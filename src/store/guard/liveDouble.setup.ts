@@ -1,5 +1,5 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
-import type { Value } from 'convex/values'
+import { ConvexError, type Value } from 'convex/values'
 import {
   rootOf,
   type Seatless,
@@ -267,14 +267,16 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
 
 /** What the task window's read `name` with `args` answers while the
     server holds `whole`, or TASK_WINDOW_NO_ANSWER for none; throws a
-    failure. A login with no seat may open no task. */
+    failure. A login with no seat is refused, as the server's orgQuery
+    refuses a caller without a seat in the organization. */
 function taskWindowAnswerOf(
   whole: Published,
   name: TaskWindowRead,
   args: Record<string, unknown>,
   force: ForcedTaskWindow | undefined,
 ): unknown {
-  if (whole === null || seatless(whole)) return { state: 'unavailable' }
+  if (whole === null || seatless(whole))
+    throw new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
   return taskWindowStandIn(whole, name, args, force)
 }
 
@@ -388,6 +390,9 @@ export function liveOver(
         continue
       }
       if ('error' in whole) {
+        // the task window's reads are queries of their own, which a failed
+        // workspace part does not fail
+        if (isTaskWindowRead(w.name)) continue
         w.error = whole.error
         w.json = undefined
         changed.add(token)

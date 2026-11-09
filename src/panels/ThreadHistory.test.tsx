@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* The task window's Comments and All filters on the real store. Comments
@@ -73,7 +73,7 @@ async function load(
   unread: { minute: number; kind: 'comment' | 'change' | 'mention'; detail?: string }[] = [],
 ) {
   vi.resetModules()
-  snap = plannerFixture()
+  snap = underProgram(plannerFixture())
   me = snap.profiles[0].id
   snap.issues.push({
     id: 'task-a',
@@ -182,7 +182,7 @@ const history = (events: Row<'activity_events'>[], earlier = false) =>
 
 async function openTask() {
   const { IssueDetail } = await import('./IssueDetail')
-  const task = P.issues.find((it) => it.uuid === 'task-a')
+  const task = { id: P.openTask('task-a', P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(
@@ -320,7 +320,7 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     await pick('All')
     await history([change(2)])
     const { IssueDetail } = await import('./IssueDetail')
-    const other = P.issues.find((it) => it.uuid === 'task-b')
+    const other = { id: P.openTask('task-b', P.homeOrg, null), uuid: 'task-b' }
     if (!other) throw new Error('missing the second task')
     await act(async () =>
       root.render(

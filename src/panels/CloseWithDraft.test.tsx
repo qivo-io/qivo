@@ -100,7 +100,7 @@ async function open({ embedded = false, title = 'Run the soak test', comment = f
       })
     })
   }
-  const task = store.P.issues.find((it) => it.uuid === 'task-a')
+  const task = { id: store.P.openTask('task-a', store.P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(

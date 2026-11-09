@@ -95,8 +95,6 @@ afterEach(async () => {
   // the dialog's kept draft and the preferences, which an earlier case left
   localStorage.clear()
   sessionStorage.clear()
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })

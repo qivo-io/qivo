@@ -11,7 +11,8 @@
 
    - task: the task the ref names in the organization the read names, a
      uuid in any case or a number bare or as QN-12, never another
-     organization's (convex/lib/taskWindow.ts taskByRef). An active task
+     organization's (convex/lib/taskWindow.ts taskByRef), and a fixture's
+     task id that is no uuid as that task's. An active task
      whose project the caller reaches answers `ok` with its row, the
      caller's level on its project, its label rows, the caller's follow,
      its parent as a short row when the whole holds the parent, and its
@@ -144,7 +145,10 @@ export function taskWindowStandIn(
   const opened = (id: string) => shown.get(id)
 
   if (name === 'taskWindow:task') {
-    const named = typeof args.ref === 'string' ? parseIssueRef(args.ref) : null
+    const ref = typeof args.ref === 'string' ? args.ref : ''
+    // a fixture's task id that is no uuid, such as task-a, names its task
+    // as a uuid would; the server never stores such an id
+    const named = parseIssueRef(ref) ?? (ref !== '' ? { uuid: ref } : null)
     if (named === null) return UNAVAILABLE
     const every = [...whole.issues, ...(whole.unheld?.issues ?? [])]
     const task = every.find(

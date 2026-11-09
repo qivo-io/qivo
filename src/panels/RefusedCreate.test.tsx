@@ -74,8 +74,6 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })

@@ -28,6 +28,9 @@ type Planner = Store['P']
 /** How a recipe's preparation answers the writes it sends. */
 export type Prepare = {
   answer: (name: string, value: unknown, edit?: (snap: Snapshot) => void) => Promise<void>
+  /** Delivers `value` as query `name`'s answer, as a view's read after the
+      server stored a write. */
+  publish: (name: string, value: unknown) => Promise<void>
 }
 
 /* The time the store's clock reads in the runner, and the later time the
@@ -479,33 +482,6 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'issues:update',
-    mutator: 'updateIssue',
-    what: 'a renamed task',
-    pause: 'P',
-    act: (P) => P.updateIssue('QN-1', { title: 'Renamed task' }),
-    truth: (snap) =>
-      Object.assign(issue(snap, 'task-a'), { title: 'Renamed task', updated_at: SERVER }),
-  },
-  {
-    mutation: 'issues:update',
-    mutator: 'updateIssue',
-    what: 'a task moved into Review',
-    pause: 'P',
-    act: (P) => P.updateIssue('QN-3', { status: 'review' }),
-    // updateIssueCore: the status stamp, the review hand-off and the
-    // project's review time (the default, 2 hours)
-    truth: (snap) =>
-      Object.assign(issue(snap, 'task-c'), {
-        status: 'review',
-        status_at: SERVER,
-        review_at: SERVER,
-        remaining_hours: 2,
-        remaining_set_at: SERVER,
-        updated_at: SERVER,
-      }),
-  },
-  {
-    mutation: 'issues:update',
     mutator: 'updateViewTask',
     what: "a drop's status on a task only the Board's answer brings",
     pause: 'P',
@@ -721,15 +697,6 @@ export const recipes: Recipe[] = [
   /* --- the relation pickers' writes, with an end only an answer holds - */
   {
     mutation: 'issues:update',
-    mutator: 'updateIssue',
-    what: 'a parent only a picker row names set on a task the workspace holds',
-    pause: 'P',
-    act: (P) => P.updateIssue('QN-1', { parent: 'task-p' }, { parentRow: pickerRow('task-p', 85) }),
-    truth: (snap) =>
-      Object.assign(issue(snap, 'task-a'), { parent_id: 'task-p', updated_at: SERVER }),
-  },
-  {
-    mutation: 'issues:update',
     mutator: 'updateAnswerTask',
     what: 'a parent only a picker row names set on a task the window shows from its own answer',
     pause: 'P',
@@ -871,93 +838,6 @@ export const recipes: Recipe[] = [
       created(snap, str(args.id), 4, { title: 'New subtask', parent_id: WINDOW_TASK }),
   },
   {
-    mutation: 'issues:createParent',
-    mutator: 'createParent',
-    what: 'a new parent task',
-    pause: 'P',
-    act: (P) => P.createParent('QN-3', 'New parent'),
-    answers: {
-      'issues:createParent': (args) => underNew(task('task-c', 3), str(args.parent_id), 4),
-    },
-    truth: (snap, args) => {
-      created(snap, str(args.parent_id), 4, { title: 'New parent' })
-      Object.assign(issue(snap, 'task-c'), { parent_id: str(args.parent_id), updated_at: SERVER })
-      issue(snap, str(args.parent_id)).updated_at = SERVER
-    },
-  },
-  {
-    mutation: 'issues:createLinked',
-    mutator: 'createLinked',
-    what: 'a new linked task',
-    pause: 'P',
-    act: (P) => P.createLinked('QN-1', 'blocks', 'New linked task'),
-    answers: {
-      'issues:createLinked': (args) => stored(str(args.new_id), 4, { title: 'New linked task' }),
-    },
-    truth: (snap, args) => {
-      created(snap, str(args.new_id), 4, { title: 'New linked task' })
-      snap.links.push({
-        id: str(args.link_id),
-        source_id: 'task-a',
-        target_id: str(args.new_id),
-        type: 'blocks',
-        pair_key: [str(args.new_id), 'task-a'].sort().join(':'),
-        created_at: SERVER,
-      })
-    },
-  },
-  {
-    mutation: 'issues:move',
-    mutator: 'moveIssue',
-    what: 'a task moved to another sub-project',
-    pause: 'P',
-    act: (P) => P.moveIssue('QN-2', 'work2'),
-    // movedStamps: no status stamp, the review hand-off restarts
-    truth: (snap) =>
-      Object.assign(issue(snap, 'task-b'), {
-        project_id: 'work2',
-        status_at: undefined,
-        review_at: SERVER,
-        updated_at: SERVER,
-      }),
-  },
-  {
-    mutation: 'issues:deleteDeep',
-    mutator: 'deleteIssue',
-    what: 'a deleted task',
-    pause: 'P',
-    act: (P) => P.deleteIssue('QN-1'),
-    truth: (snap) => {
-      snap.issues = snap.issues.filter((r) => r.id !== 'task-a')
-      snap.links = []
-      snap.issueLabels = []
-      snap.attachments = []
-      snap.messages = snap.messages.filter((m) => m.issue_id !== 'task-a')
-    },
-  },
-  {
-    mutation: 'issues:deleteDeep',
-    mutator: 'deleteIssue',
-    what: 'a task deleted from the window that waits',
-    paintsOnAccept: true,
-    pause: 'P',
-    act: (P) => P.deleteIssue('QN-3', [], true),
-    truth: (snap) => {
-      snap.issues = snap.issues.filter((r) => r.id !== 'task-c')
-    },
-  },
-  {
-    mutation: 'issues:archive',
-    mutator: 'sendArchive',
-    what: 'an archived task',
-    paintsOnAccept: true,
-    pause: 'P',
-    act: (P) => P.archiveIssue('QN-3'),
-    truth: (snap) => {
-      snap.issues = snap.issues.filter((r) => r.id !== 'task-c')
-    },
-  },
-  {
     mutation: 'issues:unarchive',
     mutator: 'unarchiveIssue',
     what: 'a restored task',
@@ -966,64 +846,12 @@ export const recipes: Recipe[] = [
     answers: { 'issues:unarchive': () => ({ issue: { id: 'task-z' }, left_parent: false }) },
   },
   {
-    mutation: 'issues:addLink',
-    mutator: 'addLink',
-    what: 'a new link',
-    pause: 'P',
-    act: (P) => P.addLink('QN-1', 'relates', 'QN-3'),
-    truth: (snap, args) =>
-      snap.links.push({
-        id: str(args.id),
-        source_id: 'task-a',
-        target_id: 'task-c',
-        type: 'relates',
-        pair_key: 'task-a:task-c',
-        created_at: SERVER,
-      }),
-  },
-  {
-    mutation: 'issues:removeLink',
-    mutator: 'removeLink',
-    what: 'a removed link',
-    pause: 'P',
-    act: (P) => P.removeLink('QN-1', 'QN-2'),
-    truth: (snap) => {
-      snap.links = []
-    },
-  },
-  {
-    mutation: 'issues:setSubscriber',
-    mutator: 'setIssueSubscriber',
-    what: 'another person following a task',
-    pause: 'U',
-    act: (P) => P.setIssueSubscriber('QN-1', PAT, true, () => {}),
-  },
-  {
-    mutation: 'issues:subscribe',
-    mutator: 'setIssueSubscribed',
-    what: 'following a task',
-    pause: 'U',
-    act: (P) => P.setIssueSubscribed('QN-1', true),
-    truth: (snap) =>
-      snap.issueSubs.push({ issue_id: 'task-a', profile_id: ME, created_at: SERVER }),
-  },
-  {
-    mutation: 'issues:unsubscribe',
-    mutator: 'setIssueSubscribed',
-    what: 'no longer following a task',
-    pause: 'U',
-    act: (P) => P.setIssueSubscribed('QN-2', false),
-    truth: (snap) => {
-      snap.issueSubs = []
-    },
-  },
-  /* --- files and Team sync ------------------------------------------- */
-  {
     mutation: 'files:uploadUrl',
     mutator: 'addAttachment',
     what: 'an upload address',
     pause: 'P',
-    act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
+    detail: { answer: () => windowAnswer() },
+    act: (P) => P.addAttachment('QN-80', file('notes.txt', 'text/plain')),
     // the address then refuses the bytes, so the upload ends there
     answers: { 'files:uploadUrl': () => 'https://files.test/refused' },
   },
@@ -1032,7 +860,8 @@ export const recipes: Recipe[] = [
     mutator: 'cancelDemoReservation',
     what: 'a cancelled demo upload',
     pause: 'P',
-    act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
+    detail: { answer: () => windowAnswer() },
+    act: (P) => P.addAttachment('QN-80', file('notes.txt', 'text/plain')),
     // the POST to the demo's upload address ends without an answer
     answers: { 'files:uploadUrl': () => 'https://files.test/demo-uploads/lost-1?e=1&m=me&t=t' },
   },
@@ -1042,7 +871,14 @@ export const recipes: Recipe[] = [
     what: 'a new attachment',
     paintsOnAccept: true,
     pause: 'P',
-    act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
+    detail: {
+      answer: () => windowAnswer(),
+      files: (args) => {
+        const rows = args ? [attachmentOf(args)] : []
+        return { state: 'ok', rows, count: rows.length, complete: true }
+      },
+    },
+    act: (P) => P.addAttachment('QN-80', file('notes.txt', 'text/plain')),
     answers: {
       // an upload ticket's address, whose id the attachment takes
       'files:uploadUrl': () =>
@@ -1050,16 +886,6 @@ export const recipes: Recipe[] = [
       'files:attach': (args) => ({ attachment: attachmentOf(args) }),
     },
     truth: (snap, args) => snap.attachments.push(attachmentOf(args)),
-  },
-  {
-    mutation: 'files:removeAttachment',
-    mutator: 'removeAttachment',
-    what: 'a removed attachment',
-    pause: 'P',
-    act: (P) => P.removeAttachment('att-a'),
-    truth: (snap) => {
-      snap.attachments = []
-    },
   },
   {
     mutation: 'teamSync:stamp',
@@ -1732,12 +1558,15 @@ export const recipes: Recipe[] = [
   {
     mutation: 'roadmap:change',
     mutator: 'submitRoadmapChanges',
-    what: 'a planning change on Roadmap',
+    what: "a planning change on Roadmap of a task only a view's answer brings",
     pause: 'P',
     prepare: (P) => P.roadmapContext(true, false),
-    act: (P) => P.updateIssue('QN-1', planned(P)),
+    view: {
+      slot: 'board:desktop',
+      answer: (args) => viewAnswer(args ? { ...PLANNED, updated_at: SERVER } : {}),
+    },
+    act: (P) => P.updateIssue('QN-90', planned(P)),
     answers: { 'roadmap:change': () => ({ count: 1 }) },
-    truth: (snap) => Object.assign(issue(snap, 'task-a'), PLANNED, { updated_at: SERVER }),
   },
   {
     mutation: 'issues:update',
@@ -1768,13 +1597,20 @@ export const recipes: Recipe[] = [
     mutator: 'undoRoadmap',
     what: 'an undone Roadmap change',
     pause: 'P',
-    // a saved Roadmap change to undo
+    // a saved Roadmap change to undo, on a task only a view's answer brings,
+    // which the undo puts back; it paints nothing, and the next delivery
+    // shows the undone values
+    paintsOnAccept: true,
+    view: {
+      slot: 'board:desktop',
+      answer: (args) => viewAnswer(args ? { updated_at: SERVER } : {}),
+    },
     prepare: async (P, server) => {
       P.roadmapContext(true, false)
-      P.updateIssue('QN-1', planned(P))
-      await server.answer('roadmap:change', { count: 1 }, (snap) =>
-        Object.assign(issue(snap, 'task-a'), PLANNED, { updated_at: SERVER }),
-      )
+      P.updateIssue('QN-90', planned(P))
+      // Convex delivers the write before it answers
+      await server.publish('tasks:board', viewAnswer({ ...PLANNED, updated_at: SERVER }))
+      await server.answer('roadmap:change', { count: 1 })
     },
     act: (P) => P.undoRoadmap(),
     answers: { 'roadmap:undo': () => ({ count: 0 }) },
@@ -2029,22 +1865,6 @@ export const recipes: Recipe[] = [
     what: 'a removed label the workspace does not hold, which paints nothing',
     pause: 'P',
     act: (P) => P.removeLabel('label-far', { orgId: ORG, name: 'Far label', color: '#335577' }),
-  },
-  {
-    mutation: 'labels:toggle',
-    mutator: 'toggleIssueLabel',
-    what: 'a label put on a task',
-    pause: 'P',
-    act: (P) => P.toggleIssueLabel('QN-3', 'label-a'),
-    truth: (snap) => snap.issueLabels.push({ issue_id: 'task-c', label_id: 'label-a' }),
-  },
-  {
-    mutation: 'labels:toggle',
-    mutator: 'toggleIssueLabel',
-    what: 'a label the workspace does not hold put on a task, as the picker or the window named it',
-    pause: 'P',
-    act: (P) => P.toggleIssueLabel('QN-3', 'label-far'),
-    truth: (snap) => snap.issueLabels.push({ issue_id: 'task-c', label_id: 'label-far' }),
   },
 ]
 

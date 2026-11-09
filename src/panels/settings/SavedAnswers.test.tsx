@@ -11,7 +11,7 @@ import {
   labelsByIdsStandIn,
 } from '../../store/labelPagesStandIn.setup'
 import { answerMilestones, isMilestoneRead } from '../../store/milestoneStandIn.setup'
-import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../../store/plannerFixture.setup'
 import {
   isProjectSettingsRead,
   projectSettingsServer,
@@ -86,7 +86,7 @@ let teamReads: ReturnType<typeof teamSettingsServer>
    store a name over the cap. */
 async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {}) {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  const snap: Snapshot = underProgram(plannerFixture())
   const org = snap.orgs[0].id
   snap.teams.push({
     id: 'crew',
@@ -157,6 +157,9 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     if (name === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
     else if (name === 'labels:byIds') next(labelsByIdsStandIn(snap, args))
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
+    // a task window's thread and history start empty
+    else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'snapshot:threadHistory') next({ events: [], earlier: false, next: null })
     else next(structuredClone(snap))
     return () => {}
   })
@@ -372,11 +375,20 @@ describe('create forms', () => {
 describe('the label picker in the task window', () => {
   /* Lets the typed search rest and its answer arrive. */
   const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 300)))
+  /* The task as its window shows it from its own answer, as the app shows
+     every task. */
+  const windowTask = async () => {
+    const { P } = await import('../../store/planner')
+    const org = fixture.orgs[0].id
+    P.watchComments('task', org)
+    await vi.waitFor(() => expect(P.taskDetail('task', org)?.view).toBeTruthy())
+    const task = P.taskDetail('task', org)?.view
+    if (!task) throw new Error('no task')
+    return task
+  }
 
   it('creates a label at once and puts a refused name back', async () => {
-    const { P } = await import('../../store/planner')
-    const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
-    if (!task) throw new Error('no task')
+    const task = await windowTask()
     await render(() => (
       <pages.picker.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
     ))
@@ -394,9 +406,7 @@ describe('the label picker in the task window', () => {
   })
 
   it('says why a name over the cap creates nothing, and keeps it whole', async () => {
-    const { P } = await import('../../store/planner')
-    const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
-    if (!task) throw new Error('no task')
+    const task = await windowTask()
     await render(() => (
       <pages.picker.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
     ))

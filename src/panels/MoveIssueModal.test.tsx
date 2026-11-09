@@ -178,16 +178,6 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-async function openFor(key: string) {
-  await act(async () =>
-    root.render(
-      <TooltipProvider>
-        <dialogs.MoveIssueModal issueId={key} onClose={vi.fn()} onMove={vi.fn()} />
-      </TooltipProvider>,
-    ),
-  )
-}
-
 /* Picks sub-project `projectId` among the window's targets once the
    server listed it, then waits for the project cache's answer of it,
    which Move waits for. */
@@ -241,22 +231,51 @@ function farAnswer(complete = true) {
   }
 }
 
-/* Opens the window's read of QN-40 with `answer`, and the Move window over
-   the task it shows. */
-async function openFromAnswer(answer: unknown) {
-  P.watchComments('far', orgId)
+/* QN-1, the lone task in FE with no subtask, as the window's own answer
+   sends it. */
+function loneAnswer() {
+  return {
+    state: 'ok',
+    task: {
+      id: 'lone',
+      org_id: orgId,
+      project_id: ids.fe,
+      num: 1,
+      title: 'Lone task',
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_subtasks: false,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    },
+    level: 'lead',
+    labels: [],
+    follow: null,
+    parent: null,
+    subtasks: { rows: [], complete: true },
+  }
+}
+
+/* Opens the window's read of the task `answer` names with it, and the
+   Move window over the task it shows. */
+async function openFromAnswer(answer: { task: { id: string } }) {
+  P.watchComments(answer.task.id, orgId)
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
   await act(async () => {
     windowRead?.(answer)
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
-  await showMove()
+  await showMove(answer.task.id)
 }
 
 /* Renders the Move window over the task the window shows now, as the task
    window does each time the store changes. */
-async function showMove() {
-  const task = P.taskDetail('far')?.view
+async function showMove(id = 'far') {
+  const task = P.taskDetail(id)?.view
   if (!task) throw new Error('the window shows no task from its answer')
   await act(async () =>
     root.render(
@@ -351,18 +370,16 @@ describe('Move window', () => {
   it('says the subtasks move when the server knows of ones this view lacks', async () => {
     carries = true
     await load()
-    const lone = P.issues.find((it) => it.uuid === 'lone')!
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     await chooseTarget(ids.fw)
     expect(notes()).toEqual([NOTE])
-    expect(asked).toEqual([{ org_id: lone.org, id: 'lone', project_id: ids.fw }])
+    expect(asked).toEqual([{ org_id: orgId, id: 'lone', project_id: ids.fw }])
   })
 
   it('says nothing when none would move, and asks only across top-level projects', async () => {
     carries = false
     await load()
-    const lone = P.issues.find((it) => it.uuid === 'lone')!
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     await chooseTarget(ids.fw)
     expect(notes()).toEqual([])
     await chooseTarget(ids.be)

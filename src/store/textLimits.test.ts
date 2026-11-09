@@ -116,6 +116,10 @@ describe('the limits in the store', () => {
     await store.initStore()
     // the views name the projects they show; this suite names them all
     await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
+    // the task edits below are on task-a, which its window shows from its
+    // own answer, as the app shows every task
+    store.P.watchComments('task-a', store.P.homeOrg)
+    await vi.waitFor(() => expect(task()).toBeDefined())
   })
 
   afterEach(() => {
@@ -123,7 +127,8 @@ describe('the limits in the store', () => {
     vi.unstubAllGlobals()
   })
 
-  const task = () => store.P.issues.find((it) => it.uuid === 'task-a')
+  /* task-a as its window shows it from its own answer (P.taskDetail). */
+  const task = () => store.P.taskDetail('task-a', store.P.homeOrg)?.view ?? undefined
 
   it('refuses a description over the cap before painting or sending', async () => {
     const { P } = store
@@ -161,7 +166,7 @@ describe('the limits in the store', () => {
 
   it('posts a comment of 20,000 characters after trimming and refuses one more', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', P.homeOrg)
     publishComments([])
     expect(await P.addComment('task-a', ` ${OVER} `)).toBe(false)
     expect(toast).toHaveBeenCalledWith(limitSentence(LIMITS.comment), 'error')
@@ -277,7 +282,7 @@ describe('the limits in the store', () => {
 
   it('leaves a comment unchanged when the edit is over the cap', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', P.homeOrg)
     publishComments([
       {
         id: 'comment-a',
@@ -300,7 +305,7 @@ describe('the limits in the store', () => {
     const { P } = store
     const key = task()?.id ?? ''
     expect(await P.updateIssue(key, { description: mentions(MENTION_MAX + 1) })).toBe(false)
-    P.watchComments('task-a')
+    P.watchComments('task-a', P.homeOrg)
     publishComments([])
     expect(await P.addComment('task-a', mentions(MENTION_MAX + 1))).toBe(false)
     expect(toast.mock.calls).toEqual([

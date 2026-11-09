@@ -33,8 +33,6 @@ describe('view model identity across repaints', () => {
   let stop: () => void
 
   const P = () => store.P
-  const task = (id: string) => P().issues.find((issue) => issue.uuid === id)!
-  const row = (snap: Snapshot, id: string) => snap.issues.find((issue) => issue.id === id)!
 
   /* The next delivery: the last one with `change` applied, as the server
      holds it. */
@@ -106,168 +104,6 @@ describe('view model identity across repaints', () => {
     vi.restoreAllMocks()
   })
 
-  it('keeps every unchanged task, and P.issueById with it, when one task changes', () => {
-    const before = new Map(P().issues.map((it) => [it.uuid, it]))
-    const context = P().contextVersion
-    deliverChange((snap) => {
-      row(snap, 'alone').title = 'Renamed elsewhere'
-    })
-    expect(task('alone').title).toBe('Renamed elsewhere')
-    expect(task('alone')).not.toBe(before.get('alone'))
-    for (const id of ['parent', 'child-a', 'child-b', 'other'])
-      expect(task(id), id).toBe(before.get(id))
-    for (const it of P().issues) expect(P().issueById[it.id]).toBe(it)
-    expect(P().contextVersion).toBe(context)
-  })
-
-  it('gives the tasks above and below a changed task new objects, and no one else', () => {
-    let before = new Map(P().issues.map((it) => [it.uuid, it]))
-    deliverChange((snap) => {
-      row(snap, 'child-a').status = 'done'
-    })
-    // the parent shows its subtasks' progress; a sibling reads neither
-    for (const id of ['parent', 'child-a']) expect(task(id), id).not.toBe(before.get(id))
-    for (const id of ['child-b', 'alone', 'other']) expect(task(id), id).toBe(before.get(id))
-    before = new Map(P().issues.map((it) => [it.uuid, it]))
-    deliverChange((snap) => {
-      row(snap, 'parent').title = 'Renamed parent'
-    })
-    // a subtask's owner list asks about the tasks above it
-    for (const id of ['parent', 'child-a', 'child-b']) expect(task(id), id).not.toBe(before.get(id))
-    for (const id of ['alone', 'other']) expect(task(id), id).toBe(before.get(id))
-  })
-
-  it('gives a task a new object when a task it is linked to changes', () => {
-    deliverChange((snap) => {
-      snap.links.push({
-        id: 'link-1',
-        // stored as the blocker's link
-        source_id: 'other',
-        target_id: 'alone',
-        type: 'blocks',
-        pair_key: 'alone:other',
-        created_at: AT,
-      })
-    })
-    const before = new Map(P().issues.map((it) => [it.uuid, it]))
-    // the blocker is done: Team sync's row for the task it blocks says so
-    deliverChange((snap) => {
-      row(snap, 'other').status = 'done'
-    })
-    for (const id of ['other', 'alone']) expect(task(id), id).not.toBe(before.get(id))
-    for (const id of ['parent', 'child-a', 'child-b']) expect(task(id), id).toBe(before.get(id))
-  })
-
-  it('keeps the very same list when a delivery changes no task', () => {
-    const issues = P().issues
-    const byId = P().issueById
-    deliverChange((snap) => {
-      snap.messages.push({
-        id: 'message-1',
-        org_id: snap.orgs[0].id,
-        recipient_id: snap.profiles[0].id,
-        issue_id: 'alone',
-        issue_title: 'Task alone',
-        kind: 'change',
-        detail: 'Status changed',
-        created_at: AT,
-      })
-    })
-    expect(P().issues).toBe(issues)
-    expect(P().issueById).toBe(byId)
-  })
-
-  it('gives a task whose delay changed a new object, its data the same', async () => {
-    // the dates module the store loaded, after resetModules
-    const { TODAY_WEEK, weekToISO } = await import('../lib/dates')
-    const me = snapshot.profiles[0].id
-    deliverChange((snap) => {
-      Object.assign(row(snap, 'alone'), {
-        start_week: weekToISO(TODAY_WEEK),
-        end_week: weekToISO(TODAY_WEEK),
-        due_date: weekToISO(TODAY_WEEK + 1),
-        remaining_hours: 8,
-        remaining_set_at: new Date().toISOString(),
-      })
-    })
-    const before = task('alone')
-    const other = task('other')
-    const delay = P().delayOf(before)
-    // another task of the same owner, outside this view, fills the weeks
-    deliverChange((snap) => {
-      snap.orgLoad.push({
-        issue_id: null,
-        owner_id: me,
-        start_week: weekToISO(TODAY_WEEK),
-        end_week: weekToISO(TODAY_WEEK + 1),
-        remaining: 400,
-        remaining_set_at: new Date().toISOString(),
-      })
-    })
-    expect(P().delayOf(task('alone'))).not.toEqual(delay)
-    expect(task('alone')).not.toBe(before)
-    expect(task('other')).toBe(other)
-  })
-
-  it('moves contextVersion when something besides the tasks changes, and only then', async () => {
-    const context = P().contextVersion
-    const before = new Map(P().issues.map((it) => [it.uuid, it]))
-    deliverChange((snap) => {
-      row(snap, 'other').title = 'A task change'
-    })
-    expect(P().contextVersion).toBe(context)
-    deliverChange((snap) => {
-      snap.projects[0].name = 'Renamed project'
-    })
-    // the project cache's answer repaints on the store's next frame
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(P().contextVersion).not.toBe(context)
-    // the tasks themselves did not change
-    expect(task('alone')).toBe(before.get('alone'))
-    const renamed = P().contextVersion
-    deliverChange((snap) => {
-      snap.profiles[0].name = 'Renamed person'
-    })
-    expect(P().contextVersion).not.toBe(renamed)
-    // a team membership decides what the person sees (the search palette
-    // asks P.canSee again when this moves); the store holds the person's own
-    // teams and memberships alone, so a team arrives with its membership
-    const named = P().contextVersion
-    deliverChange((snap) => {
-      snap.teams.push({
-        id: 'team-1',
-        org_id: snap.orgs[0].id,
-        name: 'Field',
-        track_delay_default: true,
-        created_at: AT,
-      })
-      snap.teamMembers.push({
-        team_id: 'team-1',
-        profile_id: snap.profiles[0].id,
-        is_leader: false,
-      })
-    })
-    const teamed = P().contextVersion
-    expect(teamed).not.toBe(named)
-    deliverChange((snap) => {
-      const membership = snap.teamMembers.find((m) => m.team_id === 'team-1')
-      if (membership) membership.is_leader = true
-    })
-    expect(P().contextVersion).not.toBe(teamed)
-    // another person's team reaches no part the store holds
-    const led = P().contextVersion
-    deliverChange((snap) => {
-      snap.teams.push({
-        id: 'team-2',
-        org_id: snap.orgs[0].id,
-        name: 'Elsewhere',
-        track_delay_default: true,
-        created_at: AT,
-      })
-    })
-    expect(P().contextVersion).toBe(led)
-  })
-
   it('keeps contextVersion for the organization load and Team sync stamps', () => {
     const context = P().contextVersion
     const people = P().users
@@ -292,64 +128,6 @@ describe('view model identity across repaints', () => {
     expect(P().contextVersion).toBe(context)
   })
 
-  it('notifies no view for a delivery that changes nothing on screen', async () => {
-    // the paint stamps the time of the edit, which the server's row matches
-    vi.useFakeTimers({ now: Date.parse('2026-09-16T08:00:00.000Z') })
-    try {
-      // a write waits with its paint; the delivery that holds its change
-      // shows exactly what is on screen already
-      void P().updateIssue(task('alone').id, { title: 'Painted first' })
-      expect(sent).toHaveLength(1)
-      const shown = emits
-      deliverChange((snap) => {
-        Object.assign(row(snap, 'alone'), {
-          title: 'Painted first',
-          updated_at: new Date().toISOString(),
-        })
-      })
-      await vi.advanceTimersByTimeAsync(0)
-      expect(emits).toBe(shown)
-      expect(task('alone').title).toBe('Painted first')
-      expect(P().roadmapUndo.busy).toBe(true)
-      // the answer ends the wait, which Roadmap's undo reads, so it shows
-      // though the rows stay as they were
-      sent[0].resolve(null)
-      await vi.advanceTimersByTimeAsync(0)
-      expect(P().roadmapUndo.busy).toBe(false)
-      expect(emits).toBe(shown + 1)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it("renders once when a task edit's answer ends the Roadmap's undo history", async () => {
-    vi.useFakeTimers({ now: Date.parse('2026-09-16T08:00:00.000Z') })
-    try {
-      P().roadmapContext(true, false)
-      // an edit made outside the Roadmap's own changes, such as in the task window
-      void P().updateIssue(task('alone').id, { title: 'Renamed' })
-      expect(P().roadmapUndo.disabled).toBe(false)
-      // Convex delivers the snapshot that holds a write before the write
-      // resolves (lib/convexOrdering.test.ts)
-      deliverChange((snap) => {
-        Object.assign(row(snap, 'alone'), {
-          title: 'Renamed',
-          updated_at: new Date().toISOString(),
-        })
-      })
-      await vi.advanceTimersByTimeAsync(0)
-      const shown = emits
-      sent[0].resolve(null)
-      await vi.advanceTimersByTimeAsync(0)
-      expect(P().roadmapUndo.disabled).toBe(true)
-      expect(P().roadmapUndo.busy).toBe(false)
-      expect(emits).toBe(shown + 1)
-    } finally {
-      P().roadmapContext(false, false)
-      vi.useRealTimers()
-    }
-  })
-
   it('still notifies for a delivery that changes only rows no view model holds', () => {
     const shown = emits
     // another person's task in a project this person cannot see takes the
@@ -358,20 +136,5 @@ describe('view model identity across repaints', () => {
       snap.orgs[0].next_issue_num = 40
     })
     expect(emits).toBe(shown + 1)
-  })
-
-  it('notifies for a delivery that changes a task', () => {
-    const shown = emits
-    deliverChange((snap) => {
-      row(snap, 'other').priority = 'high'
-    })
-    expect(emits).toBe(shown + 1)
-  })
-
-  it('lists subtasks by number, in whatever order they arrive', () => {
-    deliverChange((snap) => {
-      snap.issues.reverse()
-    })
-    expect(task('parent').children).toEqual(['child-a', 'child-b'].map((id) => task(id).id))
   })
 })

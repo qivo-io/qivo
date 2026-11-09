@@ -6,7 +6,7 @@ import type { FieldChange } from '../../convex/lib/functions'
 import { LIMITS } from '../../convex/lib/limits'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { shownOf } from './personShown.setup'
-import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture as fixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* The field check in the app's store: every edit of an existing record
    sends the values on screen for the fields it changes as `expected`
@@ -57,7 +57,9 @@ describe('the field check in the store', () => {
     showToast = vi.fn()
     vi.stubGlobal('window', { showToast })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = fixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the window's read opens its tasks
+    snap = underProgram(fixture())
     const org = snap.orgs[0].id
     me = snap.profiles[0].id
     snap.profiles.push({
@@ -131,6 +133,9 @@ describe('the field check in the store', () => {
     // the view that shows Emil names him, so the notices can
     P.namePeople('field-check', [{ org, id: EMIL }])
     await vi.waitFor(() => expect(P.person(EMIL)?.state).toBe('ok'))
+    // most edits below are on task-1, which its window shows from its own
+    // answer, as the app shows every task
+    await open('task-1')
   })
 
   afterEach(() => {
@@ -139,7 +144,19 @@ describe('the field check in the store', () => {
     vi.unstubAllGlobals()
   })
 
-  const key = (uuid: string) => P.handleOf(uuid) as string
+  /* Opens the window on task `uuid` and waits for its own answer. */
+  const open = async (uuid: string) => {
+    P.watchComments(uuid, snap.orgs[0].id)
+    await vi.waitFor(() => expect(P.taskDetail(uuid, snap.orgs[0].id)?.state).toBe('ok'))
+  }
+  /* Task `uuid` as the window that watches it shows it from its own answer. */
+  const shown = (uuid: string) => {
+    const view = P.taskDetail(uuid, snap.orgs[0].id)?.view
+    if (!view) throw new Error(`the window shows no ${uuid}`)
+    return view
+  }
+  /* The handle the window opened task `uuid` by. */
+  const key = (uuid: string) => shown(uuid).id
   const latest = () => requests.at(-1) as Pending
   const settle = async () => {
     for (let i = 0; i < 10; i++) await Promise.resolve()
@@ -148,7 +165,7 @@ describe('the field check in the store', () => {
     new ConvexError({
       code: 'conflict',
       reason: 'field_changed',
-      message: 'status of QN-1 changed since you read it',
+      message: 'status of a task changed since you read it',
       changes: changes.map((c) => ({
         record: 'task',
         id: 'task-1',
@@ -165,18 +182,20 @@ describe('the field check in the store', () => {
       patch: { status: 'progress' },
       expected: { status: 'todo' },
     })
-    expect(P.issueById[key('task-1')].status).toBe('progress')
+    expect(shown('task-1').status).toBe('progress')
     P.updateIssue(key('task-1'), { status: 'review' })
     expect(latest().args.expected).toEqual({ status: 'progress' })
   })
 
-  it('sends only the dates that differ from the screen, as sent', () => {
-    const on = P.issueById[key('task-3')]
+  it('sends only the dates that differ from the screen, as sent', async () => {
+    await open('task-3')
+    const on = shown('task-3')
     // the start shown is on the grid: a new end goes out alone
     P.updateIssue(key('task-3'), { start: on.start, end: (on.end ?? 0) + 1 })
     expect(Object.keys(latest().args.patch as object)).toEqual(['end_week'])
     // an off-grid stored start goes with the new end, or the pair would differ
-    const off = P.issueById[key('task-1')]
+    await open('task-1')
+    const off = shown('task-1')
     P.updateIssue(key('task-1'), { start: off.start, end: (off.end ?? 0) + 1 })
     expect(Object.keys(latest().args.patch as object).sort()).toEqual(['end_week', 'start_week'])
     expect((latest().args.expected as Record<string, unknown>).start_week).toBe('2026-10-14')
@@ -187,14 +206,15 @@ describe('the field check in the store', () => {
     expect(await P.updateIssue(key('task-1'), { remaining: 8.01 })).toBe(true)
     expect(requests).toHaveLength(sent)
     P.updateIssue(key('task-1'), { remaining: 9.04 })
-    expect(P.issueById[key('task-1')].remaining).toBe(9)
+    expect(shown('task-1').remaining).toBe(9)
     expect(latest().args).toMatchObject({
       patch: { remaining_hours: 9 },
       expected: { remaining_hours: 8 },
     })
   })
 
-  it('sends the hidden parent as the pair a read shows, and detaches from it', () => {
+  it('sends the hidden parent as the pair a read shows, and detaches from it', async () => {
+    await open('task-2')
     P.updateIssue(key('task-2'), { parent: null })
     expect(latest().args).toMatchObject({
       patch: { parent_id: null },
@@ -212,7 +232,7 @@ describe('the field check in the store', () => {
       title: printOf(trimmedForm('Seen title')),
       description: printOf(descriptionForm('Seen text')),
     })
-    P.watchComments('task-1')
+    P.watchComments('task-1', snap.orgs[0].id)
     // the thread's first answer paints once the pending task edit lets it,
     // on the store's 0 ms paint timer
     await vi.waitFor(() => expect(P.commentsLoaded).toBe(true))
@@ -229,7 +249,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ field: 'description' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the description of QN-1. Your change was discarded.',
+      'Not saved. Emil Berg changed the description of a task. Your change was discarded.',
     )
   })
 
@@ -239,8 +259,12 @@ describe('the field check in the store', () => {
     expect(latest().args).not.toHaveProperty('expected')
   })
 
-  it('sends the link kind on screen with a removal', () => {
-    P.removeLink(key('task-1'), key('task-3'))
+  it('sends the link kind on screen with a removal', async () => {
+    // the Linked tasks section shows the link task-1 blocks task-3 by
+    P.showSections({}, true)
+    await vi.waitFor(() => expect(P.sections?.links.rows).toHaveLength(1))
+    const [link] = P.sections?.links.rows ?? []
+    P.unlinkTasks(key('task-1'), { uuid: 'task-3' }, link.type)
     expect(latest()).toMatchObject({
       name: 'issues:removeLink',
       args: { a: 'task-1', b: 'task-3', expected: { kind: 'blocks' } },
@@ -252,11 +276,11 @@ describe('the field check in the store', () => {
     latest().reject(changed([{}]))
     await settle()
     expect(showToast).toHaveBeenCalledWith(
-      'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of a task. Your change was discarded.',
       'error',
       expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     )
-    expect(P.issueById[key('task-1')].status).toBe('todo')
+    expect(shown('task-1').status).toBe('todo')
   })
 
   it('says the field was changed elsewhere when no view has named the writer', async () => {
@@ -267,7 +291,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ by: 'p-unnamed' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. The status of QN-1 was changed elsewhere. Your change was discarded.',
+      'Not saved. The status of a task was changed elsewhere. Your change was discarded.',
     )
   })
 
@@ -275,6 +299,7 @@ describe('the field check in the store', () => {
     void P.updateIssue(key('task-1'), { status: 'progress' })
     latest().reject(changed([{}]))
     await settle()
+    await open('task-3')
     void P.updateIssue(key('task-3'), { title: 'Other' })
     latest().reject(changed([{ id: 'task-3', field: 'title' }]))
     await settle()
@@ -286,6 +311,7 @@ describe('the field check in the store', () => {
     expect(opts.key).toBe('field-changed-1')
     expect(text.split('\n')).toHaveLength(2)
     opts.onDismiss()
+    await open('task-1')
     void P.updateIssue(key('task-1'), { priority: 'high' })
     latest().reject(changed([{ field: 'priority' }]))
     await settle()
@@ -297,7 +323,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ by: me }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. You changed the status of QN-1 elsewhere. This change was discarded.',
+      'Not saved. You changed the status of a task elsewhere. This change was discarded.',
     )
   })
 
@@ -311,7 +337,7 @@ describe('the field check in the store', () => {
     second.reject(changed([{}]))
     await settle()
     expect(showToast.mock.calls.at(-1)).toEqual([
-      'Not saved. Emil Berg changed the status of QN-1. Your 2 changes were discarded.',
+      'Not saved. Emil Berg changed the status of a task. Your 2 changes were discarded.',
       'error',
       expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     ])
@@ -327,8 +353,8 @@ describe('the field check in the store', () => {
     second.reject(changed([{ field: 'title' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the title of QN-1. Your change was discarded.\n' +
-        'Not saved. Emil Berg changed the title of QN-1. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Emil Berg changed the title of a task. Your change was discarded.\n' +
+        'Not saved. Emil Berg changed the title of a task. Your text is still in the editor. Save again to replace their version.',
     )
   })
 
@@ -344,7 +370,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:01:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of QN-1 while you were offline. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of a task while you were offline. Your change was discarded.',
     )
   })
 
@@ -364,7 +390,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:02:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of QN-1 while you were offline. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of a task while you were offline. Your change was discarded.',
     )
   })
 
@@ -380,7 +406,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:01:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of a task. Your change was discarded.',
     )
   })
 
@@ -391,7 +417,7 @@ describe('the field check in the store', () => {
       { description: 'My text' },
       {
         keepDraft: (shown) => {
-          kept.push(shown, P.issueById[key('task-1')].description)
+          kept.push(shown, P.taskDetail('task-1', snap.orgs[0].id)?.view?.description)
           return true
         },
       },
@@ -400,7 +426,7 @@ describe('the field check in the store', () => {
     await settle()
     expect(kept).toEqual(['The old text', 'The old text'])
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the description of QN-1. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Emil Berg changed the description of a task. Your text is still in the editor. Save again to replace their version.',
     )
   })
 

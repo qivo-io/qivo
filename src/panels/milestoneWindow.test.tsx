@@ -1325,8 +1325,6 @@ describe('rights', { timeout: 30_000 }, () => {
 describe('tasks on demand', { timeout: 30_000 }, () => {
   it('reads no task as the window opens from an Overview row, Past expands, a search runs and Load more grows', async () => {
     fixture({ up: 3, past: 3 })
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = false
     try {
       await start({ batch: 2, rows: 4 })
       const { syncStatus } = await import('../lib/syncStatus')
@@ -1369,7 +1367,6 @@ describe('tasks on demand', { timeout: 30_000 }, () => {
       expect(store.__layerProbe?.asks()).toEqual([])
       expect(store.__layerProbe?.faults()).toEqual([])
     } finally {
-      TASKS.atBoot = true
       history.replaceState(null, '', '/')
     }
   })

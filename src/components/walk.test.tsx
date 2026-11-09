@@ -4,7 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* A walk's Remaining box on the real store: a typed number counts the row
    as reviewed only once the server saves it. Each task write is answered by
@@ -36,7 +36,7 @@ beforeEach(async () => {
   vi.resetModules()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   window.showToast = vi.fn()
-  const snap: Snapshot = plannerFixture()
+  const snap: Snapshot = underProgram(plannerFixture())
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -70,7 +70,11 @@ beforeEach(async () => {
   await store.initStore()
   const { RemainingInput } = await import('./walk')
   const { TooltipProvider } = await import('./ui/tooltip')
-  const task = store.P.issues.find((i) => i.uuid === 'task-a')
+  // the task as its window shows it from its own answer, as the app shows
+  // every task
+  store.P.watchComments('task-a', store.P.homeOrg)
+  await vi.waitFor(() => expect(store.P.taskDetail('task-a', store.P.homeOrg)?.view).toBeTruthy())
+  const task = store.P.taskDetail('task-a', store.P.homeOrg)?.view
   if (!task) throw new Error('missing the task')
   onCommit = vi.fn<() => void>()
   container = document.createElement('div')

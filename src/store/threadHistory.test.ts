@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { refParts } from '../lib/taskReference'
 import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -159,7 +160,7 @@ describe("the task's history in the store", () => {
   })
 
   it('opens a task with its comments and no history', () => {
-    store.P.watchComments('task-a')
+    store.P.watchComments('task-a', snap.orgs[0].id)
     expect(subs.map((s) => s.name)).toEqual(['snapshot:threadComments'])
     expect(named('snapshot:threadHistory')).toEqual([])
     expect(store.P.historyLoaded).toBe(false)
@@ -167,7 +168,7 @@ describe("the task's history in the store", () => {
 
   it('subscribes the history once while any window shows All, and drops it when the last leaves', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     const history = one('snapshot:threadHistory')
     expect(history.args).toEqual({ org_id: snap.orgs[0].id, issue_id: 'task-a' })
@@ -193,7 +194,7 @@ describe("the task's history in the store", () => {
 
   it('shows the changes the latest page holds, oldest first, beside comments on their own', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     one('snapshot:threadHistory').deliver({
       events: [change(3), change(2)],
@@ -201,7 +202,7 @@ describe("the task's history in the store", () => {
       next: null,
     })
     expect(changes()).toEqual(['event-2', 'event-3'])
-    expect(P.threadEvents[0]).toMatchObject({ targetType: 'issue', targetId: 'QN-1' })
+    expect(P.threadEvents[0]).toMatchObject({ targetType: 'issue', targetId: 'task-a' })
     // the comments have not arrived; the history does not wait for them
     expect(P.commentsLoaded).toBe(false)
     one('snapshot:threadHistory').deliver({ events: [], earlier: false, next: null })
@@ -210,7 +211,7 @@ describe("the task's history in the store", () => {
 
   it('keeps the history when the comments fail, and the comments when the history fails', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     one('snapshot:threadComments').deliver({ comments: [comment(1)], earlier: false })
     one('snapshot:threadHistory').deliver({ events: [change(2)], earlier: false, next: null })
@@ -228,11 +229,11 @@ describe("the task's history in the store", () => {
 
   it('starts the history over for another task, for the windows still on All', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     const first = one('snapshot:threadHistory')
     first.deliver({ events: [change(2)], earlier: false, next: null })
-    P.watchComments('task-b')
+    P.watchComments('task-b', snap.orgs[0].id)
     expect(first.closed).toBe(true)
     expect(changes()).toEqual([])
     expect(P.historyLoaded).toBe(false)
@@ -251,7 +252,7 @@ describe("the task's history in the store", () => {
 
   it('drops an earlier page that answers after the history stopped', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     one('snapshot:threadHistory').deliver({
       events: [change(10)],
@@ -283,7 +284,7 @@ describe("the task's history in the store", () => {
 
     it('drops the loaded rows for an empty live page with rows before it, and pages on from it', async () => {
       const { P } = store
-      P.watchComments('task-a')
+      P.watchComments('task-a', snap.orgs[0].id)
       P.showHistory(pane, true)
       const empty = { events: [], earlier: true, next: 'hidden-row' }
       one('snapshot:threadHistory').deliver(empty)
@@ -305,7 +306,7 @@ describe("the task's history in the store", () => {
 
     it('drops a loaded row the live page leaves out from its first row on', async () => {
       const { P } = store
-      P.watchComments('task-a')
+      P.watchComments('task-a', snap.orgs[0].id)
       P.showHistory(pane, true)
       one('snapshot:threadHistory').deliver({
         events: span(30, 36),
@@ -337,7 +338,7 @@ describe("the task's history in the store", () => {
 
     it('starts over after more changes than a page between two deliveries, with nothing left loading', async () => {
       const { P } = store
-      P.watchComments('task-a')
+      P.watchComments('task-a', snap.orgs[0].id)
       P.showHistory(pane, true)
       one('snapshot:threadHistory').deliver({
         events: span(51, 101),
@@ -372,7 +373,7 @@ describe("the task's history in the store", () => {
 
   it('reads no earlier page before the live page arrives', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     void P.loadEarlierHistory()
     expect(earlier).toEqual([])
@@ -380,7 +381,7 @@ describe("the task's history in the store", () => {
 
   it('shows a failed history, retries it until the server answers, and loads not_found empty', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     const first = one('snapshot:threadHistory')
     first.fail(new Error('Server Error'))
@@ -413,7 +414,7 @@ describe("the task's history in the store", () => {
 
   it('keeps an accepted comment on screen when the history arrives before the comments do', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     one('snapshot:threadComments').deliver({ comments: [comment(1)], earlier: false })
     const saved = P.addComment('task-a', 'Accepted')
@@ -435,7 +436,7 @@ describe("the task's history in the store", () => {
 
   it('subscribes the history again for its windows after the parts start over', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     P.showHistory(pane, true)
     const before = one('snapshot:threadHistory')
     before.deliver({ events: [change(2)], earlier: false, next: null })
@@ -456,8 +457,9 @@ describe("the task's history in the store", () => {
     P.showHistory(pane, true)
     const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
     if (!key) throw new Error('the task was not created')
-    const task = P.issueById[key]
-    P.watchComments(task.uuid)
+    // a reference that names the new task's organization, number and uuid
+    const task = { uuid: refParts(key)?.uuid ?? '' }
+    P.watchComments(task.uuid, snap.orgs[0].id)
     expect(P.historyLoaded).toBe(true)
     expect(P.historyEarlier).toBe('none')
     expect(named('snapshot:threadHistory')).toEqual([])
@@ -503,7 +505,7 @@ describe("the task's history in the store", () => {
     await settle()
     // watched while the boot waits for its workspace: the thread and its
     // history subscribe on the boot's parts and answer before it
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     const history = one('snapshot:threadHistory')
     history.deliver({ events: [change(1)], earlier: false, next: null })
     history.deliver({ events: [change(1), change(2)], earlier: false, next: null })

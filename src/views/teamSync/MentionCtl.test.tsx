@@ -13,7 +13,7 @@ import {
   type OwnerPickerArgs,
   ownerPickersStandIn,
 } from '../../store/ownerPickersStandIn.setup'
-import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../../store/plannerFixture.setup'
 
 /* The Team sync @ window on the real store. Its note is a comment, so the
    window waits for the server with the note locked: it closes once the
@@ -67,7 +67,9 @@ const LAST =
 
 async function load(people = 0) {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one that
+  // holds tasks, so the window's read opens its task
+  const snap: Snapshot = underProgram(plannerFixture())
   const me = snap.profiles[0]
   snap.profiles.push({ ...me, id: 'aisha', name: 'Aisha Rahman', auth_user_id: 'account-aisha' })
   for (let i = 0; i < people; i++) {
@@ -119,6 +121,10 @@ async function load(people = 0) {
   const store = await import('../../store/planner')
   P = store.P
   await store.initStore()
+  // the task as its window shows it from its own answer, as the app shows
+  // every task
+  P.watchComments('task-a', snap.orgs[0].id)
+  await vi.waitFor(() => expect(P.taskDetail('task-a', snap.orgs[0].id)?.view).toBeTruthy())
   card = await import('./SyncCard')
   safety = await import('../../lib/updateSafety')
   prompt = await import('../../components/DiscardPrompt')
@@ -166,7 +172,7 @@ async function flush() {
 /* Renders the @ glyph on the task, suggesting `initial`. `page` is the
    scope of the page the card sits on. */
 async function mount(onSent: () => void, page?: UnsentScope, initial: string | null = 'aisha') {
-  const it = P.issues.find((i) => i.uuid === 'task-a')
+  const it = P.taskDetail('task-a', P.homeOrg)?.view
   if (!it) throw new Error('missing the task')
   const { UnsentScopeContext } = await import('../../lib/leaveGuard')
   await act(async () =>

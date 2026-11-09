@@ -298,34 +298,6 @@ describe('the read of a reference', () => {
     expect(one('taskWindow:task')).toBe(side)
   })
 
-  it("moves the reference to the task's handle in the repaint in which the workspace first holds it, and never on a home organization change", async () => {
-    const { P } = store
-    const moves: Record<string, string>[] = []
-    P.watchHandles((moved) => moves.push(Object.fromEntries(moved)))
-    const ref = taskRef({ org, num: 40 })
-    P.watchTaskRef(ref)
-    one('taskWindow:task').deliver(okAnswer(FAR, 40))
-    snap.issues.push(task(FAR, 40))
-    publishWhole(snap)
-    await turn()
-    expect(moves.filter((m) => ref in m)).toEqual([{ [ref]: 'QN-40' }])
-    // a guest organization's reference stays through a home organization change
-    moves.length = 0
-    const guest = taskRef({ org: GUEST, num: 5, uuid: OTHER })
-    P.watchTaskRef(guest)
-    snap.profiles = snap.profiles.map((p) =>
-      p.id === me
-        ? { ...p, org_role: 'guest' }
-        : p.id === 'me-guest'
-          ? { ...p, org_role: 'user' }
-          : p,
-    )
-    publishWhole(snap)
-    await turn()
-    expect(P.homeOrg).toBe(GUEST)
-    expect(moves.some((m) => guest in m)).toBe(false)
-  })
-
   it('walks the seats for a uuid without an organization, the named one first, then home, one at a time', async () => {
     const { P } = store
     P.watchTaskRef(taskRef({ org: null, uuid: FAR }))
@@ -553,19 +525,6 @@ describe("the boot's read of its address", () => {
     read.fail(new Error('Server Error'))
     expect(store.P.snapshotTrouble()).toBeNull()
     expect(store.P.reference?.state).toBe('failed')
-  })
-
-  it('stops the read once a window opens the task by the handle the workspace holds it by', async () => {
-    subs = []
-    await boot({ address: { slug: 'testbed', ref: 'QN-1' } })
-    const read = one('taskWindow:task')
-    expect(read.args).toEqual({ org_id: org, ref: 'QN-1' })
-    await turn()
-    // the first delivery holds task-a, so the window names it by its handle
-    expect(store.P.handleOf('task-a')).toBe('QN-1')
-    store.P.watchTaskRef(null)
-    expect(read.closed).toBe(true)
-    expect(open('taskWindow:task')).toEqual([])
   })
 
   it('reads nothing for a slug the login cannot resolve', async () => {

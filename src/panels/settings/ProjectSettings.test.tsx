@@ -554,18 +554,6 @@ describe('the page before and after its answer', () => {
   })
 
   it('opens with the project settings reads alone, reads no task, and leaves no read behind', async () => {
-    let taskReads = 0
-    let issues = P.issues
-    Object.defineProperty(P, 'issues', {
-      configurable: true,
-      get: () => {
-        taskReads++
-        return issues
-      },
-      set: (value) => {
-        issues = value
-      },
-    })
     const before = network.onUpdate.mock.calls.length
     await open()
     const opened = network.onUpdate.mock.calls.slice(before).map(([ref]) => getFunctionName(ref))
@@ -578,7 +566,6 @@ describe('the page before and after its answer', () => {
       'projectSettings:teams',
       'projectSettings:users',
     ])
-    expect(taskReads).toBe(0)
     // the pickers read nothing while closed
     expect(
       network.query.mock.calls.map(([ref]) => getFunctionName(ref)).filter(isProjectSettingsRead),

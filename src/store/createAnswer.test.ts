@@ -255,7 +255,6 @@ beforeEach(() => {
 
 afterEach(() => {
   if (liveParts) {
-    liveParts.TASKS.atBoot = true
     liveParts.STALL.ms = 60_000
   }
   // no write went out on a path that needs every task, and no paint threw

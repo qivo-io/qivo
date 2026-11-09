@@ -231,6 +231,9 @@ async function load({ viaTeam = false, ada = false, lead = true } = {}) {
   const store = await import('../store/planner')
   P = store.P
   await store.initStore()
+  // the settings page that opens the window names its project, which the
+  // removal takes its organization from
+  await (await import('../store/oracleScope.setup')).nameProjects(P, snap)
 }
 
 beforeEach(async () => {

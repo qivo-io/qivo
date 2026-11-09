@@ -107,7 +107,7 @@ afterEach(async () => {
 
 /* Opens the task window on QN-27. */
 async function open(onClose = vi.fn()) {
-  const task = P.issues.find((it) => it.uuid === 'task-a')
+  const task = { id: P.openTask('task-a', P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(

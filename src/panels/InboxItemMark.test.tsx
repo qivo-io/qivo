@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* The task window's New divider, its tail note and its read on open from
@@ -117,7 +117,7 @@ async function load(
   vi.resetModules()
   // vi.resetModules keeps the live double, and with it a state forced before
   double.live?.forceInbox(null)
-  snap = plannerFixture()
+  snap = underProgram(plannerFixture())
   me = snap.profiles[0].id
   for (const [n, id] of ['task-a', 'task-b'].entries())
     snap.issues.push({
@@ -201,8 +201,11 @@ const settle = () => act(async () => await new Promise((resolve) => setTimeout(r
 
 async function openTask(uuid = 'task-a') {
   const { IssueDetail } = await import('./IssueDetail')
-  const task = P.issues.find((it) => it.uuid === uuid)
-  if (!task) throw new Error(`missing ${uuid}`)
+  const row = snap.issues.find((it) => it.id === uuid)
+  if (!row) throw new Error(`missing ${uuid}`)
+  // the store holds no task, so the window opens by a reference and shows
+  // the task from its own answer
+  const task = { id: P.openTask(row.id, row.org_id, row.num) }
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -548,7 +551,26 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
       snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Second', slug: 'second' })
       snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
       snap.myProfileIds.push(seat)
-      snap.projects.push({ ...snap.projects[0], id: 'project-x', org_id: org, key: 'SEC' })
+      // its sub-project under a top-level project of its own
+      snap.projects.push(
+        {
+          ...snap.projects[0],
+          id: 'program-x',
+          org_id: org,
+          key: 'SEP',
+          type: 'meta',
+          parent_id: undefined,
+          lead_id: undefined,
+        },
+        {
+          ...snap.projects[0],
+          id: 'project-x',
+          org_id: org,
+          key: 'SEC',
+          parent_id: 'program-x',
+          lead_id: undefined,
+        },
+      )
       snap.access.push({ project_id: 'project-x', profile_id: seat, level: 'user' })
       snap.issues.push({
         ...snap.issues[0],

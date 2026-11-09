@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -98,7 +98,7 @@ describe('the task window keeps a bounded thread', () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = plannerFixture()
+    snap = underProgram(plannerFixture())
     author = snap.profiles[0].id
     for (const [id, num] of [
       ['task-a', 1],
@@ -174,7 +174,7 @@ describe('the task window keeps a bounded thread', () => {
     figure = budget.THREAD_KEEP.rows
     budget.THREAD_KEEP.rows = 120
     await store.initStore()
-    store.P.watchComments('task-a')
+    store.P.watchComments('task-a', snap.orgs[0].id)
   })
 
   afterEach(() => {
@@ -240,8 +240,8 @@ describe('the task window keeps a bounded thread', () => {
       // another task
       void P.loadNewerComments()
       const changed = last()
-      P.watchComments('task-b')
-      P.watchComments('task-a')
+      P.watchComments('task-b', snap.orgs[0].id)
+      P.watchComments('task-a', snap.orgs[0].id)
       publish({ comments: range(250, 300), earlier: true })
       changed?.answer.resolve({ comments: range(169, 219), earlier: true })
       await settle()

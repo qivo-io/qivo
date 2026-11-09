@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { LIMITS } from '../../convex/lib/limits'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { subscribersStandIn, taskFollowersStandIn } from '../store/followerStandIn.setup'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
 /* A task's subscribers popover on the real store as it closes. A close
@@ -69,7 +69,7 @@ beforeEach(async () => {
   )
   playClosingAnimations()
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  const snap: Snapshot = underProgram(plannerFixture())
   org = snap.orgs[0].id
   projectId = snap.projects[0].id
   const me = snap.profiles[0]
@@ -145,15 +145,6 @@ beforeEach(async () => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  const issue = P.issues.find((it) => it.uuid === 'task-a')
-  if (!issue) throw new Error('missing the task')
-  await act(async () =>
-    root.render(
-      <TooltipProvider>
-        <ui.IssueSubscribers issue={issue} />
-      </TooltipProvider>,
-    ),
-  )
 })
 
 afterEach(async () => {
@@ -173,8 +164,8 @@ const offered = () =>
 const press = (selector: string) =>
   act(async () => document.querySelector<HTMLElement>(selector)?.click())
 
-/* Renders the popover for task QN-40, which the workspace does not hold,
-   from the window's own answer of it (P.taskDetail). */
+/* Renders the popover for task QN-40 from the window's own answer of it
+   (P.taskDetail), as the app shows every task. */
 async function showFromAnswer() {
   network.mutation.mockClear()
   P.watchComments('far', org)
@@ -314,6 +305,7 @@ describe('the task subscribers popover past the followers cap', () => {
     try {
       // Person 0000 followed last, past the cap
       followers = ['leo', 'aisha', 'person-0000']
+      await showFromAnswer()
       await press('[data-task-subscribe]')
       const listed = [...document.querySelectorAll('[data-task-subscriber]')].map((row) =>
         row.getAttribute('data-task-subscriber'),
@@ -331,6 +323,7 @@ describe('the task subscribers popover past the followers cap', () => {
 
 describe('the task subscribers popover', () => {
   it('keeps the person search while it closes, and starts over when it opens', async () => {
+    await showFromAnswer()
     await press('[data-task-subscribe]')
     await press('[data-task-subscriber-add-open]')
     const field = search()

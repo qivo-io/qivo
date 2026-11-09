@@ -104,7 +104,6 @@ describe('tasks on demand', () => {
     double.live?.holdWindow(null)
     double.live?.failWindow(null)
     liveParts.STALL.ms = 60_000
-    liveParts.TASKS.atBoot = true
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })

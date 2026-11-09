@@ -123,20 +123,11 @@ describe('archiving and deleting from the Archive or delete window', () => {
     vi.unstubAllGlobals()
   })
 
-  const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)
-  const handle = (uuid: string) => vm(uuid)?.id ?? ''
   const accept = (name: string) => {
     answers[name] = () => Promise.resolve(null)
   }
   const refuse = (name: string, message: string) => {
     answers[name] = () => Promise.reject(new Error(message))
-  }
-  /* Another write is refused, so the store rolls back to the snapshot it
-     holds, from before the archive. */
-  const rollBack = async () => {
-    refuse('issues:update', 'refused')
-    P.updateIssue(handle('c'), { title: 'renamed' })
-    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
   }
 
   /* Another write is in flight, so deliveries are held. `remove` is accepted
@@ -156,30 +147,6 @@ describe('archiving and deleting from the Archive or delete window', () => {
     await vi.waitFor(() => expect(P.org.name).toBe('Restored Labs'))
   }
 
-  it('shows an archived subtree restored while deliveries were held', async () => {
-    accept('issues:archive')
-    const subtree = new Set(['root', 'a', 'b', 'aa'])
-    await restoredWhileHeld(
-      async () => !!(await P.archiveIssue(handle('root'), '')),
-      (snap) => {
-        snap.issues = snap.issues.filter((issue) => !subtree.has(issue.id))
-      },
-    )
-    expect(['root', 'a', 'b', 'aa'].map((id) => vm(id)?.uuid)).toEqual(['root', 'a', 'b', 'aa'])
-  })
-
-  it('shows a deleted task and its subtask restored while deliveries were held', async () => {
-    accept('issues:deleteDeep')
-    await restoredWhileHeld(
-      () => P.deleteIssue(handle('a'), [handle('aa')], true),
-      (snap) => {
-        snap.issues = snap.issues.filter((issue) => issue.id !== 'a' && issue.id !== 'aa')
-      },
-    )
-    expect(vm('a')).toBeDefined()
-    expect(vm('aa')?.parent).toBe(handle('a'))
-  })
-
   it('shows a deleted project restored while deliveries were held', async () => {
     accept('projects:deleteDeep')
     const org = P.project('plan')?.org ?? ''
@@ -192,161 +159,6 @@ describe('archiving and deleting from the Archive or delete window', () => {
     )
     expect(P.project('plan')).toBeDefined()
     expect(P.project('work')).toBeDefined()
-    expect(vm('root')).toBeDefined()
-  })
-
-  /* What issues:archive answers for an archive it made: the task and
-     whether it was active, or no flag from a server before it, or nothing
-     from a test double. Each paints the archive. */
-  const ARCHIVED_ANSWERS = [null, { issue: null }, { issue: null, archived: true }]
-
-  it.each(ARCHIVED_ANSWERS)(
-    'archives the task alone when its subtasks are kept, and keeps them through a rollback (answer %o)',
-    async (answer) => {
-      answers['issues:archive'] = () => Promise.resolve(answer)
-      const archived = P.archiveIssue(handle('root'), '  Moved to the next release  ', true)
-      expect(vm('root')).toBeDefined() // nothing changes before the server answers
-      expect(await archived).toBe(true)
-      expect(requests).toEqual([
-        {
-          name: 'issues:archive',
-          args: expect.objectContaining({
-            id: 'root',
-            reason: 'Moved to the next release',
-            keep_subtasks: true,
-          }),
-        },
-      ])
-      expect(vm('root')).toBeUndefined()
-      // the direct subtasks become top-level tasks; theirs stay under them
-      expect(vm('a')?.parent).toBeNull()
-      expect(vm('b')?.parent).toBeNull()
-      expect(vm('aa')?.parent).toBe(handle('a'))
-
-      await rollBack()
-      expect(vm('root')).toBeUndefined()
-      expect(vm('a')?.parent).toBeNull()
-      expect(vm('b')).toBeDefined()
-      expect(vm('aa')?.parent).toBe(handle('a'))
-      expect(vm('c')?.title).toBe('c')
-    },
-  )
-
-  it('keeps an accepted archive gone when another write paints a delivery held from before it', async () => {
-    let saved: (value: null) => void = () => {}
-    answers['issues:update'] = () => new Promise((resolve) => (saved = resolve))
-    P.updateIssue(handle('c'), { title: 'renamed' })
-    // while that write is in flight, a delivery that still holds the task is held
-    await deliverSnap((snap) => {
-      const c = snap.issues.find((issue) => issue.id === 'c')
-      if (c) c.title = 'renamed on the server'
-    })
-    accept('issues:archive')
-    expect(await P.archiveIssue(handle('root'), '')).toBe(true)
-    expect(vm('root')).toBeUndefined()
-    // the write settles, and the held delivery is painted
-    saved(null)
-    await vi.waitFor(() => expect(vm('c')?.title).toBe('renamed on the server'))
-    expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
-  })
-
-  it('keeps no marker for an archive a held delivery already holds, so a restore shows', async () => {
-    let saved: (value: null) => void = () => {}
-    answers['issues:update'] = () => new Promise((resolve) => (saved = resolve))
-    P.updateIssue(handle('c'), { title: 'renamed' })
-    const subtree = new Set(['root', 'a', 'b', 'aa'])
-    // while that write is in flight, the delivery without the subtree is held
-    await deliverSnap((snap) => {
-      snap.issues = snap.issues.filter((issue) => !subtree.has(issue.id))
-    })
-    accept('issues:archive')
-    expect(await P.archiveIssue(handle('root'), '')).toBe(true)
-    expect(vm('root')).toBeUndefined()
-    // the subtree is restored before the write settles, and that delivery is held too
-    await deliverSnap((snap) => {
-      const c = snap.issues.find((issue) => issue.id === 'c')
-      if (c) c.title = 'renamed on the server'
-    })
-    saved(null)
-    await vi.waitFor(() => expect(vm('c')?.title).toBe('renamed on the server'))
-    expect(['root', 'a', 'b', 'aa'].map((id) => vm(id)?.uuid)).toEqual(['root', 'a', 'b', 'aa'])
-  })
-
-  it.each(ARCHIVED_ANSWERS)(
-    'archives the whole subtree otherwise, and keeps it gone through a rollback (answer %o)',
-    async (answer) => {
-      answers['issues:archive'] = () => Promise.resolve(answer)
-      expect(await P.archiveIssue(handle('root'), '')).toBe(true)
-      expect(requests[0].args).not.toHaveProperty('keep_subtasks')
-      expect(requests[0].args).not.toHaveProperty('reason')
-      expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
-      await rollBack()
-      expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
-      expect(vm('c')).toBeDefined()
-    },
-  )
-
-  /* An archive found the task already archived changed nothing, and the
-     earlier one may have kept or taken the subtasks, so the board keeps
-     the last delivery until one holds that archive, here one that took
-     the subtree, or one that kept the subtasks. */
-  it.each([
-    [true, 'took the subtree'],
-    [false, 'kept the subtasks'],
-  ])(
-    'paints nothing for an archive that found the task already archived (Keep subtasks %s, the earlier one %s)',
-    async (keep, earlier) => {
-      answers['issues:archive'] = () => Promise.resolve({ issue: null, archived: false })
-      expect(await P.archiveIssue(handle('root'), 'why', keep)).toBe('already')
-      expect(vm('root')).toBeDefined()
-      expect(vm('a')?.parent).toBe(handle('root'))
-      expect(vm('b')?.parent).toBe(handle('root'))
-      expect(vm('aa')?.parent).toBe(handle('a'))
-      if (earlier === 'took the subtree') {
-        await deliverSnap((snap) => {
-          snap.issues = snap.issues.filter((issue) => issue.id === 'c')
-        })
-        expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-        ])
-      } else {
-        await deliverSnap((snap) => {
-          snap.issues = snap.issues.filter((issue) => issue.id !== 'root')
-          for (const issue of snap.issues)
-            if (issue.parent_id === 'root') issue.parent_id = undefined
-        })
-        expect(vm('root')).toBeUndefined()
-        expect(vm('a')?.parent).toBeNull()
-        expect(vm('b')?.parent).toBeNull()
-      }
-      expect(vm('c')).toBeDefined()
-    },
-  )
-
-  it('changes nothing when the server refuses the archive, and a rollback brings nothing back', async () => {
-    refuse('issues:archive', 'a subtask is in a project you cannot edit')
-    expect(await P.archiveIssue(handle('root'), 'why', true)).toBe(false)
-    // nothing painted, so the toast says nothing was reverted
-    expect(vi.mocked(window.showToast).mock.calls.at(-1)?.[0]).toBe("Couldn't save.")
-    expect(vm('root')).toBeDefined()
-    expect(vm('a')?.parent).toBe(handle('root'))
-    await rollBack()
-    expect(vm('root')).toBeDefined()
-    expect(vm('a')?.parent).toBe(handle('root'))
-  })
-
-  it('sends a delete reason trimmed, and none when it is blank', async () => {
-    accept('issues:deleteDeep')
-    expect(await P.deleteIssue(handle('c'), [], true, '  Duplicate  ')).toBe(true)
-    expect(requests[0]).toEqual({
-      name: 'issues:deleteDeep',
-      args: expect.objectContaining({ id: 'c', reason: 'Duplicate' }),
-    })
-    expect(await P.deleteIssue(handle('b'), [], true, '   ')).toBe(true)
-    expect(requests[1].args).not.toHaveProperty('reason')
   })
 
   it('waits for the server before a project leaves, and keeps it on a refusal', async () => {
@@ -361,7 +173,6 @@ describe('archiving and deleting from the Archive or delete window', () => {
     expect(vi.mocked(window.showToast).mock.calls.at(-1)?.[0]).toBe("Couldn't save.")
     expect(P.project('plan')).toBeDefined()
     expect(P.project('work')).toBeDefined()
-    expect(vm('root')).toBeDefined()
 
     let settle: (value: null) => void = () => {}
     answers['projects:deleteDeep'] = () => new Promise((resolve) => (settle = resolve))
@@ -384,39 +195,6 @@ describe('archiving and deleting from the Archive or delete window', () => {
     await vi.waitFor(() => expect(P.projectState('plan')).toBe('gone'))
     expect(P.project('plan')).toBeUndefined()
     expect(P.project('work')).toBeUndefined()
-    expect(vm('root')).toBeUndefined()
-  })
-
-  it('keeps an accepted task delete through a rollback, with the subtasks it left behind detached', async () => {
-    accept('issues:deleteDeep')
-    expect(await P.deleteIssue(handle('a'), [], true)).toBe(true)
-    expect(vm('a')).toBeUndefined()
-    expect(vm('aa')?.parent).toBeNull()
-    await rollBack()
-    expect(vm('a')).toBeUndefined()
-    expect(vm('aa')?.parent).toBeNull()
-    expect(vm('root')).toBeDefined()
-    expect(vm('c')?.title).toBe('c')
-  })
-
-  it('keeps no marker for a delete whose delivery came first, so a restored task stays through a rollback', async () => {
-    let settle: (value: null) => void = () => {}
-    answers['issues:deleteDeep'] = () => new Promise((resolve) => (settle = resolve))
-    const deleted = P.deleteIssue(handle('c'), [], true)
-    // the delivery without the task lands before the answer
-    await deliverSnap((snap) => {
-      snap.issues = snap.issues.filter((issue) => issue.id !== 'c')
-    })
-    settle(null)
-    expect(await deleted).toBe(true)
-    expect(vm('c')).toBeUndefined()
-    // the task comes back from Deleted items
-    await deliverSnap(() => {})
-    expect(vm('c')).toBeDefined()
-    refuse('issues:update', 'refused')
-    P.updateIssue(handle('b'), { title: 'renamed' })
-    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
-    expect(vm('c')).toBeDefined()
   })
 
   it('keeps an accepted project delete through a rollback', async () => {
@@ -439,12 +217,5 @@ describe('archiving and deleting from the Archive or delete window', () => {
     await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
     expect(P.project('plan')).toBeUndefined()
     expect(P.project('work')).toBeUndefined()
-    expect(['root', 'a', 'b', 'aa', 'c'].map(vm)).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    ])
   })
 })

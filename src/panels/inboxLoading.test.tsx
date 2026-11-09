@@ -222,13 +222,6 @@ async function loadingInbox(
   return { store, snap, opened, onExit, reads, goTo, publish, current: () => shown.open }
 }
 
-/** Lets the last task window answer. */
-const arrive = () =>
-  act(async () => {
-    double.live?.holdWindow(null)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
-
 /* The task answer of fd000000-b, QN-2 (convex/lib/taskWindow.ts), with
    `subtasks`. */
 const answerOf = (snap: Snapshot, subtasks: unknown[] = []) => {
@@ -287,37 +280,6 @@ async function paneActions() {
 }
 
 describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () => {
-  it('opens its task in the pane from the server when picked, reads its inbox item, and keeps the same window once it arrives', async () => {
-    const { store, snap, opened, reads, current } = await loadingInbox()
-    const open = container.querySelector<HTMLButtonElement>(
-      '[data-message="fd000000-b"] .inbox-message-open',
-    )
-    await act(async () => open?.click())
-    const org = snap.orgs[0].id
-    // the pane's window reads the task's whole item once the item answers
-    await vi.waitFor(() =>
-      expect(reads().map(([, args]) => args)).toEqual([
-        { org_id: org, issue_id: 'fd000000-b', through: Date.parse('2026-09-14T09:00:00.000Z') },
-      ]),
-    )
-    // by a reference with the row's organization, number and uuid
-    const { refParts } = await import('../lib/taskReference')
-    expect(refParts(opened.at(-1))).toEqual({ org, num: 2, uuid: 'fd000000-b' })
-    expect(container.querySelector('[data-task-loading]')?.textContent).toContain('Loading QN-2…')
-    expect(windowReads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'fd000000-b' }])
-    await act(async () => windowReads[0]?.next(answerOf(snap)))
-    await vi.waitFor(() => expect(paneWindow()?.textContent).toContain('Run the soak test'))
-    expect(paneWindow()?.dataset.taskSource).toBe('answer')
-    const pane = paneWindow()
-    // the reference turns into the task's handle as the task arrives, and
-    // the pane's window stays
-    await arrive()
-    expect(store.P.stillLoading()).toBeNull()
-    expect(current()).toBe(store.P.handleOf('fd000000-b'))
-    expect(paneWindow()).toBe(pane)
-    expect(paneWindow()?.dataset.taskSource).toBe('workspace')
-  })
-
   it('offers Open task in board for a task the workspace does not hold, in the row menu and the pane', async () => {
     // the row menu places itself with a ResizeObserver, which jsdom lacks
     vi.stubGlobal(
@@ -498,34 +460,6 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     const restore = buttonNamed('Restore', paneWindow() ?? document)
     await act(async () => restore?.click())
     await vi.waitFor(() => expect(window.showToast).toHaveBeenCalledWith('Restored QN-2'))
-  })
-
-  it("keeps the pane's window and the comment typed in it when the home organization changes", async () => {
-    const { store, snap, current, publish } = await loadingInbox()
-    await arrive()
-    const open = container.querySelector<HTMLButtonElement>(
-      '[data-message="00000000-a"] .inbox-message-open',
-    )
-    await act(async () => open?.click())
-    expect(current()).toBe('QN-1')
-    await act(async () => threadReads.at(-1)?.({ comments: [], earlier: false }))
-    const pane = paneWindow()
-    expect(pane?.dataset.taskSource).toBe('workspace')
-    const composer = await editorOf('Leave a comment')
-    await act(async () => composer.commands.insertContent('Soak it twice'))
-    // the person also holds a seat in Beta, which becomes the home organization
-    const BETA = 'org-beta'
-    const me = snap.profiles[0]
-    snap.orgs.push({ ...snap.orgs[0], id: BETA, slug: 'beta', name: 'Beta', next_issue_num: 0 })
-    snap.profiles.push({ ...me, id: 'me-beta', org_id: BETA })
-    snap.myProfileIds.unshift('me-beta')
-    await publish()
-    expect(store.P.homeOrg).toBe(BETA)
-    // the task's handle moves to its uuid, and the pane follows it
-    expect(current()).toBe('00000000-a')
-    expect(paneWindow()).toBe(pane)
-    expect(composer.isDestroyed).toBe(false)
-    expect((await editorOf('Leave a comment')).getText()).toBe('Soak it twice')
   })
 
   it('offers the relation pickers in the pop-out over a task it shows from its answer, read from the server', async () => {
@@ -722,8 +656,6 @@ describe('the Inbox of a session that never asked for every task', { timeout: 20
     TASKS.atBoot = false
   })
   afterEach(async () => {
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
     const { __layerProbe } = await import('../store/planner')
     expect(__layerProbe?.faults()).toEqual([])

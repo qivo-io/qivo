@@ -177,53 +177,6 @@ async function open() {
 }
 
 describe('the rows a view brings', () => {
-  it('shapes a model for each task only the answer brings, the same object while its row holds', async () => {
-    const parent = row('par', 7, {
-      has_subtasks: true,
-      status: 'backlog',
-      group_done: true,
-      span: { start_week: '2026-09-07', end_week: '2026-09-28', partial: false },
-    })
-    answer = ok([row('kid', 8, { parent_id: 'par', status: 'done' }), row('task-a', 1)], [parent])
-    await open()
-    const P = store.P
-    const kid = P.viewTask(SLOT, 'kid')
-    const par = P.viewTask(SLOT, 'par')
-    expect(kid?.title).toBe('Task kid')
-    // a parent the answer sends is a group, Done by its facts, with its span
-    expect(par && P.isGroup(par)).toBe(true)
-    expect(par && P.isDone(par)).toBe(true)
-    expect(par?.start).not.toBeNull()
-    expect(kid?.parent).toBe(par?.id)
-    expect(P.anyTask(kid?.id ?? '')).toBe(kid)
-    // a held task is the workspace's, never a model of the answer's row
-    expect(P.viewTask(SLOT, 'task-a')).toBeUndefined()
-    // the same data keeps the object; a changed row gives a new one
-    await serve(structuredClone(answer))
-    expect(P.viewTask(SLOT, 'kid')).toBe(kid)
-    await serve(ok([row('kid', 8, { parent_id: 'par', title: 'Renamed' })], [parent]))
-    expect(P.viewTask(SLOT, 'kid')).not.toBe(kid)
-    expect(P.viewTask(SLOT, 'kid')?.title).toBe('Renamed')
-    // a drifted fact moves the parent's Done
-    await serve(ok([row('kid', 8, { parent_id: 'par' })], [{ ...parent, group_done: false }]))
-    const after = P.viewTask(SLOT, 'par')
-    expect(after && P.isDone(after)).toBe(false)
-  })
-
-  it('lets the workspace win where it holds a task, and the row stand in once it drops it', async () => {
-    answer = ok([row('task-a', 1, { title: 'From the answer' })])
-    await open()
-    const handle = store.P.handleOf('task-a') ?? ''
-    expect(store.P.anyTask(handle)?.title).toBe('Task task-a')
-    expect(store.P.viewTask(SLOT, 'task-a')).toBeUndefined()
-    // the workspace no longer holds it, while the answer still names it
-    snapshot.issues = snapshot.issues.filter((t) => t.id !== 'task-a')
-    deliver(structuredClone(snapshot))
-    await turn()
-    expect(store.P.handleOf('task-a')).toBeNull()
-    expect(store.P.viewTask(SLOT, 'task-a')?.title).toBe('From the answer')
-  })
-
   it("keeps a view's rows while its read stops, and lets them go on other arguments or when its page leaves", async () => {
     answer = ok([row('far', 9)])
     await open()
@@ -669,15 +622,6 @@ describe('the delays of tasks only a view brings', () => {
     await turn()
     await turn()
     expect(verdict()).toMatchObject({ status: 'late' })
-  })
-
-  it("asks no load for a held task, whose delay stays the workspace's", async () => {
-    snapshot.projects[0].track_delay = true
-    deliver(structuredClone(snapshot))
-    await turn()
-    answer = ok([{ ...planned('task-a', 1) }])
-    await open()
-    expect(loads.size).toBe(0)
   })
 })
 

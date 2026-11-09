@@ -190,9 +190,9 @@ describe('the unread summary in the store', () => {
 
   it("is watched again by a retry's registry and a re-init's, held until then", async () => {
     await store.initStore()
-    // after a reconnect the parts stay silent and the workspace stalls
+    // after a reconnect the root part stays silent and the workspace stalls
     liveParts.STALL.ms = 30
-    live().reconnect(['workspace:root'])
+    live().reconnect([])
     await wait(80)
     expect(P().snapshotTrouble()?.kind).toBe('failed')
     expect(P().inboxSummary).toMatchObject({ state: 'ok', current: false })

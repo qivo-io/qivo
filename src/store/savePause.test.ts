@@ -104,6 +104,18 @@ describe('the pause while Qivo cannot save', () => {
     status.syncStatus.setProbe(() => new Promise<void>((resolve) => probes.push(resolve)))
     status.syncStatus.setSocket(UP)
     await answerProbe()
+    // the task edits below are on task-a, which its window shows from its
+    // own answer, as the app shows every task
+    store.P.watchComments('task-a', snapshot.orgs[0].id)
+    await settle()
+    vi.advanceTimersByTime(0)
+    await settle()
+  }
+  /* task-a as its window shows it from its own answer (P.taskDetail). */
+  const windowTask = () => {
+    const view = store.P.taskDetail('task-a', snapshot.orgs[0].id)?.view
+    if (!view) throw new Error('the window shows no task-a')
+    return view
   }
   /** Answers the newest probe query, as the server would. */
   async function answerProbe() {
@@ -203,7 +215,7 @@ describe('the pause while Qivo cannot save', () => {
     await goOffline()
     expect(P.savePause()).toEqual({ kind: 'offline', waiting: 0 })
     expect(P.editsPaused()).toBe(true)
-    const [task] = P.issues
+    const task = windowTask()
     expect(await P.updateIssue(task.id, { status: 'progress' })).toBe(false)
     expect(await P.addComment('task-a', 'Soak run finished')).toBe(false)
     // the read that opening a task sends says nothing, a read the person asks for says why
@@ -220,8 +232,8 @@ describe('the pause while Qivo cannot save', () => {
     P.setIssueSubscribed(task.id, true)
     await settle()
     expect(sent).toEqual([])
-    expect(P.issueById[task.id].status).toBe('todo')
-    expect(P.issueById[task.id].subscribed).toBe(false)
+    expect(windowTask().status).toBe('todo')
+    expect(windowTask().subscribed).toBe(false)
     expect(P.inboxMarks.size).toBe(0)
     expect(showToast).toHaveBeenCalledWith(store.OFFLINE_TEXT, 'error')
     expect(showToast).toHaveBeenCalledTimes(2)
@@ -231,7 +243,7 @@ describe('the pause while Qivo cannot save', () => {
   it('counts a change sent before the drop, lets it save on reconnect and then ends the pause', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     void P.updateIssue(task.id, { status: 'progress' })
     await goOffline()
     expect(P.savePause()).toEqual({ kind: 'offline', waiting: 1 })
@@ -244,14 +256,14 @@ describe('the pause while Qivo cannot save', () => {
     await answerProbe()
     expect(P.savePause()).toBeNull()
     expect(P.hasUnconfirmed()).toBe(false)
-    expect(P.issueById[task.id].status).toBe('progress')
+    expect(windowTask().status).toBe('progress')
     expect(showToast).toHaveBeenCalledWith('Back online. Editing is on again.', 'success')
   })
 
   it('pauses after a write waits too long on a connected socket and ends when it settles', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     void P.updateIssue(task.id, { status: 'progress' })
     vi.advanceTimersByTime(status.SLOW_SAVE_MS)
     expect(P.savePause()).toEqual({ kind: 'slow', waiting: 1 })
@@ -280,7 +292,7 @@ describe('the pause while Qivo cannot save', () => {
   it('notes each sent change without its text, and clears it on an answer', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     void P.updateIssue(task.id, { description: 'Secret plans for the launch' })
     void P.addComment('task-a', 'Private remark')
     await settle()
@@ -296,7 +308,11 @@ describe('the pause while Qivo cannot save', () => {
     await settle()
     expect(notes()).toEqual([])
 
-    // a removal names its task, though its paint took the row away first
+    // a removal names its task, from the window's attachments answer
+    store.P.showSections({}, true)
+    await settle()
+    vi.advanceTimersByTime(0)
+    await settle()
     store.P.removeAttachment('file-a')
     await settle()
     expect(JSON.parse(notes()[0][1])).toEqual([
@@ -327,7 +343,7 @@ describe('the pause while Qivo cannot save', () => {
   it('signs out past a waiting change only on a second press, and then clears every note', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     void P.updateIssue(task.id, { title: 'Recalibrate' })
     await settle()
     storage.set('qivo.unconfirmed.v1:org-8:someone-else:closed-page', '[]')
@@ -407,7 +423,7 @@ describe('the pause while Qivo cannot save', () => {
 
   it('tells the next start about a change no page heard back about, once', async () => {
     await boot()
-    const [task] = store.P.issues
+    const task = windowTask()
     void store.P.updateIssue(task.id, { description: 'Never confirmed' })
     await settle()
     expect(notes()).toHaveLength(1)

@@ -14,7 +14,8 @@ import {
   labelsByIdsStandIn,
 } from '../store/labelPagesStandIn.setup'
 import type { IssueVM } from '../store/planner'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import { taskWindowStandIn } from '../store/taskWindowStandIn.setup'
 
 /* The task label picker (LabelPicker.tsx) on the real store. Its batches
    (labels:picker) and the window's reads of labels by id (labels:byIds)
@@ -66,6 +67,10 @@ let holding: boolean
 let refuseNext: string | null
 /* The window's read of a task the workspace does not hold. */
 let windowRead: ((value: unknown) => void) | null
+/* The window's read of the fixture's task, answered from the server's data
+   by the shared stand-in, and that task's uuid. */
+let taskRead: ((value: unknown) => void) | null = null
+let taskUuid = ''
 /* Publishes the workspace again, as Convex delivers a write's transition
    before the write's answer. */
 let publish: () => void
@@ -86,10 +91,13 @@ const label = (name: string, extra: Partial<Label> = {}): Label => ({
    the task carrying `on`. */
 async function load(o: { labels?: Label[]; serverOnly?: Label[]; on?: string[] } = {}) {
   vi.resetModules()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one that
+  // holds tasks, so the window's read opens its task
+  snap = underProgram(plannerFixture())
   org = snap.orgs[0].id
   projectId = snap.projects[0].id
   const taskId = crypto.randomUUID()
+  taskUuid = taskId
   snap.issues.push({
     id: taskId,
     org_id: org,
@@ -114,10 +122,16 @@ async function load(o: { labels?: Label[]; serverOnly?: Label[]; on?: string[] }
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publish = () => next(structuredClone(snap))
+      publish = () => {
+        next(structuredClone(snap))
+        answerTask()
+      }
       publish()
     }
-    if (name === 'taskWindow:task') windowRead = next
+    if (name === 'taskWindow:task') {
+      windowRead = next
+      if ((args as { ref?: string }).ref === taskId) taskRead = next
+    }
     if (name === 'labels:byIds')
       try {
         next(labelsByIdsStandIn(server, args))
@@ -130,6 +144,20 @@ async function load(o: { labels?: Label[]; serverOnly?: Label[]; on?: string[] }
   P = store.P
   await store.initStore()
   picker = await import('./LabelPicker')
+  // the task as its window shows it from its own answer, as the app shows
+  // every task
+  P.watchComments(taskId, org)
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+  answerTask()
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+}
+
+/* Answers the window's read of the fixture's task from the workspace the
+   server holds now (store/taskWindowStandIn.setup.ts). */
+function answerTask() {
+  taskRead?.(
+    structuredClone(taskWindowStandIn(snap, 'taskWindow:task', { org_id: org, ref: taskUuid })),
+  )
 }
 
 beforeEach(() => {
@@ -152,6 +180,7 @@ beforeEach(() => {
   holding = false
   refuseNext = null
   windowRead = null
+  taskRead = null
   publish = () => {}
   network.query.mockImplementation((ref, args: LabelPageArgs) => {
     if (getFunctionName(ref) !== 'labels:picker') return Promise.resolve(null)
@@ -219,7 +248,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-const task = () => P.issues[0]
+/* The fixture's task as its window shows it from its own answer. */
+const task = () => P.taskDetail(taskUuid, org)?.view as IssueVM
 
 /* Opens the picker for the task `of` answers, the store's task by default,
    as the window renders it again with the task's model after each change

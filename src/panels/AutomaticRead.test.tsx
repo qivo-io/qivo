@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* Opening a task reads its inbox item on its own (IssueDetail), once the
    item's answer froze where the unread part starts, through
@@ -58,7 +58,7 @@ afterEach(async () => {
 describe('the automatic read in the task window', { timeout: 20_000 }, () => {
   it('is refused quietly while edits pause and goes out once the pause ends', async () => {
     vi.resetModules()
-    const snap: Snapshot = plannerFixture()
+    const snap: Snapshot = underProgram(plannerFixture())
     snap.issues.push({
       id: 'task-a',
       org_id: snap.orgs[0].id,
@@ -101,7 +101,7 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
     vi.advanceTimersByTime(OFFLINE_DELAY_MS)
     expect(store.P.editsPaused()).toBe(true)
 
-    const task = store.P.issues.find((it) => it.uuid === 'task-a')
+    const task = { id: store.P.openTask('task-a', store.P.homeOrg, null), uuid: 'task-a' }
     if (!task) throw new Error('missing the task')
     await act(async () =>
       root.render(

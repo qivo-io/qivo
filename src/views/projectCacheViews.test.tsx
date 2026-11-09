@@ -85,8 +85,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')

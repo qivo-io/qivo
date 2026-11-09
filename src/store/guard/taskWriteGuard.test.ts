@@ -86,8 +86,6 @@ describe('the guard against task writes before the ask', () => {
   })
 
   afterEach(async () => {
-    const { TASKS } = await import('../liveParts')
-    TASKS.atBoot = true
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })

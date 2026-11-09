@@ -527,32 +527,6 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     expect(asks).toEqual([])
   })
 
-  it('keeps the remembered project for a task address of a task in it, else opens the task’s sub-project, checking nothing', async () => {
-    const snap = world()
-    // QN-7 in Firmware, which the workspace holds from its boot
-    snap.orgs[0].next_issue_num = 8
-    snap.issues.push({
-      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
-      project_id: FW,
-    })
-    for (const [id, org, name] of [
-      [LUMA, ORG, 'Luma Sensor'],
-      [PORTAL, PARTNER, 'Firmware'],
-    ] as const) {
-      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id, org))
-      await until(() => shown() === 'kanban', 'the Board')
-      expect(q('[data-scope-crumb] h1')?.textContent).toBe(name)
-      expect(asks).toEqual([])
-      // a task's address chose the scope, so nothing is remembered
-      expect(sentProjects()).toEqual([])
-      if (id === LUMA) await leave()
-    }
-    // the person's own press on the scope the task chose remembers it
-    await until(() => q(`aside [data-subproject-row="${FW}"] > button`), "Firmware's row")
-    await click(q(`aside [data-subproject-row="${FW}"] > button`))
-    await until(() => lastSent() === FW, 'Firmware remembered')
-  })
-
   it('keeps the remembered project for a task address while the project cache has not named the task’s project, and settles the scope once it does', async () => {
     const snap = world()
     // QN-7 in Firmware, which the workspace holds from its boot
@@ -816,33 +790,6 @@ describe('what is remembered', { timeout: 60_000 }, () => {
     await click(q(`[data-directory-row="${LUMA}"] [data-directory-open]`))
     await until(() => lastSent() === LUMA, 'the directory row remembered')
     expect(sentProjects()).toEqual([LUMA, PORTAL, LUMA])
-  })
-
-  it('is written by Plan on roadmap from an Inbox task address, whose scope reading the task left alone', async () => {
-    const snap = world()
-    // QN-7 in Firmware, which the workspace holds from its boot
-    snap.orgs[0].next_issue_num = 8
-    snap.issues.push({
-      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
-      project_id: FW,
-    })
-    await app(snap, '/app/testbed/inbox/tasks/qn-7', remembering(PORTAL, PARTNER))
-    // the Inbox's pane shows the discussion alone on a desktop, so the
-    // person plans from the window it pops out
-    await until(() => q('[data-task-popout]'), "the pane's pop-out")
-    await click(q('[data-task-popout]'))
-    await until(() => q('[data-plan-on-roadmap]'), 'Plan on roadmap')
-    // the task's address chose Firmware beneath the Inbox, which is not
-    // remembered
-    expect(shown()).toBe('inbox')
-    expect(sentProjects()).toEqual([])
-    await click(q('[data-plan-on-roadmap]'))
-    await until(() => shown() === 'roadmap', "Firmware's Roadmap")
-    expect(q('[data-scope-crumb] h1')?.textContent).toBe('Firmware')
-    // the jump is the person's choice of that Roadmap, so it is remembered
-    await until(() => lastSent() === FW, 'Firmware remembered')
-    expect(sentProjects()).toEqual([FW])
-    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW })
   })
 })
 
@@ -1236,119 +1183,95 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
   }
 
   it('boots with no scope and no check, lets the task name its project, and remembers nothing', async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
-    try {
-      await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
-      await until(() => windowReads.length > 0, "the window's read")
-      await settle()
-      // the remembered project waits, unchecked and unopened
-      expect(asks).toEqual([])
-      expect(viewReads()).toEqual([])
-      expect(q('[data-project-chooser]')).toBeNull()
-      await act(async () => {
-        for (const read of windowReads) read(taskAnswer())
-      })
-      await until(() => shown() === 'kanban', "Firmware's Board")
-      expect(store.P.scopeInfo(FW)).not.toBeNull()
-      expect(asks).toEqual([])
-      // a task's address chose it, so it is not remembered
-      expect(sentProjects()).toEqual([])
-    } finally {
-      TASKS.atBoot = true
-    }
+    await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
+    await until(() => windowReads.length > 0, "the window's read")
+    await settle()
+    // the remembered project waits, unchecked and unopened
+    expect(asks).toEqual([])
+    expect(viewReads()).toEqual([])
+    expect(q('[data-project-chooser]')).toBeNull()
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    await until(() => shown() === 'kanban', "Firmware's Board")
+    expect(store.P.scopeInfo(FW)).not.toBeNull()
+    expect(asks).toEqual([])
+    // a task's address chose it, so it is not remembered
+    expect(sentProjects()).toEqual([])
   })
 
   it('takes the startup rule once the task names no project', async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
-    try {
-      await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
-      await until(() => windowReads.length > 0, "the window's read")
-      await act(async () => {
-        for (const read of windowReads) read(taskAnswer('unavailable'))
-      })
-      // the remembered project opens as the scope, which the project cache
-      // checks
-      await until(() => shown() === 'kanban', "Partner portal's Board")
-      expect(cacheReads().flat()).toContain(PORTAL)
-      expect(asks).toEqual([])
-    } finally {
-      TASKS.atBoot = true
-    }
+    await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
+    await until(() => windowReads.length > 0, "the window's read")
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer('unavailable'))
+    })
+    // the remembered project opens as the scope, which the project cache
+    // checks
+    await until(() => shown() === 'kanban', "Partner portal's Board")
+    expect(cacheReads().flat()).toContain(PORTAL)
+    expect(asks).toEqual([])
   })
 
   it('keeps the remembered scope while Back or Forward reaches such a task, and moves to the task’s own project once its answer names it', async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
-    try {
-      await app(world(), '/app/testbed', remembering(PORTAL, PARTNER), () =>
-        cache({ byIdsLoading: true }),
-      )
-      await chooser('checking')
-      await go('/app/testbed/board/tasks/qn-7')
-      await until(() => windowReads.length > 0, "the window's read")
-      // the remembered scope stays beneath the task while its answer is on
-      // its way, as a task address keeps the scope it does not leave
-      expect(store.P.scopeInfo(PORTAL)).toMatchObject({ id: PORTAL, state: 'loading' })
-      await act(async () => cache(null))
-      await act(async () => {
-        for (const read of windowReads) read(taskAnswer())
-      })
-      await until(
-        () => shown() === 'kanban' && q('[data-scope-crumb] h1')?.textContent === 'Firmware',
-        "Firmware's Board",
-      )
-      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
-      expect(asks).toEqual([])
-      // a task's address chose it, so nothing is remembered
-      expect(sentProjects()).toEqual([])
-    } finally {
-      TASKS.atBoot = true
-    }
+    await app(world(), '/app/testbed', remembering(PORTAL, PARTNER), () =>
+      cache({ byIdsLoading: true }),
+    )
+    await chooser('checking')
+    await go('/app/testbed/board/tasks/qn-7')
+    await until(() => windowReads.length > 0, "the window's read")
+    // the remembered scope stays beneath the task while its answer is on
+    // its way, as a task address keeps the scope it does not leave
+    expect(store.P.scopeInfo(PORTAL)).toMatchObject({ id: PORTAL, state: 'loading' })
+    await act(async () => cache(null))
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    await until(
+      () => shown() === 'kanban' && q('[data-scope-crumb] h1')?.textContent === 'Firmware',
+      "Firmware's Board",
+    )
+    expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+    expect(asks).toEqual([])
+    // a task's address chose it, so nothing is remembered
+    expect(sentProjects()).toEqual([])
   })
 
   it('lands on the task’s own sub-project when its answer comes in the render of a workspace update and the project cache names its project later', async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
     const crumb = () => q('[data-scope-crumb] h1')?.textContent
-    try {
-      for (const gone of [false, true]) {
-        const snap = world()
-        // the remembered project, Partner portal, or one the cache answers
-        // gone, and neither holds Firmware
-        const lost = meta(snap, 'Taken away', ORG, false)
-        const [remembered, org] = gone ? [lost, ORG] : [PORTAL, PARTNER]
-        // the cache answers nothing yet, so the task's answer cannot name
-        // Firmware's parent
-        holdAtBoot = true
-        await app(snap, '/app/testbed/board/tasks/qn-7', remembering(remembered, org))
-        await until(() => windowReads.length > 0, "the window's read")
-        // the task's answer and a workspace update, here the partner
-        // organization's new name, land in one render
-        await act(async () => {
-          for (const read of windowReads) read(taskAnswer())
-          const next = structuredClone(server)
-          next.orgs[1].name = 'Partner Company'
-          publish(next)
-        })
-        await settle()
-        await act(async () => cache(null))
-        // must fail for a settle record the same render cleared, which
-        // keeps Partner portal or shows the chooser's lost note
-        await until(() => crumb() === 'Firmware', "Firmware's Board")
-        await settle()
-        expect(crumb()).toBe('Firmware')
-        expect(shown()).toBe('kanban')
-        expect(chooserState()).toBeUndefined()
-        expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
-        expect(asks).toEqual([])
-        // a task's address chose the scope, so nothing is remembered
-        expect(sentProjects()).toEqual([])
-        await leave()
-      }
-    } finally {
-      TASKS.atBoot = true
+    for (const gone of [false, true]) {
+      const snap = world()
+      // the remembered project, Partner portal, or one the cache answers
+      // gone, and neither holds Firmware
+      const lost = meta(snap, 'Taken away', ORG, false)
+      const [remembered, org] = gone ? [lost, ORG] : [PORTAL, PARTNER]
+      // the cache answers nothing yet, so the task's answer cannot name
+      // Firmware's parent
+      holdAtBoot = true
+      await app(snap, '/app/testbed/board/tasks/qn-7', remembering(remembered, org))
+      await until(() => windowReads.length > 0, "the window's read")
+      // the task's answer and a workspace update, here the partner
+      // organization's new name, land in one render
+      await act(async () => {
+        for (const read of windowReads) read(taskAnswer())
+        const next = structuredClone(server)
+        next.orgs[1].name = 'Partner Company'
+        publish(next)
+      })
+      await settle()
+      await act(async () => cache(null))
+      // must fail for a settle record the same render cleared, which
+      // keeps Partner portal or shows the chooser's lost note
+      await until(() => crumb() === 'Firmware', "Firmware's Board")
+      await settle()
+      expect(crumb()).toBe('Firmware')
+      expect(shown()).toBe('kanban')
+      expect(chooserState()).toBeUndefined()
+      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      await leave()
     }
   })
 })

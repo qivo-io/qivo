@@ -917,7 +917,6 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     publishWorkspace()
     await turn()
     expect(P.homeOrg).toBe(BETA)
-    expect(P.issueById[H]?.uuid).toBe('beta-40')
     release()
     await turn()
     expect(sent('files:uploadUrl').map((w) => w.args)).toEqual([

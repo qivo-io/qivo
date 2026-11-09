@@ -6412,24 +6412,24 @@ export const __layerProbe = STRICT_LAYERS
       /** The reasons P.askTasks was called with since the last call, in
           order. */
       asks: () => askReasons.splice(0),
-      /** Changes a task's title outside any layer and emits. The title
-          changes in a painted copy, since the server's rows are frozen
+      /** Changes an organization's name outside any layer and emits. The
+          name changes in a painted copy, since the server's rows are frozen
           (writeServerRow). */
       writeOutside() {
-        const id = rows.issues.keys().next().value
-        let issue: Row<'issues'> | undefined
+        const id = rows.orgs.keys().next().value
+        let org: Row<'organizations'> | undefined
         // a pass that changes nothing, which leaves a copy to change
         workspaceRows.paint(() => {
-          issue = id === undefined ? undefined : rows.issues.get(id)
+          org = id === undefined ? undefined : rows.orgs.get(id)
         })
-        if (issue) issue.title = `${issue.title}!`
+        if (org) org.name = `${org.name}!`
         emit()
       },
       /** Writes into one of the server's rows outside any paint, which
           throws. */
       writeServerRow() {
-        const issue = rows.issues.values().next().value
-        if (issue) issue.title = `${issue.title}!`
+        const org = rows.orgs.values().next().value
+        if (org) org.name = `${org.name}!`
       },
       /** Changes a task's view model behind the task index and rebuilds,
           which the full-rebuild check (checkTasks) refuses. */
@@ -6457,8 +6457,8 @@ export const __layerProbe = STRICT_LAYERS
       paintClock() {
         const layer = layers.open('probe', {
           workspace: () => {
-            const issue = rows.issues.values().next().value
-            if (issue) issue.updated_at = new Date().toISOString()
+            const org = rows.orgs.values().next().value
+            if (org) org.name = new Date().toISOString()
           },
         })
         layers.send(layer, deliveryCounters())

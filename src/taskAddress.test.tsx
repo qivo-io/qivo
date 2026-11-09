@@ -218,29 +218,6 @@ const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
 const note = () => document.querySelector('[data-task-gone] [role="status"]')?.textContent
 
 describe('a boot on a task address', { timeout: 30_000 }, () => {
-  it('reads the task with the first parts, shows it from that answer while tasks load, and turns editable in place once the workspace holds it', async () => {
-    const { store, snap, arrive } = await bootAt('/app/testbed/board/mine/tasks/qn-2')
-    const org = snap.orgs[0].id
-    // the read the boot subscribed with its first parts
-    expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
-    await waitFor(() => note() === 'Loading QN-2…', 'the loading frame')
-    expect(dialog()?.querySelector('[data-task-loading]')).not.toBeNull()
-    await act(async () => reads[0]?.next(answerOf(snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
-    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
-    // the window's reference took the boot's read over; its own read by
-    // uuid is the only other
-    expect(reads.filter((read) => read.args.ref === 'QN-2')).toHaveLength(1)
-    expect(reads.map((read) => read.args.ref)).toEqual(['QN-2', SOAK])
-    expect(store.P.stillLoading()).not.toBeNull()
-    const window = dialog()
-    // the workspace brings it: the same window, now the workspace's
-    await arrive()
-    await waitFor(() => dialog()?.dataset.taskSource === 'workspace', "the workspace's task")
-    expect(dialog()).toBe(window)
-    expect(location.pathname).toBe('/app/testbed/board/mine/tasks/qn-2')
-  })
-
   it("moves the page behind it to the task's own project once its answer names it", async () => {
     const { snap } = await bootAt('/app/testbed/board/tasks/qn-2', {
       // My view, which an earlier app saved as the scope, is read by
@@ -377,8 +354,6 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
     TASKS.atBoot = false
   })
   afterEach(async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = true
     // the boot asked for no task, and no write needed one
     const { __layerProbe } = await import('./store/planner')
     expect(__layerProbe?.asks()).toEqual([])

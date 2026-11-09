@@ -15,10 +15,7 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | {
-    holdWindow(from: string | null): void
-    failWindow(from: string | null): void
-  },
+  live: null as null | object,
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
@@ -46,6 +43,8 @@ type Live = {
 
 const AT = '2026-09-14T08:00:00.000Z'
 const SECTIONS = ['taskWindow:task', 'taskWindow:links', 'taskWindow:attachments']
+/* The lists a window reads only while it shows the task's details. */
+const LISTS = ['taskWindow:links', 'taskWindow:attachments']
 
 let P: Planner
 let container: HTMLDivElement
@@ -251,7 +250,6 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
-  double.live?.holdWindow(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -311,10 +309,13 @@ const answerAll = async () => {
   )
 }
 
+/* Opens the window on task `uuid` of the fixture by the reference that
+   names it (P.openTask), as the store holds no task: the window shows it
+   from its own answer. */
 async function openTask(uuid = 'fam') {
-  const handle = P.handleOf(uuid)
-  if (!handle) throw new Error(`missing ${uuid}`)
-  await openHandle(handle)
+  const found = snap.issues.find((t) => t.id === uuid)
+  if (!found) throw new Error(`missing ${uuid}`)
+  await openHandle(P.openTask(found.id, found.org_id, found.num))
 }
 
 /* Opens the window on `handle`, a handle or a reference
@@ -369,59 +370,6 @@ const rollup = () => {
 }
 
 describe("the task window's sections", { timeout: 20_000 }, () => {
-  /* What the window shows of each list: its heading, its rows and its line. */
-  const shown = () =>
-    ['subtasks', 'links', 'attachments'].map((name) => ({
-      head: headingOf(name),
-      rows: section(name).querySelector('.task-section-head')?.nextElementSibling?.outerHTML,
-    }))
-
-  it("lists a complete workspace's rows at once, and the answers take over unseen", async () => {
-    await load()
-    await openTask()
-    for (const name of SECTIONS) expect(open(name)).toHaveLength(1)
-    for (const name of ['subtasks', 'links', 'attachments']) {
-      expect(stateOf(name)).toBe('complete')
-      expect(section(name).dataset.sectionSource).toBe('workspace')
-    }
-    expect(headingOf('subtasks')).toBe('Subtasks (3)')
-    expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
-    expect(headingOf('links')).toBe('Linked tasks (1)')
-    expect(headingOf('attachments')).toBe('Attachments (1)')
-    expect(document.body.textContent).not.toContain('Loading subtasks…')
-    // Progress and Remaining by the workspace's rules, as before the sections
-    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
-    expect(rollup()).toEqual(['complete', 'Σ 4.5h'])
-    const before = shown()
-    await answerAll()
-    for (const name of ['subtasks', 'links', 'attachments'])
-      expect(section(name).dataset.sectionSource).toBe('answer')
-    // the answers agree, so nothing on screen moved
-    expect(shown()).toEqual(before)
-    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
-    expect(rollup()).toEqual(['complete', 'Σ 4.5h'])
-  })
-
-  it("keeps a complete workspace's lists while no answer comes, as when offline", async () => {
-    await load()
-    await openTask()
-    // the connection is down: the subscriptions wait and nothing answers
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
-    expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
-    expect(titlesOf('links')).toEqual(['Ship firmware'])
-    expect(
-      [...section('attachments').querySelectorAll('[data-attachment-open]')].map(
-        (b) => (b as HTMLElement).dataset.attachmentOpen,
-      ),
-    ).toEqual(['file-1.pdf'])
-    for (const name of ['subtasks', 'links', 'attachments']) expect(noteOf(name)).toBeNull()
-    // a removal works from the workspace's rows, as before the sections
-    const remove = section('subtasks').querySelector<HTMLButtonElement>(
-      '[data-related-task="QN-28"] .task-related-remove',
-    )
-    expect(remove?.disabled).toBe(false)
-  })
-
   it('shows each whole list with its count, and the totals from it', async () => {
     await load()
     await openTask()
@@ -461,19 +409,16 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(noteOf('attachments')).toBe('Some attachments could not be loaded.')
   })
 
-  it('says a list is not available when the server no longer lists the task', async () => {
+  it('says a list is not available when the server no longer lists the task beside it', async () => {
     await load()
     await openTask()
-    await answer('taskWindow:task', { state: 'unavailable' })
+    // the task shows from its own answer, and its other lists no longer
+    // list it, as when access changed between the reads
+    await answer('taskWindow:task', taskAnswer([]))
     await answer('taskWindow:links', { state: 'unavailable' })
     await answer('taskWindow:attachments', { state: 'unavailable' })
-    expect(stateOf('subtasks')).toBe('unavailable')
-    expect(noteOf('subtasks')).toBe('Subtasks are not available.')
-    expect(titlesOf('subtasks')).toEqual([])
     expect(noteOf('links')).toBe('Linked tasks are not available.')
     expect(noteOf('attachments')).toBe('Attachments are not available.')
-    expect(progress()).toEqual(['Completion unknown.'])
-    expect(rollup()).toEqual(['unknown', 'Unknown'])
   })
 
   it('says a whole empty list is empty', async () => {
@@ -493,6 +438,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
   it('says No attachments. only to a person who cannot add files', async () => {
     await load()
     await openTask('manual')
+    await answer('taskWindow:task', { ...taskAnswer([], true, false, 'manual'), level: 'viewer' })
     await act(async () => one('taskWindow:attachments').deliver(filesAnswer([])))
     expect(noteOf('attachments')).toBe('No attachments.')
     expect(section('attachments').textContent).not.toContain('Drop files here')
@@ -502,12 +448,15 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     await load()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await openTask()
+    await answer(
+      'taskWindow:task',
+      taskAnswer([short(row('kid-1')), short(row('kid-2')), short(row('kid-ro'))]),
+    )
     await fail('taskWindow:task')
-    // a complete workspace's rows stay, and the read that failed says so
+    // the rows read before stay, and the read that failed says so
     expect(stateOf('subtasks')).toBe('failed')
     expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
     expect(noteOf('subtasks')).toBe("Couldn't load the latest subtasks.Retry")
-    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
     // the thread's failure rows are its own
     expect(document.querySelectorAll('[data-thread-failure]')).toHaveLength(0)
     const retry = section('subtasks').querySelector<HTMLElement>('[data-section-failure] button')
@@ -523,11 +472,11 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(headingOf('subtasks')).toBe('Subtasks')
     expect(noteOf('subtasks')).toBe("Couldn't load the latest subtasks.Retry")
     expect(progress()).toEqual(['Completion unknown.', 'Not every subtask could be loaded.'])
-    // the workspace's lists stay beside the other failures
+    // a list that fails before its first answer has no rows to keep
     await fail('taskWindow:links')
-    expect(noteOf('links')).toBe("Couldn't load the latest linked tasks.Retry")
+    expect(noteOf('links')).toBe("Couldn't load linked tasks.Retry")
     await fail('taskWindow:attachments')
-    expect(noteOf('attachments')).toBe("Couldn't load the latest attachments.Retry")
+    expect(noteOf('attachments')).toBe("Couldn't load attachments.Retry")
   })
 
   it('reads a short row from the answer for a task the workspace does not hold', async () => {
@@ -593,21 +542,11 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     ])
   })
 
-  it("shows the person's own edit of a held subtask at once", async () => {
-    await load()
-    network.mutation.mockImplementation(() => new Promise(() => {}))
-    await openTask()
-    await answerAll()
-    await act(async () => {
-      P.updateIssue(P.handleOf('kid-1') ?? '', { title: 'Mount the new board' })
-    })
-    expect(titlesOf('subtasks')).toEqual(['Mount the new board', 'Order parts', 'Read the manual'])
-  })
-
-  it('removes a link only the links answer holds, between held tasks, with the kind it shows', async () => {
+  it('removes a link the links answer holds with the kind it shows', async () => {
     await load()
     await openTask()
-    // a link to a held task that no workspace delivery holds yet
+    await answer('taskWindow:task', taskAnswer([]))
+    // a link no workspace delivery holds
     await answer(
       'taskWindow:links',
       linksAnswer(
@@ -755,6 +694,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     )
     await load(next)
     await openTask()
+    await answer('taskWindow:task', taskAnswer([]))
     const links = [
       link('link-1', 'fam', 'other'),
       { ...link('link-2', 'blocker', 'fam'), created_at: '2026-09-14T09:00:00.000Z' },
@@ -778,6 +718,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
   it('opens and downloads a file only the answer holds', async () => {
     await load()
     await openTask()
+    await answer('taskWindow:task', taskAnswer([]))
     await answer('taskWindow:attachments', filesAnswer([file('file-1'), file('file-2')]))
     network.query.mockImplementation(async (ref, args: { attachment_ids?: string[] }) =>
       getFunctionName(ref) === 'files:mintUrls'
@@ -903,12 +844,16 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       const roll = document.querySelector('[data-remaining-rollup]')?.textContent ?? null
       frames.push({ subtasks, links, rollup: roll })
     }
+    const handleOf = (uuid: string) => {
+      const found = snap.issues.find((t) => t.id === uuid)
+      return found ? P.openTask(found.id, found.org_id, found.num) : null
+    }
     const show = (uuid: string) =>
       act(async () =>
         root.render(
           <TooltipProvider>
             <Profiler id="window" onRender={record}>
-              <IssueDetail issueId={P.handleOf(uuid)} onClose={vi.fn()} onOpen={opened} />
+              <IssueDetail issueId={handleOf(uuid)} onClose={vi.fn()} onOpen={opened} />
             </Profiler>
           </TooltipProvider>,
         ),
@@ -956,22 +901,27 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
     )
   }
 
-  it('loads none for the desktop Inbox pane, once for its pop-out, and stops them as it closes', async () => {
+  it('loads the lists for none of the desktop Inbox pane, once for its pop-out, and stops them as it closes', async () => {
     await load()
     await openInbox()
     const item = document.querySelector<HTMLElement>('[data-message="fam"] .inbox-message-open')
     await act(async () => item?.click())
     expect(one('snapshot:threadComments').args).toMatchObject({ issue_id: 'fam' })
-    for (const name of SECTIONS) expect(subs.filter((s) => s.name === name)).toEqual([])
+    // the pane shows the task from its own read, and lists none of its
+    // links or files
+    expect(one('taskWindow:task').args).toMatchObject({ org_id: snap.orgs[0].id })
+    await answer('taskWindow:task', taskAnswer([]))
+    for (const name of LISTS) expect(subs.filter((s) => s.name === name)).toEqual([])
     const pane = document.querySelector('.inbox-detail-frame')
     await act(async () => pane?.querySelector<HTMLElement>('[data-task-popout]')?.click())
     for (const name of SECTIONS) expect(one(name).args).toMatchObject({ org_id: snap.orgs[0].id })
     const dialog = document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')
     await act(async () => dialog?.querySelector<HTMLElement>('[data-task-close]')?.click())
     expect(document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')).toBeNull()
-    for (const name of SECTIONS) expect(open(name)).toEqual([])
-    // the pane keeps its thread
+    for (const name of LISTS) expect(open(name)).toEqual([])
+    // the pane keeps its thread and its task's read
     expect(one('snapshot:threadComments').args).toMatchObject({ issue_id: 'fam' })
+    expect(open('taskWindow:task')).toHaveLength(1)
   })
 
   it('loads them on a phone only while the Details tab shows', async () => {
@@ -985,7 +935,10 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
     )
     await load()
     await openTask()
-    for (const name of SECTIONS) expect(open(name)).toEqual([])
+    // the task's own read runs for every window, its lists only with the
+    // Details tab
+    await answer('taskWindow:task', taskAnswer([]))
+    for (const name of LISTS) expect(open(name)).toEqual([])
     const tab = (label: string) =>
       [...document.querySelectorAll<HTMLElement>('[data-mobile-task-sections] button')].find(
         (b) => b.textContent === label,
@@ -993,14 +946,13 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
     await act(async () => tab('Details')?.click())
     for (const name of SECTIONS) expect(open(name)).toHaveLength(1)
     await act(async () => tab('Activity')?.click())
-    for (const name of SECTIONS) expect(open(name)).toEqual([])
+    for (const name of LISTS) expect(open(name)).toEqual([])
+    expect(open('taskWindow:task')).toHaveLength(1)
   })
 })
 
 describe('a new task before the server stored it', { timeout: 20_000 }, () => {
   afterEach(async () => {
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
     const { __layerProbe } = await import('../store/planner')
     expect(__layerProbe?.faults()).toEqual([])
@@ -1010,10 +962,7 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
       and holds each create until the test accepts it with the number the
       server gave it. */
   async function loadNotAsked() {
-    await load(fixture(), async () => {
-      const { TASKS } = await import('../store/liveParts')
-      TASKS.atBoot = false
-    })
+    await load(fixture())
     const held: { name: string; args: Record<string, unknown>; resolve: (v: unknown) => void }[] =
       []
     network.mutation.mockImplementation((ref, args) => {
@@ -1139,7 +1088,6 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
       const { taskRef } = await import('../lib/taskReference')
       await openHandle(taskRef({ org: snap.orgs[0].id, num: 31, uuid: 'other' }))
       await answer('taskWindow:task', taskAnswer([], true, false, 'other'))
-      expect(P.handleOf('other')).toBeNull()
       await act(async () => {
         void (made === 'parent'
           ? P.createParent('QN-31', 'Build the rig')
@@ -1211,10 +1159,17 @@ describe("the task window's labels", { timeout: 20_000 }, () => {
     document.querySelector<HTMLButtonElement>(`button[aria-label="Remove label “${name}”"]`)
   const far = (id: string, name: string) => ({ id, name, color: '#4C9AFF' })
   const hardware = () => far('label-hw', 'Hardware')
+  /* The family task's own answer, with its label rows. */
+  const answerLabelled = () =>
+    answer('taskWindow:task', {
+      ...taskAnswer([]),
+      labels: snap.issueLabels.filter((row) => row.issue_id === 'fam'),
+    })
 
   it('shows each label as loading, then by name in name order, and its × takes it off', async () => {
     await load(labelled())
     await openTask()
+    await answerLabelled()
     const waiting = {
       text: 'Loading label…',
       waiting: true,
@@ -1283,6 +1238,7 @@ describe("the task window's labels", { timeout: 20_000 }, () => {
   it('keeps the chips after a failed read, each removable, with one Try again', async () => {
     await load(labelled())
     await openTask()
+    await answerLabelled()
     await fail('labels:byIds')
     const failed = chips()
     expect(failed).toHaveLength(4)
@@ -1307,6 +1263,7 @@ describe("the task window's labels", { timeout: 20_000 }, () => {
     next.issueLabels = next.issueLabels.filter((il) => il.label_id !== 'label-gone')
     await load(next)
     await openTask()
+    await answerLabelled()
     await answer('labels:byIds', {
       rows: [far('label-far-a', 'Far A'), far('label-far-b', 'Far B'), hardware()],
     })

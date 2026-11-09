@@ -774,40 +774,6 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-2')
   })
 
-  /** The snapshot row of an active task, as it reads once restored. */
-  const active = (num: number) => ({
-    id: `archived-${num}`,
-    org_id: ORG,
-    project_id: FW,
-    num,
-    title: `Task ${num}`,
-    description: '',
-    status: 'done' as const,
-    priority: 'medium' as const,
-    paused: false,
-    created_at: '2026-01-01T08:00:00.000Z',
-    updated_at: '2026-01-01T08:00:00.000Z',
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  })
-  /** Delivers the snapshot with `nums` active again. */
-  async function restoredElsewhere(...nums: number[]) {
-    snap.issues.push(...nums.map(active))
-    snap.delivered_at = new Date(Date.parse(snap.delivered_at) + 1000).toISOString()
-    await act(async () => publish(structuredClone(snap)))
-    await settle()
-  }
-
-  it('lets a task someone else restores leave as soon as the snapshot shows it', async () => {
-    await open()
-    await last().answer([task(1), task(2), task(3)])
-    const asked = calls.length
-    await restoredElsewhere(2)
-    expect(rowIds()).toEqual(['archived-1', 'archived-3'])
-    expect(text('[data-archive-count]')).toBe('2 archived tasks')
-    expect(calls.length).toBe(asked)
-  })
-
   it('lets a restore that lands just after a change of scope touch nothing', async () => {
     await open()
     await last().answer([task(1), task(2)])

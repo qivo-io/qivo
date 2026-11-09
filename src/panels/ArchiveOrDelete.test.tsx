@@ -8,6 +8,7 @@ import type { ProjectRemovalSummary } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { isProjectListRead, projectListsServer } from '../store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
+import { taskWindowStandIn } from '../store/taskWindowStandIn.setup'
 
 /* The Archive or delete windows on the real store, fed one snapshot. Mira
    (me) is a standard user who leads Plan and only views Docs. In Work, under
@@ -54,6 +55,9 @@ let summaries: (() => Promise<ProjectRemovalSummary>)[]
 // its failures
 let windowRead: ((value: unknown) => void) | null
 let windowFail: ((error: unknown) => void) | null
+// the answers of the windows open on a fixture task, run again on each
+// delivery
+const fixtureWindows = new Set<() => void>()
 
 function fixture() {
   const next = plannerFixture()
@@ -118,6 +122,7 @@ async function load() {
   )
   windowRead = null
   windowFail = null
+  fixtureWindows.clear()
   // a project's page and Archived projects read the server from the
   // snapshot last delivered
   let held = snap
@@ -133,12 +138,22 @@ async function load() {
         next(structuredClone(snapshot))
         settings.rerun()
         lists.rerun()
+        for (const answer of fixtureWindows) answer()
       }
       deliver(snap)
     }
-    if (getFunctionName(ref) === 'taskWindow:task') {
-      windowRead = next
-      windowFail = fail
+    if (name === 'taskWindow:task') {
+      // QN-40's window the cases answer by hand; a fixture task's answers
+      // from the snapshot last delivered, as the server would
+      if (args.ref === 'far') {
+        windowRead = next
+        windowFail = fail
+      } else {
+        const answer = () => next(taskWindowStandIn(held, name, args))
+        fixtureWindows.add(answer)
+        answer()
+        return () => fixtureWindows.delete(answer)
+      }
     }
     return () => {}
   })
@@ -150,6 +165,8 @@ async function load() {
   const store = await import('../store/planner')
   P = store.P
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('../store/oracleScope.setup')).nameProjects(store.P, snap)
   dialogs = await import('./Modals')
 }
 
@@ -223,20 +240,31 @@ async function type(value: string) {
 const choose = (fate: 'archive' | 'delete') =>
   click(find(`[data-fate-card="${fate}"] input[type="radio"]`))
 const subtasks = () => find<HTMLButtonElement>('[data-subtask-choice]')
-const handle = (uuid: string) => P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+/* The task with uuid `uuid` as its window shows it from its own answer. */
+const shownTask = (uuid: string) => {
+  const task = P.taskDetail(uuid, snap.orgs[0].id)?.view
+  if (!task) throw new Error(`the window shows no ${uuid}`)
+  return task
+}
 
-/* Opens the task window on `uuid`, wired to the store as the task window does. */
+/* Opens the task window on `uuid` from its own answer, as the app opens
+   every task, and the Archive or delete window over it, wired to the
+   store as the task window does. */
 async function openTask(uuid: string) {
+  P.watchComments(uuid, snap.orgs[0].id)
+  await settle()
+  const task = shownTask(uuid)
   const onClose = vi.fn()
   await act(async () =>
     root.render(
       <TooltipProvider>
         <dialogs.ArchiveOrDeleteTaskModal
           key={uuid}
-          issueId={handle(uuid)}
+          issueId={task.id}
+          task={task}
           onClose={onClose}
-          onArchive={async (reason, keep) => !!(await P.archiveIssue(handle(uuid), reason, keep))}
-          onDelete={(subs, reason) => P.deleteIssue(handle(uuid), subs, true, reason)}
+          onArchive={async (reason, keep) => !!(await P.archiveIssue(task.id, reason, keep))}
+          onDelete={(subs, reason) => P.deleteIssue(task.id, subs, true, reason)}
         />
       </TooltipProvider>,
     ),
@@ -286,7 +314,6 @@ describe('Archive or delete a task', () => {
         args: expect.objectContaining({ id: 'root', keep_subtasks: true }),
       },
     ])
-    expect(P.issues.find((it) => it.uuid === 'todo-sub')?.parent).toBeNull()
   })
 
   it('requires a reason to archive unfinished work, and asks none for a Done task', async () => {
@@ -382,11 +409,15 @@ describe('Archive or delete a task', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const onClose = vi.fn()
     const failed = () => Promise.reject(new Error('the follow-up threw'))
+    P.watchComments('finished', snap.orgs[0].id)
+    await settle()
+    const task = shownTask('finished')
     await act(async () =>
       root.render(
         <TooltipProvider>
           <dialogs.ArchiveOrDeleteTaskModal
-            issueId={handle('finished')}
+            issueId={task.id}
+            task={task}
             onClose={onClose}
             onArchive={failed}
             onDelete={failed}
@@ -487,7 +518,6 @@ describe('Archive or delete a task', () => {
     await settle()
     expect(button('Delete 4 tasks').disabled).toBe(false)
     expect(window.showToast).toHaveBeenCalled()
-    expect(P.issues.find((it) => it.uuid === 'root')).toBeDefined()
     // the lists did not change, so the window does not ask again
     expect(text('[data-task-fate]')).not.toContain('The subtasks changed')
     await click(button('Cancel'))

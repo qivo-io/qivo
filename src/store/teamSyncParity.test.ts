@@ -102,6 +102,9 @@ async function start(snap: Snapshot) {
     else next(structuredClone(snap))
     return () => {}
   })
+  // the store half of this parity derives from every task held, which only a store that asked for every task has
+  const { TASKS } = await import('./liveParts')
+  TASKS.atBoot = true
   const store = await import('./planner')
   await store.initStore()
   await nameEveryone(store.P, snap)

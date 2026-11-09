@@ -149,6 +149,9 @@ describe('roadmap undo through the client store', () => {
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       return new Promise((resolve, reject) => requests.push({ name, args, resolve, reject }))
     })
+    // these cases edit the tasks the store holds, which only a store that asked for every task has
+    const { TASKS } = await import('./liveParts')
+    TASKS.atBoot = true
     const store = await import('./planner')
     P = store.P
     roadmapSlots = store.ROADMAP_MILESTONE_SLOTS

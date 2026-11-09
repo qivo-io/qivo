@@ -404,8 +404,6 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   double.live?.forceInbox(null)
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   if (double.live) double.live.inboxStandIn.examine = Number.POSITIVE_INFINITY
   const { PAGE_LIMITS } = await import('../lib/pagedList')
   PAGE_LIMITS.starts = 1000

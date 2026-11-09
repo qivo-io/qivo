@@ -1,3 +1,4 @@
+import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Whole } from './guard/liveDouble.setup'
 
@@ -178,14 +179,22 @@ describe('task holders in the store', () => {
     projectId = snap.projects.find((project) => project.type === 'project')!.id
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      next(structuredClone(snap))
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      const name = getFunctionName(ref)
+      // a task window's thread and history start empty
+      if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'snapshot:threadHistory') next({ events: [], earlier: false, next: null })
+      else next(structuredClone(snap))
       return () => {}
     })
     const store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
+    held = snap
     return store.P
   }
+  let held: Snapshot
 
   afterEach(() => {
     vi.restoreAllMocks()
@@ -205,8 +214,14 @@ describe('task holders in the store', () => {
   })
 
   it('keeps existing holders by id, whom it does not hold', async () => {
-    const P = await as('Admin')
-    const task = P.issues.find((issue) => issue.title === 'Existing assignment')!
+    // the project's lead, who sees the task its window shows from its own
+    // answer
+    const P = await as('Project lead')
+    const row = held.issues.find((issue) => issue.title === 'Existing assignment')!
+    P.watchComments(row.id, row.org_id)
+    await vi.waitFor(() => expect(P.taskDetail(row.id, row.org_id)?.view).toBeTruthy())
+    const task = P.taskDetail(row.id, row.org_id)?.view
+    if (!task) throw new Error('the window shows no task')
     const viewer = P.users.find((u) => u.name === 'Direct View')
     expect(viewer).toBeUndefined()
     expect(task.assignee).toBeTruthy()

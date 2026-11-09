@@ -415,21 +415,6 @@ describe('a phone layer over the project chooser', { timeout: 30_000 }, () => {
   })
 })
 
-describe('a task someone else removes while the Inbox shows it', { timeout: 30_000 }, () => {
-  it("keeps the address in the task's organization, with no new entry", async () => {
-    const drop = await boot('/app/testbed/inbox/tasks/qn-1', false)
-    await waitFor(() => document.querySelector('[data-task-chrome]'), 'the task pane')
-    await settle()
-    expect(location.pathname).toBe('/app/testbed/inbox/tasks/qn-1')
-    const entries = history.length
-    await drop()
-    await waitFor(() => document.querySelector('[data-task-gone]'), 'the note')
-    await settle()
-    expect(location.pathname).toBe('/app/testbed/inbox/tasks/qn-1')
-    expect(history.length).toBe(entries)
-  })
-})
-
 describe('a project page whose project leaves while its delete waits', { timeout: 30_000 }, () => {
   it("keeps the page and its waiting window on a phone's Back", async () => {
     const live = await boot('/app/testbed/settings/project/2', true)
@@ -588,35 +573,6 @@ describe('a pick from the Back menu past a task with a comment not yet sent', {
     expect(document.querySelector('[cmdk-root]')).not.toBeNull()
     expect(location.pathname).toBe(task)
   })
-
-  it('holds the page for a dialog whose request still runs, and asks nothing', async () => {
-    const task = await taskWithComment()
-    network.mutation.mockImplementation((ref) =>
-      getFunctionName(ref) === 'issues:archive' ? new Promise(() => {}) : Promise.resolve(null),
-    )
-    await press('Task actions')
-    await press('Archive or delete…')
-    // unfinished work needs a reason to be archived
-    const reason = await waitFor(
-      () => document.querySelector<HTMLTextAreaElement>('[data-modal-shell] textarea'),
-      'the reason',
-    )
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
-        reason,
-        'Replaced by the new rig',
-      )
-      reason.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await press('Archive')
-    await settle()
-    expect(history.state?.qivoLayer).toBeTruthy()
-    await act(async () => history.go(-2))
-    await settle()
-    expect(question()).toBeNull()
-    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
-    expect(location.pathname).toBe(task)
-  })
 })
 
 describe('a Back that closes a phone layer over a task the workspace does not hold', {
@@ -767,46 +723,6 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
           ?.textContent?.includes(title),
       title,
     )
-  /* Makes the Testbed seat a guest seat and Other Co, a new seat, the home
-     organization, whose active QN-1 and QN-7 take the numbers of Testbed's
-     tasks. The Testbed seat keeps its grant on the project. */
-  let otherOrg = ''
-  const swapHome = (next: Snapshot) => {
-    otherOrg = crypto.randomUUID()
-    const seat = crypto.randomUUID()
-    const meta = crypto.randomUUID()
-    const sub = crypto.randomUUID()
-    const [base, work] = next.projects
-    next.orgs.push({ ...next.orgs[0], id: otherOrg, name: 'Other Co', slug: 'other' })
-    next.profiles[0].org_role = 'guest'
-    next.profiles.push({ ...next.profiles[0], id: seat, org_id: otherOrg, org_role: 'user' })
-    next.myProfileIds.push(seat)
-    next.access.push({ project_id: base.id, profile_id: next.profiles[0].id, level: 'user' })
-    next.projects.push(
-      { ...base, id: meta, org_id: otherOrg, key: 'OTH', num: 1, name: 'Other', lead_id: seat },
-      {
-        ...work,
-        id: sub,
-        org_id: otherOrg,
-        key: 'OTHW',
-        num: 2,
-        name: 'Other work',
-        parent_id: meta,
-      },
-    )
-    for (const [num, title] of [
-      [1, 'Plan the other rollout'],
-      [7, 'Ship the other kit'],
-    ] as const)
-      next.issues.push({
-        ...next.issues[0],
-        id: crypto.randomUUID(),
-        org_id: otherOrg,
-        project_id: sub,
-        num,
-        title,
-      })
-  }
   /* Waits for the window's note that the task was archived. */
   const archivedNote = () =>
     waitFor(
@@ -838,47 +754,6 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
     // the window reads the task again, by the number its address names in
     // its organization, then by its uuid
     expect(asked()).toBe(3)
-  })
-
-  it('opens again on Forward after the home organization changed, not the new home task of its number', async () => {
-    const { board, task, change } = await openArchived()
-    await act(async () => history.back())
-    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
-    await settle()
-    expect(location.pathname).toBe(board)
-    // Testbed becomes a guest seat, and Other Co's active QN-7 the home QN-7
-    await change(swapHome)
-    await settle()
-    const { P } = await import('./store/planner')
-    expect(P.homeOrg).toBe(otherOrg)
-    expect(P.issueById['QN-7']?.title).toBe('Ship the other kit')
-    await act(async () => history.forward())
-    await settle()
-    expect(location.pathname).toBe(task)
-    await archivedNote()
-    const window = document.querySelector('[data-task-gone]')?.closest('[role="dialog"]')
-    expect(window?.textContent).toContain('Recalibrate the old sensor')
-    expect(document.body.textContent).not.toContain('Ship the other kit')
-  })
-
-  it('opens an active result again after the home organization changed', async () => {
-    const { board, task, change } = await openFromSearch(true)
-    expect(task).toBe('/app/testbed/board/tasks/qn-1')
-    await act(async () => history.back())
-    await waitFor(() => !document.querySelector('[data-task-chrome]'), 'the window to close')
-    await settle()
-    expect(location.pathname).toBe(board)
-    await change(swapHome)
-    await settle()
-    const { P } = await import('./store/planner')
-    expect(P.issueById['QN-1']?.title).toBe('Plan the other rollout')
-    await act(async () => history.forward())
-    await settle()
-    expect(location.pathname).toBe(task)
-    await shows('Calibrate the sensor')
-    expect(
-      document.querySelector('[data-task-chrome]')?.closest('[role="dialog"]')?.textContent,
-    ).not.toContain('Plan the other rollout')
   })
 
   it('opens again on Forward after Back closed it', async () => {
