@@ -388,7 +388,7 @@ function JobLines(props: {
         ? `The automatic download started at ${when(job.auto_download_at)}, here or on another device.`
         : null
     return (
-      <div className="space-y-1">
+      <div className="space-y-1" data-export-bytes={job.archive_bytes ?? undefined}>
         <div className="flex flex-wrap items-center gap-2">
           <span>
             Ready. Available until {when(job.expires_at ?? '')}

@@ -216,6 +216,15 @@
  * scope, and deletes it for good from its row menu once Delete now counts
  * no earlier items (deletedItems.purgeSummary)
  * (ui/deleted-items).
+ * It makes a task of its own in Alpha and deletes it over REST, then, with
+ * an origin private file system file standing in for the save picker,
+ * presses Export data in Settings › Organization › General as Nora, waits
+ * up to five minutes for the deployment's export job to be ready, for the
+ * automatic save into that file and its record, reads the file back,
+ * unzips it and checks its format 4 manifest, t0 in data/tasks, its
+ * deleted task in deleted/tasks and deleted/items, no file contents and
+ * its size, and that the record line shows today; it deletes the file
+ * and its Deleted item for good afterwards (ui/org-export).
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
  * the project's Overview, which opens the Milestones window on the
@@ -10237,6 +10246,193 @@ async function deletedItemsCheck() {
   })
 }
 
+/** The step that prepares, saves and unzips an organization export through
+ *  the app (orgExportCheck). */
+export const ORG_EXPORT_STEP = 'ui/org-export'
+
+/** The marks the step waits for on the export section
+ *  (src/panels/OrganizationExport.tsx). */
+export const ORG_EXPORT_MARKS = {
+  section: 'data-org-export',
+  state: 'data-export-state',
+  delivery: 'data-export-delivery',
+  start: 'data-export-start',
+  saved: 'data-export-saved',
+  recorded: 'data-export-recorded',
+  bytes: 'data-export-bytes',
+  lastExport: 'data-org-last-export',
+}
+
+/** The session flag under which the init script stands in for the save
+ *  picker, so later navigations of the page keep the browser's own. */
+export const ORG_EXPORT_PICKER_FLAG = 'stgchk-export-picker'
+
+/** The file the stand-in picker answers, in the origin private file system. */
+export const ORG_EXPORT_FILE = 'stgchk-org-export.zip'
+
+/** The init script that answers showSaveFilePicker with a file of the
+ *  origin private file system while the session flag is set, so the app's
+ *  real createWritable, pipeTo and close run. The native picker cannot be
+ *  pressed in a headless browser. */
+export const ORG_EXPORT_PICKER = `(() => {
+  try {
+    if (sessionStorage.getItem('${ORG_EXPORT_PICKER_FLAG}') !== '1') return
+  } catch {
+    return
+  }
+  window.showSaveFilePicker = async () => {
+    const root = await navigator.storage.getDirectory()
+    return await root.getFileHandle('${ORG_EXPORT_FILE}', { create: true })
+  }
+})()`
+
+/** How long the step waits for the export to be ready. */
+export const ORG_EXPORT_READY_MS = 5 * 60_000
+
+/** Settings › Organization › General › Export data on the deployment's
+ *  export job (orgExport.request, status and claimDownload, the /exports/
+ *  route) and its record (orgRemovals.recordExport), as Nora on t0's
+ *  organization. Over REST the run makes `<tag> Exported deleted` in Alpha
+ *  and deletes it, so the archive holds a Deleted item of the run's own.
+ *  With the stand-in picker on (ORG_EXPORT_PICKER) it opens the page,
+ *  waits for the section's state from the deployment's answer, checks that
+ *  the page saves into a chosen file, presses Export data, waits until the
+ *  job is ready (ORG_EXPORT_READY_MS, the time it took in its note), then
+ *  for the saved line and the recorded mark, reads the file back from the
+ *  origin private file system, unzips it with fflate and checks the
+ *  manifest (format qivo-organization-export, version 4, the
+ *  organization's slug), that data/tasks holds t0, that deleted/tasks and
+ *  deleted/items hold the deleted task, that no file contents are in it,
+ *  and that its size is the panel's archive_bytes. The record line must
+ *  show today's date as the page formats it. Its finally deletes the file,
+ *  turns the stand-in off and deletes the run's Deleted item for good. It
+ *  writes on t0's organization what an admin's export writes: a job with
+ *  its parts for four hours and its rows for 30 days, the end of an
+ *  earlier ready archive, and the organization's last_export_at. It needs
+ *  a backend from the release after v0.1.161 on, whose record takes the
+ *  export's id. */
+async function orgExportCheck() {
+  const w = run.creds.writeToken
+  const m = ORG_EXPORT_MARKS
+  const { A } = run.projects
+  await check(ORG_EXPORT_STEP, async () => {
+    const gone = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} Exported deleted`,
+    })
+    run.created.push(gone)
+    const r = await rest(w, 'DELETE', `/tasks/${gone.id}`)
+    expect(r.status === 200, `DELETE ${gone.key} answered HTTP ${r.status}`)
+    let itemId = null
+    await context.addInitScript(ORG_EXPORT_PICKER)
+    try {
+      await evaluate(app, (flag) => sessionStorage.setItem(flag, '1'), ORG_EXPORT_PICKER_FLAG)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-general`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const section = app.locator(`[${m.section}][${m.state}]`)
+      await section.waitFor({ timeout: 60_000 })
+      expect(
+        await until(async () => (await section.getAttribute(m.state)) !== 'unknown', 60_000),
+        'the export section never read the deployment',
+      )
+      eq(await section.getAttribute(m.delivery), 'file', 'how the page saves an export')
+      const before = await section.getAttribute(m.state)
+      if (before === 'collecting')
+        throw new Error('an export of the organization is already being prepared')
+      const started = Date.now()
+      await app.locator(`[${m.start}]`).click()
+      expect(
+        await until(
+          async () => (await section.getAttribute(m.state)) === 'ready',
+          ORG_EXPORT_READY_MS,
+        ),
+        `the export reads ${await section.getAttribute(m.state)} after ${ORG_EXPORT_READY_MS / 60_000} minutes`,
+      )
+      const took = Math.round((Date.now() - started) / 1000)
+      const recorded = app.locator(`[${m.recorded}]`)
+      expect(
+        await until(async () => (await recorded.count()) > 0, 120_000),
+        'the page never said whether the save was recorded',
+      )
+      eq(await recorded.first().getAttribute(m.recorded), 'true', 'the record of the saved export')
+      const bytes = Number(await app.locator(`[${m.bytes}]`).first().getAttribute(m.bytes))
+      const saved = await evaluate(
+        app,
+        async (name) => {
+          const root = await navigator.storage.getDirectory()
+          const file = await (await root.getFileHandle(name)).getFile()
+          const data = new Uint8Array(await file.arrayBuffer())
+          let text = ''
+          for (let i = 0; i < data.length; i += 0x8000)
+            text += String.fromCharCode(...data.subarray(i, i + 0x8000))
+          return btoa(text)
+        },
+        ORG_EXPORT_FILE,
+        60_000,
+      )
+      const zip = new Uint8Array(Buffer.from(saved, 'base64'))
+      eq(zip.length, bytes, 'the saved file against the archive size')
+      const { unzipSync, strFromU8 } = await import('fflate')
+      const entries = unzipSync(zip)
+      const names = Object.keys(entries)
+      const manifest = JSON.parse(strFromU8(entries['manifest.json']))
+      eq(manifest.format, 'qivo-organization-export', 'the manifest format')
+      eq(manifest.version, 4, 'the manifest version')
+      eq(manifest.organization?.slug, ORG_SLUG, "the manifest's organization")
+      const rows = (folder) =>
+        names
+          .filter((name) => name.startsWith(`${folder}/`) && name.endsWith('.json'))
+          .flatMap((name) => JSON.parse(strFromU8(entries[name])))
+      expect(
+        rows('data/tasks').some((row) => row.id === run.t0.id),
+        `data/tasks does not hold ${run.t0.key}`,
+      )
+      expect(
+        rows('deleted/tasks').some((row) => row.id === gone.id),
+        `deleted/tasks does not hold ${gone.key}`,
+      )
+      const item = rows('deleted/items').find((row) => row.target_id === gone.id)
+      expect(item !== undefined, `deleted/items holds no item of ${gone.key}`)
+      itemId = item.id
+      expect(!names.some((name) => name.startsWith('files/')), 'the archive holds file contents')
+      const today = await evaluate(app, () =>
+        new Date().toLocaleDateString(undefined, {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        }),
+      )
+      const line = ((await app.locator(`[${m.lastExport}]`).textContent()) ?? '').trim()
+      expect(
+        line.startsWith(`Last saved export confirmed on ${today}.`),
+        `the record line reads ${short(line)}`,
+      )
+      return `prepared t0's organization's export in ${took} s, saved ${bytes} bytes into the chosen file, recorded it, and found ${run.t0.key} and the deleted ${gone.key} in the archive`
+    } finally {
+      await evaluate(
+        app,
+        async ([flag, name]) => {
+          sessionStorage.removeItem(flag)
+          try {
+            await (await navigator.storage.getDirectory()).removeEntry(name)
+          } catch {
+            // nothing was saved
+          }
+        },
+        [ORG_EXPORT_PICKER_FLAG, ORG_EXPORT_FILE],
+      ).catch(() => {})
+      if (itemId !== null)
+        await evaluate(
+          app,
+          (id) => window.PLANNER.purgeDeletedItems([{ id, org_id: window.PLANNER.homeOrg }]),
+          itemId,
+          60_000,
+        ).catch(() => {})
+    }
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -12168,6 +12364,9 @@ async function main() {
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
   await deletedItemsCheck()
+  // the organization's export on the deployment's job, saved into a chosen
+  // file, unzipped and recorded, with a Deleted item of its own
+  await orgExportCheck()
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()

@@ -2686,59 +2686,122 @@ try {
   log(`A: /files/ serve — 200, ${served.len} bytes exact, image/png, cache-control "${served.cc}"`)
   log(`   url ${served.u.slice(0, 110)}…`)
 
-  // The organization export must contain the real attachment bytes, not
-  // expiring URLs, and preserve the row/UUID relationship in its JSON files.
-  await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-general`, {
-    waitUntil: 'domcontentloaded',
-  })
-  const exportTimeout = 120000
-  const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
-  const [result] = await Promise.all([
-    Promise.race([
-      pageA
-        .waitForEvent('download', { timeout: exportTimeout })
-        .then((download) => ({ kind: 'downloaded', download })),
-      exportAlert.waitFor({ state: 'visible', timeout: exportTimeout }).then(async () => ({
-        kind: 'failed',
-        message: (await exportAlert.textContent())?.trim(),
-      })),
-    ]),
-    pageA.locator('[data-export-download]').click(),
-  ])
-  if (result.kind === 'failed') {
-    await fail(`Organization export failed: ${result.message || 'unknown error'}`)
-  }
-  const exported = result.download
-  if (!exported.suggestedFilename().endsWith('.zip')) await fail('Export did not download a ZIP')
-  const stream = await exported.createReadStream()
-  if (!stream) await fail('Export download is unavailable')
-  const chunks = []
-  for await (const chunk of stream) chunks.push(chunk)
-  const zip = unzipSync(Buffer.concat(chunks))
-  const manifest = JSON.parse(strFromU8(zip['manifest.json']))
-  const exportedTasks = JSON.parse(strFromU8(zip['data/tasks.json']))
-  const exportedAttachments = JSON.parse(strFromU8(zip['data/task_attachments.json']))
-  const exportedProfiles = JSON.parse(strFromU8(zip['data/profiles.json']))
-  const exportedTask = exportedTasks.find((task) => task.title === TITLE)
-  const exportedAttachment = exportedAttachments.find((attachment) => attachment.id === att.id)
-  const file = manifest.files.find((item) => item.kind === 'attachment' && item.id === att.id)
-  if (
-    manifest.format !== 'qivo-organization-export' ||
-    manifest.version !== 2 ||
-    manifest.organization.slug !== demo.orgSlug ||
-    !exportedTask ||
-    exportedAttachment?.task_id !== exportedTask.id ||
-    !file ||
-    !zip[file.path] ||
-    Buffer.compare(Buffer.from(zip[file.path]), PNG) !== 0
+  // The organization export, prepared on the server's job, saved into a
+  // chosen file and recorded, holds the task and its attachment record as
+  // data, with no file contents and no personal data. A file of the
+  // origin private file system stands in for the save picker, which a
+  // headless browser cannot press, so the app's real createWritable,
+  // pipeTo and close run; the stand-in answers only under its session
+  // flag, which the step clears after.
+  const PICKER_FLAG = 'smoke-export-picker'
+  const EXPORT_FILE = 'smoke-org-export.zip'
+  await ctxA.addInitScript(
+    ([flag, name]) => {
+      try {
+        if (sessionStorage.getItem(flag) !== '1') return
+      } catch {
+        return
+      }
+      window.showSaveFilePicker = async () =>
+        (await navigator.storage.getDirectory()).getFileHandle(name, { create: true })
+    },
+    [PICKER_FLAG, EXPORT_FILE],
   )
-    await fail('Organization ZIP did not preserve its task, attachment record and exact bytes')
-  if (exportedProfiles.some((profile) => 'auth_user_id' in profile))
-    await fail('Organization export exposed account identity references')
-  if (zip['data/messages.json'] || zip['data/user_prefs.json'] || zip['data/mcp_tokens.json'])
-    await fail('Organization export included private account data')
-  await pageA.screenshot({ path: `${SHOTS}/smoke-export.png` })
-  log('A: organization ZIP contains task JSON and exact uploaded bytes; personal data excluded')
+  await pageA.evaluate((flag) => sessionStorage.setItem(flag, '1'), PICKER_FLAG)
+  try {
+    await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-general`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const section = pageA.locator('[data-org-export][data-export-state]')
+    await section.waitFor({ timeout: 60000 })
+    await pageA.waitForFunction(
+      () =>
+        document.querySelector('[data-org-export]')?.getAttribute('data-export-state') !==
+        'unknown',
+      undefined,
+      { timeout: 60000 },
+    )
+    if ((await section.getAttribute('data-export-delivery')) !== 'file')
+      await fail('The export panel does not save into a chosen file in Chromium')
+    await pageA.locator('[data-export-start]').click()
+    const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
+    const outcome = await Promise.race([
+      pageA
+        .locator('[data-export-recorded]')
+        .first()
+        .waitFor({ timeout: 180000 })
+        .then(() => 'saved'),
+      exportAlert.waitFor({ state: 'visible', timeout: 180000 }).then(() => 'failed'),
+    ])
+    if (outcome === 'failed')
+      await fail(`Organization export failed: ${(await exportAlert.textContent())?.trim()}`)
+    if (
+      (await pageA
+        .locator('[data-export-recorded]')
+        .first()
+        .getAttribute('data-export-recorded')) !== 'true'
+    )
+      await fail('The saved export was not recorded')
+    const bytes = Number(
+      await pageA.locator('[data-export-bytes]').first().getAttribute('data-export-bytes'),
+    )
+    const saved = await pageA.evaluate(async (name) => {
+      const file = await (
+        await (await navigator.storage.getDirectory()).getFileHandle(name)
+      ).getFile()
+      const data = new Uint8Array(await file.arrayBuffer())
+      let text = ''
+      for (let i = 0; i < data.length; i += 0x8000)
+        text += String.fromCharCode(...data.subarray(i, i + 0x8000))
+      return btoa(text)
+    }, EXPORT_FILE)
+    const archive = Buffer.from(saved, 'base64')
+    if (archive.length !== bytes)
+      await fail(`The saved export holds ${archive.length} bytes, the archive ${bytes}`)
+    const zip = unzipSync(archive)
+    const names = Object.keys(zip)
+    const rows = (folder) =>
+      names
+        .filter((name) => name.startsWith(`${folder}/`) && name.endsWith('.json'))
+        .flatMap((name) => JSON.parse(strFromU8(zip[name])))
+    const manifest = JSON.parse(strFromU8(zip['manifest.json']))
+    const exportedTask = rows('data/tasks').find((task) => task.title === TITLE)
+    const exportedAttachment = rows('data/task_attachments').find(
+      (attachment) => attachment.id === att.id,
+    )
+    if (
+      manifest.format !== 'qivo-organization-export' ||
+      manifest.version !== 4 ||
+      manifest.organization.slug !== demo.orgSlug ||
+      !exportedTask ||
+      exportedAttachment?.task_id !== exportedTask.id
+    )
+      await fail('Organization export did not hold its task and attachment record')
+    if (names.some((name) => name.startsWith('files/')))
+      await fail('Organization export held file contents')
+    if (rows('data/profiles').some((profile) => 'auth_user_id' in profile))
+      await fail('Organization export exposed account identity references')
+    if (names.some((name) => /^data\/(messages|user_prefs|mcp_tokens)\//.test(name)))
+      await fail('Organization export included private account data')
+    await pageA.screenshot({ path: `${SHOTS}/smoke-export.png` })
+    log(
+      `A: organization export prepared on the server, saved (${bytes} bytes) and recorded; task and attachment record as data, no file contents, personal data excluded`,
+    )
+  } finally {
+    await pageA
+      .evaluate(
+        async ([flag, name]) => {
+          sessionStorage.removeItem(flag)
+          try {
+            await (await navigator.storage.getDirectory()).removeEntry(name)
+          } catch {
+            // nothing was saved
+          }
+        },
+        [PICKER_FLAG, EXPORT_FILE],
+      )
+      .catch(() => {})
+  }
 
   // ---- 8. cleanup: A deletes the smoke issue from its task window, opened
   // by its address, which moves it with its attachment to Deleted items
@@ -2760,8 +2823,8 @@ try {
     waitUntil: 'domcontentloaded',
   })
   await pageB.locator('[data-settings-page]').waitFor({ state: 'visible', timeout: 30000 })
-  if (await pageB.locator('[data-export-download]').count())
-    await fail('A non-admin can see the organization export control')
+  if (await pageB.locator('[data-org-export]').count())
+    await fail('A non-admin can see the organization export section')
 
   // ---- 8b. Team sync, on temporaries only. Every change made from a row
   // stamps the page owner's last sync (a sync_stamps row), and no client

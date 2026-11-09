@@ -97,6 +97,12 @@ import {
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
+  ORG_EXPORT_FILE,
+  ORG_EXPORT_MARKS,
+  ORG_EXPORT_PICKER,
+  ORG_EXPORT_PICKER_FLAG,
+  ORG_EXPORT_READY_MS,
+  ORG_EXPORT_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_MILESTONES_STEP,
@@ -1121,6 +1127,63 @@ describe('staging check REST contract', () => {
       expect(selectedCreatorsStarts([])).toEqual([])
     })
   })
+  it("checks the organization export on the panel's own marks, after Deleted items, with the picker's stand-in scoped to its session flag", async () => {
+    expect(ORG_EXPORT_STEP).toBe('ui/org-export')
+    const panel = readFileSync(
+      new URL('../src/panels/OrganizationExport.tsx', import.meta.url),
+      'utf8',
+    )
+    for (const mark of Object.values(ORG_EXPORT_MARKS)) expect(panel, mark).toContain(mark)
+    expect(ORG_EXPORT_READY_MS).toBe(5 * 60_000)
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    // it runs after Deleted items' step
+    const at = ['await deletedItemsCheck()', 'await orgExportCheck()'].map((call) =>
+      script.indexOf(call),
+    )
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const step = script.slice(
+      script.indexOf('async function orgExportCheck()'),
+      script.indexOf('/** The Settings page Archived tasks opens'),
+    )
+    // the stand-in goes in before the navigation, the flag and the file go
+    // in its finally, and so does the run's Deleted item
+    expect(step.indexOf('context.addInitScript(ORG_EXPORT_PICKER)')).toBeLessThan(
+      step.indexOf('settings/org-general'),
+    )
+    const after = step.slice(step.indexOf('} finally {'))
+    for (const part of [
+      'sessionStorage.removeItem(flag)',
+      'removeEntry(name)',
+      'purgeDeletedItems',
+    ])
+      expect(after, part).toContain(part)
+    // the stand-in answers a file only under its flag, else the browser's
+    // own picker stays
+    const stand = (flag) => {
+      const picker = () => 'native'
+      const page = {
+        sessionStorage: { getItem: (name) => (name === ORG_EXPORT_PICKER_FLAG ? flag : null) },
+        navigator: {
+          storage: {
+            getDirectory: async () => ({
+              getFileHandle: async (name, options) => ({ name, options }),
+            }),
+          },
+        },
+        window: { showSaveFilePicker: picker },
+      }
+      new Function('sessionStorage', 'navigator', 'window', ORG_EXPORT_PICKER)(
+        page.sessionStorage,
+        page.navigator,
+        page.window,
+      )
+      return page.window.showSaveFilePicker
+    }
+    expect(stand(null)()).toBe('native')
+    expect(await stand('1')()).toEqual({ name: ORG_EXPORT_FILE, options: { create: true } })
+  })
+
   it("checks Deleted items on the page's own marks, after Settings › Projects, restoring 26 tasks in two calls", () => {
     const page = readFileSync(
       new URL('../src/panels/settings/DeletedItems.tsx', import.meta.url),

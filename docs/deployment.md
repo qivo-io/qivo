@@ -534,6 +534,20 @@ projects without a scope, and deletes it for good once **Delete now**
 counts no earlier items (`ui/deleted-items`). The
 cleanup deletes the 26 tasks again with its project. Against a backend from
 before v0.1.131 that step fails.
+Next it makes a task of its own and deletes it over REST, then, with a file
+of the browser's origin private file system standing in for the save
+picker, which no headless browser can press, presses **Export data** in
+**Settings → Organization → General** as Nora. It waits up to five minutes
+for the deployment's export job to be ready, notes how long it took, waits
+for the automatic save into that file and its record, reads the file back,
+unzips it and checks its format 4 manifest, t0 in `data/tasks`, its deleted
+task in `deleted/tasks` and `deleted/items`, no file contents and its size,
+and that the record line shows today's date (`ui/org-export`). It writes on
+t0's organization what an admin's export writes: a job with its parts for
+four hours and its rows for 30 days, the end of an earlier ready archive and
+the organization's last saved export. Afterwards it deletes the file and its
+Deleted item for good. Against a backend before the release after v0.1.161,
+whose record takes no export id, that step fails.
 It makes a sub-project of its own under the run project, led by Leo
 Martins, with a task in it, picks the task's assignee (the run's Standard
 agent), its reviewer (Nora) and **No reviewer** in the task's window and
