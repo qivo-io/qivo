@@ -629,16 +629,22 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // Where the pop-out's unread part starts. It starts nowhere, since the
   // pane behind it showed this visit's New mark already, until a return to
   // a hidden page freezes the pane's mark again while the pop-out is open,
-  // which the pop-out then shows too.
-  const [popUnread, setPopUnread] = useState<UnreadStart>(NO_UNREAD)
+  // which the pop-out then shows too. That start is kept with the task it
+  // was frozen for. A task followed from it inside the pop-out, which moves
+  // the pane too, starts nowhere, so the pop-out never shows one task's
+  // mark on another, and back on the first task it shows again.
+  const [popUnread, setPopUnread] = useState<{ task: string | null; start: UnreadStart }>({
+    task: null,
+    start: NO_UNREAD,
+  })
   const paneReturned = useCallback(
     (start: UnreadStart) => {
-      if (poppedOut) setPopUnread(start)
+      if (poppedOut) setPopUnread({ task: paneId, start })
     },
-    [poppedOut],
+    [poppedOut, paneId],
   )
   const popOut = () => {
-    setPopUnread(NO_UNREAD)
+    setPopUnread({ task: null, start: NO_UNREAD })
     setPoppedOut(true)
   }
   // the text typed in the pane and its pop-out, and in the pop-out alone,
@@ -1316,8 +1322,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             issueId={paneId}
             holdThread
             // the pane behind it showed this visit's New mark already,
-            // until a return froze it again
-            unread={popUnread}
+            // until a return froze it again on this task
+            unread={sameTask(popUnread.task, paneId) ? popUnread.start : NO_UNREAD}
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}

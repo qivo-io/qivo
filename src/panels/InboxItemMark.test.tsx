@@ -925,6 +925,76 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     expect(thread(dialog)).toContain('Check 8')
     expect(thread(dialog)).not.toContain('New')
   })
+
+  it("shows a return's New in the pop-out on its own task alone, never on a task followed from it", async () => {
+    // task-b is task-a's subtask, which the pop-out lists
+    await load([], [message('task-a', 5, { kind: 'comment' })], (s) => {
+      const b = s.issues.find((it) => it.id === 'task-b')
+      if (b) b.parent_id = 'task-a'
+    })
+    await openInbox()
+    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    if (!row) throw new Error('missing the row')
+    await act(async () => row.click())
+    await settle()
+    // the server read the item, and confirmed the read
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await comments(range(1, 7))
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    await settle()
+    // the page hides with task-a popped out, and news of it arrives
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    beyond = [message('task-a', 8)]
+    await act(async () => publish())
+    await settle()
+    await act(async () => {
+      Reflect.deleteProperty(document, 'visibilityState')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    await comments(range(1, 9))
+    await settle()
+    expect(thread(popOut() ?? document).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    /* Follows the pop-out's row of the task titled `title`, which moves
+       the pane too, and delivers the thread of the task it opens. */
+    const follow = async (title: string, rows: Row<'comments'>[]) => {
+      const link = [
+        ...(popOut()?.querySelectorAll<HTMLElement>('[data-related-task] button') ?? []),
+      ].find((b) => b.textContent?.includes(title))
+      if (!link) throw new Error(`missing the row of ${title}`)
+      await act(async () => link.click())
+      await settle()
+      await comments(rows)
+      await settle()
+      const dialog = popOut()
+      if (!dialog) throw new Error('the pop-out closed')
+      return dialog
+    }
+    // task-b, which holds nothing unread, shows no New of task-a's
+    const onB = await follow(
+      'Write the report',
+      [20, 21].map((n) => ({ ...comment(n), issue_id: 'task-b' })),
+    )
+    expect(thread(onB)).toEqual(['Check 20', 'Check 21'])
+    expect(thread(pane())).toEqual(['Check 20', 'Check 21'])
+    const onA = await follow('Run the soak test', range(1, 9))
+    // back on task-a, from task-b's parent row, it shows again, as the
+    // pane behind it does, whose item is still unread
+    expect(thread(onA).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    expect(thread(pane()).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+  })
 })
 
 describe('a return to a hidden page', { timeout: 20_000 }, () => {
