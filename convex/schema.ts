@@ -1242,9 +1242,7 @@ export default defineSchema({
     // The last export before last_export_confirmed_at existed. Until the
     // release after v0.1.161 the browser export set it when its download
     // started, so a value may record a download that never finished.
-    // recordExport still sets it beside last_export_confirmed_at, so a
-    // rolled-back backend's reminder sees confirmed saves, but nothing reads
-    // it. Later work removes it with its write.
+    // Nothing writes or reads it any more, and later work removes it.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

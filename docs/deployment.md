@@ -2323,15 +2323,17 @@ the Delete organization and Cancel subscription questions,
 `orgRemovals.state`, Billing's details and the deletion reminder now read
 alone. Until this release the browser export set `last_export_at` when its
 download started, so an export recorded before this release does not count
-as a confirmed save, and the reminder goes out for it. `recordExport` still
-sets `last_export_at` beside the new field, which nothing reads, so a backend
-rolled back to an earlier release still counts a confirmed save. The field
-needs no backfill. The app needs a backend from v0.1.153
-(`b4dc7775`) on for its export, which first shipped `claimDownload` and the
-route, and the floors above already hold it. Against a backend from v0.1.153
-to before this release the archive downloads but its record is refused, and
-the app shows no confirmed save, so the deletion reminder still goes out.
-The release needs no backfill and no release step.
+as a confirmed save, and the reminder goes out for it. Nothing writes or
+reads `last_export_at` any more. Code from before this release does not
+accept an organizations row that holds `last_export_confirmed_at`, so once
+a save is recorded a backend from before this release fails to deploy; it
+is a rollback floor anyway (see Rollback and hotfixes). The field needs no
+backfill. The app needs a backend from v0.1.153 (`b4dc7775`) on for its
+export, which first shipped `claimDownload` and the route, and the floors
+above already hold it. Against a backend from v0.1.153 to before this
+release the archive downloads but its record is refused, and the app shows
+no confirmed save, so the deletion reminder still goes out. The release
+needs no backfill and no release step.
 
 ## Node.js version
 
@@ -2993,7 +2995,7 @@ file of exactly the archive's bytes. It records only a served archive of
 that organization that is ready or ended less than 30 minutes before. Other
 browsers' downloads record nothing, so the reminder still goes out after
 them. The older `organizations.last_export_at`, which earlier releases set
-when a browser download started, is no longer read.
+when a browser download started, is no longer written or read.
 A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the

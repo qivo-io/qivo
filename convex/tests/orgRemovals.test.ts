@@ -1717,14 +1717,6 @@ describe('recording a saved export', () => {
     vi.advanceTimersByTime(5000)
     expect(await record(t, f.admin, f.org.id, exportId)).toBeNull()
     expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
-    // the older field too, which a rolled-back backend's reminder reads
-    const org = await t.run((ctx) =>
-      ctx.db
-        .query('organizations')
-        .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
-        .unique(),
-    )
-    expect(org?.last_export_at).toBe(new Date().toISOString())
     expect(await as(t, f.admin).query(api.orgRemovals.state, { org_id: f.org.id })).toMatchObject({
       last_export_confirmed_at: new Date().toISOString(),
     })

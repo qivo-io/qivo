@@ -625,9 +625,7 @@ export const state = orgQuery({
  * app or a browser confirmed a saved file of exactly the archive's bytes
  * (src/lib/orgExport.ts); the server cannot check that confirmation. It is
  * that field's only writer, since the /exports/ route records an archive it
- * served on the job alone (model/orgExports.ts noteDelivered). It also sets
- * the older last_export_at, which nothing reads, so a backend rolled back to
- * a release that reads it still counts the save (schema.ts). The export
+ * served on the job alone (model/orgExports.ts noteDelivered). The export
  * must be the organization's (an unknown and a foreign id are refused
  * alike) and an archive the route served that is ready or ended less than
  * DELIVERY.streamMs before (model/orgExports.ts recordable), else the rule
@@ -645,7 +643,7 @@ export const recordExport = authedMutation({
     if (job === null || job.org_id !== org_id) throw notFound('export not found')
     if (!recordable(job, Date.now())) throw rule(notRecordable())
     const at = isoNow()
-    await ctx.db.patch(org._id, { last_export_confirmed_at: at, last_export_at: at })
+    await ctx.db.patch(org._id, { last_export_confirmed_at: at })
     return null
   },
 })

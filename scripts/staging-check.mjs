@@ -10320,7 +10320,7 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  writes on t0's organization what an admin's export writes: a job with
  *  its parts for four hours and its rows for 30 days, the end of an
  *  earlier ready archive, and the organization's last saved export
- *  (last_export_confirmed_at, and last_export_at beside it). It needs
+ *  (last_export_confirmed_at). It needs
  *  a backend from the release after v0.1.161 on, whose record takes the
  *  export's id. */
 async function orgExportCheck() {
