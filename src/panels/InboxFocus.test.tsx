@@ -4,7 +4,7 @@ import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* Where keyboard focus goes in the Inbox when a row leaves the list: after
    the pane's Archive or delete window takes its task away, after a row's
@@ -56,7 +56,9 @@ async function openInbox(
   { kept = false } = {},
 ) {
   vi.resetModules()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the project cache answers it
+  snap = underProgram(plannerFixture())
   const uuids: string[] = []
   for (let n = 0; n < count; n++) {
     const uuid = `task-${n}`

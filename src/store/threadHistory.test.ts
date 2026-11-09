@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -91,7 +91,9 @@ describe("the task's history in the store", () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snap = underProgram(plannerFixture())
     author = snap.profiles[0].id
     for (const [id, num] of [
       ['task-a', 1],
@@ -147,6 +149,8 @@ describe("the task's history in the store", () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   })
 
   afterEach(() => {

@@ -57,8 +57,8 @@ import {
   type T,
   uuid,
   withOrg,
-  workspaceOf,
 } from './helpers.setup'
+import { ready as navListsReady, navRowsOf } from './projectNavFixtures.setup'
 import {
   expectedReach,
   expectReachExact,
@@ -213,14 +213,17 @@ describe('reach rows follow ordinary access', () => {
 })
 
 describe('archive states', () => {
-  it('never leave the server: the workspace, the export, REST and MCP', async () => {
+  it('never leave the server: the navigation reads, the export, REST and MCP', async () => {
     const t = newT()
     const f = await ready(t)
     await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.hidden.id })
     expect(await states(t, [f.meta.id, f.hidden.id])).toEqual(['live', 'listed'])
-    const snap = (await workspaceOf(as(t, f.user)))!
-    expect(snap.projects.length).toBeGreaterThan(0)
-    for (const row of snap.projects) expect(row).not.toHaveProperty('archive_state')
+    // the app's only project rows, which the project cache and the pickers
+    // read (projectNav.byIds, page, targets and children)
+    await navListsReady(t, f)
+    const nav = await navRowsOf(as(t, f.user), [f.meta.id, f.sub.id, f.hidden.id])
+    expect(nav.length).toBeGreaterThan(3)
+    for (const row of nav) expect(row).not.toHaveProperty('archive_state')
     const page = makeFunctionReference<
       'query',
       { org_id: string; section: OrgExportSection; cursor: string | null },

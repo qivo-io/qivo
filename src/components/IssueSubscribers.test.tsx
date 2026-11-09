@@ -37,6 +37,8 @@ let ui: typeof import('./IssueSubscribers')
 let container: HTMLDivElement
 let root: Root
 let org: string
+// the fixture's project, which the store reads by id
+let projectId: string
 /* How many more people the organization holds than Aisha and Leo, and who
    follows the task besides, as the roster answers. */
 let crowd = 0
@@ -67,6 +69,7 @@ beforeEach(async () => {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   org = snap.orgs[0].id
+  projectId = snap.projects[0].id
   const me = snap.profiles[0]
   for (const [id, name, email] of [
     ['aisha', 'Aisha Rahman', 'aisha@northstar.test'],
@@ -177,7 +180,7 @@ async function showFromAnswer() {
   const task = {
     id: 'far',
     org_id: org,
-    project_id: P.projects[0].id,
+    project_id: projectId,
     num: 40,
     title: 'Tune the antenna',
     description: '',

@@ -10,13 +10,12 @@ import { Button } from './ui/button'
 /* The open rule of the lists on the navigation reads
    (components/projectNavRows.tsx useNavOpen and openResolved), which the
    All projects directory, the sidebar's tree, Search's project results and
-   the project chooser share, on the real store. projectNav.resolve is a
-   one-shot query the test answers itself, as it chooses, so a case can
-   answer ok for a project the workspace does not hold yet and order that
-   answer against the workspace's deliveries as Convex does: a delivery and
-   the answer of one transition, an answer while a painted write waits, an
-   answer while a new seat's parts are still on their way, and an answer
-   while every task loads. Everyday size: a handful of projects. */
+   the project chooser share, on the real store. The store holds no
+   project, so a press opens the row's project at once with its facts
+   seeded into the project cache, and App's scope check (P.scopeInfo)
+   decides what the main pane shows. projectNav.resolve, which startup's
+   check of an address by number reads (openResolved), is a one-shot query
+   the test answers itself. Everyday size: a handful of projects. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -35,7 +34,6 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-const NOW = '2026-09-14T08:00:00.000Z'
 // where the last task window starts, which a load of every task holds
 const LAST_WINDOW = 'fc000000'
 
@@ -57,26 +55,6 @@ let rows: typeof import('./projectNavRows')
 let store: typeof import('../store/planner')
 let ORG: string
 
-let num = 10
-/** Adds a top-level project to `next` with a grant for the person's seat
-    in `org`, answering its id. */
-function top(next: Snapshot, name: string, org = ORG) {
-  const id = crypto.randomUUID()
-  next.projects.push({
-    ...plannerFixture().projects[0],
-    id,
-    org_id: org,
-    type: 'meta',
-    key: `P${num}`,
-    num: num++,
-    name,
-    created_at: NOW,
-  })
-  const seat = next.profiles.find((p) => p.org_id === org && next.myProfileIds.includes(p.id))
-  if (seat) next.access.push({ project_id: id, profile_id: seat.id, level: 'user' })
-  return id
-}
-
 /** The fixture with its projects cleared and the person a user. */
 function base(): Snapshot {
   const next = plannerFixture()
@@ -84,23 +62,6 @@ function base(): Snapshot {
   next.profiles[0] = { ...next.profiles[0], org_role: 'user' }
   next.projects = []
   return next
-}
-
-/** A copy of `next` delivered a minute later, for a case to add to. */
-function later(next: Snapshot): Snapshot {
-  const copy = structuredClone(next)
-  copy.delivered_at = new Date(Date.parse(next.delivered_at) + 60_000).toISOString()
-  return copy
-}
-
-/** `next` with a seat in Partner Co added, answering the organization's id. */
-function withPartner(next: Snapshot): string {
-  const away = crypto.randomUUID()
-  const seat = crypto.randomUUID()
-  next.orgs.push({ ...next.orgs[0], id: away, name: 'Partner Co', slug: 'partner' })
-  next.profiles.push({ ...next.profiles[0], id: seat, org_id: away, org_role: 'user' })
-  next.myProfileIds.push(seat)
-  return away
 }
 
 /** Lets answers and renders land, timers included. */
@@ -158,7 +119,7 @@ async function load(next: Snapshot, loading = false) {
 }
 
 /** Rows that open through the rule, with the line it says. */
-function Opener({ list }: { list: { id: string; name: string }[] }) {
+function Opener({ list }: { list: { id: string; name: string; org_id: string; num: number }[] }) {
   const [line, setLine] = useState<string | null>(null)
   const nav = rows.useNavOpen(go, setLine)
   return (
@@ -184,7 +145,7 @@ function Opener({ list }: { list: { id: string; name: string }[] }) {
 
 /** Renders the rows, shown or hidden as a kept page is (Activity). */
 async function render(
-  list: { id: string; name: string }[],
+  list: { id: string; name: string; org_id: string; num: number }[],
   mode: 'visible' | 'hidden' = 'visible',
 ) {
   await act(async () =>
@@ -226,293 +187,68 @@ afterEach(async () => {
   network.mutation.mockReset()
 })
 
+const ORG_OF = () => store.P.homeOrg
+const row = (id: string, name: string, num: number) => ({ id, name, num, org_id: ORG_OF() })
+
 describe('the open rule', { timeout: 30_000 }, () => {
-  it('opens a project the workspace holds at once, reading nothing', async () => {
-    const next = base()
-    const plan = top(next, 'Plan')
-    await load(next)
-    await render([{ id: plan, name: 'Plan' }])
-    await press(plan)
-    expect(go).toHaveBeenCalledExactlyOnceWith(plan)
-    expect(asks).toEqual([])
+  it('opens any row at once with its facts seeded, reading no resolve', async () => {
+    await load(base())
+    await render([row('far', 'Far away', 7)])
+    await press('far')
+    expect(go).toHaveBeenCalledWith('far')
+    expect(asks).toHaveLength(0)
+    // the seeded facts name it before the project cache answers
+    expect(store.P.project('far')).toMatchObject({ name: 'Far away', num: 7, org: ORG_OF() })
+    // must fail: a seed gives no level, so nothing is offered for it yet
+    expect(store.P.canWrite('far')).toBe(false)
     expect(line()).toBe('')
   })
 
-  it('opens one it does not hold once the server says so and the delivery that brings it lands with the answer', async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const late = top(after, 'Late arrival')
-    await render([{ id: late, name: 'Late arrival' }])
-    await press(late)
-    expect(line()).toBe('Opening Late arrival…')
-    // the id alone, never beside an organization
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: late }])
-    expect(go).not.toHaveBeenCalled()
-    // the projects part's delivery and the answer of one transition
-    await act(async () => {
-      publish(after)
-      asks[0].ok(late)
+  it("seeds a sub-project's row with its parent, so the scope names its top-level project", async () => {
+    await load(base())
+    seedRow({
+      id: 'sub',
+      org_id: ORG_OF(),
+      name: 'Sub',
+      num: 9,
+      parent: { id: 'top', org_id: ORG_OF(), name: 'Top', num: 8 },
     })
-    expect(go).toHaveBeenCalledExactlyOnceWith(late)
-    expect(line()).toBe('')
+    expect(store.P.project('sub')?.parent).toBe('top')
+    expect(store.P.project('top')?.name).toBe('Top')
   })
 
-  it('says each answer it cannot open on, and opens nothing', async () => {
-    const next = base()
-    await load(next)
-    const late = crypto.randomUUID()
-    await render([{ id: late, name: 'Late arrival' }])
-    const tries: [(ask: Ask) => void, string][] = [
-      [(a) => a.answer({ state: 'unavailable' }), 'You can no longer open Late arrival.'],
-      [
-        (a) =>
-          a.answer({ state: 'unavailable', reason: 'access_unchecked', message: NAV_UNCHECKED }),
-        NAV_UNCHECKED,
-      ],
-      [(a) => a.fail(), "Couldn't open Late arrival. Try again."],
-      // the server's ok while the workspace, current, does not hold it
-      [(a) => a.ok(late), 'Late arrival has not loaded yet. Try again in a moment.'],
-    ]
-    for (const [answer, said] of tries) {
-      await press(late)
-      expect(line()).toBe('Opening Late arrival…')
-      await act(async () => answer(asks[asks.length - 1]))
-      await settle()
-      expect(line()).toBe(said)
-    }
-    expect(asks).toHaveLength(4)
-    expect(go).not.toHaveBeenCalled()
-  })
-
-  it('waits once for a second press, lets another row replace the wait, and drops it on cancel', async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const a = top(after, 'Alpha')
-    const b = top(after, 'Beta')
-    await render([
-      { id: a, name: 'Alpha' },
-      { id: b, name: 'Beta' },
-    ])
-    await press(a)
-    await press(a)
+  it('resolves an address by number into the project it names, with its facts seeded', async () => {
+    await load(base())
+    let opened: unknown = null
+    rows.openResolved({ org_id: ORG_OF(), num: 3 }, (o) => {
+      opened = o
+    })
+    await settle()
     expect(asks).toHaveLength(1)
-    await press(b)
-    expect(asks).toHaveLength(2)
-    expect(line()).toBe('Opening Beta…')
-    // the replaced wait opens nothing when its answer comes
-    await act(async () => {
-      publish(after)
-      asks[0].ok(a)
-    })
+    asks[0].ok('resolved')
     await settle()
-    expect(go).not.toHaveBeenCalled()
-    expect(line()).toBe('Opening Beta…')
-    await act(async () => document.querySelector<HTMLElement>('[data-cancel]')?.click())
-    await act(async () => asks[1].ok(b))
-    await settle()
-    expect(go).not.toHaveBeenCalled()
+    expect(opened).toEqual({ state: 'open', id: 'resolved' })
+    expect(store.P.project('resolved')?.name).toBe('Answered')
   })
 
-  it('drops the wait and its line when its caller hides or goes, so nothing opens in a place the person left', async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const late = top(after, 'Late arrival')
-    const gone = top(after, 'Gone too')
-    const list = [
-      { id: late, name: 'Late arrival' },
-      { id: gone, name: 'Gone too' },
-    ]
-    await render(list)
-    await press(late)
-    expect(line()).toBe('Opening Late arrival…')
-    // hidden, as a kept page or the tree under Settings is
-    await render(list, 'hidden')
-    await act(async () => {
-      publish(after)
-      asks[0].ok(late)
-    })
+  it('answers unavailable, the refusal and a failure apart, opening nothing', async () => {
+    await load(base())
+    const got: unknown[] = []
+    rows.openResolved({ org_id: ORG_OF(), num: 3 }, (o) => got.push(o))
+    rows.openResolved({ org_id: ORG_OF(), num: 4 }, (o) => got.push(o))
+    rows.openResolved({ org_id: ORG_OF(), num: 5 }, (o) => got.push(o))
     await settle()
-    await render(list)
-    expect(go).not.toHaveBeenCalled()
-    // shown again, it no longer says it opens what nothing waits for
-    expect(line()).toBe('')
-    // and gone, as the palette closing; the workspace holds Late arrival now
-    const more = later(after)
-    const last = top(more, 'Last one')
-    await render([{ id: last, name: 'Last one' }])
-    await press(last)
-    await act(async () => root.unmount())
-    root = createRoot(container)
-    await act(async () => {
-      publish(more)
-      asks[1].ok(last)
-    })
+    asks[0].answer({ state: 'unavailable' })
+    asks[1].answer({ state: 'unavailable', reason: 'access_unchecked', message: NAV_UNCHECKED })
+    asks[2].fail()
     await settle()
-    expect(go).not.toHaveBeenCalled()
-  })
-
-  it('ends the line of a wait a press on a held row replaces, also once its caller hides', async () => {
-    const next = base()
-    const held = top(next, 'Held')
-    await load(next)
-    const after = later(next)
-    const late = top(after, 'Late arrival')
-    const list = [
-      { id: late, name: 'Late arrival' },
-      { id: held, name: 'Held' },
-    ]
-    await render(list)
-    await press(late)
-    expect(line()).toBe('Opening Late arrival…')
-    await press(held)
-    expect(go).toHaveBeenCalledExactlyOnceWith(held)
-    expect(line()).toBe('')
-    // the kept page shown again says nothing of the replaced wait
-    await render(list, 'hidden')
-    await render(list)
-    expect(line()).toBe('')
-    await act(async () => {
-      publish(after)
-      asks[0].ok(late)
-    })
-    await settle()
-    expect(go).toHaveBeenCalledTimes(1)
-  })
-
-  it("drops the wait and its line on the person's navigation and on another list's open, so its answer opens nothing", async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const a = top(after, 'Alpha')
-    const b = top(after, 'Beta')
-    // two lists, as the sidebar's tree beside the directory or Search
-    await act(async () =>
-      root.render(
-        <>
-          <Opener list={[{ id: a, name: 'Alpha' }]} />
-          <Opener list={[{ id: b, name: 'Beta' }]} />
-        </>,
-      ),
-    )
-    await settle()
-    const lines = () =>
-      [...document.querySelectorAll('[data-line]')].map((el) => el.textContent ?? '')
-    await press(a)
-    expect(lines()).toEqual(['Opening Alpha…', ''])
-    // an open that starts to wait in another list takes the first one's place
-    await press(b)
-    expect(lines()).toEqual(['', 'Opening Beta…'])
-    await act(async () => {
-      publish(after)
-      asks[0].ok(a)
-    })
-    await settle()
-    expect(go).not.toHaveBeenCalled()
-    expect(lines()).toEqual(['', 'Opening Beta…'])
-    // a navigation the person makes, as App reports each one
-    await act(async () => rows.navMoved())
-    expect(lines()).toEqual(['', ''])
-    await act(async () => asks[1].ok(b))
-    await settle()
-    expect(go).not.toHaveBeenCalled()
-    expect(lines()).toEqual(['', ''])
-    expect(asks).toHaveLength(2)
-  })
-})
-
-describe('the wait for the workspace, in the order Convex delivers', { timeout: 30_000 }, () => {
-  it('decides after the repaint a painted write holds back, which brings the project', async () => {
-    const next = base()
-    const plan = top(next, 'Plan')
-    await load(next)
-    const after = later(next)
-    const late = top(after, 'Late arrival')
-    await render([{ id: late, name: 'Late arrival' }])
-    await press(late)
-    // a write whose paint waits for its answer, which never comes
-    void store.P.updateProject(plan, { name: 'Plan renamed' })
-    await act(async () => {
-      publish(after)
-      asks[0].ok(late)
-      // the answer's own turn, before the 0 ms timer the paint waits for
-      for (let i = 0; i < 4; i++) await Promise.resolve()
-    })
-    expect(store.P.workspaceCurrent()).toBe(false)
-    expect(store.P.project(late)).toBeUndefined()
-    expect(line()).toBe('Opening Late arrival…')
-    await settle()
-    expect(store.P.workspaceCurrent()).toBe(true)
-    expect(go).toHaveBeenCalledExactlyOnceWith(late)
-  })
-
-  it("waits while a new seat's parts are on their way, and opens once they answer", async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const away = withPartner(after)
-    const shared = top(after, 'Partner portal', away)
-    await render([{ id: shared, name: 'Partner portal' }])
-    await press(shared)
-    double.live?.hold(away)
-    await act(async () => {
-      publish(after)
-      asks[0].ok(shared)
-    })
-    await settle()
-    expect(store.P.workspaceCurrent()).toBe(false)
-    expect(line()).toBe('Opening Partner portal…')
-    expect(go).not.toHaveBeenCalled()
-    await act(async () => double.live?.hold(null))
-    await settle()
-    expect(go).toHaveBeenCalledExactlyOnceWith(shared)
-  })
-
-  it('ends a wait the workspace never answers after its bound', async () => {
-    const next = base()
-    await load(next)
-    const after = later(next)
-    const away = withPartner(after)
-    const shared = top(after, 'Partner portal', away)
-    await render([{ id: shared, name: 'Partner portal' }])
-    await press(shared)
-    double.live?.hold(away)
-    await act(async () => {
-      publish(after)
-      asks[0].ok(shared)
-    })
-    await act(async () => await vi.advanceTimersByTimeAsync(rows.NAV_OPEN_WAIT_MS - 100))
-    expect(line()).toBe('Opening Partner portal…')
-    await act(async () => await vi.advanceTimersByTimeAsync(200))
-    expect(line()).toBe('Partner portal has not loaded yet. Try again in a moment.')
-    expect(go).not.toHaveBeenCalled()
-  })
-
-  it('counts a delivery while every task loads, opening a project it brings and saying at once of one it lacks', async () => {
-    const next = base()
-    await load(next, true)
-    expect(store.P.stillLoading()).not.toBeNull()
-    const after = later(next)
-    const late = top(after, 'Late arrival')
-    const missing = crypto.randomUUID()
-    await render([
-      { id: late, name: 'Late arrival' },
-      { id: missing, name: 'Not delivered' },
+    expect(got).toEqual([
+      { state: 'unavailable' },
+      { state: 'unchecked', message: NAV_UNCHECKED },
+      { state: 'failed' },
     ])
-    await press(missing)
-    await act(async () => asks[0].ok(missing))
-    await settle()
-    // the load's report holds the projects, so it waits for no bound
-    expect(line()).toBe('Not delivered has not loaded yet. Try again in a moment.')
-    await press(late)
-    await act(async () => {
-      publish(after)
-      asks[1].ok(late)
-    })
-    await settle()
-    expect(store.P.stillLoading()).not.toBeNull()
-    expect(go).toHaveBeenCalledExactlyOnceWith(late)
   })
 })
+
+/** Seeds a row through the rule's own helper. */
+const seedRow = (r: Parameters<typeof rows.seedNavRow>[0]) => rows.seedNavRow(r)

@@ -31,6 +31,10 @@ const NOW = '2026-09-14T08:00:00.000Z'
  * Plans and Work sub-projects of one top-level project, where a subtask and
  * its parent may live; "workOnly" can edit Work alone, so the epic in Plans
  * is out of their sight. */
+// the fixture's Plans sub-project and its parent, for the move cases
+let snapPlans = ''
+let snapTop = ''
+
 describe('assignees must see the tasks above a subtask', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
@@ -44,6 +48,8 @@ describe('assignees must see the tasks above a subtask', () => {
     const work = { ...snap.projects[0], id: crypto.randomUUID(), parent_id: top.id }
     const plans = { ...work, id: crypto.randomUUID(), key: 'PLAN', num: 2, name: 'Plans' }
     snap.projects = [top, work, plans]
+    snapPlans = plans.id
+    snapTop = top.id
     const person = (id: string, name: string) =>
       snap.profiles.push({
         id,
@@ -181,7 +187,11 @@ describe('assignees must see the tasks above a subtask', () => {
         assignee_id: 'workOnly',
       })
     })
-    const plans = P.projects.find((p) => p.name === 'Plans')!
+    // the target as the Move window seeds it from its targets row
+    const plans = { id: snapPlans, name: 'Plans' }
+    P.seedProjects([
+      { id: snapPlans, org_id: P.homeOrg, name: 'Plans', num: 2, parent_id: snapTop },
+    ])
     const work = vm('free').project
     refusal = MOVE_HOLDER_RULE
     const saved: boolean[] = []

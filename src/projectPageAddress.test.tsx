@@ -91,7 +91,8 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
 }
 /** Waits for `find` to answer, through lazy modules that can take seconds
-    to load on a busy worker. */
+    to load on a busy worker. The budget is 20 s, because CI's runner under
+    the full suite once took over 10 s to settle a boot's address. */
 function waitFor<T>(find: () => T | null | undefined, what: string) {
   return vi.waitFor(
     () => {
@@ -99,7 +100,7 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
       if (!found) throw new Error(`missing ${what}`)
       return found
     },
-    { timeout: 10_000 },
+    { timeout: 20_000 },
   )
 }
 const heading = () => document.querySelector('[data-settings-page] h1')?.textContent ?? ''
@@ -199,7 +200,7 @@ async function go(step: -1 | 1) {
   await settle()
 }
 
-describe('the address of a project page the workspace does not hold', { timeout: 30_000 }, () => {
+describe('the address of a project page the workspace does not hold', { timeout: 60_000 }, () => {
   it('opens on a reload of its uuid address, and Back and Forward open it again', async () => {
     const P = await boot(`/app/testbed/settings/project/${AWAY}`)
     expect(P.project(AWAY)).toBeUndefined()
@@ -265,7 +266,7 @@ describe('the address of a project page the workspace does not hold', { timeout:
 })
 
 describe('the numbered address of a project page the workspace does not hold', {
-  timeout: 30_000,
+  timeout: 60_000,
 }, () => {
   it('opens the page of a project an admin only manages by its organization and number, keeping its numbered address through a reload, Back and Forward', async () => {
     let P = await boot('/app/testbed/settings/project/7')
@@ -349,23 +350,32 @@ describe('the numbered address of a project page the workspace does not hold', {
     }
   })
 
-  it('reads an unpinned number in the home organization, never as the project of that number the workspace holds in another organization', async () => {
+  /** Has the project cache read Partner Co's project of number 7, as a
+      view that shows it would. */
+  const knowPartner = async (P: Awaited<ReturnType<typeof boot>>) => {
+    await act(async () => P.nameProjects('a view', [PARTNER]))
+    await waitFor(() => P.project(PARTNER)?.num === 7 || null, "Partner Co's project 7")
+  }
+
+  it('reads an unpinned number in the home organization, never as the project of that number the project cache knows in another organization', async () => {
     for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
       const P = await boot(address, partnerSeven)
-      expect(P.project(PARTNER)?.num).toBe(7)
+      await knowPartner(P)
       await waitFor(() => heading().includes('Away'), `the page at ${address}`)
       expect(gets).toEqual([{ org_id: P.homeOrg, num: 7 }])
       expect(location.pathname).toBe('/app/testbed/settings/project/7')
       expect(heading()).not.toContain('Partner')
     }
-    // a login without a home organization reads no number under `~`
+  })
+
+  it('reads no number under `~` for a login without a home organization, whatever the project cache knows of that number', async () => {
     for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
       const P = await boot(address, (snap) => {
         partnerSeven(snap)
         snap.profiles[0].org_role = 'guest'
       })
       expect(P.homeOrg).toBe('')
-      expect(P.project(PARTNER)?.num).toBe(7)
+      await knowPartner(P)
       await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
       expect(gets).toEqual([])
       expect(heading()).not.toContain('Partner')

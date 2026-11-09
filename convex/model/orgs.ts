@@ -8,7 +8,8 @@
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
  *                    org_counters and org_ready rows and delete them
- *   live counts      the active tasks and live projects the app's windows
+ *   live counts      the active tasks the app's task windows and the live
+ *                    projects admin usage
  *                    read (org_counters), kept by tallyRow, which also
  *                    moves the label usage counts (model/labelCounts.ts),
  *                    and for a new task by numberNewTask
@@ -362,15 +363,15 @@ export async function insertOrgRows(
 }
 
 /* ------------------------------------------------------------- live counts
- * org_counters active_tasks and live_projects count the rows the app's
- * windows read, which are the active tasks and the projects in the live
- * tables. Every write that inserts or deletes a task or project, or sets or
+ * org_counters active_tasks and live_projects count the active tasks,
+ * which size the app's task windows, and the projects in the live tables,
+ * which admin usage reads (model/usage.ts). Every write that inserts or deletes a task or project, or sets or
  * clears a task's archived_at, calls tallyRow in its transaction, except
  * model/cascade.ts deleteOrgDeep, which deletes the counters with the rows
  * in one transaction, and a task's create, which counts the task as it
  * numbers it (numberNewTask). An organization created before them has none
- * until internal/liveCountsBackfill counts it, and the app sizes its windows
- * by its numbers until then (lib/idWindows.ts startWindows). The counts
+ * until internal/liveCountsBackfill counts it, and the app sizes its task
+ * windows by its task numbers until then (lib/idWindows.ts startWindows). The counts
  * share the row with the numbers, so archives, restores and deletes in one
  * organization conflict with each other and with its creates, as its creates
  * already did, and Convex runs the one that lost again. A write of tasks

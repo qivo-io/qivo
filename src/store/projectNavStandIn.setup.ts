@@ -135,6 +135,8 @@ export const NAV_UNCHECKED =
 export const NAV_BLANK_SEARCH =
   'search must hold a character besides spaces and accents; browse with projectNav.page'
 export const NAV_EMPTY_ORG = 'org_id must name an organization, or be left out to search every seat'
+export const NAV_EMPTY_PARENT =
+  'parent_id must name a top-level project, or be left out to list under every one'
 export const NAV_TEAM_WITHOUT_ORG = 'team_id needs org_id, the organization of the team'
 export const NAV_RESOLVE_FORM =
   'resolve takes project_id alone, or org_id with num, a whole number of at least 1'
@@ -338,6 +340,7 @@ export type ProjectNavRead = (typeof PROJECT_NAV_READS)[number]
 export type ProjectNavArgs = {
   ids?: readonly string[]
   team_id?: string
+  parent_id?: string
   after?: string
   through?: string
   project_id?: string
@@ -439,7 +442,14 @@ export function projectNavStandIn(
     if (text !== '' && term === '')
       throw new ConvexError({ code: 'bad_request', message: NAV_BLANK_SEARCH })
     if (args.org_id === '') throw new ConvexError({ code: 'bad_request', message: NAV_EMPTY_ORG })
-    const scope = [workspace.auth_user_id ?? '', args.org_id ?? '', term]
+    if (args.parent_id === '')
+      throw new ConvexError({ code: 'bad_request', message: NAV_EMPTY_PARENT })
+    const scope = [
+      workspace.auth_user_id ?? '',
+      args.org_id ?? '',
+      term,
+      ...(args.parent_id === undefined ? [] : [args.parent_id]),
+    ]
     const list = 'projectNav.targets'
     const after = open(list, scope, 5, args.after)
     const through = open(list, scope, 5, args.through)
@@ -453,6 +463,8 @@ export function projectNavStandIn(
       if (seat.org_role === 'viewer') continue
       for (const c of workspace.projects) {
         if (c.parent_id === undefined || !rule.sees(seat, c)) continue
+        // with parent_id, only the sub-projects under that parent
+        if (args.parent_id !== undefined && c.parent_id !== args.parent_id) continue
         const parent = rule.byId.get(c.parent_id)
         if (!parent) continue
         const level = rule.byIdRow(seat, c).level

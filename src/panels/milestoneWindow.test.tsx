@@ -16,6 +16,7 @@ import {
 } from '../store/milestoneStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { projectNavStandIn } from '../store/projectNavStandIn.setup'
 
 /* The Milestones window's two sections (panels/Modals.tsx MilestoneModal,
    views/useMilestoneSection.ts), on the real store, with the milestone
@@ -164,7 +165,12 @@ async function start(lowered?: { batch: number; rows: number }) {
     }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   store = await import('../store/planner')
   await store.initStore()
@@ -193,10 +199,24 @@ async function open(init: { id?: string; week?: number; project?: string | null 
     ),
   )
   await settle()
+  // the window names its project with the project cache, whose answer its
+  // sections and add row wait for, while the page shows
+  const project = init.project
+  if (project && document.visibilityState !== 'hidden') {
+    await vi.waitFor(() => expect(store.P.projectState(project)).not.toBe('loading'))
+    await settle()
+  }
 }
 
 const settle = async () => {
   for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+/** Waits for the project cache's answer of Plan, which the window names,
+    and the repaint that follows it. */
+const planAnswered = async () => {
+  await act(async () => vi.waitFor(() => expect(store.P.projectState('plan')).toBe('ok')))
+  await act(async () => await new Promise((r) => setTimeout(r, 20)))
 }
 
 /** Waits past the search box's settling delay (lib/pagedList.ts). */
@@ -546,8 +566,16 @@ describe('the hidden tab and a new week', { timeout: 30_000 }, () => {
     await start()
     await act(async () => setHidden(true))
     await open({ project: 'plan' })
+    // nothing reads while hidden, the project's own read by id included,
+    // so the window waits for its project with no section shown as loaded
     expect(live(sectionSubs())).toHaveLength(0)
-    expect(stateOf('upcoming')).toBe('loading')
+    expect(['loading', undefined]).toContain(stateOf('upcoming'))
+    expect(store.P.projectState('plan')).toBe('loading')
+    // shown, it reads its project and then its sections
+    await act(async () => setHidden(false))
+    await vi.waitFor(() => expect(store.P.projectState('plan')).toBe('ok'))
+    await settle()
+    expect(live(sectionSubs('upcoming'))).toHaveLength(1)
   })
 
   it('asks a new `from` once the week rolls over and starts again at the first batch', async () => {
@@ -560,7 +588,8 @@ describe('the hidden tab and a new week', { timeout: 30_000 }, () => {
     // a week later, the grid re-anchors as the workspace delivers again
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(Date.now() + 7 * 86_400_000)
-    snap.projects[1].description = 'A week later'
+    // a change the root part sends, as no part sends a project
+    snap.orgs[0].name = 'A week later'
     await act(async () => deliverWorkspace(snap))
     await settle()
     const asked = live(sectionSubs('upcoming'))
@@ -597,6 +626,8 @@ describe("the person's writes", { timeout: 30_000 }, () => {
       ),
     )
     await settle()
+    // its add row waits for the project cache's answer of Plan
+    await planAnswered()
     await typeInto(q('[data-milestone-new]') as HTMLInputElement, 'Between')
     await press(button('Add'))
     expect(namesOf('upcoming')).toEqual(['Step 1', 'Between', 'Step 2'])
@@ -624,6 +655,8 @@ describe("the person's writes", { timeout: 30_000 }, () => {
       ),
     )
     await settle()
+    // its add row waits for the project cache's answer of Plan
+    await planAnswered()
     if (expanded) await press(q('[data-milestone-past-toggle]'))
     await typeInto(q('[data-milestone-new]') as HTMLInputElement, 'Old review')
     await press(button('Add'))
@@ -650,6 +683,8 @@ describe("the person's writes", { timeout: 30_000 }, () => {
       ),
     )
     await settle()
+    // its add row waits for the project cache's answer of Plan
+    await planAnswered()
     expect(q('[data-milestone-past-toggle]')).toBeNull()
     await press(q('[data-milestone-more]'))
     await press(q('[data-milestone-more]'))
@@ -746,6 +781,8 @@ describe("the person's writes", { timeout: 30_000 }, () => {
         ),
       )
       await settle()
+      // its add row waits for the project cache's answer of Plan
+      await planAnswered()
       expect(q('[data-milestone-past-toggle]')).toBeNull()
       await press(q('[data-milestone-row="u2"] button[aria-label^="Edit"]'))
       // a new search's read, which would say whether Past holds any, is held
@@ -1235,8 +1272,8 @@ describe('opened on a milestone', { timeout: 30_000 }, () => {
     // and holds it again, while Upcoming's first read for it loads
     force = { upcoming: 'loading' }
     await act(async () => deliverWorkspace(snap))
-    await settle()
-    expect(live(sectionSubs('upcoming'))).toHaveLength(1)
+    // the project cache answers the project again, a frame later
+    await act(async () => vi.waitFor(() => expect(live(sectionSubs('upcoming'))).toHaveLength(1)))
     expect(q('[data-milestone-open="loading"]')).toBeNull()
     expect(q('[data-milestone-editor="u1"]')).toBe(editor)
     expect(nameBox()?.value).toBe('Kept draft')

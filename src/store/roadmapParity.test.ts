@@ -64,6 +64,7 @@ import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
 import type { LoadIssue, LoadItem } from '../lib/workload'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleScope, oracleStore } from './oracleScope.setup'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
@@ -177,7 +178,7 @@ function expectRows(
   label: string,
   session?: string,
 ): Set<string> {
-  const info = P.scopeInfo(scopeId)
+  const info = oracleScope(P.snapshot, scopeId)
   if (info === null) {
     expect(answer, `${label}: unavailable`).toEqual({ state: 'unavailable' })
     return new Set()
@@ -249,7 +250,7 @@ function expectDependencies(
   scopeId: string,
   label: string,
 ): number {
-  const info = P.scopeInfo(scopeId)
+  const info = oracleScope(P.snapshot, scopeId)
   if (info === null) {
     expect(answer, `${label}: unavailable`).toEqual({ state: 'unavailable' })
     return 0
@@ -414,7 +415,7 @@ type Filters = [label: string, filters: Partial<RoadmapFilters>]
  * shows, each of their sub-projects and My view. */
 function selectionsOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, RoadmapScope, string][] = []
-  for (const meta of P.visibleProjects()) {
+  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
     out.push([meta.name, projectScope(profile, meta.id), meta.id])
     for (const id of meta.children ?? [])
       if (P.canSee(id)) out.push([P.project(id)?.name ?? id, projectScope(profile, id), id])
@@ -715,7 +716,7 @@ describe('the rules that must hold', () => {
     const answer = await roadmapFor(t, subject, scope, {}, windowOf(P, weeks))
     if (answer.state !== 'ok') throw new Error(answer.state)
     const ids = sorted(answer.rows.map((r) => r.id))
-    const info = P.scopeInfo(f.sub.id)
+    const info = oracleScope(P.snapshot, f.sub.id)
     if (info === null) throw new Error('FW')
     const desk = deskFilters(P, f.sub.id, NO_ROADMAP_FILTERS).desk
     const names = P.oracle.textNames(P.snapshot)
@@ -1071,7 +1072,7 @@ function expectTeam(P: Store, owners: OwnerAnswers, scopes: readonly string[], l
   const fromRows = teamTasksOf(P, owners, {}, 'store')
   const seen = { hours: 0, paused: 0, pausedPeople: new Set<string>() }
   for (const scopeId of scopes) {
-    const info = P.scopeInfo(scopeId)
+    const info = oracleScope(P.snapshot, scopeId)
     if (info === null) continue
     const modes: TeamMode[] = info.wide ? ['all'] : ['all', 'scope']
     for (const [windowLabel, weeks] of teamWindows(P))
@@ -1114,7 +1115,7 @@ function teamDiffers(
   const people = owners.map((o) => o.owner_id)
   const tasks = teamTasksOf(P, owners, drift)
   return scopes.some((scopeId) => {
-    const info = P.scopeInfo(scopeId)
+    const info = oracleScope(P.snapshot, scopeId)
     if (info === null || (mode === 'scope' && info.wide)) return false
     return teamWindows(P).some(([, weeks]) => {
       const want = teamFigures(P.oracle.teamLoad(info, mode, ...weeks), people, weeks)
@@ -1130,7 +1131,7 @@ function teamDiffers(
  * projects mode covers them for each of these. */
 function teamScopes(P: Store): string[] {
   const out = [P.MINE_SCOPE]
-  for (const meta of P.visibleProjects()) {
+  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
     out.push(meta.id)
     for (const id of meta.children ?? []) if (P.canSee(id)) out.push(id)
   }
@@ -1351,7 +1352,7 @@ describe('Team utilization', () => {
     expect(user?.state === 'ok' && user.spans.some((s) => s.issue_id === null)).toBe(true)
     expect(teamDiffers(P, owners, scopes, { keepHidden: true }, 'all')).toBe(true)
     // the subject's work in PCB and the sibling, outside FW
-    expect(P.scopeInfo(f.sub.id)?.wide).toBe(false)
+    expect(oracleScope(P.snapshot, f.sub.id)?.wide).toBe(false)
     expect(teamDiffers(P, owners, [f.sub.id], {}, 'scope', 'all')).toBe(true)
     expect(teamDiffers(P, owners, [f.sub.id, sibling.id], {}, 'scope')).toBe(false)
     // the subject's paused leaves

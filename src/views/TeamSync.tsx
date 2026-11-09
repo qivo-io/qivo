@@ -31,13 +31,15 @@
      its meeting has answered. It never corrects a scope. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NoProjects } from '@/components/NoProjects'
+import { type NavOpening, openResolved } from '@/components/projectNavRows'
 import { Avatar, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
+import { useHolds } from '@/components/useHolds'
 import { usePeople } from '@/components/usePeople'
 import { WalkFooter, WalkRail } from '@/components/walk'
 import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import type { UnsentScope } from '@/lib/leaveGuard'
-import { seesNoProject, syncNoProjectsHint } from '@/lib/noProjects'
+import { syncNoProjectsHint } from '@/lib/noProjects'
 import {
   dayLabel,
   doneSince,
@@ -52,6 +54,7 @@ import {
   type SyncVerdict,
   stampLabel,
   syncDay,
+  syncProjectNumber,
   waitingOnReview,
 } from '@/lib/teamSync'
 import { useLatest } from '@/lib/useLatest'
@@ -61,7 +64,13 @@ import { useViewVisibility } from '@/lib/viewVisibility'
 import { type IssueVM, P } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
-import { IncompleteNote, StaleNote, SyncNote } from './teamSync/SyncNote'
+import {
+  IncompleteNote,
+  ResolveNote,
+  type ResolveState,
+  StaleNote,
+  SyncNote,
+} from './teamSync/SyncNote'
 import { SyncScopeMenu } from './teamSync/SyncScopeMenu'
 import { TeamOpening } from './teamSync/TeamOpening'
 import {
@@ -462,6 +471,58 @@ export function TeamSync({
   const scopeKey = place.scope
   const scope = parseSyncScope(scopeKey)
   const meeting = useSyncMeeting(scopeKey, now)
+  // whether the person sees no project of the home organization, which the
+  // server confirms (projectNav.holds) while no meeting shows
+  const noProject = useHolds(!meeting.shows, P.homeOrg) === 'none'
+  // a Team sync address names a project by its number (`unresolved:<n>`,
+  // or `<n>@<org_id>` for one the address pinned to another organization),
+  // which the server resolves in that organization into the project's
+  // scope, its facts seeded, so the page never asks to choose a project the
+  // person can open. While it resolves the page says it is opening the
+  // project; a failed resolve and the access_unchecked refusal say so with
+  // Retry, which asks again (`tries`), and only an unavailable answer says
+  // the project is not available.
+  const asked = scope.kind === 'unresolved' ? syncProjectNumber(scope.segment) : null
+  const askedNum = asked?.num ?? null
+  const askedOrg = asked ? (asked.org_id ?? P.homeOrg) : ''
+  const [tries, setTries] = useState(0)
+  // the address and the try a resolve answers for, so a Retry reads
+  // loading until its own answer
+  const askedKey = askedNum === null || !askedOrg ? null : `${askedOrg}\n${askedNum}\n${tries}`
+  const [resolved, setResolved] = useState<{ key: string; opening: NavOpening } | null>(null)
+  useEffect(() => {
+    if (askedNum === null || !askedOrg) return
+    let live = true
+    const key = `${askedOrg}\n${askedNum}\n${tries}`
+    const stop = openResolved({ org_id: askedOrg, num: askedNum }, (opening) => {
+      if (!live) return
+      setResolved({ key, opening })
+      if (opening.state === 'open')
+        onCorrectRef.current({ scope: `project:${opening.id}`, step: place.step })
+    })
+    return () => {
+      live = false
+      stop()
+    }
+  }, [askedNum, askedOrg, tries])
+  // where the numbered address's resolve stands, loading until its answer
+  // for this address and this try
+  const resolving: ResolveState | null =
+    askedKey === null
+      ? null
+      : resolved?.key !== askedKey
+        ? { state: 'loading' }
+        : resolved.opening.state === 'failed'
+          ? { state: 'failed', retry: () => setTries((n) => n + 1) }
+          : resolved.opening.state === 'unchecked'
+            ? {
+                state: 'unchecked',
+                message: resolved.opening.message,
+                retry: () => setTries((n) => n + 1),
+              }
+            : resolved.opening.state === 'open'
+              ? { state: 'loading' }
+              : null
   const { humans, agents } = meeting
   // the people the page shows, named while it shows: the walk's people and
   // the meeting's tasks' assignees and reviewers, in the walk's order
@@ -579,6 +640,9 @@ export function TeamSync({
   useEffect(() => {
     if (frozen !== null) setPrompt(null)
   }, [frozen])
+  // the cards' rights: the agenda's `editable` of the answer the meeting
+  // shows, which reruns on access changes, never the store's levels
+  const editableIds = new Set(meeting.answer?.editable ?? [])
   const ctxFor = (owner: SyncPerson): PageCtx => {
     // P.syncStamp sends nothing for a viewer who is not staff (the server's
     // rule), so a read-only visitor earns no refusal toasts. It takes the
@@ -604,6 +668,7 @@ export function TeamSync({
       onShowTask,
       cards,
       frozen,
+      editable: (id) => editableIds.has(id),
     }
   }
 
@@ -619,11 +684,15 @@ export function TeamSync({
   const named = meeting.state !== 'choose' && meeting.state !== 'unavailable'
 
   let body: ReactNode
-  // with no project of the home organization to see, no step has anything to show
-  if (seesNoProject(P.homeOrg))
+  // with no project of the home organization to see, no step has anything
+  // to show, which the server's answer says (useHolds), read only while no
+  // meeting shows and never taken as none before it confirmed it
+  if (noProject)
     body = <NoProjects icon="people" title="Nothing to review yet" hint={syncNoProjectsHint()} />
   else if (!meeting.shows)
-    body = (
+    body = resolving ? (
+      <ResolveNote resolving={resolving} />
+    ) : (
       <SyncNote
         meeting={meeting}
         scopeKey={scopeKey}
@@ -754,7 +823,7 @@ export function TeamSync({
                 }
               />
             </div>
-            {!seesNoProject(P.homeOrg) && (
+            {!noProject && (
               <>
                 <StaleNote
                   meeting={meeting}

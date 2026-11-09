@@ -164,11 +164,13 @@ async function assertKeyFree(
 // Bounds the reads one create spends looking for a free key.
 const KEY_CANDIDATES = 500
 
-/* A new project keeps the key its client previewed while that key is free.
- * Archived projects and projects the caller cannot see keep their keys, and
- * the client never receives those, so a taken key is replaced by the first
- * free candidate derived from the name rather than refusing the project.
- * Without a preview (REST and MCP) the first free candidate is the key.
+/* A new project keeps the key its client sent while that key is free. The
+ * app sends the name's first candidate, projectKeyCandidate(projectKeyBase
+ * (name), 1), as it holds no project to avoid, and takes the key from the
+ * create's answer. Archived projects and projects the caller cannot see
+ * keep their keys too, so a taken key is replaced by the first free
+ * candidate derived from the name rather than refusing the project.
+ * Without a key (REST and MCP) the first free candidate is the key.
  * Concurrent creates of one key conflict and Convex retries the loser, which
  * then reads the winner's row. */
 async function allocateKey(
@@ -392,16 +394,16 @@ export type NewProject = {
 /* Where a new project goes in its list: one past the largest sort_order of
  * its siblings, archived and hidden ones included, so it sorts after every
  * one of them also where earlier deletes, restores or the app's own places
- * left gaps or ties (src/store/viewModels.ts byOrder sorts by sort_order). A
+ * left gaps or ties (the Board's lanes and the navigation lists sort by
+ * sort_order). A
  * top-level project reads the organization's top-level metas (by_org_parent
  * with parent_id absent), at most 500 rows at the design size, live and
  * archived, so a meta stored with a parent, which no writer makes, does not
  * count. A sub-project reads its parent's sub-projects, at most 70 at the
  * design size, the same rows projectLevel's navigation walk reads under
  * that parent, a read accepted at the design size's sum. Every create that
- * leaves sort_order out reaches it: REST, MCP and, from the release after
- * v0.1.140, the app's (src/store/planner.ts P.addProject paints its own
- * place by the same rule over the siblings the workspace holds). 0 when
+ * leaves sort_order out reaches it: REST, MCP and the app's, which sends
+ * none and paints nothing (src/store/planner.ts P.addProject). 0 when
  * there is no sibling. A sibling whose sort_order is not a finite number,
  * which createProjectCore refuses but an older backend stored as sent, is
  * skipped. One past NaN is NaN, which byOrder cannot compare with a number,

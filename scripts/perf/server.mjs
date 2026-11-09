@@ -7,23 +7,25 @@
 // real client does: decode the text and update the app.
 //
 // It serves the workspace in live parts (convex/workspace.ts), its tasks
-// and projects in the id windows the app asks for, cut from the whole
-// workspace it holds
+// in the id windows the app asks for, cut from the whole workspace it holds
 // (convex/lib/workspaceJoin.ts splitWorkspace), and the root part with the
 // signed-in person's own profiles, memberships and teams alone (rootOf),
 // so the app holds nobody else and no label, and names every other person,
 // team and label through the reads by id and the pickers, which answer
 // from the whole. After a write it sends every
 // part whose JSON changed, and only those, in one transition, as Convex does.
-// The whole it holds keeps the planted milestones as the server's rows,
-// which no part sends, as the projects part sends none; the milestone reads
-// answer from them (src/store/milestoneStandIn.setup.ts).
+// The whole it holds keeps the planted milestones and projects as the
+// server's rows, which no part sends; the milestone reads and the
+// navigation reads answer from them (src/store/milestoneStandIn.setup.ts,
+// src/store/projectNavStandIn.setup.ts).
 // It also answers snapshot:forMe, the one query apps before the parts read,
 // with the whole it holds, milestones included, for a baseline build. A
-// baseline build from after the parts and before the projects part
-// stopped sending milestones joins the parts this server sends and
-// cannot load against it (scripts/benchmark-browser.mjs --baseline), so
-// measure such a build in a checkout of its own. It answers the task
+// baseline build from after the parts and before the workspace's projects
+// part went subscribes that part (workspace:projects) and sizes its windows
+// from root fields this server no longer sends, so it cannot load against
+// it (scripts/benchmark-browser.mjs --baseline). A read of a part this
+// server does not serve answers an error that says so (readPart). Measure
+// such a build in a checkout of its own. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the
 // workspace it holds, which a write sends
 // again with the parts it changed. The task window's relation pickers' read
@@ -98,10 +100,12 @@
 //                        so the cap note shows) and health-error (its read
 //                        fails); several joined by commas
 //   projectnav           a state the navigation reads of the project
-//                        picker, the All projects directory and the
-//                        sidebar's project tree (projectNav.page,
-//                        children, search and resolve)
-//                        answer whatever the workspace says, for
+//                        picker, the All projects directory, the
+//                        sidebar's project tree, the New task dialog's and
+//                        the Move window's Sub-project picker and Team
+//                        sync's scope menu (projectNav.page, with org_id
+//                        and team_id too, children, search, resolve and
+//                        targets) answer whatever the workspace says, for
 //                        screenshots of states a seeded backend cannot
 //                        reach: not-ready (every list not ready),
 //                        unchecked (every read the access_unchecked
@@ -115,13 +119,16 @@
 //                        begin with) and empty (projectNav.page, search
 //                        and children list nothing, as for someone who
 //                        sees no project), and for projectNav.byIds alone,
-//                        which the store's project cache reads for the
-//                        projects unheldprojects leaves out: byids-loading
-//                        (it never answers, so their controls say Loading
-//                        this project…), byids-error (it fails) and
+//                        which the store's project cache reads for every
+//                        project a view, the scope, a dialog or the task
+//                        window names: byids-loading (it never answers, so
+//                        a scope opened by its address says Opening that
+//                        project… and the controls Loading this project…),
+//                        byids-error (it fails, so a scope says Couldn't
+//                        check that project. with Retry) and
 //                        byids-unchecked (it lists every id apart with the
-//                        access_unchecked sentence); several joined by
-//                        commas. A star
+//                        access_unchecked sentence, which a scope says with
+//                        Retry); several joined by commas. A star
 //                        or an unstar (projectNav:setFavorite) changes the
 //                        starred set by the server's rule and sends the
 //                        reads again
@@ -136,6 +143,24 @@
 //                        error the check shows its sentence with Retry, and
 //                        startup=none&projectnav=empty the chooser's empty
 //                        state
+//   holds                what projectNav.holds answers, which My view's
+//                        Overview, Board, Roadmap and the phone, the Inbox
+//                        and Team sync read only where their "no project"
+//                        note could show: none (no project, so they say
+//                        Nothing to … yet with New project), no-sub (a
+//                        top-level project and no sub-project, so they say
+//                        Tasks live in sub-projects.) and loading (it never
+//                        answers, so they say only Nothing assigned to
+//                        you); by default the server's word on the
+//                        workspace. Open My view with tasks=0 for the
+//                        notes
+//   syncmenu             a state the Projects group of Team sync's scope
+//                        menu answers (projectNav.page and search with the
+//                        home organization's org_id), apart from the other
+//                        navigation reads: not-ready, stopped (an open
+//                        batch stops after two projects looked at), small
+//                        (batches of five, so programs=12 reaches Load
+//                        more), error and empty; several joined by commas
 //   roadmap              a state the Roadmap's reads (tasks:roadmap and
 //                        tasks:roadmapDependencies) answer whatever the
 //                        tasks say, for screenshots of states a seeded
@@ -262,18 +287,6 @@
 //                        person's own grants reach, as anyone's, and
 //                        Settings' project lists and project pages reach
 //                        the hidden program by management
-//   unheldprojects (0)   leaves the N highest-numbered programs but the
-//                        first, with their sub-projects, grants and team
-//                        shares, out of the workspace's projects part,
-//                        while projectNav:byIds, the views' reads, the
-//                        task window and Search still answer them, so a
-//                        task window, an Inbox row, My view's Overview rows
-//                        and milestones and the phone agenda of such a
-//                        program read its name and the caller's level from
-//                        the store's project cache (src/store/projectCache.ts);
-//                        with projectnav=byids-loading, byids-error and
-//                        byids-unchecked for its loading, failed and
-//                        unchecked screenshots
 //   unheld (0)           leaves the N highest-numbered visible tasks without
 //                        a parent or subtasks out of the workspace's parts
 //                        and snapshot:forMe, with their labels, files,
@@ -354,14 +367,9 @@
 //                        invite lookup fail), get-error (the page's own
 //                        read fails), loading (the page's own read never
 //                        answers), refused (the pickers and the invite
-//                        lookup answer with the write's refusal), small
-//                        (batches of five) and unheld (once a project's
-//                        page has read it, by its id or by its number, the
-//                        workspace's parts leave the project and its
-//                        grants out while the page's reads still answer
-//                        them, as for a project an admin
-//                        manages without taking part in it); several
-//                        joined by commas. Open it with role=admin
+//                        lookup answer with the write's refusal) and small
+//                        (batches of five); several joined by commas. Open
+//                        it with role=admin
 //   projectlists         states Settings' project lists answer whatever the
 //                        workspace says (projectSettings:projects,
 //                        subProjects, archived and archivedSubProjects,
@@ -605,10 +613,10 @@
 // tokens and connected apps (tokens:personalTokens and connectedApps:list),
 // through src/store/credentialListsStandIn.setup.ts, over the rows the
 // `tokens` and `apps` parameters plant; the credential writes get no answer
-// here either. So are the project picker's
-// navigation reads (projectNav:page, children, search and resolve), through
-// src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
-// ordinary access, reads no budget and has no favorites unless
+// here either. So are the navigation reads (projectNav:page, with org_id
+// and team_id too, children, search, resolve, targets, holds and byIds),
+// through src/store/projectNavStandIn.setup.ts, which judges the signed-in
+// person by ordinary access, reads no budget and has no favorites unless
 // projectnav=favorites asks or the page stars one: the star
 // (projectNav:setFavorite) changes the starred set by the server's rule
 // (setFavoriteStandIn) and sends the reads that changed. Archived tasks' own read (issues:archivedPage) has
@@ -626,8 +634,8 @@
 // creator's own grant on a top-level project by the server's rule
 // (convex/lib/projectGrants.ts creatorGrant) and the server's place, one
 // past the siblings' largest; a sub-project of the hidden program joins
-// that program, so the workspace never holds it, as for a project an admin
-// creates under one they only manage after the admin access split
+// that program, which the navigation reads leave out, as for a project an
+// admin creates under one they only manage after the admin access split
 // (role=admin&hidden=N). So are the removal window's reads
 // (accessRemovals:preview and reassignChoices), through
 // src/store/removalStandIn.setup.ts, which takes the removed people's open
@@ -927,6 +935,22 @@ const forcedProjectNav = (() => {
   }
   return force
 })()
+/* What projectNav.holds answers (the `holds` parameter): none, no-sub or
+   loading, else the server's word on the workspace. */
+const forcedHolds = parameters.get('holds') ?? ''
+/* The forced states of Team sync's scope menu's Projects group (the
+   `syncmenu` parameter), as the navigation stand-in's `force` takes them. */
+const forcedSyncMenu = (() => {
+  const force = {}
+  for (const state of (parameters.get('syncmenu') ?? '').split(',').filter(Boolean)) {
+    if (state === 'not-ready') force.notReady = true
+    else if (state === 'stopped') force.stop = 2
+    else if (state === 'small') force.batch = 5
+    else if (state === 'error') force.fail = true
+    else if (state === 'empty') force.empty = true
+  }
+  return force
+})()
 const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
@@ -1051,9 +1075,8 @@ const forcedRelations = (() => {
   return force
 })()
 /* A project's Settings page forced states (the `projectsettings`
-   parameter), as the stand-in's `force` takes them, and the two the
-   server handles itself: `loading`, a page read that never answers, and
-   `unheld`. */
+   parameter), as the stand-in's `force` takes them, and the one the server
+   handles itself: `loading`, a page read that never answers. */
 const settingsStates = new Set((parameters.get('projectsettings') ?? '').split(',').filter(Boolean))
 const forcedSettings = (() => {
   const force = {}
@@ -1307,15 +1330,6 @@ const programs = Array.from({ length: programCount }, (_, n) =>
   ),
 )
 const visible = programs[0]
-/* `unheldprojects`: the highest-numbered programs but the first, with their
-   sub-projects, which the projects part leaves out with their grants and
-   team shares (heldWorkspace), while every read by id still answers them. */
-const unheldProgramCount = Math.min(Math.max(0, option('unheldprojects', 0)), programCount - 1)
-const unheldProjects = new Set(
-  programs
-    .slice(programCount - unheldProgramCount)
-    .flatMap((p) => [p.meta.id, ...p.children.map((child) => child.id)]),
-)
 /* With projectsettings or grants, the second person, an admin, leads the
    first program, and its sub-projects, which name no lead of their own,
    are led by that lead, so their Settings pages show an inherited lead. */
@@ -1639,6 +1653,10 @@ const attachments = descriptionImages.concat(
 const issueSubs = tasks.flatMap((row, n) => {
   return picked(n, followShare, 3) ? [{ issue_id: row.id, profile_id: me.id, created_at: now }] : []
 })
+/* The number the server gives the next project created here, as its
+   org_counters next_project_num does, which no part sends: one past every
+   program and the hidden one. */
+let nextProjectNum = hiddenNum + hiddenCount + 1
 const snapshot = {
   auth_user_id: 'perf-account',
   myProfileIds: [me.id],
@@ -1649,11 +1667,9 @@ const snapshot = {
       slug: 'testbed',
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
-      next_project_num: hiddenNum + hiddenCount + 1,
-      // every task is active, and every program and its projects are live
-      // but those archivedprojects archives
+      // every task is active; the root sends no project number or count,
+      // which the server keeps in org_counters (nextProjectNum below)
       active_tasks: count + hiddenTasks.length,
-      live_projects: liveProgramCount * (subprojectCount + 1) + 1 + hiddenCount,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -1707,9 +1723,7 @@ if (deletedStates.has('two-orgs')) {
       name: 'Partner Co',
       slug: 'partner',
       next_issue_num: 1,
-      next_project_num: 3,
       active_tasks: 0,
-      live_projects: 2,
     },
   ]
   snapshot.myProfileIds = [...snapshot.myProfileIds, seat]
@@ -1777,24 +1791,16 @@ const unheld = new Set(
     .slice(0, unheldCount)
     .map((row) => row.id),
 )
-/* The projects whose Settings page read them while
-   projectsettings=unheld, which the workspace's parts then leave out. */
-const settingsUnheld = new Set()
-/** The workspace as its parts and forMe send it: without the unheld tasks
-    and the rows hung on them, and without the projects a Settings page read
-    under projectsettings=unheld or unheldprojects leaves out, with their
-    grants. Its people, teams and labels are every one the server holds;
-    the root part sends the signed-in person's own alone. */
-function heldWorkspace() {
-  if (unheld.size === 0 && settingsUnheld.size === 0 && unheldProjects.size === 0) return snapshot
+/** The workspace as its task parts and forMe send it: without the unheld
+    tasks and the rows hung on them. Its people, teams and labels are every
+    one the server holds; the root part sends the signed-in person's own
+    alone, and no part sends a project, which the app reads through the
+    navigation reads and projectNav.byIds. */
+function partsWorkspace() {
+  if (unheld.size === 0) return snapshot
   const held = (row) => !unheld.has(row.issue_id)
-  const away = (id) => settingsUnheld.has(id) || unheldProjects.has(id)
-  const shown = (row) => !away(row.project_id)
   return {
     ...snapshot,
-    projects: snapshot.projects.filter((p) => !away(p.id)),
-    access: snapshot.access.filter(shown),
-    teamAccess: snapshot.teamAccess.filter(shown),
     issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
     issueLabels: snapshot.issueLabels.filter(held),
     attachments: snapshot.attachments.filter(held),
@@ -1808,7 +1814,7 @@ function heldWorkspace() {
 /** The snapshot as forMe sends it: its long lists past 8,192 values in
     parts (convex/lib/arrayLimit.ts). */
 function wireSnapshot() {
-  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = heldWorkspace()
+  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = partsWorkspace()
   const { delivered_at, ...lists } = rest
   return { auth_user_id, myProfileIds, orgs, ...chunkLists(lists), messages, delivered_at }
 }
@@ -2099,7 +2105,6 @@ function windowsOf(orgId) {
     const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
     windows = {
       tasks: idWindows(start.tasks),
-      projects: idWindows(start.projects),
     }
     windowsByOrg.set(orgId, windows)
   }
@@ -2110,22 +2115,28 @@ function windowsOf(orgId) {
 let partsCache = null
 /** The parts of the workspace as convex/workspace.ts answers them. */
 function partsNow() {
-  partsCache ??= splitWorkspace(heldWorkspace(), (orgId, kind) => windowsOf(orgId)[kind])
+  partsCache ??= splitWorkspace(partsWorkspace(), (orgId) => windowsOf(orgId).tasks)
   return partsCache
 }
 const PART_KINDS = {
   'workspace:tasks': 'tasks',
-  'workspace:projects': 'projects',
 }
-/** What workspace part `name` answers for `args`. */
+/** What workspace part `name` answers for `args`. A part this server does
+    not serve, such as the projects part a build from before its removal
+    subscribes, throws an error that names it and says how to measure such
+    a build. */
 function readPart(name, args) {
   const parts = partsNow()
   // the organization's parts the read names, the first one's by default
   const part = parts.find((p) => p.org_id === args.org_id) ?? parts[0]
   // the signed-in person's own profiles, memberships and teams
   // (convex/lib/workspaceParts.ts readRoot)
-  if (name === 'workspace:root') return rootOf(heldWorkspace())
+  if (name === 'workspace:root') return rootOf(partsWorkspace())
   const kind = PART_KINDS[name]
+  if (kind === undefined)
+    throw new Error(
+      `${name} is no workspace part this perf server serves (workspace:root and ${Object.keys(PART_KINDS).join(', ')} only); a build from before the workspace's projects part went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
+    )
   const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
 }
@@ -2382,11 +2393,25 @@ const read = (name, args = {}) => {
     const force = forcedProjectNav.byIdsUnchecked ? { unchecked: NAV_UNCHECKED } : {}
     return projectNavStandIn(snapshot, name, args, { force })
   }
-  // the project picker's reads (src/store/projectNavStandIn.setup.ts)
+  // whether the person sees a project and a sub-project (holds=)
+  if (name === 'projectNav:holds' && forcedHolds) {
+    if (forcedHolds === 'loading') return NO_ANSWER
+    if (forcedHolds === 'none') return { state: 'ok', top: false, sub: false }
+    if (forcedHolds === 'no-sub') return { state: 'ok', top: true, sub: false }
+  }
+  // the project picker's reads (src/store/projectNavStandIn.setup.ts), Team
+  // sync's scope menu with its own states (syncmenu=)
   if (name.startsWith('projectNav:')) {
-    const answer = projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
-    // projectnav=empty: the lists hold nothing, after the stand-in's checks
-    return forcedProjectNav.empty && answer.state === 'ok' && name !== 'projectNav:resolve'
+    const menu =
+      (name === 'projectNav:page' || name === 'projectNav:search') &&
+      args.org_id !== undefined &&
+      args.team_id === undefined &&
+      Object.keys(forcedSyncMenu).length > 0
+    const force = menu ? { ...forcedSyncMenu, favorites: starredSet() } : projectNavForce()
+    const answer = projectNavStandIn(snapshot, name, args, { force })
+    // projectnav=empty (or syncmenu=empty): the lists hold nothing, after
+    // the stand-in's checks
+    return force.empty && answer.state === 'ok' && 'rows' in answer
       ? { ...answer, rows: [], next: null, stopped: false }
       : answer
   }
@@ -2630,23 +2655,14 @@ const read = (name, args = {}) => {
   }
 }
 /** What a project's Settings page read `name` answers for `args`, through
-    the stand-in over the whole workspace, so a project the parts leave
-    out still answers (projectsettings=unheld). get names its project by
-    id or by organization and number and takes no other organization; the
-    lists take the page's organization. */
+    the stand-in over the whole workspace. get names its project by id or
+    by organization and number and takes no other organization; the lists
+    take the page's organization. */
 function readSettings(name, args) {
   if (name !== 'projectSettings:get')
     return projectSettingsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedSettings)
   if (settingsStates.has('loading')) return NO_ANSWER
-  const answer = projectSettingsStandIn(serverWorld(), name, args, forcedSettings)
-  // the project the answer names, whichever form named it
-  const id = answer.state === 'unavailable' ? undefined : answer.project.id
-  if (id !== undefined && settingsStates.has('unheld') && !settingsUnheld.has(id)) {
-    // the parts leave the project out from the next transition on
-    settingsUnheld.add(id)
-    setTimeout(() => void emitWorkspace(), 0)
-  }
-  return answer
+  return projectSettingsStandIn(serverWorld(), name, args, forcedSettings)
 }
 /** What a team settings read `name` answers for `args`, through the
     stand-in over the workspace, with every third team uncounted under
@@ -3022,8 +3038,7 @@ async function mutate(name, args) {
         ? p.type === 'meta' && p.parent_id === undefined
         : p.type === 'project' && p.parent_id === parent,
     )
-    const [orgRow] = snapshot.orgs
-    const num = orgRow.next_project_num
+    const num = nextProjectNum++
     const row = {
       id: args.id,
       org_id: args.org_id,
@@ -3040,7 +3055,6 @@ async function mutate(name, args) {
       track_delay: args.track_delay ?? true,
       created_at: new Date().toISOString(),
     }
-    snapshot.orgs = [{ ...orgRow, next_project_num: num + 1 }, ...snapshot.orgs.slice(1)]
     if (unseen) hidden.children.push(row)
     else {
       snapshot.projects = [...snapshot.projects, row]

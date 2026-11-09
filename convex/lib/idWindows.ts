@@ -1,9 +1,8 @@
-/* Windows of row keys for the workspace parts (workspace.ts). A window
- * [from, to) holds the rows whose key sorts from `from` (inclusive) to `to`
- * (exclusive, null for no end): a task's or project's window_key, 8 random
- * hex digits the server sets at every insert (lib/db.ts newWindowKey), a
- * task's relation rows by the same key (their task_key), and a person by
- * id. Keys and ids are random, so windows cut at fixed hex points hold
+/* Windows of row keys for the workspace's tasks part (workspace.ts). A
+ * window [from, to) holds the rows whose key sorts from `from` (inclusive)
+ * to `to` (exclusive, null for no end): a task's window_key, 8 random hex
+ * digits the server sets at every insert (lib/db.ts newWindowKey), and a
+ * task's relation rows by the same key (their task_key). Keys and ids are random, so windows cut at fixed hex points hold
  * about as many rows each, and cutting one in two needs no row: its halves
  * meet at the middle point of its bounds. So no window bound tells
  * anything about the rows, and the app chooses its windows without asking
@@ -130,19 +129,17 @@ export const idShare = (w: IdWindow) => (pointOf(w.to) - pointOf(w.from)) / SPAC
 /** Whether the key or id `id` falls in window `w`. */
 export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to === null || id < w.to)
 
-/** About how many rows the app's first windows of each kind hold, from the
+/** About how many rows the app's first task windows hold, from the
  * organization's counts (startWindows; lib/workspaceParts.ts PAGE has the
  * split points). */
-export const WINDOW_ROWS = { tasks: 200, projects: 250 }
+export const WINDOW_ROWS = { tasks: 200 }
 
 /** An organization as the root part sends it (lib/workspaceParts.ts
- * readRoot): its numbers, and the rows its windows read once the server
- * counts them (schema.ts org_counters). */
+ * readRoot): its task number, and the active tasks its windows read once
+ * the server counts them (schema.ts org_counters). */
 export type WindowCounts = {
   next_issue_num: number
-  next_project_num: number
   active_tasks?: number
-  live_projects?: number
 }
 
 /** About how many tasks the task windows of organization `org` read. Until
@@ -150,25 +147,19 @@ export type WindowCounts = {
  * stand in, which count every task ever created. */
 export const tasksIn = (org: WindowCounts): number => org.active_tasks ?? org.next_issue_num
 
-/** How many task and project windows the app starts organization `org`
- * with, sized by the rows its windows read (tasksIn, and its projects,
- * archived ones included), or by the numbers it handed out until the
+/** How many task windows the app starts organization `org` with, sized by
+ * the rows they read (tasksIn), or by the numbers it handed out until the
  * server has counted them. */
 export const startWindows = (org: WindowCounts) => ({
   tasks: windowCount(tasksIn(org), WINDOW_ROWS.tasks),
-  projects: windowCount(org.live_projects ?? org.next_project_num, WINDOW_ROWS.projects),
 })
 
-/** Live counts `counts` rounded up to the rows of the windows they start,
- * from which startWindows chooses the same windows, for a reader who may
- * not learn how much hidden work an organization holds. */
+/** The count of active tasks `counts` rounded up to the rows of the
+ * windows it starts, from which startWindows chooses the same windows, for
+ * a reader who may not learn how much hidden work an organization holds. */
 export const roundedCounts = (
-  counts: Pick<WindowCounts, 'active_tasks' | 'live_projects'>,
-): Pick<WindowCounts, 'active_tasks' | 'live_projects'> =>
-  counts.active_tasks === undefined || counts.live_projects === undefined
+  counts: Pick<WindowCounts, 'active_tasks'>,
+): Pick<WindowCounts, 'active_tasks'> =>
+  counts.active_tasks === undefined
     ? {}
-    : {
-        active_tasks: windowCount(counts.active_tasks, WINDOW_ROWS.tasks) * WINDOW_ROWS.tasks,
-        live_projects:
-          windowCount(counts.live_projects, WINDOW_ROWS.projects) * WINDOW_ROWS.projects,
-      }
+    : { active_tasks: windowCount(counts.active_tasks, WINDOW_ROWS.tasks) * WINDOW_ROWS.tasks }

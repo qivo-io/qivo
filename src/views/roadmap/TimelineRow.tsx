@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { Icon, ProjectName } from '../../components/qivo'
 import { type RoadmapEdge, roadmapEdges } from '../../lib/roadmapEdges'
-import { type IssueVM, P, type ProjectVM } from '../../store/planner'
+import { type IssueVM, P, type ProjectFacts } from '../../store/planner'
 import type { StoreVersion } from '../../store/updates'
 import { GUTTER_W, HEAD_STICK, LABEL_W, SUB_STICK } from './layout'
 import type { RowObserver } from './rowObserver'
@@ -13,7 +13,7 @@ import { BAR_RING, Bar, WeekCountEdge } from './TimelineMarks'
 export type Row = {
   kind: 'track' | 'sub' | 'task' | 'unsched'
   pid: string
-  proj: ProjectVM
+  proj: ProjectFacts
   issue?: IssueVM
 }
 type DueMark = { x: number; color: string; state: string } | null

@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from '../plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../plannerFixture.setup'
 
 /* The test-build guard against task writes before the store asked for
    every task (store/planner.ts guardTaskWrite, in start): a write that needs
@@ -60,7 +60,9 @@ describe('the guard against task writes before the ask', () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     snapshot.orgs[0].next_issue_num = 1
     network.query.mockResolvedValue(null)
     // writes stay on their way, but the boot's seat claim
@@ -158,7 +160,13 @@ describe('the guard against task writes before the ask', () => {
   })
 
   it('lets a create through without an ask, and paints no task row of the workspace', async () => {
-    const key = store.P.addIssue({ project: snapshot.projects[0].id, title: 'A new task' })
+    // the New task picker's row names its sub-project with the project
+    // cache, whose answer a create waits for
+    const project = snapshot.projects[0].id
+    store.P.nameProjects('the New task picker', [project])
+    await vi.waitFor(() => expect(store.P.projectState(project)).toBe('ok'))
+    probe.faults()
+    const key = store.P.addIssue({ project, title: 'A new task' })
     expect(key).not.toBeNull()
     await tick()
     expect(probe.faults()).toEqual([])

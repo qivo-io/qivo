@@ -30,7 +30,6 @@ import type { OrgLoadRow } from '../lib/loadRows'
 import { UNAVAILABLE_DELAY } from '../lib/machineDelay'
 import { byLoadRow, OWNER_LOADS } from '../lib/ownerLoads'
 import { taskOwnerId } from '../lib/review'
-import type { Workspace } from '../lib/workspaceJoin'
 import { restWorkload } from '../machine/records'
 import { getIssue } from '../machine/rest'
 import {
@@ -261,7 +260,7 @@ const orgOwner = (fx: Pick<Fx, 't'>, reader: Doc<'profiles'>, ownerId: string) =
  * appLoadRows), as spans in the wire's order, each with its task's project
  * from the workspace, and the paused tasks the app marks for them
  * (appPausedRows), in the wire's order. */
-function appOwnerOf(snap: Workspace, ownerId: string) {
+function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof workspaceOf>>>, ownerId: string) {
   const projectOf = new Map(snap.issues.map((task) => [task.id, task.project_id]))
   const spans = appLoadRows(snap)
     .filter((row) => row.owner_id === ownerId)

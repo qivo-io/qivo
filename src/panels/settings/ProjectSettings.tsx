@@ -132,10 +132,11 @@ export function ProjectPage({
       setRemovingState(null)
       window.showToast?.(`Deleted “${shown.name}”`)
       onProjectGone?.(shown.id, parent)
-      // a sub-project falls back to its project while the workspace holds
-      // it; a project back to the list it was opened from (never to some
-      // other project the caller may not see)
-      if (parent && P.heldProject(parent)) setPage(`project:${parent}`)
+      // a sub-project falls back to its project, which the page's own
+      // answer named, so its gate let it through; a project back to the
+      // list it was opened from (never to some other project the caller
+      // may not see)
+      if (parent) setPage(`project:${parent}`)
       else setPage('projects')
       return true
     }
@@ -151,16 +152,13 @@ export function ProjectPage({
     )
   }
   const answer = read.answer
-  /* The address names a project the workspace does not hold under the
-     organization this read found it in, by the number a numbered page
-     opened it by, else by its uuid, so a reload, Back and Forward open it
-     again (lib/router.ts noteProjectPage). The note stays as it was while
-     the Archive or delete window is open, so the address under the window
-     does not change. A project the workspace does not hold keeps its
-     address there, and a held one that leaves meanwhile keeps its number
-     until the window closes. */
-  const unheldIn =
-    answer && !gone && !P.heldProject(answer.project.id) ? answer.project.org_id : null
+  /* The address names the project under the organization this read found
+     it in, by the number a numbered page opened it by, else by its uuid,
+     so a reload, Back and Forward open it again (lib/router.ts
+     noteProjectPage), from the page's own answer, as the store holds no
+     project. The note stays as it was while the Archive or delete window
+     is open, so the address under the window does not change. */
+  const unheldIn = answer && !gone ? answer.project.org_id : null
   const openedBy =
     typeof project !== 'string' && 'num' in project && project.org_id === unheldIn
       ? project.num

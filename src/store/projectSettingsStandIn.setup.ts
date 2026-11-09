@@ -45,9 +45,8 @@
    a cursor of another list, project or search is refused with
    bad_request. It reads no read budget, so `not_ready`, a stopped batch, a
    failure, a refusal, `unavailable` and a smaller batch answer only when
-   `force` asks for them. The benchmark answers a project the page's
-   workspace leaves out by handing this stand-in its whole workspace while
-   the parts leave the project out (its `projectsettings=unheld`).
+   `force` asks for them. The benchmark hands this stand-in its whole
+   workspace, as no part sends a project.
    src/store/projectSettingsParity.test.ts compares it with the real
    queries. It imports nothing the benchmark's worker cannot load. */
 

@@ -794,43 +794,42 @@ describe('Settings › Projects', () => {
   /** Specs, the sub-project of Plan that New sub-project makes here. */
   const specs = () => ({ ...server.snap.projects[1], id: 'specs', num: 30, name: 'Specs' })
   /** Creates sub-project `made` from Plan's New sub-project… as the
-      dialog does: the store paints it, which the server's list lacks, and
-      the page hears its id. Answers how to tell the page whether the
-      server stored it. */
+      dialog does: the page hears its id and the name the dialog sent, and
+      the store paints nothing. Answers how to tell the page the create's
+      answer, its number where the server stored it. */
   async function create(made: ReturnType<typeof specs>) {
     await click(find('[data-project-row="plan"] button[aria-label="Project actions"]'))
     await click(button('New sub-project…'))
     const [, , onCreated] = onNewSubProject.mock.lastCall ?? []
-    await act(async () =>
-      server.publish({ ...server.snap, projects: [...server.snap.projects, made] }),
-    )
-    let stored: (ok: boolean) => void = () => {}
-    const saved = new Promise<boolean>((resolve) => {
+    let stored: (answer: { num: number } | null) => void = () => {}
+    const saved = new Promise<{ num: number } | null>((resolve) => {
       stored = resolve
     })
-    await act(async () => onCreated(made.id, saved))
+    await act(async () => onCreated(made.id, saved, made.name))
     await settle()
     return async (ok: boolean) => {
-      await act(async () => stored(ok))
+      await act(async () => stored(ok ? { num: made.num } : null))
       await settle()
     }
   }
 
-  it('keeps a sub-project made here in its open list until the server’s list holds it', async () => {
+  it('shows a sub-project made here once the server’s list holds it, and nothing of it before the create answers', async () => {
     await projects()
     await click(find('[data-project-row="plan"] button'))
     const made = specs()
     const stored = await create(made)
-    // before the server stored it, a list that ended without it keeps it
-    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
-    const kept = find('[data-subproject-row="specs"] button')
-    kept.focus()
+    // the store paints nothing, so nothing shows before the create answers
+    expect(subNames('plan')).toEqual(['Docs', 'Work'])
+    // the server's list holds it with the commit, which comes before the
+    // create's answer
     await elsewhere((snap) => snap.projects.push(made))
     expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
-    // the row the server's list took in keeps its element and its focus
-    expect(document.activeElement).toBe(find('[data-subproject-row="specs"] button'))
+    const row = find('[data-subproject-row="specs"] button')
+    row.focus()
     await stored(true)
+    // the list's row stays, with its element and its focus
     expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
+    expect(document.activeElement).toBe(row)
   })
 
   it('lets a sub-project made here go once a loaded batch held it, so a rename past the loaded batches leaves it there', async () => {
@@ -843,7 +842,6 @@ describe('Settings › Projects', () => {
     await click(find('[data-project-row="plan"] button'))
     const made = specs()
     const stored = await create(made)
-    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
     await elsewhere((snap) => snap.projects.push(made))
     await stored(true)
     expect(subNames('plan')).toEqual(['Docs', 'Specs'])
@@ -860,9 +858,9 @@ describe('Settings › Projects', () => {
   it('lets a sub-project made here go once the server stored it and a loaded list tells it does not hold it', async () => {
     await projects()
     await click(find('[data-project-row="plan"] button'))
-    // the store holds Specs and the server's list never does
+    // the create answers Specs and the server's list never holds it
     const stored = await create(specs())
-    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    expect(subNames('plan')).toEqual(['Docs', 'Work'])
     // while the page is hidden its list's answers may be from before
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
     await act(async () => document.dispatchEvent(new Event('visibilitychange')))
@@ -882,34 +880,31 @@ describe('Settings › Projects', () => {
   it('shows no sub-project made here while its list answers that the sub-projects can’t be listed', async () => {
     await projects()
     await click(find('[data-project-row="plan"] button'))
-    await create(specs())
+    const made = specs()
+    const stored = await create(made)
+    // the create answers while the page is hidden, so its row is kept from
+    // the answer until the list answers again
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await stored(true)
     expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    // back, the list answers that it can't list the sub-projects: no row,
+    // the kept one included
     server.force = { unavailable: true }
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
     await rerun()
     expect(subNames('plan')).toEqual([])
     expect(text('[data-subprojects-end]')).toBe("This project's sub-projects can't be listed.")
-    // it shows again with the list, which still lacks it
+    // it shows with the list once the list holds it
     server.force = {}
-    await rerun()
-    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    await elsewhere((snap) => snap.projects.push(made))
+    expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
   })
 
   it('reads nothing of the store’s catalogue, no level and no task', async () => {
-    const shown = vi.spyOn(P, 'visibleProjects')
     const sees = vi.spyOn(P, 'canSee')
     const level = vi.spyOn(P, 'levelOn')
-    let archivedReads = 0
-    let held = P.archivedProjects
-    Object.defineProperty(P, 'archivedProjects', {
-      configurable: true,
-      get: () => {
-        archivedReads++
-        return held
-      },
-      set: (value) => {
-        held = value
-      },
-    })
     watched = []
     await projects()
     await click(find('[data-project-row="plan"] button'))
@@ -917,11 +912,9 @@ describe('Settings › Projects', () => {
     await type(find('[data-archived-projects-search]'), 'old')
     await rest()
     await click(find('[data-archived-subs-toggle="old"]'))
-    expect(shown).not.toHaveBeenCalled()
     expect(sees).not.toHaveBeenCalled()
     // New sub-project… follows the row's own right
     expect(level).not.toHaveBeenCalled()
-    expect(archivedReads).toBe(0)
     expect(new Set(watched)).toEqual(
       new Set([
         'projectSettings:projects',

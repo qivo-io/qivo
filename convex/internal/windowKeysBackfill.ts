@@ -1,15 +1,18 @@
 /* One-time migration: give every task and project stored before window
  * keys existed a window key (schema.ts `window_key`, lib/db.ts
- * newWindowKey), so the app's windows spread them (lib/workspaceParts.ts),
- * and each task's relation rows (label assignments, attachments, follows
- * and the links from it) the same key as `task_key`, in the transaction
- * that gives the task its key. A relation row whose key differs from its
- * task's gets the task's, too, so a run also repairs those.
+ * newWindowKey), so the app's task windows spread the tasks
+ * (lib/workspaceParts.ts), and each task's relation rows (label
+ * assignments, attachments, follows and the links from it) the same key as
+ * `task_key`, in the transaction that gives the task its key. A relation
+ * row whose key differs from its task's gets the task's, too, so a run also
+ * repairs those. Since the workspace's projects part went, the app holds no
+ * project and nothing reads a project's key, which the run still gives, as
+ * every new project gets one.
  *
- * Until it runs, a row without a key sorts first and loads in the first
- * window of its kind, its relation rows with it, so the app still shows it,
- * but an organization with more such tasks than one window holds cannot
- * load. New rows get a key when they are inserted. Deleted items keep their
+ * Until it runs, a task without a key sorts first and loads in the first
+ * task window, its relation rows with it, so the app still shows it, but an
+ * organization with more such tasks than one window holds cannot load. New
+ * rows get a key when they are inserted. Deleted items keep their
  * stored copies as they were, and a restore gives a copy stored before keys
  * a key as it writes it back, its relation rows with it
  * (model/deletedItems.ts storedTaskKey, cleanProject). Earlier releases
@@ -44,7 +47,7 @@
  * 'window_keys_backfill', actor 'system') with its counts. The results hold
  * counts only. Running it again is safe, and a clean deployment reports
  * zeros. It writes no activity, sends no task event and changes nothing a
- * person sees, except which window of the app holds a row. */
+ * person sees, except which task window of the app holds a task. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'

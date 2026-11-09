@@ -182,6 +182,50 @@ export async function signInDemo(page, demo, key = 'nora') {
   if (slug !== demo.orgSlug) throw new Error('Browser did not sign in to Northstar Labs.')
 }
 
+/** Every row of navigation list `query` (projectNav:page, children, search
+ * or targets) with `args`, as the person signed in on `page` sees it, read
+ * batch by batch on the page's Convex client, waiting out `not_ready` for
+ * up to 15 s. The store holds no project list, so the drives read what the
+ * app's own lists read. Throws where the list stops or refuses. Needs the
+ * Vite dev server, which serves the page's modules. */
+export async function navRows(page, query, args = {}) {
+  const rows = await page.evaluate(
+    async ({ query, args }) => {
+      const { convex } = await import('/src/lib/convex.ts')
+      const deadline = Date.now() + 15000
+      const rows = []
+      for (let after; ; ) {
+        const batch = await convex.query(query, { ...args, ...(after ? { after } : {}) })
+        if (batch.state === 'not_ready' && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 250))
+          continue
+        }
+        if (batch.state !== 'ok') return `answered ${batch.state}`
+        rows.push(...batch.rows)
+        if (batch.stopped) return 'stopped'
+        if (batch.next === null) return rows
+        after = batch.next
+      }
+    },
+    { query, args },
+  )
+  if (typeof rows === 'string') throw new Error(`${query} ${rows}`)
+  return rows
+}
+
+/** The top-level project named `name` that the person signed in on `page`
+ * opens, with its live sub-projects: `{ id, org_id, name, num, children }`,
+ * each child `{ id, org_id, name, num, parent_id }`, from projectNav.search
+ * and projectNav.children (navRows). Throws where no such project shows. */
+export async function navProject(page, name) {
+  const top = (await navRows(page, 'projectNav:search', { search: name })).find(
+    (row) => row.name === name && row.parent === null,
+  )
+  if (!top) throw new Error(`Northstar shows no top-level project named ${name}`)
+  const children = await navRows(page, 'projectNav:children', { project_id: top.id })
+  return { id: top.id, org_id: top.org_id, name: top.name, num: top.num, children }
+}
+
 /** Removes what a drive left in Northstar: its tasks titled `issueTitle`, a
  * temporary agent, agent key and member, then deletes for good the Deleted
  * items of those tasks and of `taskIds`, the tasks the drive deleted itself. */

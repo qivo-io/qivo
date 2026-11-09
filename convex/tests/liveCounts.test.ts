@@ -152,17 +152,23 @@ describe('live counts', () => {
     expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 0, live_projects: 4 })
   }, 60_000)
 
-  it('sends the exact counts only to staff, and guests and Viewers the same windows', async () => {
+  it('sends the exact count only to staff, and guests and Viewers the same windows', async () => {
     const t = newT()
     const f = await withOrg(t)
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await backfill(t, { dry_run: false })
-    const exact = await expectLiveCounts(t, f.org.id)
-    for (const staff of [f.admin, f.user]) expect(await rootRow(t, f, staff)).toMatchObject(exact)
+    const { active_tasks } = await expectLiveCounts(t, f.org.id)
+    for (const staff of [f.admin, f.user]) {
+      const row = await rootRow(t, f, staff)
+      expect(row).toMatchObject({ active_tasks })
+      // the root sends no project count since no part sends a project
+      expect(row).not.toHaveProperty('live_projects')
+    }
     for (const reader of [f.guest, f.viewer]) {
       const row = await rootRow(t, f, reader)
-      expect(row).toMatchObject({ active_tasks: 200, live_projects: 250 })
-      expect(startWindows(row as WindowCounts)).toEqual({ tasks: 1, projects: 1 })
+      expect(row).toMatchObject({ active_tasks: 200 })
+      expect(row).not.toHaveProperty('live_projects')
+      expect(startWindows(row as WindowCounts)).toEqual({ tasks: 1 })
     }
   })
 
@@ -210,7 +216,8 @@ describe('live counts', () => {
     let done = null
     for (let n = 0; done === null && n < 20; n++) done = await step()
     expect(done).toEqual(await expectLiveCounts(t, org_id))
-    expect(await rootRow(t, f)).toMatchObject(done ?? {})
+    if (done === null || done === 'skipped') throw new Error(`the count did not finish: ${done}`)
+    expect(await rootRow(t, f)).toMatchObject({ active_tasks: done.active_tasks })
   })
 
   it('a step ends a page early once it has read its bytes', async () => {

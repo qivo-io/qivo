@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* "Show newer comments" in the task window, on the real store, with the
@@ -77,7 +77,9 @@ const change = (n: number): Row<'activity_events'> => ({
    minute of an unread comment message about it. */
 async function load({ unread }: { unread?: number } = {}) {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the project cache answers it
+  const snap: Snapshot = underProgram(plannerFixture())
   me = snap.profiles[0].id
   org = snap.orgs[0].id
   snap.issues.push({

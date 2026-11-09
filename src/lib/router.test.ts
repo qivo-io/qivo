@@ -9,7 +9,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
    Fixture: one home organization (HOME, slug "home") with projects 1 and 7 and
    issues QN-5 / QN-9, plus a foreign one (ACME, slug "acme") whose numbering
    collides on purpose — project 1 and QN-5 exist twice, which is the whole
-   reason an address carries the organization at all (0081). */
+   reason an address carries the organization at all (0081). The store holds
+   no project list: `project` stands for the project cache's facts, which
+   the router reads to name a scope and to keep a preferred scope, and an
+   address names a project by its uuid or asks for it by number. */
 const HOME = 'org-home'
 const ACME = 'org-acme'
 
@@ -53,9 +56,8 @@ const store = {} as {
   detail: FakeDetail | null
   reference: FakeReference | null
   orgBySlug: (s: string) => FakeOrg | undefined
+  /** The project cache's facts of a project (P.project). */
   project: (id: string) => FakeProject | undefined
-  /** The workspace's held project, which the fake answers as `project`. */
-  heldProject: (id: string) => FakeProject | undefined
   issueRefIn: (org: string, key: string) => string | null
   handleNow: (uuid: string, org: string, num: number) => string
   handleOf: (uuid: string) => string | null
@@ -64,11 +66,7 @@ const store = {} as {
 vi.mock('../store/planner', () => ({
   ISSUE_PREFIX: 'QN',
   MINE_SCOPE: 'mine',
-  // every project the fake holds is the workspace's, so heldProject is project
-  P: new Proxy(
-    {},
-    { get: (_t, k) => store[(k === 'heldProject' ? 'project' : k) as keyof typeof store] },
-  ),
+  P: new Proxy({}, { get: (_t, k) => store[k as keyof typeof store] }),
 }))
 
 import {
@@ -203,10 +201,13 @@ describe('parsePath — the front door parses to NOTHING', () => {
   })
 
   it('strips a query string and a fragment before reading the path', () => {
-    expect(parsePath('/app/home/board/p/7?x=1')).toEqual({ view: 'kanban', scope: 'p-home-7' })
-    expect(parsePath('/app/home/board/p/7#access_token=abc')).toEqual({
+    expect(parsePath('/app/home/board/p/7?x=1')).toEqual({
       view: 'kanban',
-      scope: 'p-home-7',
+      unheld: { org_id: HOME, num: 7 },
+    })
+    expect(parsePath(`/app/home/board/p/${FAR}#access_token=abc`)).toEqual({
+      view: 'kanban',
+      scope: FAR,
     })
   })
 })
@@ -227,14 +228,23 @@ describe('parsePath — the org segment', () => {
   })
 
   it('pins which organization a bare number is read in', () => {
-    expect(parsePath('/app/home/board/p/1')).toEqual({ view: 'kanban', scope: 'p-home-1' })
-    expect(parsePath('/app/acme/board/p/1')).toEqual({ view: 'kanban', scope: 'p-acme-1' })
+    expect(parsePath('/app/home/board/p/1')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: HOME, num: 1 },
+    })
+    expect(parsePath('/app/acme/board/p/1')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: ACME, num: 1 },
+    })
     expect(parsePath('/app/home/tasks/qn-5')!.issue).toBe('QN-5')
     expect(parsePath('/app/acme/tasks/qn-5')!.issue).toBe('uuid-acme-5')
   })
 
   it('~ names no organization, and reads home-first', () => {
-    expect(parsePath('/app/~/board/p/1')).toEqual({ view: 'kanban', scope: 'p-home-1' })
+    expect(parsePath('/app/~/board/p/1')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: HOME, num: 1 },
+    })
     expect(parsePath('/app/~/tasks/qn-5')!.issue).toBe('QN-5')
   })
 
@@ -297,7 +307,7 @@ describe('parsePath — scopes and pages', () => {
     expect(parsePath('/app/home/board/p/mine')).toEqual({ view: 'kanban', unheld: null })
   })
 
-  it('names a project the workspace does not hold as App asks the server about it', () => {
+  it('asks for a numbered project as App asks the server about it, and names a uuid as the scope', () => {
     // by its number in the organization the address pins, `~` reading home
     expect(parsePath('/app/home/board/p/9')).toEqual({
       view: 'kanban',
@@ -308,18 +318,22 @@ describe('parsePath — scopes and pages', () => {
       unheld: { org_id: ACME, num: 7 },
     })
     expect(parsePath('/app/~/p/9')).toEqual({ unheld: { org_id: HOME, num: 9 } })
-    // by its uuid alone, lowercase
+    // a uuid is the scope, lowercase, which the project cache checks
     expect(parsePath(`/app/home/board/p/${FAR.toUpperCase()}`)).toEqual({
       view: 'kanban',
-      unheld: FAR,
+      scope: FAR,
     })
     // a number no project has, and an unpinned one with no home to read it in
     expect(parsePath('/app/home/board/p/0')).toEqual({ view: 'kanban', unheld: null })
     store.homeOrg = ''
     expect(parsePath('/app/~/board/p/9')).toEqual({ view: 'kanban', unheld: null })
     store.homeOrg = HOME
-    // a held project is the scope, with no unheld; Team sync keeps its own form
-    expect(parsePath('/app/home/board/p/7')).toEqual({ view: 'kanban', scope: 'p-home-7' })
+    // a number the cache knows is asked for too, since no list of projects
+    // answers it; Team sync keeps its own form
+    expect(parsePath('/app/home/board/p/7')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: HOME, num: 7 },
+    })
     expect(parsePath('/app/home/sync/p/9')).toEqual({ sync: { scope: 'unresolved:9' } })
   })
 
@@ -329,7 +343,9 @@ describe('parsePath — scopes and pages', () => {
     expect(parsePath('/app/~/settings/account')).toEqual({ settings: 'account' })
     expect(parsePath('/app/~/settings/desktop')).toEqual({ settings: 'desktop' })
     expect(parsePath('/app/home/settings/org-general')).toEqual({ settings: 'org-general' })
-    expect(parsePath('/app/home/settings/project/7')).toEqual({ settings: 'project:p-home-7' })
+    expect(parsePath('/app/home/settings/project/7')).toEqual({
+      settings: numberedProjectPage(HOME, 7),
+    })
     expect(parsePath('/app/home/settings/projects-archived-tasks')).toEqual({
       settings: 'projects-archived-tasks',
     })
@@ -353,11 +369,14 @@ describe('parsePath — scopes and pages', () => {
     })
   })
 
-  it('reads a number the workspace does not hold as a numbered page in the organization the address names, never another', () => {
-    // a held number is the page by id, in the organization the address pins
-    expect(parsePath('/app/home/settings/project/1')).toEqual({ settings: 'project:p-home-1' })
-    expect(parsePath('/app/acme/settings/project/1')).toEqual({ settings: 'project:p-acme-1' })
-    // an unheld one is the numbered page of that organization
+  it('reads a number as a numbered page in the organization the address names, never another', () => {
+    // the numbered page of the organization the address pins
+    expect(parsePath('/app/home/settings/project/1')).toEqual({
+      settings: numberedProjectPage(HOME, 1),
+    })
+    expect(parsePath('/app/acme/settings/project/1')).toEqual({
+      settings: numberedProjectPage(ACME, 1),
+    })
     expect(parsePath('/app/home/settings/project/99')).toEqual({
       settings: numberedProjectPage(HOME, 99),
     })
@@ -395,16 +414,20 @@ describe('parsePath — scopes and pages', () => {
     })
   })
 
-  it("reads an unpinned number in the home organization before any project the workspace holds, never as another organization's project of that number", () => {
-    // Acme's project 99 is held, Home's project 99 is not
+  it("reads an unpinned number in the home organization, never as another organization's project of that number", () => {
+    // Acme has a project 99 too
     store.projects = [...store.projects, project('p-acme-99', 99, ACME)]
     expect(parsePath('/app/~/settings/project/99')).toEqual({
       settings: numberedProjectPage(HOME, 99),
     })
     expect(parseHash('#/settings/project/99')).toEqual({ settings: numberedProjectPage(HOME, 99) })
-    // pinned to Acme, the number is Acme's held project
-    expect(parsePath('/app/acme/settings/project/99')).toEqual({ settings: 'project:p-acme-99' })
-    expect(parseHash('#/o/acme/settings/project/99')).toEqual({ settings: 'project:p-acme-99' })
+    // pinned to Acme, the number is Acme's numbered page
+    expect(parsePath('/app/acme/settings/project/99')).toEqual({
+      settings: numberedProjectPage(ACME, 99),
+    })
+    expect(parseHash('#/o/acme/settings/project/99')).toEqual({
+      settings: numberedProjectPage(ACME, 99),
+    })
     // a view's project address and Team sync's read it the same way
     expect(parsePath('/app/~/board/p/99')).toEqual({
       view: 'kanban',
@@ -412,13 +435,15 @@ describe('parsePath — scopes and pages', () => {
     })
     expect(parseHash('#/board/p/99')).toEqual({ view: 'kanban', unheld: { org_id: HOME, num: 99 } })
     expect(parsePath('/app/~/sync/p/99')).toEqual({ sync: { scope: 'unresolved:99' } })
-    // a login without a home organization holds no project by an unpinned
-    // number, though projects 1 of Home and of Acme are both held
+    // a login without a home organization reads no unpinned number, though
+    // Home and Acme both have a project 1
     store.homeOrg = ''
     expect(parsePath('/app/~/settings/project/1')).toEqual({ settings: 'account' })
     expect(parseHash('#/settings/project/1')).toEqual({ settings: 'account' })
     expect(parsePath('/app/~/board/p/1')).toEqual({ view: 'kanban', unheld: null })
-    expect(parsePath('/app/acme/settings/project/1')).toEqual({ settings: 'project:p-acme-1' })
+    expect(parsePath('/app/acme/settings/project/1')).toEqual({
+      settings: numberedProjectPage(ACME, 1),
+    })
     store.homeOrg = HOME
   })
 
@@ -434,10 +459,10 @@ describe('parsePath — scopes and pages', () => {
     // another number, or another page, is another page
     expect(pathMatchesState('/app/acme/settings/project/8', page)).toBe(false)
     expect(pathMatchesState('/app/acme/settings/account', page)).toBe(false)
-    // once the workspace holds the project, its address parses to the page
-    // by id, and still names this numbered page in place
+    // its address parses to the same numbered page, also once the project
+    // cache knows the project, and names this page in place
     store.projects = [...store.projects, project('p-acme-7', 7, ACME)]
-    expect(parsePath('/app/acme/settings/project/7')).toEqual({ settings: 'project:p-acme-7' })
+    expect(parsePath('/app/acme/settings/project/7')).toEqual({ settings: page.settingsPage })
     expect(namesProjectPage('/app/acme/settings/project/7', page.settingsPage)).toBe(true)
     expect(namesProjectPage('/app/home/settings/project/7', page.settingsPage)).toBe(false)
     expect(pathMatchesState('/app/acme/settings/project/7', page)).toBe(true)
@@ -909,7 +934,10 @@ describe('buildPath', () => {
       { scope: 'p-home-7', view: 'kanban', openIssue: 'uuid-acme-5' },
     ] as UiState[]) {
       const r = parsePath(buildPath(s))!
-      expect(r.scope || null).toBe(s.scope && !s.openIssue ? s.scope : r.scope || null)
+      // a project scope comes back as the number App asks the server about
+      const p = s.scope && !s.openIssue ? store.project(s.scope) : undefined
+      if (p) expect(r.unheld).toEqual({ org_id: p.org, num: p.num })
+      else expect(r.scope || null).toBe(s.scope && !s.openIssue ? s.scope : r.scope || null)
       expect(r.view).toBe(s.view)
       expect(r.issue || null).toBe(s.openIssue || null)
     }
@@ -1007,8 +1035,11 @@ describe('issueLink — the shareable short form', () => {
 
 describe('parseHash — shared route grammar', () => {
   it('reads project and task forms', () => {
-    expect(parseHash('#/board/p/1')).toEqual({ view: 'kanban', scope: 'p-home-1' })
-    expect(parseHash('#/o/acme/board/p/1')).toEqual({ view: 'kanban', scope: 'p-acme-1' })
+    expect(parseHash('#/board/p/1')).toEqual({ view: 'kanban', unheld: { org_id: HOME, num: 1 } })
+    expect(parseHash('#/o/acme/board/p/1')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: ACME, num: 1 },
+    })
     expect(parseHash('#/tasks/qn-5')!.issue).toBe('QN-5')
     expect(parseHash('#/tasks/5')!.issue).toBe('QN-5')
     expect(parseHash('#/o/acme/tasks/qn-5')!.issue).toBe('uuid-acme-5')
@@ -1268,20 +1299,25 @@ describe('Team sync addresses', () => {
 
   it('reads each scope, then the step', () => {
     expect(parsePath('/app/home/sync/all')).toEqual({ sync: { scope: 'all' } })
-    expect(parsePath('/app/home/sync/p/7')).toEqual({ sync: { scope: 'project:p-home-7' } })
+    // a number the page resolves, a uuid at once
+    expect(parsePath('/app/home/sync/p/7')).toEqual({ sync: { scope: 'unresolved:7' } })
     expect(parsePath(`/app/home/sync/team/${TEAM.toUpperCase()}/agents`)).toEqual({
       sync: { scope: `team:${TEAM}`, step: 'agents' },
     })
     expect(parsePath(`/app/home/sync/all/people/${PERSON}`)).toEqual({
       sync: { scope: 'all', step: PERSON },
     })
-    expect(parsePath(`/app/home/sync/p/p-home-1a/people/${PERSON}`)).toEqual({
-      sync: { scope: 'project:p-home-1a', step: PERSON },
+    expect(parsePath(`/app/home/sync/p/${FAR.toUpperCase()}/people/${PERSON}`)).toEqual({
+      sync: { scope: `project:${FAR}`, step: PERSON },
     })
   })
 
   it('pins a project number to the org segment, and an unreadable slug resolves nothing', () => {
-    expect(parsePath('/app/acme/sync/p/1')).toEqual({ sync: { scope: 'project:p-acme-1' } })
+    // read in the organization the address pins, which the page asks the
+    // server about, never the home organization's project of that number
+    expect(parsePath('/app/acme/sync/p/1')).toEqual({ sync: { scope: `unresolved:1@${ACME}` } })
+    expect(parsePath('/app/home/sync/p/1')).toEqual({ sync: { scope: 'unresolved:1' } })
+    expect(parsePath('/app/~/sync/p/1')).toEqual({ sync: { scope: 'unresolved:1' } })
     expect(parsePath('/app/globex/sync/p/1')).toEqual({ sync: {} })
     expect(parsePath(`/app/globex/sync/team/${TEAM}/people/${PERSON}/tasks/qn-5`)).toEqual({
       sync: {},
@@ -1385,21 +1421,28 @@ describe('Team sync addresses', () => {
   })
 
   it('round-trips every emitted form', () => {
+    // a project by number comes back as the number the page resolves, in
+    // the organization it reads in
+    const back: Record<string, string> = {
+      'project:p-home-7': 'unresolved:7',
+      'project:p-acme-1': `unresolved:1@${ACME}`,
+    }
     for (const s of [
       { sync: { scope: 'all', step: 'team' } },
       { sync: { scope: 'all', step: 'agents' } },
       { sync: { scope: 'project:p-home-7', step: PERSON } },
-      { sync: { scope: 'project:p-home-1a', step: 'team' } },
+      { sync: { scope: `project:${FAR}`, step: 'team' } },
       { sync: { scope: 'project:p-acme-1', step: 'team' } },
       { sync: { scope: `team:${TEAM}`, step: PERSON }, openIssue: 'QN-9' },
       { sync: { scope: 'all', step: 'team' }, openIssue: 'uuid-acme-5' },
       { sync: { scope: 'unresolved:99', step: 'team' } },
+      { sync: { scope: `unresolved:99@${ACME}`, step: 'team' } },
       // a typed segment holding what an address reads as its own parts
       { sync: { scope: 'unresolved:a/b', step: 'team' } },
       { sync: { scope: 'unresolved:a?b#c', step: PERSON } },
     ] as UiState[]) {
       const r = parsePath(buildPath(s))!
-      expect(r.sync?.scope).toBe(s.sync!.scope)
+      expect(r.sync?.scope).toBe(back[s.sync!.scope] ?? s.sync!.scope)
       expect(r.sync?.step || 'team').toBe(s.sync!.step)
       expect(r.issue || null).toBe(s.openIssue || null)
     }
@@ -1466,7 +1509,7 @@ describe('Team sync addresses', () => {
     // a named step wins everywhere; nothing saved means no scope, where the
     // page asks to choose, never All projects
     expect(place('/app/home/sync/p/7/agents', phone)).toEqual({
-      scope: 'project:p-home-7',
+      scope: 'unresolved:7',
       step: 'agents',
     })
     expect(place('/app/home/sync', { me: PERSON, mobile: false })).toEqual({

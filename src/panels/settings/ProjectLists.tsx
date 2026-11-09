@@ -288,7 +288,7 @@ export function OrgProjectsPage({
   onNewSubProject: (
     parent: string,
     focusAfterClose?: () => HTMLElement | null,
-    onCreated?: (id: string, saved: Promise<boolean>) => void,
+    onCreated?: (id: string, saved: Promise<{ num: number } | null>, name: string) => void,
   ) => void
   onOpenArchivedTasks: (projectId: string) => void
 }) {
@@ -328,12 +328,17 @@ export function OrgProjectsPage({
   })
   const toggle = (id: string) => setOpen((was) => (was === id ? null : id))
   const newSubProject = (parent: string, focusAfterClose?: () => HTMLElement | null) =>
-    onNewSubProject(parent, focusAfterClose, (id, saved) => {
-      editMade(parent, (was) => [...was, { id, saved: false }])
-      // a refused create's row leaves the store, which ends its kept row
-      void saved.then((ok) => {
-        if (ok) editMade(parent, (was) => was.map((m) => (m.id === id ? { id, saved: true } : m)))
-      })
+    onNewSubProject(parent, focusAfterClose, (id, saved, name) => {
+      editMade(parent, (was) => [...was, { id, name, num: null }])
+      // the row shows once the server stored it, with the number its answer
+      // gave; a refused create's entry goes
+      void saved.then((created) =>
+        editMade(parent, (was) =>
+          created
+            ? was.map((m) => (m.id === id ? { ...m, num: created.num } : m))
+            : was.filter((m) => m.id !== id),
+        ),
+      )
     })
   const canCreate = org === P.homeOrg && P.canCreateProject()
   const searching = search.settled !== ''
@@ -736,7 +741,7 @@ export function SubProjectsEnd({
 
 /** A sub-project New sub-project made in Settings › Projects, and whether
     the server has stored it yet. */
-type Made = { id: string; saved: boolean }
+type Made = { id: string; name: string; num: number | null }
 
 /* An open project's live sub-projects in Settings › Projects, a batch at a
    time as the list's end scrolls into view or Load more is pressed, up to
@@ -784,10 +789,9 @@ function SettingsSubProjects({
   })
   const current = visible && showed.current && !list.refreshing
   const settled = new Set(
-    made.flatMap(({ id, saved }) => {
+    made.flatMap(({ id, name, num }) => {
       if (loaded.has(id)) return [id]
-      const p = saved && current ? P.heldProject(id) : undefined
-      return p && listPassed(list, '', p.name, id) ? [id] : []
+      return num !== null && current && listPassed(list, '', name, id) ? [id] : []
     }),
   )
   React.useEffect(() => {
@@ -796,10 +800,9 @@ function SettingsSubProjects({
   const keptRows =
     list.phase === 'held'
       ? []
-      : made.flatMap(({ id }) => {
-          const p = settled.has(id) ? undefined : P.heldProject(id)
-          return p && p.parent === parent.id ? [{ id, name: p.name, num: p.num ?? 0 }] : []
-        })
+      : made.flatMap(({ id, name, num }) =>
+          settled.has(id) || num === null ? [] : [{ id, name, num }],
+        )
   const tags = tagsOf(org, [
     ...keptRows.map((r) => ({ ...r, parent: parent.id })),
     ...list.rows.map((r) => ({ ...r, parent: parent.id })),

@@ -173,7 +173,7 @@ async function mount(onSent: () => void, page?: UnsentScope, initial: string | n
     root.render(
       <TooltipProvider>
         <UnsentScopeContext.Provider value={page ?? null}>
-          <card.MentionCtl it={it} initial={initial} onSent={onSent} />
+          <card.MentionCtl it={it} initial={initial} onSent={onSent} editable />
         </UnsentScopeContext.Provider>
         <prompt.DiscardPrompt />
       </TooltipProvider>,

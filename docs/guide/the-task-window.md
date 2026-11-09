@@ -360,7 +360,18 @@ view. Choosing another parent replaces it, and **Remove parent** removes it.
 ## Moving a task
 
 Choose **Move to sub-project…** to move within the task's organization to a
-sub-project you can edit. The task keeps its ID, comments, attachments, labels,
+sub-project you can edit. The window lists those sub-projects under their
+projects, 25 at a time with a search and **Load more**, the task's own
+marked **Current**, and says "No other sub-project you can move it to." when
+there is none. **Move** turns on once Qivo has checked the one you choose,
+and the task's own sub-project and its parent's, which decide what moves
+with it.
+Under the list the window says it is opening that sub-project while it
+checks it, and if the check fails or cannot finish it says so with
+**Retry**. If your access there drops below Edit while the window is open,
+**Move** turns off and the window says you can no longer move the task
+there.
+The task keeps its ID, comments, attachments, labels,
 activity, links and subtasks. Its review hand-off and the time it became Done
 start again at the move, for the task and each subtask that moves with it.
 A Remaining estimate that stays with the task keeps its measurement time, so

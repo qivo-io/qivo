@@ -276,17 +276,17 @@ once you pause typing, so it finds every task in your Inbox. A search can
 be at most 200 characters ([Limits](./limits.md)).
 
 On desktop, selecting a row opens the task's discussion pane and marks the
-row read. The pane opens the task at once, read from the server, also before
-it has loaded into the workspace, and says so while it loads or when the task
-can't be opened. Click
+row read. The pane opens the task at once, read from the server, and says
+so while it loads or when the task can't be opened. Click
 **Description** to expand its collapsed description. The pane shows the
 current assignee or reviewer, Activity and comment box. Use the pop-out button
 for editable details, attachments and links; a related task opened there
 opens in both the pane and the pop-out. **Open task in board**, in the
 pane's **Task actions** menu or a row's right-click menu, opens the full
 task window over its Board, scrolls to the task's card and rings it until a
-moment after the window closes. It shows for every task whose project you
-can open. The project breadcrumb does the same
+moment after the window closes. It shows for every task with a project,
+and Qivo says so if you cannot open that project. The project breadcrumb
+does the same
 ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
@@ -333,7 +333,7 @@ notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Mark as read / unread** and **Remove notification**, and **Open task in
-board** for every task whose project you can open. Read and removal apply
+board** for every task with a project, as in the pane. Read and removal apply
 to the task's messages up to the newest one the row shows, so an update
 that arrives meanwhile stays unread, or stays as the row's only message
 after a removal.

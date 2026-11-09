@@ -130,7 +130,7 @@ describe('refusal sentences in restore and upload toasts', () => {
 
   it('adds no second period to a project restore refusal that has one', async () => {
     answers['projects:unarchive'] = refuse('rule', 'Ask a project lead to restore it.')
-    expect(await P.unarchiveProject(snap.projects[0].id)).toBe(false)
+    expect(await P.unarchiveProject(snap.projects[0].id, { orgId: P.homeOrg })).toBe(false)
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
       "Couldn't restore. Ask a project lead to restore it.",
       'error',

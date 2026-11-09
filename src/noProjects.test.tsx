@@ -8,7 +8,13 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
-import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  type ForcedProjectNav,
+  isProjectNavRead,
+  NAV_UNCHECKED,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
@@ -56,12 +62,16 @@ const CHOOSER_MEMBER =
 
 let container: HTMLDivElement
 let root: Root
+/* How the server answers projectNav.holds: from what it holds (null), not
+   at all ('hold'), or with `force`'s not ready, refusal or failure. */
+let holdsAnswer: ForcedProjectNav | 'hold' | null = null
 let phone = false
 // the milestone reads App subscribed, by query
 let milestoneReads: string[] = []
 
 beforeEach(() => {
   phone = false
+  holdsAnswer = null
   milestoneReads = []
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
@@ -118,14 +128,29 @@ async function app(snap: Snapshot, path = '/app/testbed') {
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
+  // the navigation reads open now, which the server answers again after
+  // a change of access, as Convex reruns them
+  const navReads = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
+        for (const answer of navReads) answer()
       }
       publish(snap)
+    } else if (isProjectNavRead(name)) {
+      const force = name === 'projectNav:holds' ? holdsAnswer : null
+      const answer = () => {
+        if (force === 'hold') return
+        answerProjectNav(server, name, args, next, fail, { force: force ?? {} })
+      }
+      navReads.add(answer)
+      answer()
+      return () => {
+        navReads.delete(answer)
+      }
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
@@ -134,10 +159,15 @@ async function app(snap: Snapshot, path = '/app/testbed') {
     else if (isMilestoneRead(name)) {
       milestoneReads.push(name)
       answerMilestones(server, name, args, next, fail)
-    } else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
+    }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a project address by number resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? queryProjectNav(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   await store.initStore()
@@ -598,4 +628,74 @@ describe('the phone Roadmap of a scope with nothing to schedule', () => {
     expect(document.body.textContent).not.toContain('Upcoming milestones')
     expect(document.body.textContent).not.toContain('Task schedule')
   })
+})
+
+describe("My view's notes, from the server's word on the person's projects", {
+  timeout: 60_000,
+}, () => {
+  /** A person of the fixture's organization with no task, who sees
+      `sees`: no project, a top-level project with no sub-project, or a
+      project with a sub-project. */
+  function seeing(sees: 'none' | 'no_sub' | 'some'): Snapshot {
+    const snap = sees === 'some' ? member() : noProjects('user')
+    if (sees === 'no_sub') {
+      const base = { ...plannerFixture().projects[0], org_id: snap.orgs[0].id }
+      snap.projects = [
+        {
+          ...base,
+          id: 'bare',
+          type: 'meta',
+          key: 'BARE',
+          num: 3,
+          name: 'Bare',
+          parent_id: undefined,
+        },
+      ]
+      snap.access = [{ project_id: 'bare', profile_id: snap.profiles[0].id, level: 'user' }]
+    }
+    snap.issues = []
+    return snap
+  }
+  const views = [
+    ['Overview', 'overview'],
+    ['Board', 'board'],
+    ['Roadmap', 'roadmap'],
+  ] as const
+
+  it.each(views)(
+    'on the %s, says no project, no sub-project or nothing assigned as projectNav.holds confirms it',
+    async (_name, view) => {
+      for (const [sees, note] of [
+        ['none', MEMBER],
+        ['no_sub', 'Tasks live in sub-projects.'],
+        ['some', 'Nothing assigned to you'],
+      ] as const) {
+        await app(seeing(sees), `/app/~/${view}/mine`)
+        await shows(note)
+        if (sees !== 'none') expect(document.body.textContent).not.toContain(MEMBER)
+        await reload()
+      }
+    },
+  )
+
+  it.each(views)(
+    'on the %s, says only what its own answer says while the word is on its way, not ready, refused or failed',
+    async (_name, view) => {
+      for (const force of [
+        'hold',
+        { notReady: true },
+        { unchecked: NAV_UNCHECKED },
+        { fail: true },
+      ] as const) {
+        // a person who sees no project, whose note a confirmed answer would
+        // give: must fail for a no-project note shown before it
+        holdsAnswer = force
+        await app(seeing('none'), `/app/~/${view}/mine`)
+        await shows('Nothing assigned to you')
+        expect(document.body.textContent).not.toContain(MEMBER)
+        expect(document.body.textContent).not.toContain('Tasks live in sub-projects.')
+        await reload()
+      }
+    },
+  )
 })

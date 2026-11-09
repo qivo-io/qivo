@@ -22,6 +22,12 @@ import { isOwnerPickerRead, ownerPickersStandIn } from '../store/ownerPickersSta
 import { peopleSettingsStandIn } from '../store/peopleSettingsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  type ForcedProjectNav,
+  isProjectNavRead,
+  type ProjectNavRead,
+} from '../store/projectNavStandIn.setup'
 import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
 import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSyncStandIn.setup'
 
@@ -262,6 +268,20 @@ export async function loadBoard(
         fail?: (e: unknown) => void
       }>
     }
+    /** the navigation reads the views and dialogs subscribe to (children,
+        page, search, resolve, targets and holds; the double answers the
+        project cache's byIds), which answer from the snapshot through
+        their stand-in, `force` forcing its states; `open` holds those open
+        now, which a delivery answers again */
+    nav: {
+      force: ForcedProjectNav
+      open: Set<{
+        name: ProjectNavRead
+        args: unknown
+        next: (value: unknown) => void
+        fail?: (e: unknown) => void
+      }>
+    }
   } = {
     hold: false,
     force: null,
@@ -295,6 +315,7 @@ export async function loadBoard(
     owners: { force: new Set(), asked: [] },
     people: { hold: false, force: null, open: new Set() },
     milestones: { hold: false, force: {}, asked: [], open: new Set() },
+    nav: { force: {}, open: new Set() },
   }
   /** Answers people:byIds read `read` from the snapshot as it is now, with
       the state the test forces. */
@@ -316,9 +337,14 @@ export async function loadBoard(
       read.fail?.(e)
     }
   }
-  // the store's canSee and canWrite, once the store loaded
-  let sees: (id: string) => boolean = () => true
-  let writes: (id: string) => boolean = () => true
+  /* What the caller reads and writes by the server's rule, the navigation
+     reads' levels (store/oracleScope.setup.ts oracleLevels) judged from the
+     snapshot as it is now, once per answer: the store holds no project, so
+     its own canSee and canWrite know only the projects its cache named. */
+  let serverRule = () => ({
+    sees: (_id: string) => true,
+    writes: (_id: string) => true,
+  })
   /** Answers Team sync subscription `sub` from the snapshot as it is now,
       or fails it. */
   const answerSync = (sub: {
@@ -328,6 +354,7 @@ export async function loadBoard(
   }) => {
     const s = server.sync
     if (s.fail !== undefined) return sub.fail?.(s.fail)
+    const { sees, writes } = serverRule()
     const answer = teamSyncStandIn(snapshot, sub.args, { sees, writes, force: s.force })
     sub.next(structuredClone(s.edit ? s.edit(answer, sub.args) : answer))
   }
@@ -341,6 +368,7 @@ export async function loadBoard(
   }) => {
     const r = server.roadmap
     if (r.fail !== undefined) return sub.fail?.(r.fail)
+    const { sees, writes } = serverRule()
     const answer = answerRoadmap(snapshot, sub.name, sub.args, {
       sees,
       canEdit: writes,
@@ -361,6 +389,7 @@ export async function loadBoard(
       ? call.fail?.(server.failLoads)
       : call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
   const answerOf = (args: BoardArgs): BoardAnswer => {
+    const { sees } = serverRule()
     const answer = boardStandIn(snapshot, args, { sees, force: server.force ?? undefined })
     return server.edit ? server.edit(answer) : answer
   }
@@ -376,6 +405,7 @@ export async function loadBoard(
     const o = server.overview
     if (o.fail !== undefined && o.failing(sub.query, sub.args)) return sub.fail?.(o.fail)
     let answer: unknown
+    const { sees } = serverRule()
     try {
       answer = overviewStandIn(snapshot, sub.query, sub.args, { sees, force: o.force })
     } catch (error) {
@@ -403,6 +433,10 @@ export async function loadBoard(
     for (const sub of server.roadmap.open) answerRoadmapSub(sub)
     if (!server.milestones.hold) for (const sub of server.milestones.open) answerMilestoneSub(sub)
     if (!server.people.hold) for (const read of server.people.open) answerPeople(read)
+    for (const sub of server.nav.open)
+      answerProjectNav(snapshot, sub.name, sub.args, sub.next, sub.fail, {
+        force: server.nav.force,
+      })
   }
   // a task's people pickers answer through their stand-in, and every other
   // one-shot read with nothing
@@ -462,6 +496,12 @@ export async function loadBoard(
       if (!server.sync.hold) answerSync(sub)
       return () => server.sync.open.delete(sub)
     }
+    if (isProjectNavRead(name) && name !== 'projectNav:byIds') {
+      const sub = { name, args, next, fail }
+      server.nav.open.add(sub)
+      answerProjectNav(snapshot, name, args, next, fail, { force: server.nav.force })
+      return () => server.nav.open.delete(sub)
+    }
     if (name === 'teamSync:lastComments') {
       const sub = { owners: [...((args as { owner_ids: string[] }).owner_ids ?? [])] }
       server.comments.add(sub)
@@ -490,9 +530,18 @@ export async function loadBoard(
   )
   const store = await import('../store/planner')
   await store.initStore()
+  // the scope opens as App opens it from a row, its facts seeded and
+  // named with the project cache, which answers from the whole
+  const { openScope, oracleLevels } = await import('../store/oracleScope.setup')
+  openScope(store.P, snapshot, scopeId || snapshot.projects[0].id)
   lastProbe = store.__layerProbe
-  sees = (id) => store.P.canSee(id)
-  writes = (id) => store.P.canWrite(id)
+  serverRule = () => {
+    const levels = oracleLevels(snapshot)
+    return {
+      sees: (id) => levels.has(id),
+      writes: (id) => levels.get(id) === 'lead' || levels.get(id) === 'user',
+    }
+  }
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')
   const { Kanban } = await import('./Kanban')
@@ -536,7 +585,6 @@ export async function loadBoard(
     }, [])
     const filters = { ...row, search }
     const info = P.scopeInfo(scope)
-    if (!info) throw new Error('missing the scope')
     const actions = { ...board, openIssue: setOpened as (...args: unknown[]) => void }
     return (
       <TooltipProvider>
@@ -573,7 +621,6 @@ export async function loadBoard(
   function View({ view }: { view: (info: ScopeInfo) => ReactNode }) {
     usePlannerVersion()
     const info = P.scopeInfo(scope)
-    if (!info) throw new Error('missing the scope')
     return <TooltipProvider>{view(info)}</TooltipProvider>
   }
   return {

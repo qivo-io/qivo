@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import { inspectBrowserDemo, loadBrowserDemo, navProject, signInDemo } from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] || 'http://localhost:5199')
 await inspectBrowserDemo(demo)
@@ -26,9 +26,7 @@ if (hasEmail) {
   await signInDemo(page, demo)
   // sign-in lands on the project directory, which shows no task, so the
   // drive opens Luma Sensor's Board for its cards
-  const num = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  const num = (await navProject(page, 'Luma Sensor')).num
   if (num == null) throw new Error('Northstar holds no Luma Sensor')
   await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${num}`)
   await page.waitForSelector('[data-card]', { timeout: 30000 })

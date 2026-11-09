@@ -1337,13 +1337,11 @@ const wholeNumber = (n: number | undefined): n is number =>
 /** A row of projectNav.byIds: a project the caller opens for navigation,
  * with its top-level project's id (null for a top-level one), the caller's
  * level on it, whether its tasks track delay, its own lead (`lead_id`,
- * meant for the Board's lane heads and the Overview's Lead, which read the
- * workspace's projects part until t3/limits-projects-part, so no app reads
- * it yet) and the time a task gets on entering Review in it
+ * which the Board's lane heads and the Overview's Lead read through the
+ * store's project cache) and the time a task gets on entering Review in it
  * (`review_hours`: its own, else its parent's, else DEFAULT_REVIEW_HOURS,
- * lib/review.ts resolveReviewHours, for the views' Review paint of a
- * project the workspace does not hold, store/planner.ts
- * reviewHoursForProject). A reader of the project's Settings page reads the
+ * lib/review.ts resolveReviewHours, for the views' Review paint,
+ * store/planner.ts reviewHoursForProject). A reader of the project's Settings page reads the
  * same lead and Review time (model/projectSettings.ts settingsGate). */
 export type NavByIdRow = NavProject & {
   parent_id: string | null
@@ -1384,9 +1382,8 @@ export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
  * an organization without the caller's seat, one the seat does not see and
  * a top-level project seen only through an archived sub-project are left
  * out alike, so an answer tells nothing of a project the person cannot open.
- * The last of these lib/access.ts counts for navigation and the workspace's
- * projects part sends; byIds leaves it out as the directory, the sidebar
- * and resolve do.
+ * The last of these lib/access.ts counts for navigation; byIds leaves it
+ * out as the directory, the sidebar and resolve do.
  *
  * Every asked id is judged first, then the parent of each opened
  * sub-project is added whatever its own verdict in the call, so the answer
@@ -1569,10 +1566,8 @@ async function byIdRow(sight: SeatSight, project: Doc<'projects'>): Promise<NavB
  * projectNav.page with `team_id` (navPageOf): one batch of the projects and
  * sub-projects team `team_id` of organization `org_id` holds a share on
  * that the person sees for navigation with their seat there, in name key
- * order with the project id breaking ties, meant for Team sync's notes,
- * which offer a team meeting's smaller scopes and read the workspace's
- * projects part until t3/limits-projects-part moves them here; no app
- * reads it yet.
+ * order with the project id breaking ties, which Team sync's notes read to
+ * offer a team meeting's smaller scopes (src/views/teamSync/SyncNote.tsx).
  *
  * Its candidates are the team's own shares: its live root reach rows that
  * record a source on the top-level project (on_root) and its live child
@@ -1657,10 +1652,9 @@ export type NavHolds =
 /**
  * projectNav.holds for the login whose active seats are `myProfiles`, or
  * only the seat in `org_id`: whether the person sees any live top-level
- * project and any live sub-project for navigation, meant for the "no
- * project" and "no sub-project" notes, which are to say so only on this
- * confirmed answer once t3/limits-projects-part moves them off the
- * workspace's projects part; no app reads it yet.
+ * project and any live sub-project for navigation, which the "no project"
+ * and "no sub-project" notes read and say so only on this confirmed answer
+ * (src/components/useHolds.ts).
  *
  * Its candidates are the navigation reads' own: the live root reach rows
  * of each seat and its teams (rootIndex), each judged by rootShows, never a
@@ -1765,15 +1759,25 @@ export type NavTargetRow = NavProject & {
 export type NavTargets = NavBatch<NavTargetRow> | NavRefusal
 
 /** What projectNav.targets is asked for: the cursors, the one seat to list
- * (`org_id`) and a search of the sub-project's or its parent's name. */
-export type NavTargetsArgs = NavCursorArgs & { org_id?: string; search?: string }
+ * (`org_id`), a search of the sub-project's or its parent's name and the
+ * one top-level project to list under (`parent_id`). */
+export type NavTargetsArgs = NavCursorArgs & {
+  org_id?: string
+  search?: string
+  parent_id?: string
+}
 
 /** The targets list's name, which seals its cursors with the login, the
- * organization asked for and the search's name key. */
+ * organization asked for, the search's name key and, when asked, the
+ * parent. */
 export const TARGETS_LIST = 'projectNav.targets'
 
 const NOT_TARGETS_CURSOR =
-  'after and through must be cursors from an earlier answer of projectNav.targets for the same organization and search; start again from the first batch'
+  'after and through must be cursors from an earlier answer of projectNav.targets for the same organization, search and parent; start again from the first batch'
+
+/** The refusal of an empty parent_id. */
+export const EMPTY_PARENT =
+  'parent_id must name a top-level project, or be left out to list under every one'
 
 /* The tie of a target's position: its parent's id, its own name key and
  * id, and its seat's organization. */
@@ -1810,10 +1814,9 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * one batch of the live sub-projects under a live parent the person may
  * add tasks to, Edit (User) or Lead by lib/access.ts level, across every
  * seat or only the seat in `org_id` (an org_id without the caller's seat
- * answers an empty last batch, as the search does), meant for the New
- * task dialog, the Move window and the task window's Link task offer,
- * which read the workspace's projects part until t3/limits-projects-part
- * moves them here; no app reads it yet.
+ * answers an empty last batch, as the search does), which the New task
+ * dialog, the Move window (src/components/TargetPicker.tsx) and the task
+ * window's Link task offer read.
  *
  * The order is the parent's name key, the parent's id, the sub-project's
  * name key and its id, the positions of page and children joined: the
@@ -1827,9 +1830,18 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * seat writes nothing and adds no candidate. `search` keeps a row whose own
  * name or whose parent's name holds every word, in any order, ignoring case
  * and accents, matched before the cut, and is refused past LIMITS.search.
+ * `parent_id` lists only the sub-projects under that top-level project, in
+ * the same order, which the New task dialog reads for the first writable
+ * sub-project of the project it opens in. The walk starts at the parent's
+ * own place, reads no other parent's sub-projects and ends past it, and a
+ * parent the caller has no seat for, a sub-project, an archived project or
+ * an unknown id answers an empty last batch, as a parent with no writable
+ * sub-project does.
  *
  * Cursors are sealed with TARGETS_LIST, the login, the organization asked
- * for and the search's name key. `not_ready` until the asked
+ * for, the search's name key and, when asked, the parent, so a cursor of
+ * the whole list never continues a parent's and the other way round.
+ * `not_ready` until the asked
  * organizations' reach rows and name keys are complete, `stopped` where
  * NAMED_READ ends a batch, never `next: null`, and the access_unchecked
  * refusal whole where a bound of the caller's own reads stops a check.
@@ -1860,9 +1872,10 @@ export async function navTargetsOf(
   const term = text === '' ? '' : nameKey(text)
   if (text !== '' && term === '') throw badRequest(BLANK_SEARCH)
   if (a.org_id === '') throw badRequest(EMPTY_ORG)
+  if (a.parent_id === '') throw badRequest(EMPTY_PARENT)
   const ask = await openAsk(
     TARGETS_LIST,
-    [authUserId, a.org_id ?? '', term],
+    [authUserId, a.org_id ?? '', term, ...(a.parent_id === undefined ? [] : [a.parent_id])],
     a,
     NOT_TARGETS_CURSOR,
     targetTieOf,
@@ -1881,14 +1894,33 @@ export async function navTargetsOf(
     const streams: ((reads: NamedReads) => NamedStream<TargetRow>)[] = []
     for (const seat of seats) {
       const sight = seatSight(ctx, seat, true)
+      // with parent_id, only the seat of the parent's organization lists,
+      // from the parent's own place on
+      let only: { id: string; key: string } | null = null
+      if (a.parent_id !== undefined) {
+        const parent = await sight.project(a.parent_id)
+        if (
+          parent === null ||
+          parent.org_id !== seat.org_id ||
+          parent.parent_id !== undefined ||
+          parent.archived_at !== undefined
+        )
+          continue
+        only = { id: parent.id, key: nameKey(parent.name) }
+      }
       sights.set(seat.org_id, sight)
       const grantees = await sight.grantees()
-      // the parent a cursor stopped under, read again from its start, the
-      // org-less tie placing it before its own position
+      // the parent a cursor stopped under, read again from its start, or
+      // the one parent asked for, the org-less tie placing it before its
+      // own position
       const parentAfter: NamedAt<SeatTie> | null =
-        resume === null ? null : { key: resume.parentKey, tie: [resume.parentId, ''] }
+        only !== null
+          ? { key: only.key, tie: [only.id, ''] }
+          : resume === null
+            ? null
+            : { key: resume.parentKey, tie: [resume.parentId, ''] }
       streams.push(
-        targetStream(ctx, sight, grantees, parentAfter, resume, (p) => parents.set(p.id, p)),
+        targetStream(ctx, sight, grantees, parentAfter, resume, (p) => parents.set(p.id, p), only),
       )
     }
     const kept = new Set<string>()
@@ -1940,7 +1972,9 @@ type TargetRow = Doc<'projects'> | Doc<'project_reach'>
  * `parentAfter` on, each told to `found`, then its sub-projects, the
  * parent's own where the seat reaches it for a reason of its own, else the
  * child rows under it, each at its position (targetAt), after `resume`'s
- * sub-project under the parent the cursor stopped under. */
+ * sub-project under the parent the cursor stopped under. With `only`, the
+ * one parent asked for by its id and name key, it skips every other root
+ * row at that name and ends at the first row past it. */
 function targetStream(
   ctx: QueryCtx,
   sight: SeatSight,
@@ -1948,6 +1982,7 @@ function targetStream(
   parentAfter: NamedAt<SeatTie> | null,
   resume: { parentKey: string; parentId: string; childKey: string; childId: string } | null,
   found: (parent: Doc<'projects'>) => void,
+  only: { id: string; key: string } | null = null,
 ): (reads: NamedReads) => NamedStream<TargetRow> {
   const orgId = sight.seat.org_id
   return async function* (reads) {
@@ -1959,6 +1994,10 @@ function targetStream(
       if (item === STOPPED) {
         yield STOPPED
         return
+      }
+      if (only !== null) {
+        if (item.at.key !== only.key) return
+        if (item.row.project_id !== only.id) continue
       }
       const parent = await rootShows(sight, item.row)
       if (parent === null) continue

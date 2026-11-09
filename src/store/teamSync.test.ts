@@ -99,7 +99,6 @@ function fixture(myRole: Role) {
         slug: 'testbed-labs',
         created_at: NOW,
         next_issue_num: num,
-        next_project_num: 3,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -247,7 +246,7 @@ describe('the Team sync store', () => {
     expect(task('In review').statusAt).toBeNull()
   })
 
-  it('paints the status stamp the way the server stamps and clears it', () => {
+  it('paints the status stamp the way the server stamps and clears it', async () => {
     // a second top-level project to move into, and a leaf to become a subtask
     const [meta2, sub2] = [crypto.randomUUID(), crypto.randomUUID()]
     const project = f.snap.projects[1]
@@ -258,11 +257,23 @@ describe('the Team sync store', () => {
         { ...f.snap.projects[0], id: meta2, key: 'P3', num: 3, name: 'Other' },
         { ...project, id: sub2, key: 'P4', num: 4, name: 'Other sub', parent_id: meta2 },
       ],
+      // the admin's own grants on the other project and on the task's, as
+      // admin status gives no access and a move needs facts of both
+      // (P.moveWaits)
+      access: [
+        ...f.snap.access,
+        { project_id: meta2, profile_id: f.snap.myProfileIds[0], level: 'user' },
+        { project_id: f.snap.projects[0].id, profile_id: f.snap.myProfileIds[0], level: 'user' },
+      ],
       issues: [
         ...f.snap.issues,
         { ...f.todo, id: crypto.randomUUID(), num: 9, title: 'Child', status_at: undefined },
       ],
     })
+    // the Move window names its target with the project cache, which a
+    // move waits for
+    P.nameProjects('the move window', [sub2])
+    await vi.waitFor(() => expect(P.projectState(sub2)).toBe('ok'))
     // a clock that moves a minute before each write, so a stamp a later
     // write repainted would differ
     let clock = Date.parse('2026-10-19T10:00:00.000Z')
@@ -295,8 +306,9 @@ describe('the Team sync store', () => {
     expect(task('To do').project).toBe(sub2)
     expect(task('To do').statusAt).toBeNull()
     expect(task('Child').statusAt).toBeNull()
-    // a new task starts with the stamp at its creation
-    const key = P.addIssue({ project: project.id, title: 'Fresh', status: 'todo' })!
+    // a new task starts with the stamp at its creation, in a sub-project the
+    // project cache answered, as a create waits for
+    const key = P.addIssue({ project: sub2, title: 'Fresh', status: 'todo' })!
     expect(P.issueById[key].statusAt).not.toBeNull()
     expect(P.issueById[key].statusAt).toBe(P.issueById[key].createdAt)
   })
@@ -328,7 +340,7 @@ describe('the Team sync store', () => {
     expect(task('To do').reviewAt).toBeNull()
   })
 
-  it('paints a move to another sub-project restarting the hand-off and Done time', () => {
+  it('paints a move to another sub-project restarting the hand-off and Done time', async () => {
     // a sibling sub-project, and a second top-level project to carry a subtask into
     const [sibling, meta2, sub2] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
     const project = f.snap.projects[1]
@@ -340,7 +352,21 @@ describe('the Team sync store', () => {
         { ...f.snap.projects[0], id: meta2, key: 'P4', num: 4, name: 'Other' },
         { ...project, id: sub2, key: 'P5', num: 5, name: 'Other sub', parent_id: meta2 },
       ],
+      // the admin's own grants on both top-level projects, as admin status
+      // gives no access
+      access: [
+        ...f.snap.access,
+        ...[f.snap.projects[0].id, meta2].map((id) => ({
+          project_id: id,
+          profile_id: f.snap.myProfileIds[0],
+          level: 'user' as const,
+        })),
+      ],
     })
+    P.nameProjects('the move window', [sibling, sub2])
+    await vi.waitFor(() =>
+      expect([sibling, sub2].map((id) => P.projectState(id))).toEqual(['ok', 'ok']),
+    )
     const [handed, done] = [task('In review').reviewAt, task('Done one').doneAt]
     // naming the current sub-project changes nothing
     expect(P.moveIssue(task('Done one').id, project.id)).toBeNull()

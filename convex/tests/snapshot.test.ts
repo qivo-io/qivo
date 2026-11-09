@@ -39,6 +39,7 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
+import { ready } from './projectNavFixtures.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it (same situation as helpers.setup's crypto) */
@@ -84,10 +85,6 @@ const snapFor = async (profile: Doc<'profiles'>) => {
   if (snap === null) throw new Error('expected a snapshot, got the noProfile null')
   return snap
 }
-
-/* The projects part's answer for one whole window, as `profile` reads it. */
-const projectsPartFor = (profile: Doc<'profiles'>) =>
-  as(t, profile).query(api.workspace.projects, { org_id: f.org.id, from: '', to: null })
 
 const plantLabel = (name: string) =>
   t.run(async (ctx) => {
@@ -273,7 +270,9 @@ describe('billing redaction', () => {
     const user = await snapFor(f.user)
     expect(user.orgs[0]?.billing).toBeUndefined()
     expect(user.orgs[0]?.next_issue_num).toBe(1)
-    expect(user.orgs[0]?.next_project_num).toBe(5)
+    // the root sends no project number or count, which no app reads
+    expect(user.orgs[0]).not.toHaveProperty('next_project_num')
+    expect(user.orgs[0]).not.toHaveProperty('live_projects')
 
     const guest = await snapFor(f.guest)
     expect(guest.orgs[0]?.billing).toBeUndefined()
@@ -284,33 +283,6 @@ describe('billing redaction', () => {
       await ctx.db.patch(f.org._id, { gravatar_avatars: true })
     })
     expect((await snapFor(f.user)).orgs[0]).not.toHaveProperty('gravatar_avatars')
-  })
-})
-
-describe('projectAccess', () => {
-  it("the projects part carries EVERYONE'S grants on visible projects and nothing on hidden ones, and the workspace keeps the caller's own", async () => {
-    await t.run(async (ctx) => {
-      await ctx.db.insert('project_access', {
-        project_id: f.hidden.id,
-        profile_id: f.agent.id,
-        level: 'user',
-      })
-    })
-    const part = await projectsPartFor(f.guest)
-    if (part.state !== 'ok') throw new Error(part.state)
-    // the viewer's grant arrives in the guest's part, not only their own
-    expect(
-      part.access.some((a) => a.profile_id === f.viewer.id && a.project_id === f.meta.id),
-    ).toBe(true)
-    expect(part.access.some((a) => a.project_id === f.hidden.id)).toBe(false)
-    // the join keeps the guest's own grant alone (lib/workspaceJoin.ts)
-    expect((await snapFor(f.guest)).access.map((a) => a.profile_id)).toEqual([f.guest.id])
-
-    const admin = await projectsPartFor(f.admin)
-    if (admin.state !== 'ok') throw new Error(admin.state)
-    expect(
-      admin.access.some((a) => a.project_id === f.hidden.id && a.profile_id === f.agent.id),
-    ).toBe(true)
   })
 })
 
@@ -391,11 +363,8 @@ describe('archived split', () => {
       snap.links.some((l) => l.source_id === archivedIssue.id || l.target_id === archivedIssue.id),
     ).toBe(false)
     expect(snap.issueSubs.some((row) => row.issue_id === archivedIssue.id)).toBe(false)
-    // the projects part sends no milestone of a live or an archived project;
-    // the milestone reads keep the archived fence (milestoneReads.test.ts)
-    const part = await projectsPartFor(f.admin)
-    expect(part).toMatchObject({ state: 'ok' })
-    expect(part).not.toHaveProperty('milestones')
+    // no part sends a milestone of a live or an archived project; the
+    // milestone reads keep the archived fence (milestoneReads.test.ts)
     expect(snap).not.toHaveProperty('milestones')
   })
 })
@@ -1020,40 +989,40 @@ describe('navigation-only parents', () => {
     })
 
     const snap = await snapFor(subOnly)
-    expect(snap.projects.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id].sort())
-    // A new project field reaches navigation-only parents unless it is
-    // judged here first.
-    const meta = snap.projects.find((p) => p.id === f.meta.id)!
+    expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
+    expect(snap).not.toHaveProperty('milestones')
+    // the read the app takes its projects from answers the sub-project and
+    // its parent, never the sibling, once the reach rows are complete
+    await ready(t, f)
+    const nav = await as(t, subOnly).query(api.projectNav.byIds, {
+      ids: [f.sub.id, f.sub2.id],
+    })
+    expect(nav.rows.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id].sort())
+    expect(nav.unchecked).toEqual([])
+    // A new field reaches navigation-only parents unless it is judged here
+    // first; byIds sends no grant, team grant or milestone of any project.
+    const meta = nav.rows.find((p) => p.id === f.meta.id)!
     expect(Object.keys(meta).sort()).toEqual([
-      'created_at',
-      'description',
       'id',
-      'key',
       'lead_id',
+      'level',
       'name',
       'num',
       'org_id',
+      'parent_id',
       'review_hours',
-      'sort_order',
-      'team_id',
       'track_delay',
-      'type',
     ])
-    expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
-    const sent = await projectsPartFor(subOnly)
-    if (sent.state !== 'ok') throw new Error(sent.state)
-    expect(new Set(sent.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
-    expect(sent.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)
-    expect(snap.teamAccess.some((g) => g.project_id === f.sub2.id)).toBe(false)
-    expect(snap.teamAccess).toContainEqual({
-      project_id: f.meta.id,
-      team_id: parentTeam,
-      level: 'user',
-    })
-    const part = await projectsPartFor(subOnly)
-    expect(part).toMatchObject({ state: 'ok' })
-    expect(part).not.toHaveProperty('milestones')
-    expect(snap).not.toHaveProperty('milestones')
+    // the caller's own grant on the sub-project, the parent seen for
+    // navigation only, with the lead and Review time its Settings page
+    // gives anyone who reads it
+    expect(nav.rows.find((p) => p.id === f.sub.id)?.level).toBe('user')
+    expect(meta).toMatchObject({ level: 'viewer', lead_id: f.user.id, review_hours: 3 })
+    // the sibling's own reader opens it, so leaving it out is the caller's
+    // sight, never the project's
+    const theirs = await as(t, siblingOnly).query(api.projectNav.byIds, { ids: [f.sub2.id] })
+    expect(theirs.rows.map((p) => p.id)).toContain(f.sub2.id)
+    expect(parentTeam).toBeDefined()
   })
 })
 

@@ -162,7 +162,6 @@ export function fixture(): Snapshot {
         slug: 'testbed',
         created_at: '2026-09-01T08:00:00.000Z',
         next_issue_num: 3,
-        next_project_num: 3,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -1478,7 +1477,6 @@ export const recipes: Recipe[] = [
     // past Plan, the organization's one top-level project, as the server
     // places a create without a sort_order (nextSiblingPlace)
     truth: (snap, args) => {
-      snap.orgs[0].next_project_num = 4
       snap.projects.push({
         id: str(args.id),
         org_id: ORG,
@@ -1509,7 +1507,6 @@ export const recipes: Recipe[] = [
     answers: { 'projects:create': () => ({ num: 4, key: 'DOCS' }) },
     // one past Work 2, the last of Plan's sub-projects
     truth: (snap, args) => {
-      snap.orgs[0].next_project_num = 4
       snap.projects.push({
         id: str(args.id),
         org_id: ORG,
@@ -1526,31 +1523,20 @@ export const recipes: Recipe[] = [
       })
     },
   },
+  /* the writes of a project's Settings page, which send what the page
+     showed (store/planner.ts ProjectShown and GrantShown): the store holds
+     no project, so every project write names the organization of the page
+     that showed it, and refuses without one */
   {
     mutation: 'projects:update',
     mutator: 'updateProject',
     what: 'a renamed project',
     pause: 'P',
-    act: (P) => P.updateProject('plan', { name: 'Renamed plan' }),
+    act: (P) => P.updateProject('plan', { name: 'Renamed plan' }, {}, { orgId: ORG }),
     truth: (snap) => {
       snap.projects[0].name = 'Renamed plan'
     },
   },
-  {
-    mutation: 'projects:update',
-    mutator: 'updateProject',
-    what: 'a project led by someone else',
-    pause: 'P',
-    act: (P) => P.updateProject('plan', { lead: PAT }),
-    // grantsAfterHandover: the outgoing lead keeps User, the incoming one's grant goes
-    truth: (snap) => {
-      snap.projects[0].lead_id = PAT
-      snap.access = [{ project_id: 'plan', profile_id: ME, level: 'user' }]
-    },
-  },
-  /* the writes of a project's Settings page, which send what the page
-     showed (store/planner.ts ProjectShown and GrantShown) and paint the
-     workspace where it holds the project */
   {
     mutation: 'projects:update',
     mutator: 'updateProject',
@@ -1603,20 +1589,10 @@ export const recipes: Recipe[] = [
     mutator: 'archiveProject',
     what: 'an archived sub-project',
     pause: 'P',
-    act: (P) => P.archiveProject('work2'),
+    act: (P) => P.archiveProject('work2', { orgId: ORG }),
     truth: (snap) => {
       snap.projects[2].archived_at = SERVER
     },
-  },
-  {
-    mutation: 'projects:unarchive',
-    mutator: 'unarchiveProject',
-    what: 'a restored project',
-    pause: 'P',
-    seed: (snap) => {
-      snap.projects[2].archived_at = '2026-10-10T08:00:00.000Z'
-    },
-    act: (P) => P.unarchiveProject('work2'),
   },
   {
     mutation: 'projects:unarchive',
@@ -1634,19 +1610,9 @@ export const recipes: Recipe[] = [
     what: 'a deleted sub-project',
     paintsOnAccept: true,
     pause: 'P',
-    act: (P) => P.removeProject('work2'),
+    act: (P) => P.removeProject('work2', undefined, { orgId: ORG }),
     truth: (snap) => {
       snap.projects = snap.projects.filter((p) => p.id !== 'work2')
-    },
-  },
-  {
-    mutation: 'projects:setAccess',
-    mutator: 'setProjectAccess',
-    what: "a person's access level",
-    pause: 'P',
-    act: (P) => P.setProjectAccess('plan', PAT, 'viewer'),
-    truth: (snap) => {
-      snap.access[0].level = 'viewer'
     },
   },
   {
@@ -1654,7 +1620,7 @@ export const recipes: Recipe[] = [
     mutator: 'setProjectTeamAccess',
     what: "a team's access level",
     pause: 'P',
-    act: (P) => P.setProjectTeamAccess('plan', 'team-b', 'user'),
+    act: (P) => P.setProjectTeamAccess('plan', 'team-b', 'user', { orgId: ORG, level: null }),
     truth: (snap) => snap.teamAccess.push({ project_id: 'plan', team_id: 'team-b', level: 'user' }),
   },
   {

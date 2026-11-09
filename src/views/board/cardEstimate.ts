@@ -64,7 +64,7 @@ export function estimateBoardCard(
     Board's answer brings too (store/viewRows.ts), its delay from the
     owner-load cache, a Delay unknown band included; whether it shows
     a delay banner or a place line also follows its project's delay setting
-    and the projects' tree, which change P.projects, and the layout, and its
+    and the projects' tree, which change P.projectsVersion, and the layout, and its
     due date's width follows the organization's date format. Nothing
     else of the store's moves an estimate. A parent's card repeats in each
     cell that holds one of its subtasks, with other tasks, so the cell is
@@ -76,7 +76,7 @@ export function createEstimateCache() {
       members: IssueVM[]
       width: number
       kind: string
-      projects: typeof P.projects
+      projects: typeof P.projectsVersion
       dates: string
       value: number
     }
@@ -95,7 +95,7 @@ export function createEstimateCache() {
       entry &&
       entry.width === cardWidth &&
       entry.kind === kind &&
-      entry.projects === P.projects &&
+      entry.projects === P.projectsVersion &&
       entry.dates === dateFormatInUse() &&
       entry.members.length === members.length &&
       entry.members.every((it, i) => it === members[i])
@@ -106,7 +106,7 @@ export function createEstimateCache() {
       members,
       width: cardWidth,
       kind,
-      projects: P.projects,
+      projects: P.projectsVersion,
       dates: dateFormatInUse(),
       value,
     })

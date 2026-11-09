@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IssueVM } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import type { ProjectFacts } from '../store/viewModels'
 
 /* The Board's cards and the Roadmap's rows on the real store skip a task
    whose view model kept its identity (store/repaint.test.ts). The owner's
@@ -52,6 +53,26 @@ let deliver: (snap: Snapshot) => void
 let container: HTMLDivElement
 let root: Root
 
+/* The facts of the rows' project as a Roadmap row holds them, one object
+   for every render of a case, as the project cache keeps one per answer,
+   so a row's memo compares the same facts. */
+let factsKept: ProjectFacts | null = null
+function projectFacts(id: string, org: string): ProjectFacts {
+  if (factsKept?.id !== id || factsKept.org !== org)
+    factsKept = {
+      id,
+      org,
+      name: 'Project',
+      num: 1,
+      parent: undefined,
+      type: 'project',
+      trackDelay: true,
+      lead: undefined,
+      reviewHours: undefined,
+    }
+  return factsKept
+}
+
 /* Boots a fresh store on three tasks, changed by `prepare`, then loads the
    views on it. */
 async function load(prepare: (snap: Snapshot) => void = noop) {
@@ -88,6 +109,13 @@ async function load(prepare: (snap: Snapshot) => void = noop) {
   )
   const store = await import('../store/planner')
   await store.initStore()
+  // the store names the held tasks' projects with the project cache, whose
+  // answer moves P.contextVersion once; it lands before a case counts
+  // renders
+  await vi.waitFor(() =>
+    expect(snapshot.projects.every((p) => store.P.projectState(p.id) !== 'loading')).toBe(true),
+  )
+  await new Promise((resolve) => setTimeout(resolve, 20))
   return {
     P: store.P,
     usePlannerVersion: (await import('../store/usePlannerVersion')).usePlannerVersion,
@@ -221,7 +249,7 @@ describe('memoized task rows', () => {
       dispose: noop,
     }
     await mount(({ P, TimelineRow }) => {
-      const proj = P.projects[0]
+      const proj = projectFacts(P.issues[0]?.project ?? 'p', P.homeOrg)
       return P.issues.map((issue, n) => (
         <TimelineRow
           key={issue.uuid}
@@ -267,7 +295,7 @@ describe('memoized task rows', () => {
     const drawn: string[] = []
     const observer = { setRoot: noop, observe: () => noop, dispose: noop }
     await mount(({ P, TimelineRow }) => {
-      const proj = P.projects[0]
+      const proj = projectFacts(P.issues[0]?.project ?? 'p', P.homeOrg)
       return (
         <TimelineRow
           row={{ kind: 'track', pid: proj.id, proj }}
@@ -351,6 +379,7 @@ describe('memoized task rows', () => {
         onShowTask: noop,
         cards: new Map(),
         frozen: page.frozen,
+        editable: () => true,
       }
       return P.issues.map((it) => (
         <SyncCard
@@ -414,7 +443,7 @@ describe('memoized task rows', () => {
           rows={P.issues}
           tasks={P.issues}
           humans={[]}
-          subIds={new Set(P.projects.map((p) => p.id))}
+          subIds={new Set(P.issues.map((it) => it.project))}
           metaIds={new Set()}
           day={syncDay(now)}
           now={now}

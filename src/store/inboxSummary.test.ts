@@ -131,10 +131,10 @@ describe('the unread summary in the store', () => {
   it('is watched right after the root part and answers with the boot', async () => {
     expect(P().inboxSummary).toEqual({ state: 'loading', answer: null, current: false })
     await store.initStore()
-    // before the root part answered, which the other parts wait for
+    // right after the root part, before it answered, and no part of an
+    // organization comes after it
     expect(watched.slice(0, 2)).toEqual(['workspace:root', 'inbox:summary'])
-    expect(watched.indexOf('workspace:projects')).toBeGreaterThan(0)
-    expect(watched.indexOf('inbox:summary')).toBeLessThan(watched.indexOf('workspace:projects'))
+    expect(watched).not.toContain('workspace:projects')
     expect(summaryWatches()).toBe(1)
     // its first answer came with the boot's transitions, before the store
     // held the workspace, and reached the store with it

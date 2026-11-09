@@ -64,13 +64,13 @@ async function readParts(identity: Identity, orgId: string) {
     return { name, ...out, ms: performance.now() - started }
   }
   /* The windows of `kind`, as the app chooses them from the counts. */
-  const windowsOf = async (kind: string) => {
+  const windowsOf = async (_kind: string) => {
     const root = (await identity.query(async (ctx) => await run(workspace.root, ctx, {}))) as {
       orgs: (WindowCounts & { id: string })[]
     }
     const org = root.orgs.find((o) => o.id === orgId)
-    const start = org === undefined ? { tasks: 1, projects: 1 } : startWindows(org)
-    return idWindows(kind === 'projects' ? start.projects : start.tasks)
+    const start = org === undefined ? { tasks: 1 } : startWindows(org)
+    return idWindows(start.tasks)
   }
   // the root carries the caller's own profiles, memberships and teams, so
   // there is no people or catalog part to measure
@@ -78,9 +78,9 @@ async function readParts(identity: Identity, orgId: string) {
     await measured('root', workspace.root, {}),
     await measured('feed', inbox.feed, { after: 0 }),
   ]
+  // no part sends a project: the app reads them by id (projectNav.byIds)
   const windowed = {
     tasks: workspace.tasks,
-    projects: workspace.projects,
   }
   for (const [kind, fn] of Object.entries(windowed)) {
     for (const [i, w] of (await windowsOf(kind)).entries())

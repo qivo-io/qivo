@@ -199,7 +199,7 @@ choose on the server.
 status or open **Filters** to narrow the list. In a very long list, rows
 below the first screen appear in the first moments after it opens, in shaded
 space; searching the page or printing loads them all first. Use **+** to
-create a task with the project and sub-project pickers. Project pages also
+create a task with the **Sub-project** picker. Project pages also
 list tasks; tap one to edit it.
 
 **Projects** opens the same project directory as **All projects** on a

@@ -34,16 +34,16 @@ import { type MilestoneSection, useMilestoneSection, useMilestoneSlot } from './
 export type ScopeMilestoneBase = { projects: readonly string[] } | { mine: true }
 
 /** The base of `info`'s milestone sections: for a project or sub-project
-    its top-level project, `info.metas[0]?.id ?? info.id`, so a sub-project
-    whose parent the store does not hold names itself and the server folds
-    it, as the Roadmap's flags name it (roadmap/roadmapMilestones.ts
+    its top-level project, `info.topId ?? info.id`, so a sub-project whose
+    facts the project cache does not know yet names itself and the server
+    folds it, as the Roadmap's flags name it (roadmap/roadmapMilestones.ts
     markerProjects); and `mine` for My view, so the app never names My
     view's projects. */
 export function scopeMilestoneBase(
-  info: Pick<ScopeInfo, 'id' | 'mine' | 'metas'>,
+  info: Pick<ScopeInfo, 'id' | 'mine' | 'topId'>,
 ): ScopeMilestoneBase {
   if (info.mine) return { mine: true }
-  return { projects: [info.metas[0]?.id ?? info.id] }
+  return { projects: [info.topId ?? info.id] }
 }
 
 /** The next milestone as the Overview's cell shows it: on its way, given
@@ -126,7 +126,7 @@ function nextFromUpcoming(view: SectionView<MilestoneVM>): NextMilestone {
  * opens it collapsed.
  */
 export function useScopeMilestones(
-  info: Pick<ScopeInfo, 'id' | 'wide' | 'mine' | 'metas'>,
+  info: Pick<ScopeInfo, 'id' | 'mine' | 'topId'>,
   slots: ScopeMilestoneSlots,
   active = true,
 ): ScopeMilestones {

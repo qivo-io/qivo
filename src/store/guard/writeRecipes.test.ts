@@ -111,6 +111,13 @@ async function boot(recipe: Recipe) {
   })
   for (let turn = 0; turn < 50 && !booted; turn++) await vi.advanceTimersByTimeAsync(0)
   await booting
+  // the views, dialogs and task window name the projects they show with the
+  // project cache, which the double answers from the whole; the recipes
+  // write into the fixture's live projects as the app does once one shows
+  P().nameProjects(
+    'recipes',
+    snap.projects.filter((p) => !p.archived_at).map((p) => p.id),
+  )
   P().watchComments('task-a')
   // a boot run again, such as the seat claim's recipe, waits like any write
   d.holdClaims()

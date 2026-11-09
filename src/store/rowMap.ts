@@ -36,8 +36,6 @@ import {
 /** The row type of each list as the store reads it. */
 type ListRow = {
   teamMembers: Row<'team_members'>
-  access: Row<'project_access'>
-  teamAccess: Row<'project_team_access'>
   issueLabels: Row<'issue_labels'>
   issueSubs: Row<'issue_subscriptions'>
   orgLoad: RowOf<'orgLoad'>
@@ -253,7 +251,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     orgs: new RowMap<Row<'organizations'>>('orgs', host),
     teams: new RowMap<Row<'teams'>>('teams', host),
     profiles: new RowMap<Row<'profiles'>>('profiles', host),
-    projects: new RowMap<Row<'projects'>>('projects', host),
     issues: new RowMap<Row<'issues'>>('issues', host),
     links: new RowMap<Row<'issue_links'>>('links', host),
     attachments: new RowMap<Row<'issue_attachments'>>('attachments', host),

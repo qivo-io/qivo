@@ -64,7 +64,6 @@ function fixture(me: string): Snapshot {
         slug: 'testbed-labs',
         created_at: NOW,
         next_issue_num: 1,
-        next_project_num: 3,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -107,6 +106,9 @@ describe('who may add a milestone', () => {
     })
     const store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names both, so a
+    // refusal below is the level's and never a project the cache lacks
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
     return store.P
   }
 

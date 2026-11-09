@@ -5,7 +5,7 @@ import { LIMITS, TEXT_MAX } from '../../convex/lib/limits'
 import { limitSentence, sentence } from '../lib/fieldLimits'
 import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
 import { shownOf } from './personShown.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -53,7 +53,9 @@ describe('the limits in the store', () => {
     vi.stubGlobal('window', { showToast: toast })
     sent = []
     args = []
-    const snap: Snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    const snap: Snapshot = underProgram(plannerFixture())
     snap.issues.push({
       id: 'task-a',
       org_id: snap.orgs[0].id,
@@ -76,9 +78,10 @@ describe('the limits in the store', () => {
       track_delay_default: false,
       created_at: NOW,
     })
+    // on the top-level project, where milestones sit
     snap.milestones.push({
       id: 'milestone-a',
-      project_id: snap.projects[0].id,
+      project_id: snap.projects[1].id,
       name: 'Beta',
       week: '2026-09-14',
       created_at: NOW,
@@ -111,6 +114,8 @@ describe('the limits in the store', () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   })
 
   afterEach(() => {
@@ -172,8 +177,9 @@ describe('the limits in the store', () => {
     // the milestone's window reads it, which gives its writes their row
     P.watchMilestones('limits', { kind: 'get', id: 'milestone-a' })
     await vi.waitFor(() => expect(P.milestoneRead('limits').state).toBe('ok'))
-    const project = P.projects[0].id
-    expect(await P.updateProject(project, { name: NAME_OVER })).toBe(false)
+    const project = 'limits-project'
+    const shown = { orgId: P.homeOrg }
+    expect(await P.updateProject(project, { name: NAME_OVER }, {}, shown)).toBe(false)
     expect(
       await P.updateTeam(
         'team-a',
@@ -191,7 +197,7 @@ describe('the limits in the store', () => {
       'A milestone name must be at most 80 characters. Shorten it.',
     ])
     expect(sent).toEqual([])
-    void P.updateProject(project, { name: NAME_AT_CAP })
+    void P.updateProject(project, { name: NAME_AT_CAP }, {}, shown)
     void P.updateTeam(
       'team-a',
       { name: ` ${NAME_AT_CAP} ` },

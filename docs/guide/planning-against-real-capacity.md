@@ -130,12 +130,18 @@ a scoped link without a step opens the team summary.
   select one sub-project.
 
 The scope menu lists **All projects**, your organization's teams 25 at a
-time with a search and **Load more**, and its projects. The page's notes
-offer your own teams.
+time with a search and **Load more**, and its top-level projects the same
+way, 25 at a time with a search and **Load more**. When a scope is too
+large to show, the page's notes offer smaller ones: your own teams and
+your organization's projects for **All projects**, the projects shared with
+a team for that team, and a project's sub-projects for a project.
 
 The first time, and when a saved or linked team or project is no longer
 available to you, the page asks you to choose a team or project. **All
-projects** is one of the choices, and Qivo never chooses it for you.
+projects** is one of the choices, and Qivo never chooses it for you. A
+project link says Qivo is opening the project while it checks that you can
+open it. If that check fails or cannot finish, the page says so with
+**Retry** instead of asking you to choose.
 When you can see no project of your organization, the page says so and who can
 give you access. If you also belong to another organization, it names the
 organization the page covers.

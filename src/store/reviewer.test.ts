@@ -114,7 +114,6 @@ function fixture() {
         slug: 'testbed-labs',
         created_at: NOW,
         next_issue_num: num,
-        next_project_num: 5,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -131,7 +130,13 @@ function fixture() {
     issues: [a, b, c, g, child, d],
     teams: [],
     teamMembers: [],
-    access: [{ project_id: meta, profile_id: other.id, level: 'user' }],
+    // my own grants, as an admin sees a project through its own rows alone
+    // (the navigation reads, store/projectNavStandIn.setup.ts)
+    access: [
+      { project_id: meta, profile_id: other.id, level: 'user' },
+      { project_id: meta, profile_id: me.id, level: 'user' },
+      { project_id: meta2, profile_id: me.id, level: 'user' },
+    ],
     teamAccess: [],
     links: [],
     labels: [],
@@ -174,6 +179,8 @@ describe('the Reviewer rule in the client store', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, f.snap)
   })
 
   afterEach(() => {
@@ -260,8 +267,11 @@ describe('the Reviewer rule in the client store', () => {
   })
 
   it('sends a cleared project review time as null', () => {
-    P.updateProject(f.sub2, { reviewHours: null })
+    // as the project's settings page sends it, in the organization it showed
+    P.updateProject(f.sub2, { reviewHours: null }, {}, { orgId: f.snap.orgs[0].id })
     expect(lastPatch('projects:update')?.patch).toStrictEqual({ review_hours: null })
-    expect(P.reviewHoursFor(f.sub2)).toBe(4)
+    // the store paints no project: the cache's next answer brings the
+    // parent's time
+    expect(P.reviewHoursFor(f.sub2)).toBe(1)
   })
 })

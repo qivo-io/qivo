@@ -16,6 +16,11 @@ import {
 } from '../store/milestoneStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from '../store/projectNavStandIn.setup'
 import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
 
 /* The Roadmap's milestone flags on App and the real store, from the
@@ -227,6 +232,9 @@ async function app(
       if (holdRoadmap) heldRoadmaps.push(send)
       else send()
     } else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
+    // the sidebar's and the pickers' navigation lists, as the server
+    // answers them
+    else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     else if (isMilestoneRead(name)) {
       const sub: Sub = { name, args: args as Sub['args'], next, fail, stopped: false }
       subs.push(sub)
@@ -243,7 +251,12 @@ async function app(
     publish()
     for (const sub of subs) if (!sub.stopped && !holds(sub)) answer(sub)
   }
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockImplementation(async (ref, args) => {
     const name = getFunctionName(ref)
     sent.push({ name, args })

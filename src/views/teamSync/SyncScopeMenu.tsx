@@ -11,11 +11,17 @@
    holds only the signed-in person's own teams, so the menu never lists
    them in place of the server's.
 
-   The projects stay the store's (P.visibleProjects), matched in the
-   browser, until t3/limits-projects-part reads them from the server; the
-   projects part sends every project the person sees, so that list is
-   whole. A sub-project scope, as a /sync/p/<n> link opens, is offered as
-   itself.
+   The projects come from the server too: the home organization's
+   top-level projects the person sees, 25 a batch in name order
+   (projectNav.page with the home organization), and with a search the
+   matching ones (projectNav.search with the home organization), where a
+   sub-project's result shows its top-level project once, so a searched
+   batch can hold fewer rows than it read. Both are read only while the
+   menu is open and the page shows, with Load more and the list's end
+   lines. A sub-project scope, as a /sync/p/<n> link opens, is offered as
+   itself, named through the project cache. Equal names carry their number,
+   told apart among the rows the menu shows (components/projectNavRows.tsx
+   navTags), never by what the project cache holds.
 
    The closed trigger names a team scope among the person's own teams from
    the store at once, and any other from teams.get while the page shows
@@ -27,10 +33,12 @@
    page's sentence, also after the trigger named it. */
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { navCursors, navTags, seedNavRow } from '@/components/projectNavRows'
 import { Icon, Popover } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { Command, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { DropdownChevron } from '@/components/ui/select'
+import { useProjects } from '@/components/useProjects'
 import { TEAM_CAPS } from '@/lib/accessCaps'
 import { listEnd, usePagedList, useSettledSearch } from '@/lib/pagedList'
 import { type SyncPlaceScope, syncScopeKey } from '@/lib/teamSync'
@@ -39,9 +47,16 @@ import { useViewVisibility } from '@/lib/viewVisibility'
 import { useTeamSettings } from '@/panels/settings/useTeamSettings'
 import { P, type ScopeTeamChoice, type ScopeTeamChoices } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
+import { api } from '../../../convex/_generated/api'
 import { LIMITS } from '../../../convex/lib/limits'
 import { nameKey } from '../../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../../convex/lib/search'
+import type {
+  NavPage,
+  NavPageRow,
+  NavProject,
+  NavSearch,
+} from '../../../convex/model/projectNavReads'
 import { CommandChoiceEnd } from '../../components/pickerParts'
 import { type ChoiceWords, ESCAPE_CLEARS, escapeClearsFirst } from '../../components/pickerWords'
 
@@ -57,6 +72,28 @@ const SCOPE_TEAM_WORDS: ChoiceWords = {
   empty: 'No teams yet.',
   none: 'No matching teams.',
 }
+
+/** The words of the scope menu's projects. */
+const SCOPE_PROJECT_WORDS: ChoiceWords = {
+  held: (held) =>
+    held?.state === 'refused' && held.message ? held.message : "Projects can't be listed yet.",
+  failed: "Couldn't load projects.",
+  stopped: 'Showing the projects found so far.',
+  empty: 'No projects yet.',
+  none: 'No matching projects.',
+}
+
+/** The most projects the menu's Load more gathers, past which it asks for
+    a search, as the sidebar's list does. */
+const SCOPE_PROJECTS_MOST = 200
+
+/** What the projects' paged list answers: a page batch or a search batch
+    of the home organization, refusals and not ready held. */
+type ProjectsAnswer = NavPage | NavSearch
+
+/** The top-level project a menu row names: a page row itself, or for a
+    search row its top-level project, a sub-project's parent. */
+type MenuProject = NavProject
 
 /** What the trigger says while it cannot name the scope (scopeName). */
 const SCOPE_WORDS = {
@@ -109,6 +146,8 @@ export function SyncScopeMenu({
   onPick: (key: string) => void
 }) {
   usePlannerVersion()
+  // a project scope is named through the project cache while it shows
+  useProjects([named && scope.kind === 'project' ? scope.id : null])
   // a team scope the person is not in is named from the server
   const own = scope.kind === 'team' ? P.teamById(scope.id) : undefined
   const foreign = named && scope.kind === 'team' && !(own && own.org === P.homeOrg)
@@ -175,11 +214,11 @@ export function SyncScopeMenu({
 const ALL = 'all'
 
 /**
- * The open menu: a search box, All projects, the teams of the home
- * organization a batch at a time from the server, and its projects from
- * the store, matched in the browser. Enter acts only on the answer for the
- * typed text. The team read runs only while the list is mounted, which it
- * is while the menu is open, and not while the page is hidden.
+ * The open menu: a search box, All projects, and the home organization's
+ * teams and top-level projects a batch at a time from the server. Enter
+ * acts only on the answers for the typed text. The reads run only while
+ * the list is mounted, which it is while the menu is open, and not while
+ * the page is hidden.
  */
 function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: string) => void }) {
   const [text, setText] = useState('')
@@ -211,13 +250,72 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
   const stale = !answered
   const end = answered ? listEnd(list, query !== '') : 'loading'
 
+  const projectList = usePagedList<ProjectsAnswer, MenuProject>({
+    key: visible && org ? JSON.stringify(['sync-menu', org, query]) : null,
+    source:
+      query === ''
+        ? {
+            kind: 'live',
+            query: api.projectNav.page,
+            args: (at) => ({ org_id: org, ...navCursors(at) }),
+          }
+        : {
+            kind: 'live',
+            query: api.projectNav.search,
+            args: (at) => ({ search: query, org_id: org, ...navCursors(at) }),
+          },
+    batch: (answer) => {
+      if (answer.state !== 'ok') return null
+      // a sub-project's result shows its top-level project, once a batch
+      const seen = new Set<string>()
+      const rows: MenuProject[] = []
+      for (const row of answer.rows as readonly (NavPageRow & { parent?: NavProject | null })[]) {
+        const top = row.parent ?? row
+        if (seen.has(top.id)) continue
+        seen.add(top.id)
+        rows.push({ id: top.id, org_id: top.org_id, name: top.name, num: top.num })
+      }
+      return { rows, next: answer.next, stopped: answer.stopped }
+    },
+    id: (row) => row.id,
+    most: SCOPE_PROJECTS_MOST,
+  })
+  const projectEnd = answered ? listEnd(projectList, query !== '') : 'loading'
+
   const matches = allWordsMatcher(nameKey(typed))
   const showAll = typed === '' || matches(nameKey('All projects'))
-  const projects = P.visibleProjects().filter((p) => p.org === org)
-  // a sub-project scope (a /sync/p/<n> link) is offered as itself
-  const ownProject = scope.kind === 'project' ? P.heldProject(scope.id) : null
-  if (ownProject && !projects.some((p) => p.id === ownProject.id)) projects.push(ownProject)
-  const shownProjects = projects.filter((p) => typed === '' || matches(nameKey(P.projectLabel(p))))
+  // a sub-project scope (a /sync/p/<n> link) is offered as itself, named
+  // through the project cache
+  const ownProject = scope.kind === 'project' ? P.project(scope.id) : undefined
+  const shownProjects: MenuProject[] = [...projectList.rows]
+  if (
+    ownProject &&
+    ownProject.type === 'project' &&
+    (typed === '' || matches(nameKey(P.projectLabel(ownProject))))
+  )
+    shownProjects.push({
+      id: ownProject.id,
+      org_id: ownProject.org,
+      name: ownProject.name,
+      num: ownProject.num,
+    })
+  // equal names told apart among the rows shown, the sub-project scope
+  // under its own parent
+  const ownParent = ownProject?.parent ? P.project(ownProject.parent) : undefined
+  const tags = navTags(shownProjects, (row) =>
+    ownProject?.parent && row.id === ownProject.id
+      ? {
+          id: ownProject.parent,
+          org_id: ownProject.org,
+          name: ownParent?.name ?? '',
+          num: ownParent?.num ?? 0,
+        }
+      : null,
+  )
+  const labelOf = (p: MenuProject) => {
+    const tag = tags.get(p.id)
+    return tag ? `${p.name} ${tag}` : p.name
+  }
   const current = syncScopeKey(scope)
   const [value, setValue] = useState(current || ALL)
 
@@ -280,11 +378,9 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
           )
         })}
         <CommandChoiceEnd end={end} tooLong={search.tooLong} list={list} words={SCOPE_TEAM_WORDS} />
-        {shownProjects.length > 0 && (
-          <div data-sync-scope-group="projects" className="px-2 pt-2 pb-1 text-xs text-text-3">
-            Projects
-          </div>
-        )}
+        <div data-sync-scope-group="projects" className="px-2 pt-2 pb-1 text-xs text-text-3">
+          Projects
+        </div>
         {shownProjects.map((p) => {
           const key = `project:${p.id}`
           return (
@@ -292,14 +388,24 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
               key={p.id}
               value={key}
               data-sync-scope-choice={key}
-              onSelect={() => onPick(key)}
+              disabled={stale}
+              onSelect={() => {
+                seedNavRow(p)
+                onPick(key)
+              }}
               className={rowClass}
             >
-              <span className="min-w-0 flex-1 truncate">{P.projectLabel(p)}</span>
+              <span className="min-w-0 flex-1 truncate">{labelOf(p)}</span>
               {check(key)}
             </CommandItem>
           )
         })}
+        <CommandChoiceEnd
+          end={projectEnd}
+          tooLong={search.tooLong}
+          list={projectList}
+          words={SCOPE_PROJECT_WORDS}
+        />
       </CommandList>
     </Command>
   )

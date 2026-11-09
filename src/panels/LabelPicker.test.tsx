@@ -50,6 +50,8 @@ let root: Root
 let answers: Record<string, () => Promise<unknown>>
 let sent: { name: string; args: Record<string, unknown> }[]
 let org: string
+// the fixture's project, which the store reads by id
+let projectId: string
 /* The store's workspace, and what the server holds besides. */
 let snap: Snapshot
 let server: Snapshot
@@ -84,6 +86,7 @@ async function load(o: { labels?: Label[]; serverOnly?: Label[]; on?: string[] }
   vi.resetModules()
   snap = plannerFixture()
   org = snap.orgs[0].id
+  projectId = snap.projects[0].id
   const taskId = crypto.randomUUID()
   snap.issues.push({
     id: taskId,
@@ -674,7 +677,7 @@ describe('the label picker of a task the window shows from its own answer', () =
         task: {
           id: 'far',
           org_id: org,
-          project_id: P.projects[0].id,
+          project_id: projectId,
           num: 40,
           title: 'Tune the antenna',
           description: '',

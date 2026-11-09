@@ -16,14 +16,14 @@ import {
 } from './flagLanes'
 
 /* Whether the store knows the caller's level on project `id`, which a bar
-   that takes no drag says as ", read-only": the projects part holds it, or
-   the project cache's current answer gave it or left it out. While the
+   that takes no drag says as ", read-only": the project cache's current
+   answer gave it or left it out. While the
    cache loads it, failed or did not check it, the bar says ", loading"
    instead, so a project not yet answered never reads as read-only
    (P.projectState). */
 const projectKnown = (id: string) => {
   const state = P.projectState(id)
-  return state === 'held' || state === 'ok' || state === 'gone'
+  return state === 'ok' || state === 'gone'
 }
 
 export const BAR_RING = 4

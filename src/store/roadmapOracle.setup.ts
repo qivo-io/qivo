@@ -19,7 +19,8 @@
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { type AutoMove, autoMoves, type DepPair, dependencyPairs } from '../lib/schedule'
 import { issueLoadByPerson, type LoadIssue, pausedWeeksByPerson } from '../lib/workload'
-import { type IssueFilters, type IssueVM, P, type ScopeInfo } from './planner'
+import type { OracleScope } from './oracleScope.setup'
+import { type IssueFilters, type IssueVM, P } from './planner'
 import { matchesText, type TextNames, textNames } from './textMatch.setup'
 
 export { textNames }
@@ -29,7 +30,7 @@ export { textNames }
  * buckets them (Roadmap.tsx passes), where the task with store id
  * `session`, the planning session's, skips the filters alone. */
 export function roadmapRows(
-  info: ScopeInfo,
+  info: OracleScope,
   w0: number,
   w1: number,
   filters: IssueFilters,
@@ -47,7 +48,7 @@ export function roadmapRows(
 /** Each sub-project's heading Remaining of `info` in whole tenths of an
  * hour, as P.remainingByGroups sums it for one sub-project, before the
  * filters, by sub-project id. */
-export function remainingTenths(info: ScopeInfo): Record<string, number> {
+export function remainingTenths(info: OracleScope): Record<string, number> {
   const sums = P.remainingByGroups(
     info.subIds.map((id) => [id]),
     info.only,
@@ -58,7 +59,7 @@ export function remainingTenths(info: ScopeInfo): Record<string, number> {
 /** The sub-projects My view's Roadmap keeps a track or band for
  * (Roadmap.tsx held), those holding a task the scope's `only` keeps,
  * before the toolbar filters and the window, by id; null outside My view. */
-export function heldSubProjects(info: ScopeInfo): string[] | null {
+export function heldSubProjects(info: OracleScope): string[] | null {
   if (!info.only) return null
   const held = new Set<string>()
   for (const it of P.issues)
@@ -124,7 +125,7 @@ export type TeamMode = 'all' | 'scope'
  * server's answers to spread them by the same rules.
  */
 export function teamLoad(
-  info: ScopeInfo,
+  info: OracleScope,
   mode: TeamMode,
   w0: number,
   w1: number,

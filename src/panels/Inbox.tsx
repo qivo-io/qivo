@@ -53,6 +53,7 @@ import {
   ProjectName,
   Seg,
 } from '../components/qivo'
+import { useHolds } from '../components/useHolds'
 import { fmtDateTime } from '../lib/dates'
 import { closeOrAsk, typesText } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
@@ -72,7 +73,7 @@ import {
 } from '../lib/inboxPage'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { useLiveView } from '../lib/liveView'
-import { noProjectsHint, seesNoProject } from '../lib/noProjects'
+import { noProjectsHint } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { pageEnd, usePagedPages, useSettledSearch } from '../lib/pagedList'
 import { sameTask, taskFacts } from '../lib/router'
@@ -470,13 +471,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       ? true
       : snoozedPage.value !== undefined && maySnooze(snoozedPage.value)
   const foldEnd = asksSnoozed && !snoozedKnown && snoozedPage.error === undefined ? 'loading' : end
+  // whether the person sees no project at all, which the server confirms
+  // (useHolds), asked only while the Inbox holds no message
+  const noProject =
+    useHolds(page.phase === 'ready' && page.rows.length === 0 && !page.hasPrevious && !filtered) ===
+    'none'
   const words = inboxWords(page.answer, {
     order: filters.order,
     search: searching,
     filtered,
     empty: emptyLine({
       snoozed: asksSnoozed && snoozedMay,
-      hint: seesNoProject() ? noProjectsHint() : null,
+      hint: noProject ? noProjectsHint() : null,
     }),
     timeOf: (iso) => fmtDateTime(new Date(iso)),
   })
@@ -823,8 +829,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     setMenu(null)
   }
   const menuRow = menu?.row ?? null
-  // the row's project, which Open task in board opens the Board of
-  const menuBoard = menuRow ? P.heldProject(menuRow.project.id) : undefined
+  // the row's project, which Open task in board opens the Board of, by the
+  // open rule of every scope: the project cache checks it there
+  const menuBoard = menuRow ? menuRow.project.id : undefined
 
   return (
     <div
@@ -1118,8 +1125,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               <>
                 {/* opening the task is what a plain click does now, so the menu
                 offers the one place the pane can't reach: the board it sits
-                on, for any task whose project the store holds, which the
-                Board needs, held by the workspace or not */}
+                on, for every row with a project, which opens as any scope
+                does and says so where the person cannot open it */}
                 {menuBoard && (
                   <MenuItem
                     data-msg-menu-board

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import { inspectBrowserDemo, loadBrowserDemo, navRows, signInDemo } from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -151,20 +151,20 @@ try {
      and a week before this one free for the past milestone it makes. */
   const grid = await page.evaluate(() => {
     const P = window.PLANNER
-    // P.projects holds only active projects; the demo organization's own
-    const metas = P.projects
-      .filter((p) => p.type === 'meta' && p.org === P.org.id)
-      .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
-      .map((p) => ({ id: p.id, name: p.name }))
     P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
     const iso = (week) => P.isoFromDate(P.weekToDate(week))
     const weeks = Array.from({ length: 27 }, (_, i) => iso(P.TODAY_WEEK - 13 + i))
-    return { metas, org: P.org.id, today: P.TODAY_WEEK, weeks }
+    return { org: P.org.id, today: P.TODAY_WEEK, weeks }
   })
+  // the demo organization's live top-level projects, Luma Sensor first, from
+  // the navigation reads, as the store holds no project list
+  const metas = (await navRows(page, 'projectNav:page', { org_id: grid.org }))
+    .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
+    .map((p) => ({ id: p.id, name: p.name }))
   // the first day of the week `offset` weeks from this one
   const at = (offset) => grid.weeks[13 + offset]
   let fixture = null
-  for (const meta of grid.metas) {
+  for (const meta of metas) {
     const rows = await serverRows(page, meta.id, grid.weeks[0], grid.weeks[26])
     // the first day of each milestone's week, since a milestone stored on
     // another day, as a REST add can be, still takes its whole week

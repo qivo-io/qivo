@@ -13,21 +13,25 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { NativeSelect } from '@/components/ui/native-select'
 import { hasTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
-import { grouped, LIMITS } from '../../convex/lib/limits'
+import { api } from '../../convex/_generated/api'
+import { grouped, LIMITS, LIST_BATCH } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { issueKey } from '../../convex/lib/taskRefs'
+import type { NavTargetRow, NavTargets } from '../../convex/model/projectNavReads'
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
 import { MilestoneSectionPart } from '../components/MilestoneSectionPart'
 import { LeadPicker } from '../components/ProjectAccessEditor'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
-import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
+import { type ChoiceWords, escapeClearsFirst, TARGET_WORDS } from '../components/pickerWords'
+import { navCursors, seedTargetRow } from '../components/projectNavRows'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { WAITS_FOR_SAVE } from '../components/rowElements'
+import { TargetPicker } from '../components/TargetPicker'
 import { useOrgPeople, usePeople } from '../components/usePeople'
+import { useProjects } from '../components/useProjects'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -59,8 +63,8 @@ import {
   type NewIssueInput,
   type NewProjectInput,
   P,
+  type ProjectFacts,
   type ProjectRemovalSummary,
-  type ProjectVM,
   REMOVAL_UNCHECKED,
   type ReassignChoice,
   type ReassignChoices,
@@ -323,6 +327,63 @@ function HoldUnsent({ what }: { what: string }) {
   return null
 }
 
+/**
+ * What a dialog says under its destination picker about the sub-project
+ * `id` it picked, `name` the row's, while the project cache has not
+ * answered it as one the person may write in, which the dialog's button
+ * waits for: "Opening <name>…" while the cache reads it, a failed read and
+ * the access_unchecked refusal's sentence with Retry (`retry`, the
+ * dialog's useProjects), which reads it again, the loss where the answer
+ * left it out, and `readOnly` for a level without Edit. Nothing for no
+ * pick or a writable one. The dialog keeps its draft meanwhile.
+ */
+function TargetNote({
+  id,
+  name,
+  retry,
+  readOnly,
+}: {
+  id: string | null
+  name: string
+  retry: () => void
+  readOnly: (name: string) => string
+}) {
+  if (!id) return null
+  const state = P.projectState(id)
+  if (state === 'ok' && P.canWrite(id)) return null
+  const text =
+    state === 'loading'
+      ? `Opening ${name}…`
+      : state === 'failed'
+        ? `Couldn't open ${name}.`
+        : state === 'unchecked'
+          ? P.writeNote(id)
+          : state === 'gone'
+            ? `${name} is no longer available to you.`
+            : readOnly(name)
+  const again = state === 'failed' || state === 'unchecked'
+  return (
+    <div
+      data-target-note={state}
+      role="status"
+      className="mt-2 flex flex-wrap items-center gap-2 text-sm text-text-2"
+    >
+      <span>{text}</span>
+      {again && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-control-sm text-sm"
+          data-target-retry=""
+          onClick={retry}
+        >
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /* ---------- New issue ---------- */
 function NewIssueModal({
   init = {},
@@ -333,55 +394,80 @@ function NewIssueModal({
   onClose: () => void
   onCreate: (issue: NewIssueInput) => boolean
 }) {
-  /* A task is created into a SUB-project, and which one is now asked in two
-     steps: the project first, its sub-projects second. The dialog still opens
-     on the project it was opened in — that is the default, not a fence — so
-     the common path is unchanged and a create started from the wrong board no
-     longer has to be cancelled and re-opened somewhere else. (Moving an
-     EXISTING task between projects is still a move, not a re-create: the issue
-     detail's Move dialog, which is also the only one that can keep the number.)
-     The sub-project list is what the caller can WRITE in, not merely see: a
-     viewer's grant can't hold a new task, so offering the target would end in
-     a create the server rejects and the client rolls back a second later. The
-     parent list is only the hierarchy picker, so a navigation-only parent is
-     still included when it contains a writable child. A project with no
-     sub-project has nowhere to put a task, so it isn't offered.
-     Phone My tasks can open without a project context; it uses the same
-     writable roster and explicit project picker. */
-  const subsOf = (metaId: string) =>
-    P.projects.filter((p) => p.type === 'project' && p.parent === metaId)
-  const writableSubsOf = (metaId: string) => subsOf(metaId).filter((p) => P.canWrite(p.id))
-  const metas = P.projects.filter((p) => p.type === 'meta' && writableSubsOf(p.id).length > 0)
-  const ctxMeta = (() => {
-    const m = init.project ? P.heldMeta(init.project) : null
-    return m && metas.some((x) => x.id === m.id) ? m : null
-  })()
-  const initMeta = ctxMeta ? ctxMeta.id : metas[0] ? metas[0].id : null
-
+  /* A task is created into a SUB-project, chosen in one Sub-project picker
+     of the sub-projects the person may WRITE in, not merely see, grouped
+     under their project's name (projectNav.targets, components/
+     TargetPicker.tsx), 25 at a time with a search, across every seat: a
+     viewer's grant can't hold a new task, so the server applies the
+     write's rule before it cuts each batch, and a project with no
+     sub-project offers nothing. The dialog opens on the project it was
+     opened in, a default, not a fence: on that sub-project when the project
+     cache answers it writable, and in a top-level project on its first
+     writable sub-project, which one targets read narrowed to that project
+     (parent_id) answers wherever the browse list's batches would put it,
+     shown chosen at the top of the list until those batches reach it; else
+     on no choice, with Create off until one is chosen. (Moving an EXISTING task between
+     projects is still a move, not a re-create: the task window's Move
+     window, which is also the only one that can keep the number.) The
+     phone's My tasks action opens with no project context and the same
+     picker. */
+  const context = init.project ? P.project(init.project) : undefined
+  const contextWritable =
+    context && context.type === 'project' && init.project ? P.canWrite(init.project) : false
   const created = useRefM(false)
   const [title, setTitle] = useStateM('')
-  const [metaId, setMetaId] = useStateM(initMeta)
-  const subProjects = metaId ? writableSubsOf(metaId) : []
-  const initProj = (() => {
-    const p = init.project ? P.heldProject(init.project) : null
-    if (p && p.type === 'project' && subProjects.some((sp) => sp.id === p.id)) return p.id
-    return subProjects[0] ? subProjects[0].id : null
-  })()
-  const [projId, setProjId] = useStateM(initProj)
-  const canSave =
-    metas.some((meta) => meta.id === metaId) &&
-    subProjects.some((project) => project.id === projId) &&
-    title.trim().length > 0 &&
-    !overLimit(LIMITS.title, title)
-
-  // Switching project carries the sub-project with it: the one held in state
-  // belongs to the project being left, and leaving it there would submit a
-  // task into a project the dialog no longer says it is creating in.
-  const changeMeta = (mid) => {
-    setMetaId(mid)
-    const first = subsOf(mid)[0]
-    setProjId(first ? first.id : null)
-  }
+  const [projId, setProjId] = useStateM<string | null>(
+    contextWritable && init.project ? init.project : null,
+  )
+  // the name of the row the person chose, for the note under the picker
+  const [chosenName, setChosenName] = useStateM<string | null>(null)
+  // the default a top-level context opened on, which the picker shows
+  // chosen until its batches reach it
+  const [pinned, setPinned] = useStateM<NavTargetRow | null>(null)
+  // whether the person chose, after which no default moves the choice
+  const chose = useRefM(contextWritable)
+  // a context sub-project the cache answers writable once the dialog shows
+  useEffectM(() => {
+    if (!chose.current && contextWritable && init.project) {
+      chose.current = true
+      setProjId(init.project)
+    }
+  }, [contextWritable])
+  // a context the cache does not answer as a sub-project may be a
+  // top-level project, so the first batch of the targets under it, while
+  // nothing is chosen, gives its first writable sub-project; a sub-project
+  // or a project with none answers an empty batch
+  const defaults = usePagedList<NavTargets, NavTargetRow>({
+    key:
+      init.project && context?.type !== 'project' && projId === null
+        ? JSON.stringify(['targets-default', init.project])
+        : null,
+    source: {
+      kind: 'live',
+      query: api.projectNav.targets,
+      args: (at) => ({ parent_id: init.project ?? '', ...navCursors(at) }),
+    },
+    batch: (answer) => (answer.state === 'ok' ? answer : null),
+    id: (row) => row.id,
+    // its first batch alone, as nothing asks for more
+    most: LIST_BATCH,
+  })
+  const first = defaults.rows[0]
+  useEffectM(() => {
+    if (chose.current || !first) return
+    chose.current = true
+    seedTargetRow(first)
+    setProjId(first.id)
+    setChosenName(first.name)
+    setPinned(first)
+  }, [first])
+  // the chosen sub-project and the context, named while the dialog shows,
+  // so the project cache reads them; Create waits for the chosen one's
+  // answer, which the create reads (P.addIssue), and the note under the
+  // picker says where that stands, with Retry
+  const retryTarget = useProjects([projId, init.project])
+  const targetReady = !!projId && P.projectState(projId) === 'ok' && P.canWrite(projId)
+  const canSave = targetReady && title.trim().length > 0 && !overLimit(LIMITS.title, title)
 
   const submit = () => {
     if (!canSave) return
@@ -416,35 +502,25 @@ function NewIssueModal({
           : null
       }
     >
-      <MField label="Project">
-        <NativeSelect
-          data-new-issue-project
-          aria-label="Project"
-          value={metaId || ''}
-          onChange={(e) => changeMeta(e.target.value)}
-          className={ctlClass}
-        >
-          {metas.map((m) => (
-            <option key={m.id} value={m.id}>
-              {P.projectLabel(m)}
-            </option>
-          ))}
-        </NativeSelect>
-      </MField>
       <MField label="Sub-project">
-        <NativeSelect
-          data-new-issue-subproject
-          aria-label="Sub-project"
-          value={projId || ''}
-          onChange={(e) => setProjId(e.target.value)}
-          className={ctlClass}
-        >
-          {subProjects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {P.projectLabel(p)}
-            </option>
-          ))}
-        </NativeSelect>
+        <div data-new-issue-subproject>
+          <TargetPicker
+            label="Sub-project"
+            value={projId}
+            onChoose={(row) => {
+              chose.current = true
+              setProjId(row.id)
+              setChosenName(row.name)
+            }}
+            pinned={pinned}
+          />
+          <TargetNote
+            id={projId}
+            name={P.project(projId)?.name ?? chosenName ?? 'this sub-project'}
+            retry={retryTarget}
+            readOnly={(name) => `You can't add tasks to ${name}.`}
+          />
+        </div>
       </MField>
       <MField label="Title">
         <LimitedInput
@@ -465,19 +541,13 @@ function NewIssueModal({
 
 /* ---------- New project & new sub-project ---------- */
 // Abbreviations (projects.key) are no longer user-facing anywhere: the DB
-// still requires a unique ≤5-char key per org, so creation derives one from
-// the name instead of asking for it. This is only a preview. projects.create
-// keeps it while it is free and otherwise picks the next candidate itself,
-// because archived and hidden projects hold keys this client never sees.
-const genKey = (name: string) => {
-  const taken = new Set([...P.projects, ...P.archivedProjects].map((p) => p.key))
-  const base = projectKeyBase(name)
-  for (let n = 1; n <= 9999; n++) {
-    const k = projectKeyCandidate(base, n)
-    if (!taken.has(k)) return k
-  }
-  return base // every visible candidate is taken; the server picks one
-}
+// still requires a unique ≤5-char key per org, so creation sends the name's
+// first candidate (lib/projectKey.ts). projects.create keeps it while it is
+// free and otherwise picks the first free candidate itself
+// (convex/model/projects.ts allocateKey), as for REST and MCP, because the
+// app holds no project and archived and hidden projects hold keys it never
+// sees; the create's answer gives the key it kept.
+const firstKey = (name: string) => projectKeyCandidate(projectKeyBase(name), 1)
 
 /* The one line left of a create dialog's Cancel and submit buttons, beside
    the place the creator looks just before saving. Muted when someone else
@@ -561,8 +631,9 @@ type CreateOptions = {
    them (lib/newProjectAccess.ts), and the footer says who will manage the
    project, which an admin keeps managing, or that the creator would not
    see it. Of the store it reads the
-   creator's own seat, the keys the name's preview avoids (genKey) and the
-   creator's teams for the footer (P.seesNewProject). */
+   creator's own seat and the creator's teams for the footer
+   (P.seesNewProject); the key it sends is the name's first candidate
+   (firstKey). */
 function NewProjectModal({
   init: _init = {},
   onClose,
@@ -608,7 +679,7 @@ function NewProjectModal({
     if (!canSave) return
     onCreate(
       {
-        key: genKey(name),
+        key: firstKey(name),
         name: name.trim(),
         type: 'meta',
         lead: lead.id || undefined,
@@ -755,9 +826,9 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    level). Seeing it is not enough, as a Viewer on the parent sees the
    sub-project and may add no task, and an unknown level offers none. Of the
    store it reads the caller's seats and their names, the organizations'
-   names, whether the workspace holds the parent, the keys the name's
-   preview avoids (genKey) and the creator's admin flag for the footer; no
-   list, choice or right. */
+   names, the parent's facts in the project cache and the creator's admin
+   flag for the footer; no list, choice or right. The key it sends is the
+   name's first candidate (firstKey). */
 function NewSubProjectModal({
   init = {},
   onClose,
@@ -780,9 +851,12 @@ function NewSubProjectModal({
 
   const read = useProjectSettings(parent?.id ?? null)
   const answer = read.answer
-  const held = parent ? P.heldProject(parent.id) : undefined
+  // the parent, named with the project cache while the dialog shows, whose
+  // facts give the popovers their organization while the check loads
+  useProjects([parent?.id])
+  const held = parent ? P.project(parent.id) : undefined
   // the organization the popovers read in and the create goes to: the
-  // check's, a picked row's, the workspace's while it holds the parent,
+  // check's, a picked row's, the project cache's while it knows the parent,
   // and after an `unavailable` answer or a check that failed before it
   // answered the home organization, else the first, so the Project list
   // stays open to another parent while Create waits for a check
@@ -831,13 +905,15 @@ function NewSubProjectModal({
       !!parent &&
       answer.project.id === parent.id &&
       (answer.level === 'user' || answer.level === 'lead'))
-  const offersStarter = !!held && edits
+  // App makes the starter task once the new sub-project's read by id
+  // answers that the creator may add tasks there (App.tsx createProject)
+  const offersStarter = edits
 
   const submit = () => {
     if (!canSave || !parent || !answer) return
     onCreate(
       {
-        key: genKey(name),
+        key: firstKey(name),
         name: name.trim(),
         type: 'project',
         parent: parent.id,
@@ -1095,6 +1171,25 @@ const familyWait = (it: IssueVM) =>
         ? WAITS_FOR_CHECK
         : FAMILY_UNKNOWN
 
+/** What the Move window says while the project cache has no facts of the
+    task's or its parent's sub-project (P.moveWaits), which Move waits for. */
+const moveWaitNote = (waits: { state: string; message: string | null }) =>
+  waits.state === 'loading'
+    ? 'Checking where this task is before it can move…'
+    : waits.state === 'unchecked'
+      ? (waits.message ?? "Couldn't check where this task is.")
+      : waits.state === 'gone'
+        ? "This task's sub-project is no longer one you can open, so it cannot move from here."
+        : "Couldn't check where this task is, so it cannot move yet."
+
+/** What the Move window's list says at its end: no other sub-project the
+    person may move the task to. */
+const MOVE_TARGET_WORDS: ChoiceWords = {
+  ...TARGET_WORDS,
+  empty: 'No other sub-project you can move it to.',
+  none: 'No matching sub-project you can move it to.',
+}
+
 /* ---------- Move issue ----------
    The task is the window's (`task`), the workspace's or one shown from
    its own read, else the workspace's task `issueId`. What the move takes
@@ -1118,31 +1213,30 @@ function MoveIssueModal({
 }) {
   const it = task ?? P.issueById[issueId]
   const family = it ? P.familyOf(it) : null
-  // Offer same-organization destinations with write access. The server checks
-  // access at both ends; a move preserves the task's immutable number.
-  const groups = P.projects
-    .filter(
-      (m) =>
-        m.type === 'meta' &&
-        (!it || m.org === it.org) &&
-        (m.children || []).some((cid) => P.canWrite(cid)),
-    )
-    .map((m) => ({
-      meta: m,
-      subs: (m.children || [])
-        .map((cid) => P.heldProject(cid))
-        .filter((sp) => !!sp && P.canWrite(sp.id)),
-    }))
-    .filter((g) => g.subs.length > 0)
-  const hasCurrent = !!it && groups.some((g) => g.subs.some((sp) => sp.id === it.project))
-  const [target, setTarget] = useStateM(hasCurrent ? it.project : '')
+  // Same-organization destinations with write access, from the server
+  // (projectNav.targets in the task's organization, components/
+  // TargetPicker.tsx), the task's own sub-project marked current. The
+  // server checks access at both ends; a move preserves the task's
+  // immutable number. A chosen row seeds its facts and its parent's into
+  // the project cache, and the window names it while it shows, so the
+  // move reads its parent (crossing, P.moveFamily) from the cache.
+  const [target, setTarget] = useStateM('')
+  // the chosen row's name, for the note under the list
+  const [targetName, setTargetName] = useStateM('')
+  // the chosen row, and the task's and its parent's sub-projects, whose
+  // top-level projects decide what the move takes along (P.moveWaits)
+  const parentTask = it?.parent
+    ? ((family?.byId ?? P.issueById)[it.parent] ?? P.issueById[it.parent])
+    : undefined
+  const retryTarget = useProjects([target || null, it?.project, parentTask?.project])
   // A move to another top-level project carries the subtasks, archived ones
   // included. Archived tasks are not in this view, so the server answers
   // whether any would move to the chosen sub-project.
   const [asked, setAsked] = useStateM<{ target: string; carries: boolean } | null>(null)
   const crossing =
     !!it &&
-    !!P.heldProject(target) &&
+    !!target &&
+    !!P.project(target) &&
     target !== it.project &&
     P.topLevelOf(target) !== P.topLevelOf(it.project)
   useEffectM(() => {
@@ -1156,23 +1250,34 @@ function MoveIssueModal({
     }
   }, [crossing, it?.uuid, target])
   if (!it) return null
-  // targetValid: a concurrently deleted target vanishes from the options but
-  // would linger in state — the blank select must not leave Move enabled
-  const targetValid = groups.some((g) => g.subs.some((sp) => sp.id === target))
+  // Move waits for the project cache's answer of the chosen row, one round
+  // trip after the pick, as the store moves only into a target it answered
+  // writable (P.moveIssue); one it answers gone, as a concurrently deleted
+  // one, or with a level without Edit, as after the person's access there
+  // was lowered while the window was open, never enables Move, and the note
+  // under the list says why
+  const targetValid =
+    !!target && P.projectState(target) === 'ok' && !!P.project(target) && P.canWrite(target)
   const moving = targetValid && target !== it.project
+  // the move waits while the project cache has no facts of the task's or
+  // its parent's sub-project, as it could not tell what the move takes
+  // along (P.moveWaits)
+  const waits = P.moveWaits(it, family ?? undefined)
   // whoever works on the task or its subtasks must keep access after the
   // move: the server checks every one at full scope and refuses the move
   // with a sentence that says what to change, which is toasted and the
   // move taken back (the store holds no one else to name here)
-  const canMove = !!target && moving && !!family
+  const canMove = !!target && moving && !!family && !waits
   // a subtask stays in its parent's project, so a move to another project
   // leaves the parent and carries the subtasks along; the dialog says so
-  const moved = moving && family ? P.moveFamily(it, target, family) : null
+  const moved = moving && family && !waits ? P.moveFamily(it, target, family) : null
   const carries = !!moved?.carriesSubtasks || (asked?.target === target && asked.carries)
   const parentKey = it.parent ? (family?.byId[it.parent] ?? P.issueById[it.parent])?.key : undefined
   const notes = [
     !family && `${familyWait(it)}.`,
-    moved?.leavesParent &&
+    waits && moveWaitNote(waits),
+    !waits &&
+      moved?.leavesParent &&
       (parentKey
         ? `${it.key} will no longer be a subtask of ${parentKey}.`
         : `${it.key} will no longer be a subtask.`),
@@ -1198,29 +1303,23 @@ function MoveIssueModal({
       width={440}
     >
       <MField label="Move to">
-        <NativeSelect
-          aria-label="Move to"
-          autoFocus
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          className={ctlClass}
-        >
-          {!hasCurrent && (
-            <option value="" disabled hidden>
-              Choose a sub-project…
-            </option>
-          )}
-          {groups.map((g) => (
-            <optgroup key={g.meta.id} label={P.projectLabel(g.meta)}>
-              {g.subs.map((sp) => (
-                <option key={sp.id} value={sp.id}>
-                  {P.projectLabel(sp)}
-                  {sp.id === it.project ? ' (current)' : ''}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </NativeSelect>
+        <TargetPicker
+          label="Move to"
+          org={it.org}
+          value={target || null}
+          current={it.project}
+          onChoose={(row) => {
+            setTarget(row.id)
+            setTargetName(row.name)
+          }}
+          words={MOVE_TARGET_WORDS}
+        />
+        <TargetNote
+          id={target || null}
+          name={P.project(target)?.name ?? (targetName || 'this sub-project')}
+          retry={retryTarget}
+          readOnly={(name) => `You can no longer move this task into ${name}.`}
+        />
       </MField>
       {notes.length > 0 && (
         <div
@@ -1232,6 +1331,19 @@ function MoveIssueModal({
               {note}
             </p>
           ))}
+          {waits && (waits.state === 'failed' || waits.state === 'unchecked') && (
+            <div>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-control-sm text-sm"
+                data-move-retry=""
+                onClick={retryTarget}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </ModalShell>
@@ -2415,7 +2527,7 @@ function ArchiveOrDeleteProjectModal({
   /** the project, with its organization when a page that read it from the
       server opened the window (projectSettings.get), so its counts read
       also for a project the workspace does not hold */
-  project: Pick<ProjectVM, 'id' | 'name' | 'type'> & { orgId?: string }
+  project: Pick<ProjectFacts, 'id' | 'name' | 'type'> & { orgId?: string }
   deleteOnly?: boolean
   /** whether the project left the board while the window was open */
   gone?: boolean
@@ -2839,6 +2951,13 @@ function MilestoneModal({
   const [projectId, setProjectId] = useStateM<string | null>(() =>
     init.id ? null : (P.metaOf(init.project)?.id ?? null),
   )
+  // the project it opens on, and the one an opened milestone's answer
+  // fixes, named with the project cache while the window shows, so its
+  // top-level project, its level and its add row read the cache's answer,
+  // which the window takes once it arrives
+  useProjects([init.project, projectId])
+  const metaNow = init.id ? null : (P.metaOf(init.project)?.id ?? null)
+  if (!init.id && projectId === null && metaNow !== null) setProjectId(metaNow)
   // the name the answer gave the project as it fixed it, which the badge
   // keeps once the milestone is gone and its answer names no project
   const [fixedName, setFixedName] = useStateM<string | null>(null)

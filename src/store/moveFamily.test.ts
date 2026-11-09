@@ -1,14 +1,21 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { PROJECT_CACHE } from './projectCache'
+import { projectNavStandIn } from './projectNavStandIn.setup'
 
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose project cache reads
+// a case can leave to the client's onUpdate
+const double = vi.hoisted(() => ({
+  live: null as null | { forceProjectNav(force: 'client' | null): void },
 }))
+vi.mock('../lib/convex', async () => {
+  double.live = (await import('./guard/liveDouble.setup')).liveOver(network)
+  return { convex: network, live: double.live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -18,6 +25,7 @@ vi.mock('../lib/auth', () => ({
 }))
 
 const NOW = '2026-09-14T08:00:00.000Z'
+const DEFAULT_CHUNK = PROJECT_CACHE.chunk
 
 /* A subtask stays in its parent's top-level project. WEB holds the FE and BE
  * sub-projects, HW holds FW. A move to another top-level project carries the
@@ -27,7 +35,14 @@ describe('moving a task with its family', () => {
   let requests: { name: string; args: Record<string, unknown> }[]
   let ids: Record<'web' | 'fe' | 'be' | 'hw' | 'fw', string>
 
-  async function load(change?: (snap: Snapshot) => void) {
+  /** Loads the store on the world above, which `change` may change. With
+      `byIds`, the project cache reads one project a read and the client's
+      onUpdate answers them, through `byIds` (which may fail them), and the
+      suite names nothing itself. */
+  async function load(
+    change?: (snap: Snapshot) => void,
+    byIds?: (ids: string[], answer: () => void, fail: () => void) => void,
+  ) {
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
     const base = snap.projects[0]
@@ -81,13 +96,27 @@ describe('moving a task with its family', () => {
       task('lone', 4, fe.id),
     )
     change?.(snap)
-    network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
+      const name = getFunctionName(ref)
+      if (name === 'workspace:whole') next(structuredClone(snap))
+      if (name === 'projectNav:byIds' && byIds) {
+        const asked = (args as { ids: string[] }).ids
+        byIds(
+          asked,
+          () => next(projectNavStandIn(snap, 'projectNav:byIds', { ids: asked })),
+          () => fail?.(new Error('the byIds read failed')),
+        )
+      }
       return () => {}
     })
     const store = await import('./planner')
     P = store.P
+    // the double outlives the store, so each load says where its reads go
+    if (byIds) (await import('./projectCache')).PROJECT_CACHE.chunk = 1
+    double.live?.forceProjectNav(byIds ? 'client' : null)
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    if (!byIds) await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   }
 
   beforeEach(() => {
@@ -105,13 +134,42 @@ describe('moving a task with its family', () => {
     })
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    ;(await import('./projectCache')).PROJECT_CACHE.chunk = DEFAULT_CHUNK
   })
 
   const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)!
   const moves = () => requests.filter((r) => r.name === 'issues:move').map((r) => r.args)
+
+  it("sends no move while the project cache has no facts of the task's sub-project, and no detach once it has them for a move within the project", async () => {
+    // FE's read fails until the case lets it answer; every other project
+    // answers, BE among them
+    let feFails = true
+    await load(undefined, (asked, answer, fail) => {
+      if (asked.includes(ids.fe) && feFails) fail()
+      else answer()
+    })
+    P.nameProjects('test', [ids.be])
+    await vi.waitFor(() => expect(P.projectState(ids.fe)).toBe('failed'))
+    await vi.waitFor(() => expect(P.canWrite(ids.be)).toBe(true))
+    // FE has no facts, so its top-level project is unknown, never another
+    expect(P.project(ids.fe)).toBeUndefined()
+    expect(P.moveWaits(vm('feature'))).toMatchObject({ project: ids.fe, state: 'failed' })
+    // must fail for a move that reads an unknown project as another
+    // top-level project and detaches the subtask from its parent
+    expect(P.moveIssue(vm('feature').id, ids.be)).toBeNull()
+    expect(moves()).toEqual([])
+    // FE answers on a fresh read, and the move within WEB keeps the parent
+    feFails = false
+    P.retryProjects('held tasks')
+    await vi.waitFor(() => expect(P.projectState(ids.fe)).toBe('ok'))
+    expect(P.moveWaits(vm('feature'))).toBeNull()
+    expect(P.moveIssue(vm('feature').id, ids.be)).toBe(vm('feature').id)
+    expect(moves()).toEqual([expect.not.objectContaining({ detach_parent: true })])
+    expect(moves()[0]).toMatchObject({ id: 'feature', project_id: ids.be })
+  })
 
   it('carries the subtasks to another top-level project and keeps the links', async () => {
     await load()

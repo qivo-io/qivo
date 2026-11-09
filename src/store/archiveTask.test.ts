@@ -46,13 +46,23 @@ describe('archiving and deleting from the Archive or delete window', () => {
       requests.push({ name, args })
       return answers[name]?.() ?? new Promise(() => {})
     })
+    // Work under the top-level Plan, as every writer stores a project that
+    // holds tasks, so the navigation reads name both
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
     const me = snap.profiles[0]
     me.org_role = 'user'
     const base = snap.projects[0]
     snap.projects = [
-      { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: me.id },
+      {
+        ...base,
+        id: 'plan',
+        type: 'meta',
+        parent_id: undefined,
+        key: 'PLAN',
+        name: 'Plan',
+        lead_id: me.id,
+      },
       {
         ...base,
         id: 'work',
@@ -102,6 +112,8 @@ describe('archiving and deleting from the Archive or delete window', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   }
 
   beforeEach(load)
@@ -170,8 +182,9 @@ describe('archiving and deleting from the Archive or delete window', () => {
 
   it('shows a deleted project restored while deliveries were held', async () => {
     accept('projects:deleteDeep')
+    const org = P.project('plan')?.org ?? ''
     await restoredWhileHeld(
-      () => P.removeProject('plan'),
+      () => P.removeProject('plan', undefined, { orgId: org }),
       (snap) => {
         snap.projects = []
         snap.issues = []
@@ -337,8 +350,13 @@ describe('archiving and deleting from the Archive or delete window', () => {
   })
 
   it('waits for the server before a project leaves, and keeps it on a refusal', async () => {
-    refuse('projects:deleteDeep', 'requires the project lead')
+    const shown = { orgId: P.project('plan')?.org ?? '' }
+    // the page that showed the project names its organization; without it
+    // nothing is sent
     expect(await P.removeProject('plan', 'Wrapped up')).toBe(false)
+    expect(requests).toEqual([])
+    refuse('projects:deleteDeep', 'requires the project lead')
+    expect(await P.removeProject('plan', 'Wrapped up', shown)).toBe(false)
     // nothing painted, so the toast says nothing was reverted
     expect(vi.mocked(window.showToast).mock.calls.at(-1)?.[0]).toBe("Couldn't save.")
     expect(P.project('plan')).toBeDefined()
@@ -347,14 +365,23 @@ describe('archiving and deleting from the Archive or delete window', () => {
 
     let settle: (value: null) => void = () => {}
     answers['projects:deleteDeep'] = () => new Promise((resolve) => (settle = resolve))
-    const deleted = P.removeProject('plan', '  Wrapped up  ')
+    const deleted = P.removeProject('plan', '  Wrapped up  ', shown)
     expect(requests.at(-1)).toEqual({
       name: 'projects:deleteDeep',
-      args: expect.objectContaining({ id: 'plan', reason: 'Wrapped up' }),
+      args: expect.objectContaining({ id: 'plan', org_id: shown.orgId, reason: 'Wrapped up' }),
     })
     expect(P.project('plan')).toBeDefined() // still there while the server works
     settle(null)
     expect(await deleted).toBe(true)
+    // the write paints nothing: the project and its tasks leave with the
+    // delivery that no longer holds them, which the project cache's read of
+    // them answers gone
+    expect(P.project('plan')).toBeDefined()
+    await deliverSnap((snap) => {
+      snap.projects = snap.projects.filter((p) => p.id !== 'plan' && p.id !== 'work')
+      snap.issues = snap.issues.filter((issue) => issue.project_id !== 'work')
+    })
+    await vi.waitFor(() => expect(P.projectState('plan')).toBe('gone'))
     expect(P.project('plan')).toBeUndefined()
     expect(P.project('work')).toBeUndefined()
     expect(vm('root')).toBeUndefined()
@@ -393,8 +420,19 @@ describe('archiving and deleting from the Archive or delete window', () => {
   })
 
   it('keeps an accepted project delete through a rollback', async () => {
-    accept('projects:deleteDeep')
-    expect(await P.removeProject('plan')).toBe(true)
+    // the delivery without the project comes before the write's answer, as
+    // Convex hands it over
+    answers['projects:deleteDeep'] = async () => {
+      await deliverSnap((snap) => {
+        snap.projects = snap.projects.filter((p) => p.id !== 'plan' && p.id !== 'work')
+        snap.issues = snap.issues.filter((issue) => issue.project_id !== 'work')
+      })
+      return null
+    }
+    expect(await P.removeProject('plan', undefined, { orgId: P.project('plan')?.org ?? '' })).toBe(
+      true,
+    )
+    await vi.waitFor(() => expect(P.projectState('plan')).toBe('gone'))
     // a refused write outside the deleted project rolls the store back
     refuse('labels:create', 'refused')
     P.addLabel({ name: 'Firmware' })

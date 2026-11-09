@@ -9,6 +9,11 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from '../store/boardStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from '../store/projectNavStandIn.setup'
 
 /* A new task's window when the server refuses the create, on the real
    store, the real editors and App's own create and refusal wiring: the task
@@ -128,9 +133,17 @@ async function openNewTask(path = '/app/testbed/overview/p/1') {
     }
     // the Overview's empty note, with New task, waits for its answer
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+    // the navigation reads the New task picker lists from, as the server
+    // answers them
+    else if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockImplementation((ref) => {
     const name = getFunctionName(ref)
     if (name === 'issues:create')
@@ -178,7 +191,8 @@ async function openNewTask(path = '/app/testbed/overview/p/1') {
     title.dispatchEvent(new Event('input', { bubbles: true }))
   })
   // the key the new task takes, which the dialog's create previews
-  const key = store.P.nextIssueKey('work')
+  // the fixture's organization has handed out no task number yet
+  const key = `${store.P.ISSUE_PREFIX}-1`
   const create = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create')
   await act(async () => create?.click())
   await waitFor(

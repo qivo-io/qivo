@@ -955,20 +955,20 @@ a later backend, and that includes a tab already open when the release
 deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
-instead. From the release after v0.1.160 the backend has no
-`workspace.people` or `workspace.catalog`, which every earlier app
-subscribes, so that app cannot load against it, and the app from that
-release needs its backend's `teams.picker`, `pickers.taskFollowers` and the
-root part's own rows. Never return the backend to a commit before that
-release, and never return the app or the demo alone to a release before
-it; roll forward.
-
-An app from before the release after v0.1.159 joins the milestones of every
-workspace projects part it reads, which later backends no longer send, so
+instead. The app from the release after v0.1.160 on needs its backend's
+`teams.picker`, `pickers.taskFollowers` and the root part's own rows, and
+the app from the release after v0.1.161 on reads its projects through
+`projectNav.byIds`, `projectNav.targets` and `projectNav.holds` and its
+desktop notifications through `inbox.feed`, all of which that release first
+ships, so never return the backend to a commit before the release after
+v0.1.161. Every app before
+the release after v0.1.161 subscribes a workspace part that later backends
+no longer have, `workspace.projects` and `workspace.inbox`, and before the
+release after v0.1.160 also `workspace.people` and `workspace.catalog`, so
 it cannot load its workspace against them, and that includes a tab already
 open when the release deploys, until it reloads. Never return the app or
-the demo alone to a deployment of a commit before that release; return the
-backend with it, or roll forward.
+the demo alone, Vercel Instant Rollback included, to a deployment of a
+commit before the release after v0.1.161; roll forward.
 
 The app before v0.1.149 lists **Settings → Projects → Deleted items**
 through `deletedItems.list` and searches it through `deletedItems.matches`,
@@ -2246,10 +2246,11 @@ floor for the app, which calls none of them, and has no backfill and no
 release step.
 
 From the release after v0.1.161, the app reads `projectNav.byIds`, new in
-that release, for the projects its views name that the workspace's projects
-part does not hold, so that release is the backend's floor for its app:
-from it on, never return the backend to a commit before it, roll forward
-instead. The same release adds `projectNav.targets` and `projectNav.holds`,
+that release, for every project its views, dialogs and pages name, as the
+workspace holds no project, so that release is the backend's floor for its app.
+From it on, never return the backend to a commit before it; roll forward
+instead. The same release adds `projectNav.targets`, with `parent_id` for
+the sub-projects under one top-level project, and `projectNav.holds`,
 lets `projectNav.page` take `org_id` and `team_id`, adds `lead_id` and
 `review_hours` to `projectNav.byIds` rows and `project_archived` to
 `taskWindow.task`'s archived answer, none of which an app before it reads.
@@ -2277,6 +2278,22 @@ the removed part and fails to load as a whole. From it on, never return
 the backend to a commit before it, and never return the app alone to a
 release before it; roll forward instead. There is no schema change, no
 backfill and no release step.
+
+From the release after v0.1.161, the app holds no project. It reads every
+project it shows from the navigation reads, `projectNav.byIds`,
+`projectNav.targets`, `projectNav.holds` and the views' own reads, and the
+release removes `workspace.projects` and the root part's `live_projects`
+and `next_project_num`. Every earlier app subscribes the removed part at
+boot, so this release is the app floor that "Rollback and hotfixes" names.
+The backend floor for these reads is the one the paragraph on
+`projectNav.byIds` above sets. The staging check's `ui/projects-part`
+step boots the run's project's Board and checks that no frame subscribes
+`workspace.projects` and that `projectNav.byIds` reads the project, that the
+Board's **New task** dialog lists the project's two sub-projects from
+`projectNav.targets` and that Team sync's scope menu offers the project from
+`projectNav.page` with the home organization, each found by the run's tag,
+and writes nothing. The release changes no table, field or index, and needs
+no backfill and no release step.
 
 ## Node.js version
 
@@ -2427,12 +2444,15 @@ people who have none, so those stamps are lost for everyone stamped before.
 Roll forward instead.
 
 Every task and project has a `window_key`, a random point the server picks
-when it stores the row, which places the row in the app's windows of the
-workspace (`convex/lib/workspaceParts.ts`). The release that replaced
-`snapshot.forMe` with the workspace parts added it. A task or project
-stored before has none until the one-time `internal/windowKeysBackfill`
-gives it one, and until then it loads in the first window of its kind, so
-an organization with more such tasks than one window holds cannot load. A
+when it stores the row. A task's key places it in the app's task windows of
+the workspace (`convex/lib/workspaceParts.ts`). From the release after
+v0.1.161 the app holds no project, so nothing reads a project's key or the
+`by_org_window` index any more, though the server still gives each project
+one. The release that replaced `snapshot.forMe` with the workspace parts
+added the field. A task stored before has none until the one-time
+`internal/windowKeysBackfill` gives it one, and until then it loads in the
+first task window, so an organization with more such tasks than one window
+holds cannot load. The backfill gives projects stored before a key too. A
 restore from Deleted items gives a task or project stored before keys a
 key as it writes it back, and the task's relation rows the same key.
 Earlier releases brought such a task back without a key, so a deployment
@@ -2446,13 +2466,16 @@ rollback past that release fails to deploy; it is a rollback floor anyway
 (see Rollback and hotfixes).
 
 Each organization's `org_counters` row counts its active tasks and its
-projects (`active_tasks`, `live_projects`), the rows the app's windows read,
-and the app starts that many windows of each kind. Every write that adds,
-archives, restores or deletes a task or project keeps the counts, and a new
-organization starts at zero. An organization created before the release
-that added them has none until the one-time `internal/liveCountsBackfill`
-counts it, and until then the app sizes its windows by the task and project
-numbers handed out, as earlier releases did, so it loads as before. Run the
+live projects (`active_tasks`, `live_projects`). `active_tasks` alone sizes
+the app's task windows, as the app starts as many as those rows need. From the
+release after v0.1.161 the app holds no project, so `live_projects` serves
+only the organization's usage figures (`convex/model/usage.ts`). Every
+write that adds, archives, restores or deletes a task or project keeps the
+counts, and a new organization starts at zero. An organization created
+before the release that added them has none until the one-time
+`internal/liveCountsBackfill` counts it, and until then the app sizes its
+task windows by the task numbers handed out, as earlier releases did, so it
+loads as before. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says: read its dry run first, then run it. A call that
 does not finish in about five minutes answers a `cursor`; call it again

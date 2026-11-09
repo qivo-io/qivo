@@ -1,9 +1,11 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
 import type { BoardAnswer } from '../../convex/lib/board'
 import { MIB } from '../../convex/lib/limits'
 import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import type { ViewRow } from '../../convex/lib/viewReads'
+import type { LiveQueries } from '../lib/liveQueries'
 import type { Whole } from './guard/liveDouble.setup'
 import { plannerFixture } from './plannerFixture.setup'
 import {
@@ -83,7 +85,6 @@ function world() {
     { project_id: views.id, profile_id: me, level: 'viewer' },
     { project_id: granted.id, profile_id: me, level: 'user' },
   ]
-  snap.unheldProjects = [unheld, edits, views, granted, led, hidden, twin].map((p) => p.id)
   return { snap, org, held, heldSub, unheld, edits, views, granted, led, hidden, twin }
 }
 
@@ -108,6 +109,8 @@ async function start(
   vi.stubGlobal('window', { showToast: vi.fn() })
   const byIds: string[][] = []
   const open = new Set<() => void>()
+  // the navigation reads open now, by name
+  const navOpen = new Map<string, number>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     const count = (views.reads?.get(name) ?? 0) + 1
@@ -124,20 +127,31 @@ async function start(
         byIds.push([...(args as { ids: string[] }).ids])
         open.add(answer)
       }
+      navOpen.set(name, (navOpen.get(name) ?? 0) + 1)
       answer()
-      return () => open.delete(answer)
+      let stopped = false
+      return () => {
+        if (!stopped) navOpen.set(name, (navOpen.get(name) ?? 0) - 1)
+        stopped = true
+        open.delete(answer)
+      }
     }
     return () => {}
   })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const store = await import('./planner')
+  // the cases answer the cache's reads themselves, with `force`: told once
+  // the store's import made the double, also in the file's first case
+  ;(double.live as { forceProjectNav?: (f: 'client' | null) => void } | null)?.forceProjectNav?.(
+    'client',
+  )
   const { PROJECT_CACHE } = await import('./projectCache')
   await store.initStore()
   const rerun = () => {
     for (const answer of open) answer()
   }
-  return { P: store.P, byIds, PROJECT_CACHE, rerun }
+  return { P: store.P, byIds, PROJECT_CACHE, rerun, navOpen }
 }
 
 /** Task `id` of project `project` as a view's answer sends it. */
@@ -159,14 +173,15 @@ const viewRow = (snap: Whole, id: string, project: string): ViewRow => ({
 })
 
 describe('the project lookups', () => {
-  it('answers a project the part holds from the part, never reading it by id', async () => {
+  it('answers every project from the cache once named, as the workspace holds none', async () => {
     const w = world()
     const { P, byIds } = await start(w.snap)
+    // must fail: no project answers before an owner names it
+    expect(P.project(w.heldSub.id)).toBeUndefined()
     P.nameProjects('test', [w.held.id, w.heldSub.id])
-    expect(P.projectState(w.heldSub.id)).toBe('held')
-    expect(P.heldProject(w.heldSub.id)?.key).toBe(w.heldSub.key)
+    expect(byIds).toEqual([[w.held.id, w.heldSub.id]])
+    await vi.waitFor(() => expect(P.projectState(w.heldSub.id)).toBe('ok'))
     expect(P.levelOn(w.heldSub.id)).toBe('lead')
-    expect(byIds).toEqual([])
   })
 
   it('answers a project the part leaves out from the cache once named, loading until then, and never as held', async () => {
@@ -182,8 +197,6 @@ describe('the project lookups', () => {
     await vi.waitFor(() => expect(P.project(w.edits.id)?.name).toBe('Edits'))
     expect(P.contextVersion).not.toBe(before)
     expect(P.projectState(w.edits.id)).toBe('ok')
-    expect(P.heldProject(w.edits.id)).toBeUndefined()
-    expect(P.heldMeta(w.edits.id)).toBeNull()
     expect(P.project(w.edits.id)).toMatchObject({
       org: w.org,
       parent: w.unheld.id,
@@ -209,11 +222,12 @@ describe('the project lookups', () => {
     expect(P.canAddMilestone(w.edits.id)).toBe(false)
   })
 
-  it('answers a cached top-level project for a milestone add and for management, and tells a cached twin from a held one', async () => {
+  it('answers a cached top-level project for a milestone add and for management, and tells two cached namesakes apart', async () => {
     const w = world()
     const { P } = await start(w.snap)
-    P.nameProjects('test', [w.granted.id, w.led.id, w.twin.id])
+    P.nameProjects('test', [w.granted.id, w.led.id, w.twin.id, w.held.id])
     await vi.waitFor(() => expect(P.project(w.twin.id)).toBeDefined())
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).not.toBeNull())
     expect(P.canAddMilestone(w.granted.id)).toBe(true)
     expect(P.canManageOwnProjectAccess(w.granted.id)).toBe(false)
     expect(P.canManageOwnProjectAccess(w.led.id)).toBe(true)
@@ -241,9 +255,10 @@ describe('the project lookups', () => {
     const { P } = await start(w.snap)
     P.nameProjects('test', [w.edits.id])
     await vi.waitFor(() => expect(P.orgOf(w.edits.id)).toBe(w.org))
-    expect(P.projectAttachmentLimit(w.edits.id)).toBe(3 * MIB)
-    // as for a project the part holds
-    expect(P.projectAttachmentLimit(w.heldSub.id)).toBe(3 * MIB)
+    // the cap of the task's organization, which the window passes
+    expect(P.orgAttachmentLimit(w.org)).toBe(3 * MIB)
+    // must fail: an organization the root does not name takes the largest
+    expect(P.orgAttachmentLimit('elsewhere')).not.toBe(3 * MIB)
   })
 
   it('answers gone only where the answer leaves the project out', async () => {
@@ -256,11 +271,97 @@ describe('the project lookups', () => {
     expect(P.writeNote(w.hidden.id)).toBe("You can't open this project.")
   })
 
+  it("reads a seeded project's lead and delay setting as unknown until its row answers", async () => {
+    const w = world()
+    // Held sub has a lead of its own and tracks no delays, which its row
+    // says and a seed cannot
+    const sub = w.snap.projects.find((p) => p.id === w.heldSub.id)
+    if (!sub) throw new Error('no Held sub')
+    sub.track_delay = false
+    sub.lead_id = 'someone-else'
+    // a task the workspace holds in Edits, which the views would show in
+    // Held sub as a card of its answer
+    w.snap.issues.push({
+      id: 'seeded-task',
+      org_id: w.org,
+      project_id: w.edits.id,
+      num: 77,
+      title: 'Seeded task',
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    const force: ForcedProjectNav = {}
+    const { P, rerun } = await start(w.snap, force)
+    // Held program, which the caller leads, answers first
+    P.nameProjects('parent', [w.held.id])
+    await vi.waitFor(() => expect(P.leadOf(w.held.id)).toBe(w.snap.profiles[0].id))
+    // a sidebar row seeds Held sub while its read has not answered
+    force.byIdsLoading = true
+    P.seedProjects([
+      {
+        id: w.heldSub.id,
+        org_id: w.org,
+        name: 'Held sub',
+        num: w.heldSub.num,
+        parent_id: w.held.id,
+      },
+    ])
+    P.nameProjects('test', [w.heldSub.id])
+    expect(P.project(w.heldSub.id)?.name).toBe('Held sub')
+    expect(P.projectState(w.heldSub.id)).toBe('loading')
+    const task = () => {
+      const found = P.issues.find((it) => it.uuid === 'seeded-task')
+      if (!found) throw new Error('the workspace holds no task')
+      return { ...found, project: w.heldSub.id }
+    }
+    // must fail for lookups that read the seed's placeholders as real, the
+    // parent's lead as inherited, and delays tracked
+    expect(P.leadOf(w.heldSub.id)).toBeNull()
+    expect(P.tracksDelay(task())).toBe(false)
+    // its row answers with its own lead and no delays tracked
+    force.byIdsLoading = false
+    rerun()
+    await vi.waitFor(() => expect(P.projectState(w.heldSub.id)).toBe('ok'))
+    expect(P.leadOf(w.heldSub.id)).toBe('someone-else')
+    expect(P.tracksDelay(task())).toBe(false)
+    // and a row that tracks them says so
+    sub.track_delay = true
+    rerun()
+    await vi.waitFor(() => expect(P.tracksDelay(task())).toBe(true))
+  })
+
+  it('names no gone project from a navigation row that seeds it again', async () => {
+    const w = world()
+    const { P } = await start(w.snap)
+    P.nameProjects('test', [w.hidden.id])
+    await vi.waitFor(() => expect(P.projectState(w.hidden.id)).toBe('gone'))
+    P.seedProjects([
+      {
+        id: w.hidden.id,
+        org_id: w.org,
+        name: 'Hidden program',
+        num: w.hidden.num,
+        parent_id: null,
+      },
+    ])
+    // must fail for a lookup that answers a seed of a gone project
+    expect(P.project(w.hidden.id)).toBeUndefined()
+    expect(P.projectPlace(w.hidden.id)).toBeNull()
+    expect(P.projectLabelOf(w.hidden.id)).toBe('')
+  })
+
   it('names nothing of a project it answered once the answer leaves it out, as after access goes', async () => {
     const w = world()
     const { P, rerun } = await start(w.snap)
-    P.nameProjects('test', [w.twin.id])
+    P.nameProjects('test', [w.twin.id, w.held.id])
     await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('ok'))
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).not.toBeNull())
     expect(P.projectTag(w.twin.id)).toBe(`#${w.twin.num}`)
     expect(P.projectTag(w.held.id)).toBe(`#${w.held.num}`)
     // the caller no longer leads the twin, so the server's next answer
@@ -270,13 +371,14 @@ describe('the project lookups', () => {
     twin.lead_id = undefined
     rerun()
     await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('gone'))
-    // the facts follow with the cache's repaint, a frame later
-    await vi.waitFor(() => expect(P.project(w.twin.id)).toBeUndefined())
+    // the facts go at once, as the lookups read the cache
+    expect(P.project(w.twin.id)).toBeUndefined()
     expect(P.metaOf(w.twin.id)).toBeNull()
     expect(P.orgOf(w.twin.id)).toBe('')
+    // and the number tags with the cache's repaint, a frame later: the other
+    // project has no namesake left to be told apart from
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).toBeNull())
     expect(P.projectTag(w.twin.id)).toBeNull()
-    // the held project has no twin left to be told apart from
-    expect(P.projectTag(w.held.id)).toBeNull()
     expect(P.writeNote(w.twin.id)).toBe("You can't open this project.")
   })
 
@@ -432,6 +534,51 @@ describe('the project lookups', () => {
     expect(P.canWrite(w.edits.id)).toBe(false)
   })
 
+  it("shares one Link task offer read among an organization's task windows, its answer kept until the last lets go", async () => {
+    const w = world()
+    const { P, navOpen } = await start(w.snap)
+    const targets = () => navOpen.get('projectNav:targets') ?? 0
+    // the Inbox's pane shows a task the person only views
+    const pane = P.watchEditsSomeProject(w.org)
+    expect(P.editsSomeProject(w.org)).toBeNull()
+    await vi.waitFor(() => expect(P.editsSomeProject(w.org)).toBe(true))
+    // its pop-out joins the answered read and takes its answer at once
+    const popOut = P.watchEditsSomeProject(w.org)
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    expect(targets()).toBe(1)
+    // closing the pop-out leaves the pane its answer
+    popOut()
+    popOut()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    expect(targets()).toBe(1)
+    // the last window lets go, and the read with it
+    pane()
+    expect(P.editsSomeProject(w.org)).toBeNull()
+    expect(targets()).toBe(0)
+  })
+
+  it("takes the Link task offer's answer at once from a targets subscription another reader holds", async () => {
+    const w = world()
+    const { P } = await start(w.snap)
+    const transport = double.live as unknown as LiveQueries
+    // another reader, such as a Move window's first batch, holds the read
+    const other = transport.watch(api.projectNav.targets, { org_id: w.org })
+    await vi.waitFor(() => expect(transport.read(other.token)).toBeDefined())
+    // the store's watch joins that answered subscription, as Convex shares
+    // one subscription by query and arguments, and hears no transition
+    vi.spyOn(transport, 'watch').mockImplementationOnce(() => ({
+      token: other.token,
+      joined: true,
+      stop: () => {},
+    }))
+    const stop = P.watchEditsSomeProject(w.org)
+    // must fail for a watch that waits for a transition of a joined read
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    stop()
+    other.stop()
+  })
+
   it('reads the 199 unheld of 200 top-level projects in two chunks and keeps them while named, past a lowered bound', async () => {
     const w = world()
     const org = w.org
@@ -454,7 +601,6 @@ describe('the project lookups', () => {
     w.snap.access.push(
       ...tops.map((p) => ({ project_id: p.id, profile_id: me, level: 'user' as const })),
     )
-    w.snap.unheldProjects = [...(w.snap.unheldProjects ?? []), ...tops.map((p) => p.id)]
     const { P, byIds, PROJECT_CACHE } = await start(w.snap)
     const unheld = w.snap.projects.filter((p) => !p.parent_id && p.id !== w.held.id)
     expect(unheld).toHaveLength(199)

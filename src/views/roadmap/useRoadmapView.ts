@@ -11,8 +11,8 @@
      page or the tab is hidden (lib/viewVisibility.ts), so a kept page stops
      its reads and reads afresh when it shows again. The store names the
      projects the answer names with its project cache (store/planner.ts
-     ROADMAP_QUERY `projects`), so a bar's rights and a row's place read a
-     project the workspace's projects part does not hold from the cache.
+     ROADMAP_QUERY `projects`), so a bar's rights and a row's place read
+     their project from the cache, the store's only source of projects.
    - The answer decides which tasks a Roadmap shows. Each shows as the
      workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), with
@@ -62,6 +62,7 @@ import {
   ROADMAP_SLOT,
   type ScopeInfo,
 } from '../../store/planner'
+import { type ScopeGroup, scopeGroups } from '../../store/scopeGroups'
 import { before, shownText, useStall } from '../board/useBoardView'
 import { useViewsNews } from '../useViewsNews'
 import { keepsRoadmap, textChanged, useRoadmapRequest } from './roadmapArgs'
@@ -133,6 +134,15 @@ export type RoadmapView = {
   /** In My view, the sub-projects the shown answer says hold the person's
       tasks; null in a project selection or with no answer shown. */
   held: ReadonlySet<string> | null
+  /** the Roadmap's tracks from the answer on screen (store/scopeGroups.ts
+      scopeGroups): a project selection's sub-projects, My view's top-level
+      projects with their held sub-projects folded through the project
+      cache, in the answer's order, which the Roadmap sorts by name; none
+      before an answer */
+  groups: readonly ScopeGroup[]
+  /** a project selection's sub-projects as the answer on screen names
+      them, also a refusal's; null in My view and before an answer */
+  selection: readonly string[] | null
   /** whether the tasks are the current answer's for the arguments on
       screen, so an empty or no-match note may show */
   current: boolean
@@ -260,6 +270,26 @@ export function useRoadmapView(
     carried !== null && lastKey !== null && wantKey !== null && textChanged(lastKey, wantKey)
   const shownAnswer = answer?.state === 'ok' ? answer : (kept ?? carried)
   const views = P.updates.views.getSnapshot()
+  // a project selection's sub-projects, from the answer on screen, also a
+  // refusal's, which names them; null in My view
+  const selectionList = info.mine
+    ? null
+    : (shownAnswer?.projects ??
+      (answer && answer.state !== 'ok' && 'projects' in answer ? (answer.projects ?? null) : null))
+  const selection = selectionList ? new Set(selectionList) : null
+  // the tracks: a selection's sub-projects, My view's held sub-projects
+  // folded under their top-level projects through the project cache
+  const groups = scopeGroups(
+    info,
+    info.mine
+      ? shownAnswer?.held_sub_projects
+        ? { subs: shownAnswer.held_sub_projects }
+        : null
+      : selectionList
+        ? { projects: selectionList }
+        : null,
+    P.project,
+  )
 
   // the shown answer's tasks by handle, as the Roadmap shows them
   const byId = useMemo(() => {
@@ -280,7 +310,7 @@ export function useRoadmapView(
   // matched the whole text, label and assignee names included, which the
   // store cannot read, so the store's filters take no text
   const passes = (it: IssueVM) =>
-    info.subIdSet.has(it.project) &&
+    (selection === null || selection.has(it.project)) &&
     (!info.only || info.only(it)) &&
     isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
     (planned?.id === it.uuid || P.passesFilters(it, { ...filters, search: '' }))
@@ -354,6 +384,8 @@ export function useRoadmapView(
   const depsView = useDeps(depsRead, wantKey !== null)
   const base = {
     held: null,
+    groups,
+    selection: selectionList,
     current: false,
     answer: null,
     remaining: () => null,

@@ -8,7 +8,7 @@ import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import { GUEST_CALLS } from './ownerLoadCache'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* The task rows a view's answer brings (store/viewRows.ts) on the real
    store: the Board's read the store owns (P.watchBoard), the models it
@@ -115,7 +115,9 @@ beforeEach(async () => {
   vi.resetModules()
   vi.clearAllMocks()
   vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
-  snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snapshot = underProgram(plannerFixture())
   snapshot.issues.push(held('task-a', 1))
   answer = ok([])
   board = null
@@ -156,6 +158,8 @@ beforeEach(async () => {
   })
   store = await import('./planner')
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -485,6 +489,13 @@ describe('the delays of tasks only a view brings', () => {
   it("says Delay unknown at once for a Viewer's owners past the cap", async () => {
     snapshot.projects[0].track_delay = true
     snapshot.profiles[0].org_role = 'viewer'
+    // an organization Viewer leads nothing, so a grant shows them the
+    // project, whose delay rule the cards read from the project cache
+    snapshot.access.push({
+      project_id: snapshot.projects[0].id,
+      profile_id: snapshot.profiles[0].id,
+      level: 'viewer',
+    })
     // GUEST_CALLS + 2 other people, each owning one planned task
     const people = Array.from({ length: GUEST_CALLS + 2 }, (_, i) => ({
       ...snapshot.profiles[0],
@@ -496,6 +507,7 @@ describe('the delays of tasks only a view brings', () => {
     snapshot.profiles.push(...people)
     deliver(structuredClone(snapshot))
     await turn()
+    await vi.waitFor(() => expect(store.P.projectState(snapshot.projects[0].id)).toBe('ok'))
     answer = ok(people.map((p, i) => ({ ...planned(`t${i}`, 10 + i), assignee_id: p.id })))
     await open()
     const P = store.P

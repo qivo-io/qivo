@@ -42,6 +42,7 @@ import {
   BLANK_SEARCH,
   BY_IDS_LIMIT,
   EMPTY_ORG,
+  EMPTY_PARENT,
   type NavBatch,
   type NavRefusal,
   navByIdsOf,
@@ -70,10 +71,12 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { expectedPage, expectedSearch, navSees } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleStore } from './oracleScope.setup'
 import { plannerFixture } from './plannerFixture.setup'
 import {
   NAV_BLANK_SEARCH,
   NAV_EMPTY_ORG,
+  NAV_EMPTY_PARENT,
   NAV_NOT_FOUND,
   NAV_RESOLVE_FORM,
   NAV_TOP_LEVEL_ONLY,
@@ -126,7 +129,10 @@ async function start(snap: Snapshot) {
 async function storeOf(t: T, profile: Doc<'profiles'>) {
   const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
-  return await start(snap)
+  await start(snap)
+  // the store holds no project, so its old view of them comes from the
+  // server's whole (oracleStore)
+  return oracleStore(snap)
 }
 
 const sorted = (ids: Iterable<string>) => [...ids].sort()
@@ -267,6 +273,17 @@ async function compareStandIn(
       ),
     )
   }
+  // the targets under each project of the organization, a sub-project's
+  // id among them, and an unknown one
+  for (const parent_id of [...projects.map((p) => p.id), crypto.randomUUID()]) {
+    const under = (after?: string) =>
+      mine('projectNav:targets', { parent_id, after }) as Promise<NavBatch<unknown> | NavRefusal>
+    expect(await batchesOf(under), `${label}: targets under ${parent_id}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navTargetsOf(ctx, login, seats, { parent_id, after })),
+      ),
+    )
+  }
   expect(await mine('projectNav:holds', {}), `${label}: holds`).toEqual(
     await t.run((ctx) => navHoldsOf(ctx, seats, {})),
   )
@@ -361,10 +378,18 @@ describe('the stand-in', () => {
     expect([
       NAV_BLANK_SEARCH,
       NAV_EMPTY_ORG,
+      NAV_EMPTY_PARENT,
       NAV_RESOLVE_FORM,
       NAV_NOT_FOUND,
       NAV_TOP_LEVEL_ONLY,
-    ]).toEqual([BLANK_SEARCH, EMPTY_ORG, RESOLVE_FORM, 'project not found', TOP_LEVEL_ONLY])
+    ]).toEqual([
+      BLANK_SEARCH,
+      EMPTY_ORG,
+      EMPTY_PARENT,
+      RESOLVE_FORM,
+      'project not found',
+      TOP_LEVEL_ONLY,
+    ])
   })
 
   it('lists apart under force.unchecked only the asked ids the server would judge, those of an organization with the seat', () => {

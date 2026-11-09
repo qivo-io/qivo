@@ -210,6 +210,8 @@ async function boot(asked = false) {
   liveParts.TASKS.atBoot = asked
   store = await import('./planner')
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   await settle()
 }
 

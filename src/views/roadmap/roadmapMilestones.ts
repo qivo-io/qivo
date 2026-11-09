@@ -66,19 +66,15 @@ export type MarkerSlot = { n: 0 | 1; ask: MarkerAsk; key: string; attempt: numbe
 export type MarkerPlan = { shown: MarkerSlot; pending: MarkerSlot | null }
 
 /** The scope a Roadmap shows, as store/planner.ts scopeInfo gives it. */
-type MarkerScope = {
-  wide: boolean
-  mine: boolean
-  id: string
-  metas: readonly { id: string }[]
-}
-/** A track of the scope: its project and the sub-projects it groups. */
-type MarkerTrack = { proj: { id: string }; subIds: readonly string[] }
+type MarkerScope = { mine: boolean; id: string; topId: string | null }
+/** A track of the scope (store/scopeGroups.ts ScopeGroup): its project and
+    the sub-projects it groups. */
+type MarkerTrack = { id: string; subIds: readonly string[] }
 
 /**
  * The projects the Roadmap's read names, once each and sorted, or null for
- * none. A project or sub-project names its top-level project as the store
- * holds it, else its own id, which the server folds to its top-level
+ * none. A project or sub-project names its top-level project as the
+ * project cache knows it, else its own id, which the server folds to its top-level
  * project. My view names the top-level projects of the scope's `tracks`
  * that hold a sub-project of `held`, the sub-projects its Roadmap's answer
  * names, before the toolbar's filters prune them; while its Roadmap's
@@ -91,10 +87,10 @@ export function markerProjects(
   held: ReadonlySet<string> | null,
   kept: readonly string[] | null = null,
 ): string[] | null {
-  if (!scope.wide) return [scope.metas[0]?.id ?? scope.id]
+  if (!scope.mine) return [scope.topId ?? scope.id]
   if (!held) return kept && kept.length > 0 ? [...kept] : null
   const named = new Set<string>()
-  for (const track of tracks) if (track.subIds.some((id) => held.has(id))) named.add(track.proj.id)
+  for (const track of tracks) if (track.subIds.some((id) => held.has(id))) named.add(track.id)
   return named.size > 0 ? [...named].sort() : null
 }
 

@@ -15,6 +15,7 @@ import {
 } from '../store/milestoneStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { projectNavStandIn } from '../store/projectNavStandIn.setup'
 
 /* The Milestones window opened on a milestone (panels/Modals.tsx
    MilestoneModal with init.id), on the real store: it reads that milestone
@@ -143,7 +144,12 @@ async function start() {
     }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('../store/planner')
   await store.initStore()

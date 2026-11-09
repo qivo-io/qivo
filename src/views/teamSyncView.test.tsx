@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { UnsentScope } from '../lib/leaveGuard'
 import { ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
-import type { Snapshot } from '../store/plannerFixture.setup'
+import { type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  type ForcedProjectNav,
+  NAV_UNCHECKED,
+  queryProjectNav,
+} from '../store/projectNavStandIn.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { SyncPlace } from './TeamSync'
 
@@ -23,10 +29,16 @@ import type { SyncPlace } from './TeamSync'
    the owner-load cache; and the design size's single figures. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose socket a case can
+// reconnect
+const double = vi.hoisted(() => ({
+  live: null as null | { reconnect(only?: readonly string[]): void },
 }))
+vi.mock('../lib/convex', async () => {
+  const live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  double.live = live
+  return { convex: network, live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -108,10 +120,10 @@ async function open(
   prepare: (snap: Snapshot) => void,
   place: (snap: Snapshot) => SyncPlace,
   options: Parameters<typeof loadBoard>[2] = {},
-  setup: (board: Awaited<ReturnType<typeof loadBoard>>) => void = () => {},
+  setup: (board: Awaited<ReturnType<typeof loadBoard>>) => void | Promise<void> = () => {},
 ) {
   const board = await loadBoard(network, prepare, options)
-  setup(board)
+  await setup(board)
   const { TeamSync } = await import('./TeamSync')
   const calls: Calls = { places: [], opened: [], shown: [], boards: [] }
   const first = place(board.snapshot)
@@ -141,6 +153,13 @@ async function open(
 /** A few turns for the store's paint timer and React. */
 async function settle() {
   for (let i = 0; i < 4; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+/** The store's next frame, in which it paints what the project cache
+    answered, and the turns after it. */
+async function frame() {
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await settle()
 }
 
 const page = () => document.querySelector<HTMLElement>('[data-sync-page]')
@@ -214,6 +233,23 @@ const sentRemaining = (hours: number, from = 0) =>
         (args as { patch?: { remaining_hours?: number } }).patch?.remaining_hours === hours,
     )
 
+/** Answers P.resolveProject's projectNav:resolve from the board's
+    snapshot with `force()`, a failure while `fail()` holds, and counts the
+    reads it answered in `seen`; every other one-shot read goes on as the
+    board answers it. */
+function answerResolve(
+  board: Awaited<ReturnType<typeof loadBoard>>,
+  how: { fail: () => boolean; force?: () => ForcedProjectNav; seen?: number[] },
+) {
+  const base = network.query.getMockImplementation()
+  network.query.mockImplementation(async (ref, args) => {
+    if (getFunctionName(ref) !== 'projectNav:resolve') return base?.(ref, args)
+    how.seen?.push(1)
+    if (how.fail()) throw new Error('the resolve failed')
+    return queryProjectNav(board.snapshot, 'projectNav:resolve', args, { force: how.force?.() })
+  })
+}
+
 /** Edits the stand-in's answers: each row's `over` by number. */
 const rowsEdit =
   (over: Record<number, Partial<Extract<AgendaAnswer, { state: 'ok' }>['rows'][number]>>) =>
@@ -275,10 +311,91 @@ describe('the picker', () => {
       expect(calls.places).toEqual([])
       await act(async () => root.unmount())
       root = createRoot(container)
-      const again = await open(people({}), () => ({ scope: 'unresolved:99', step: 'team' }))
+      // a number no project the person can open has
+      const again = await open(
+        people({}),
+        () => ({ scope: 'unresolved:500', step: 'team' }),
+        {},
+        (b) => answerResolve(b, { fail: () => false }),
+      )
       expect(state()).toBe('choose')
       expect(title()).toBe('This team or project is not available')
       expect(asked(again.board)).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'says it is opening a numbered project while the resolve has not answered, and a failure with Retry, which opens the meeting once the resolve answers',
+    async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      let answer: (() => void) | null = null
+      const seen: number[] = []
+      const { board, calls } = await open(
+        people({}),
+        () => ({ scope: 'unresolved:1', step: 'team' }),
+        {},
+        (b) => {
+          const base = network.query.getMockImplementation()
+          // each resolve waits for the case, the first fails and the next
+          // goes through
+          network.query.mockImplementation(async (ref, args) => {
+            if (getFunctionName(ref) !== 'projectNav:resolve') return base?.(ref, args)
+            seen.push(1)
+            await new Promise<void>((resolve) => {
+              answer = resolve
+            })
+            if (seen.length === 1) throw new Error('the resolve failed')
+            return queryProjectNav(b.snapshot, 'projectNav:resolve', args)
+          })
+        },
+      )
+      // never "not available" while the number resolves
+      expect(document.querySelector('[data-sync-note="resolving"]')).not.toBeNull()
+      expect(title()).toBe('Opening the project…')
+      await act(async () => (answer as (() => void) | null)?.())
+      await settle()
+      expect(document.querySelector('[data-sync-note="resolve-failed"]')).not.toBeNull()
+      expect(title()).toBe("Couldn't open this project")
+      const retry = () =>
+        [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+          (b) => b.textContent === 'Retry',
+        )
+      expect(retry()).toBeDefined()
+      await click(retry())
+      await settle()
+      expect(seen).toHaveLength(2)
+      // the Retry's resolve is on its way, so the page says it is opening
+      // the project again, with no Retry; must fail for a resolve state
+      // kept by the address alone, which still shows the failure
+      expect(document.querySelector('[data-sync-note="resolving"]')).not.toBeNull()
+      expect(title()).toBe('Opening the project…')
+      expect(retry()).toBeUndefined()
+      await act(async () => (answer as (() => void) | null)?.())
+      await settle()
+      // the resolve named the fixture's sub-project, whose meeting opens
+      expect(calls.places).toEqual([])
+      expect(asked(board)).toEqual([{ kind: 'project', project_id: sub(board.snapshot) }])
+      expect(state()).toBe('ok')
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    "says the access check's sentence where the resolve was not checked, with Retry",
+    async () => {
+      await open(
+        people({}),
+        () => ({ scope: 'unresolved:1', step: 'team' }),
+        {},
+        (b) => answerResolve(b, { fail: () => false, force: () => ({ unchecked: NAV_UNCHECKED }) }),
+      )
+      expect(document.querySelector('[data-sync-note="resolve-unchecked"]')).not.toBeNull()
+      expect(document.body.textContent).toContain(NAV_UNCHECKED)
+      expect([...document.querySelectorAll('button')].some((b) => b.textContent === 'Retry')).toBe(
+        true,
+      )
+      expect(title()).not.toBe('This team or project is not available')
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -881,6 +998,50 @@ describe('the reviewer prompt', () => {
 
 describe('a meeting that stops fitting', () => {
   it(
+    'drops a task whose project the project cache answers gone, and keeps one whose project loads',
+    async () => {
+      // QN-1 in the fixture's sub-project and QN-2 in Second, another
+      // sub-project of the same top-level project
+      const { board, P } = await open(
+        (snap) => {
+          underProgram(snap)
+          const fixture = snap.projects[0]
+          snap.projects.push({ ...fixture, id: 'second', key: 'SEC', num: 70, name: 'Second' })
+          people({}, { project_id: 'second' })(snap)
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
+      )
+      const first = P.syncTask('t1')?.id ?? ''
+      const second = P.syncTask('t2')?.id ?? ''
+      expect(card(first)).not.toBeNull()
+      expect(card(second)).not.toBeNull()
+      board.server.sync.force = { state: 'over_ceiling' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      // the socket connects again and no project answer has arrived again,
+      // so every project loads: must fail for a loading one dropped
+      await act(async () => double.live?.reconnect(['no:query']))
+      await frame()
+      expect(P.projectState('second')).toBe('loading')
+      expect(card(first)).not.toBeNull()
+      expect(card(second)).not.toBeNull()
+      // Second is deleted, and every result arrives again: its task goes at
+      // once, as the stale answer no longer follows access, and the other
+      // stays
+      board.snapshot.projects = board.snapshot.projects.filter((p) => p.id !== 'second')
+      await board.deliver()
+      await act(async () => double.live?.reconnect())
+      await vi.waitFor(() => expect(P.projectState('second')).toBe('gone'))
+      await frame()
+      expect(state()).toBe('stale')
+      expect(card(second)).toBeNull()
+      expect(card(first)).not.toBeNull()
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'keeps the last meeting under the note, its cards’ unsent note and read-only controls, and ends with the next ok answer',
     async () => {
       const { board, P, calls } = await open(people({}), (snap) => ({
@@ -914,6 +1075,90 @@ describe('a meeting that stops fitting', () => {
       // a narrower scope from the note asks about the card's unsent note
       await click(document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`))
       expect(calls.places.at(-1)?.closes?.length).toBeGreaterThan(0)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    "leaves a gone project out of the stale note's smaller scopes, and says a failed read of one with Retry, never the loading line",
+    async () => {
+      const gone = crypto.randomUUID()
+      let failing = true
+      const { board } = await open(
+        (snap) => {
+          people({})(snap)
+          underProgram(snap)
+          // a second sub-project under the program, whose read fails
+          snap.projects.push({
+            ...snap.projects[0],
+            id: 'fail-sub',
+            key: 'FAIL',
+            num: 50,
+            name: 'Failing sub',
+          })
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: 'team' }),
+        {},
+        async (b) => {
+          // the fitted answer names a sub-project the person no longer
+          // sees, and the failing one
+          b.server.sync.edit = (answer) =>
+            answer.state === 'ok'
+              ? { ...answer, sub_projects: [...answer.sub_projects, gone, 'fail-sub'] }
+              : answer
+          // one project a read, the reads answered here, Failing sub's
+          // failing while `failing` holds
+          const { PROJECT_CACHE } = await import('../store/projectCache')
+          PROJECT_CACHE.chunk = 1
+          ;(
+            double.live as unknown as { forceProjectNav(f: 'client' | null): void }
+          ).forceProjectNav('client')
+          const base = network.onUpdate.getMockImplementation()
+          network.onUpdate.mockImplementation((ref, args, next, fail) => {
+            if (getFunctionName(ref) !== 'projectNav:byIds')
+              return base?.(ref, args, next, fail) ?? (() => {})
+            if (failing && (args as { ids: string[] }).ids.includes('fail-sub'))
+              fail?.(new Error('the byIds read failed'))
+            else answerProjectNav(b.snapshot, 'projectNav:byIds', args, next, fail)
+            return () => {}
+          })
+        },
+      )
+      try {
+        expect(state()).toBe('ok')
+        board.server.sync.force = { state: 'over_ceiling' }
+        await board.answer()
+        await settle()
+        await frame()
+        expect(state()).toBe('stale')
+        const note = () => document.querySelector('[data-sync-stale-note]')?.textContent ?? ''
+        await vi.waitFor(() =>
+          expect(note()).toContain("Couldn't load some of the smaller projects."),
+        )
+        // must fail for a note that waits for every named project
+        expect(note()).not.toContain('Loading the smaller teams and projects…')
+        expect(board.P.projectState(gone)).toBe('gone')
+        expect(document.querySelector(`[data-sync-choice="project:${gone}"]`)).toBeNull()
+        expect(
+          document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`),
+        ).not.toBeNull()
+        // Retry reads the failed one again, which answers now
+        failing = false
+        await click(document.querySelector('[data-sync-names-retry]'))
+        await frame()
+        await vi.waitFor(() =>
+          expect(document.querySelector('[data-sync-choice="project:fail-sub"]')).not.toBeNull(),
+        )
+        expect(note()).not.toContain("Couldn't load some of the smaller projects.")
+        // the gone project stays out, and no line says the list loads
+        expect(note()).not.toContain('Loading the smaller teams and projects…')
+      } finally {
+        const { PROJECT_CACHE } = await import('../store/projectCache')
+        PROJECT_CACHE.chunk = 100
+        ;(double.live as unknown as { forceProjectNav(f: 'client' | null): void }).forceProjectNav(
+          null,
+        )
+      }
     },
     BOARD_TEST_TIMEOUT,
   )

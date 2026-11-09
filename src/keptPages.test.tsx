@@ -8,6 +8,11 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
@@ -43,6 +48,7 @@ const threads: { stopped: boolean }[] = []
 // the milestone reads the store subscribed to, and whether each stopped
 const milestoneWatches: { name: string; stopped: boolean }[] = []
 const realTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
 
 let container: HTMLDivElement
 let root: Root
@@ -61,6 +67,27 @@ beforeEach(() => {
     if (typeof options === 'object') this.scrollTop = options.top ?? 0
   }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  /* Frames on the real clock: jsdom schedules its frames on the timer
+     functions it found first, so once a case faked them and the clock
+     moved, a later case would wait for frames that never come, and no page
+     that leaves (components/KeptView.tsx) would ever go. */
+  const frames = new Map<number, ReturnType<typeof realTimeout>>()
+  let frame = 0
+  vi.stubGlobal('requestAnimationFrame', (step: FrameRequestCallback) => {
+    const id = ++frame
+    frames.set(
+      id,
+      realTimeout(() => {
+        frames.delete(id)
+        step(performance.now())
+      }, 16),
+    )
+    return id
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    realClearTimeout(frames.get(id))
+    frames.delete(id)
+  })
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -154,6 +181,11 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   for (let n = 1; n <= 3; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
+  // the fixture's project under a top-level project, as every writer stores
+  // one that holds tasks, so the navigation reads and the project cache
+  // answer it, where `prepare` did not place it
+  if (snap.projects[0].parent_id === undefined && snap.projects[0].type !== 'meta')
+    underProgram(snap)
   threads.length = 0
   milestoneWatches.length = 0
   holdMilestones = false
@@ -212,9 +244,18 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
         thread.stopped = true
       }
     }
+    // the navigation lists the views and pickers read, as the server
+    // answers them
+    if (isProjectNavRead(name) && name !== 'projectNav:byIds')
+      answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   // the server holds an Inbox read and sends its rows before it answers, as
   // Convex does, so the inbox item a task window reads follows it
   network.mutation.mockImplementation(async (ref, args) => {

@@ -12,23 +12,23 @@ import {
   answerProjectNav,
   type ForcedProjectNav,
   isProjectNavRead,
+  projectNavStandIn,
 } from '../store/projectNavStandIn.setup'
 import { answerRoadmap } from '../store/roadmapStandIn.setup'
 
-/* The views of a project the workspace's projects part does not hold, on
-   App and the real store, with the double leaving it out of the part
-   (Whole unheldProjects) while the navigation stand-in answers
-   projectNav.byIds from the whole: a Roadmap flag of a top-level project
-   only the project cache holds is fixed while the cache loads it and
-   movable once it answers Edit, its drop saving with the organization the
-   cache gives, and a Viewer's stays fixed; and while the part holds every
-   project a view names, no view reads one by id. */
+/* The views of a project on App and the real store, which holds no
+   project, with the navigation stand-in answering projectNav.byIds from
+   the whole: a Roadmap flag of a top-level project is fixed while the
+   project cache loads it and movable once it answers Edit, its drop saving
+   with the organization the cache gives, and a Viewer's stays fixed. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
-}))
+vi.mock('../lib/convex', async () => {
+  const live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  // the cases answer the project cache's reads themselves, with their force
+  live.forceProjectNav('client')
+  return { convex: network, live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -85,6 +85,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = true
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
@@ -103,14 +105,9 @@ function mondayIn(weeks: number) {
 /** Plan, a top-level project, with Plan work, its sub-project, which holds
     the person's task and a grant of `subLevel` of theirs, and Plan's
     milestone next week; `planLevel` is the person's grant on Plan, none
-    for null. With `unheld` the projects part leaves Plan out. */
-function world({
-  planLevel,
-  unheld,
-}: {
-  planLevel: 'user' | 'viewer' | null
-  unheld: boolean
-}): Snapshot {
+    for null. The workspace holds no project, so the views read Plan from
+    the project cache. */
+function world({ planLevel }: { planLevel: 'user' | 'viewer' | null }): Snapshot {
   const snap = plannerFixture()
   const me = snap.profiles[0].id
   snap.profiles[0].org_role = 'user'
@@ -156,7 +153,6 @@ function world({
     week: mondayIn(1),
     created_at: AT,
   })
-  if (unheld) snap.unheldProjects = ['plan']
   return snap
 }
 
@@ -180,11 +176,20 @@ async function app(snap: Snapshot, path: string) {
     }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockImplementation(async (ref, args) => {
     sent.push({ name: getFunctionName(ref), args })
     return getFunctionName(ref) === 'roadmap:change' ? { count: 1 } : null
   })
+  // the app's boot, which asks for no task, so the store holds none and
+  // only the views name projects (the test default holds every task)
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')
@@ -234,7 +239,7 @@ const moves = () =>
 describe('a Roadmap flag of a project only the project cache holds', { timeout: 30_000 }, () => {
   it('is fixed while the cache loads its project, and sends nothing', async () => {
     navForce = { byIdsLoading: true }
-    const { P } = await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    const { P } = await app(world({ planLevel: 'user' }), '/app/~/roadmap/p/2')
     await waitFor(() => flag('m-plan'), "Plan's flag")
     expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)
     expect(P.projectState('plan')).toBe('loading')
@@ -244,11 +249,10 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
   })
 
   it('moves once the cache answers Edit, and saves with the organization the cache gives', async () => {
-    const snap = world({ planLevel: 'user', unheld: true })
+    const snap = world({ planLevel: 'user' })
     const { P } = await app(snap, '/app/~/roadmap/p/2')
     await waitFor(() => flag('m-plan'), "Plan's flag")
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
-    expect(P.heldProject('plan')).toBeUndefined()
     await settle()
     await drag('m-plan', 2)
     // a move goes out only once milestoneOrg found an organization, here
@@ -260,7 +264,7 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
   })
 
   it("stays fixed for someone who sees the project only for navigation, as a Viewer's", async () => {
-    const { P } = await app(world({ planLevel: null, unheld: true }), '/app/~/roadmap/p/2')
+    const { P } = await app(world({ planLevel: null }), '/app/~/roadmap/p/2')
     await waitFor(() => flag('m-plan'), "Plan's flag")
     await waitFor(() => P.projectState('plan') === 'ok', 'the cache answering Plan')
     expect(P.levelOn('plan')).toBe('viewer')
@@ -269,10 +273,11 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
   })
 
   it('releases the project once no view or scope names it', async () => {
-    const { P } = await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    // Plan's task is no one's, so My view shows nothing of Plan
+    const snap = world({ planLevel: 'user' })
+    for (const task of snap.issues) if (task.id === 't-plan') task.assignee_id = undefined
+    const { P } = await app(snap, '/app/~/roadmap/p/2')
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
-    // My view lists no project the part does not hold, so its Roadmap
-    // names none
     await act(async () => {
       history.pushState(null, '', '/app/~/roadmap/mine')
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -295,21 +300,21 @@ describe("the phone agenda's milestone rows of a project only the cache holds", 
   it('say Open while the cache loads the project', async () => {
     phone = true
     navForce = { byIdsLoading: true }
-    await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    await app(world({ planLevel: 'user' }), '/app/~/roadmap/p/2')
     await waitFor(() => label('m-plan'), "Plan's agenda row")
     expect(label('m-plan')).toBe('Open milestone Plan launch')
   })
 
   it('say Edit once the cache answers Edit', async () => {
     phone = true
-    const { P } = await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    const { P } = await app(world({ planLevel: 'user' }), '/app/~/roadmap/p/2')
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
     await waitFor(() => label('m-plan') === 'Edit milestone Plan launch', 'the Edit label')
   })
 
   it('say View for a project seen only for navigation', async () => {
     phone = true
-    const { P } = await app(world({ planLevel: null, unheld: true }), '/app/~/roadmap/p/2')
+    const { P } = await app(world({ planLevel: null }), '/app/~/roadmap/p/2')
     await waitFor(() => P.projectState('plan') === 'ok', 'the cache answering Plan')
     await waitFor(() => label('m-plan') === 'View milestone Plan launch', 'the View label')
   })
@@ -319,12 +324,9 @@ describe("My view's Overview rows and milestones of a program only the cache hol
   timeout: 30_000,
 }, () => {
   it("name it from the Overview's own answers, show its names, and stop reading it on leaving My view", async () => {
-    const snap = world({ planLevel: 'user', unheld: true })
-    // the whole program is out of the projects part, so no scope names it,
-    // and a held project of the person's with a sub-project, which My view
-    // needs for its lists while its notes read the held projects, to go
-    // to after My view
-    snap.unheldProjects = ['plan', 'plan-a']
+    const snap = world({ planLevel: 'user' })
+    // no scope names the program, and Home, a project the person leads with
+    // a sub-project, is the scope to go to after My view
     const me = snap.profiles[0].id
     snap.projects.push(
       {
@@ -368,25 +370,17 @@ describe("My view's Overview rows and milestones of a program only the cache hol
     // section's `mine` answer the program itself
     expect(byIds.some((ids) => ids.includes('plan-a'))).toBe(true)
     expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)
-    expect(P.heldProject('plan-a')).toBeUndefined()
-    // Home's Overview names neither, so the reads stop
+    // Home's Overview names neither, so the reads name only Home's own
+    // projects: the scope and the sub-project its health table lists
     await act(async () => {
       history.pushState(null, '', '/app/~/overview/p/5')
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     await settle()
-    await waitFor(() => P.cacheStats().reads.length === 0, 'the reads stopped')
+    const read = () => P.cacheStats().reads.flat()
+    await waitFor(() => !read().includes('plan') && !read().includes('plan-a'), 'the reads stopped')
+    await waitFor(() => read().includes('home'), "Home's read")
+    expect(read().sort()).toEqual(['home', 'home-a'])
     expect(P.projectState('plan-a')).toBe('loading')
-  })
-})
-
-describe('the views while the projects part holds every project they name', {
-  timeout: 30_000,
-}, () => {
-  it('read no project by id', async () => {
-    await app(world({ planLevel: 'user', unheld: false }), '/app/~/roadmap/p/2')
-    await waitFor(() => flag('m-plan'), "Plan's flag")
-    await settle()
-    expect(byIds).toEqual([])
   })
 })

@@ -265,7 +265,11 @@
  * It reads the run's project, Alpha and Zulu, an id of no project and a
  * project the run archived by id through the store's read of
  * projectNav.byIds, and checks the level, the parent row and the ids left
- * out (ui/project-by-ids). Granted notifications, a
+ * out (ui/project-by-ids). A fresh load of M's Board must subscribe no
+ * workspace projects part and read M by id, the Board's New task picker
+ * must list Alpha and Zulu under M from projectNav.targets, and Team sync's
+ * scope menu must offer M from the home organization's projectNav.page,
+ * each found by the run's tag (ui/projects-part). Granted notifications, a
  * fresh page takes its baseline, and one alert must follow the Standard
  * agent's next mention from the deployment's feed (inbox.feed) and a
  * granted notifications.claimAlerts, tagged with the message's id, with no
@@ -2079,12 +2083,10 @@ async function deleteConnectionInUi(clientName) {
 
 /** How deleteProjectInApp deletes a project of the run, from `current`,
  *  the server's answer to GET /v1/projects/{id}. One the caller reads
- *  ('archive') is archived over REST first and deleted once the store
- *  lists it archived, which it does for a project the caller reads. Any
- *  other ('direct'), one Nora only manages, which the store does not hold
- *  since the admin access split, is deleted as it is, live or archived. The
- *  store's own copy never decides, as it can still hold a project whose
- *  access was just taken away. */
+ *  ('archive') is archived over REST first and deleted once REST shows it
+ *  archived. Any other ('direct'), one Nora only manages, is deleted as it
+ *  is, live or archived. The app holds no project, so only the server's
+ *  answer decides. */
 export const projectDeleteRoute = (current) =>
   current?.json?.access?.read === true ? 'archive' : 'direct'
 
@@ -2102,11 +2104,9 @@ async function deleteProjectInApp(cred, project, shown) {
   if (projectDeleteRoute(current) === 'archive') {
     if (!current.json?.archived)
       await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
-    await app.waitForFunction(
-      (id) => window.PLANNER.archivedProjects?.some((x) => x.id === id),
-      project.id,
-      { timeout: 30_000 },
-    )
+    // the app holds no project, so REST says when the archive landed
+    const archived = await rest(cred, 'GET', `/projects/${project.id}`)
+    expect(archived.json?.archived === true, `${project.name} did not archive`)
   }
   const removed = await evaluate(
     app,
@@ -7591,8 +7591,10 @@ export function inDefaultWindow(week, today, weekStart) {
  *  sets her Roadmap window to the default. A fresh load of M's Roadmap by
  *  its address must subscribe MILESTONES_BETWEEN_QUERY, reach its ok state
  *  with its flags ok (data-roadmap-milestones) and show the milestone in
- *  the header's band. The store's flag move (P.setMilestone, as a drag
- *  sends it) then moves it to the next week M leaves free, also in the
+ *  the header's band, and no frame of either fresh load may add the
+ *  removed projects part (PROJECTS_PART). The store's flag move
+ *  (P.setMilestone, as a drag sends it) then moves it to the next week M
+ *  leaves free, also in the
  *  window. The write takes the milestone's row from the Roadmap's range
  *  read and its organization from the store's project, as the workspace
  *  holds no milestone, so the flag must move later on the timeline and
@@ -7659,6 +7661,10 @@ async function roadmapMilestonesCheck() {
         sent.some((f) => addsQuery(f, MILESTONES_BETWEEN_QUERY)),
         "M's Roadmap did not subscribe the range read",
       )
+      expect(
+        !sent.some((f) => addsQuery(f, PROJECTS_PART)),
+        `M's Roadmap subscribed ${PROJECTS_PART}`,
+      )
       const banded = app.locator(`[data-workspace-view] [data-msband] ${flag}`)
       await banded.waitFor({ timeout: 60_000 })
       // a flag's move through the store, from the range read's row and the
@@ -7697,6 +7703,10 @@ async function roadmapMilestonesCheck() {
       await fresh(`${cfg.appOrigin}/app/~/roadmap/mine`)
       const row = app.locator(`[data-workspace-view] [data-track="${M.id}"] ${flag}`)
       await row.waitFor({ timeout: 60_000 })
+      expect(
+        !sent.some((f) => addsQuery(f, PROJECTS_PART)),
+        `My view's Roadmap subscribed ${PROJECTS_PART}`,
+      )
       eq(
         await app.locator('[data-workspace-view] [data-msband]').count(),
         0,
@@ -9448,6 +9458,132 @@ async function projectByIdsCheck() {
   })
 }
 
+/** The step that checks the app boots and picks projects with no projects
+ *  part (projectsPartCheck). */
+export const PROJECTS_PART_STEP = 'ui/projects-part'
+
+/** The workspace part that sent every project the caller sees, which the
+ *  release after v0.1.161 removed; no frame may subscribe it. */
+export const PROJECTS_PART = 'workspace:projects'
+
+/** The project cache's read by id, and the New task picker's and Team
+ *  sync's scope menu's lists, which the app reads its projects from. */
+export const PROJECTS_PART_READS = {
+  byIds: 'projectNav:byIds',
+  targets: 'projectNav:targets',
+  page: 'projectNav:page',
+}
+
+/** The marks the step waits for: the New task dialog's Sub-project picker
+ *  (src/components/TargetPicker.tsx) and Team sync's scope menu
+ *  (src/views/teamSync/SyncScopeMenu.tsx). */
+export const PROJECTS_PART_MARKS = {
+  picker: 'data-target-picker',
+  pickerSearch: 'data-target-search',
+  group: 'data-target-group',
+  target: 'data-target',
+  scopeTrigger: 'data-sync-scope-trigger',
+  scopeSearch: 'data-sync-scope-search',
+  scopeGroup: 'data-sync-scope-group',
+  scopeChoice: 'data-sync-scope-choice',
+}
+
+/** What is wrong with `sent`, the frames a fresh load sent on its sync
+ *  socket, for an app with no projects part: a frame that adds
+ *  PROJECTS_PART, and, with `byIdsOf`, no projectNav.byIds frame whose ids
+ *  name that project, and, with `pageOf`, no projectNav.page frame with
+ *  that organization. An empty list when nothing is. */
+export function projectsPartProblems(sent, { byIdsOf, pageOf } = {}) {
+  const problems = []
+  if (sent.some((f) => addsQuery(f, PROJECTS_PART))) problems.push(`subscribed ${PROJECTS_PART}`)
+  const adds = (query, test) => sent.some((f) => addedArgs(f, query).some(test))
+  if (
+    byIdsOf !== undefined &&
+    !adds(
+      PROJECTS_PART_READS.byIds,
+      (args) => Array.isArray(args?.ids) && args.ids.includes(byIdsOf),
+    )
+  )
+    problems.push(`no ${PROJECTS_PART_READS.byIds} frame named ${byIdsOf}`)
+  if (pageOf !== undefined && !adds(PROJECTS_PART_READS.page, (args) => args?.org_id === pageOf))
+    problems.push(`no ${PROJECTS_PART_READS.page} frame with organization ${pageOf}`)
+  return problems
+}
+
+/** The app with no projects part, signed in as Nora on the run's own M and
+ *  its sub-projects Alpha and Zulu. A fresh load of M's Board by its
+ *  address must show the Board, with no frame adding PROJECTS_PART and a
+ *  projectNav.byIds frame naming M. The Board's New task dialog must
+ *  subscribe projectNav.targets and, once the run's tag is typed in its
+ *  Sub-project picker's search, list Alpha and Zulu under M. Team sync's
+ *  scope menu must subscribe projectNav.page with the home organization
+ *  when it opens and, once the run's tag is typed in its search, offer M
+ *  in its Projects group. The searches find the run's rows on a staging
+ *  backend whose first batches hold other projects. It writes nothing and
+ *  leaves the saved view on M's Board. It runs while M is active, and
+ *  needs a backend from the release after v0.1.161 on. */
+async function projectsPartCheck() {
+  const { M, A, Z } = run.projects
+  const marks = PROJECTS_PART_MARKS
+  await check(PROJECTS_PART_STEP, async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app
+        .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+        .waitFor({ timeout: 60_000 })
+      const boot = projectsPartProblems(sent, { byIdsOf: M.id })
+      expect(boot.length === 0, `M's Board: ${boot.join('; ')}`)
+      // the New task dialog's Sub-project picker, from the server's targets
+      await app.getByRole('button', { name: 'New task in To Do', exact: true }).first().click()
+      const picker = app.locator(`[${marks.picker}]`)
+      await picker.waitFor({ timeout: 60_000 })
+      expect(
+        await until(
+          async () => sent.some((f) => addsQuery(f, PROJECTS_PART_READS.targets)),
+          30_000,
+        ),
+        `the New task picker did not subscribe ${PROJECTS_PART_READS.targets}`,
+      )
+      await picker.locator(`[${marks.pickerSearch}]`).fill(run.tag)
+      const group = picker.locator(`[${marks.group}="${M.id}"]`)
+      for (const sub of [A, Z])
+        await group.locator(`[${marks.target}="${sub.id}"]`).waitFor({ timeout: 60_000 })
+      await app.keyboard.press('Escape')
+      await picker.waitFor({ state: 'detached', timeout: 30_000 })
+      // Team sync's scope menu, from the home organization's projects
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const trigger = app.locator(`[${marks.scopeTrigger}]`)
+      await trigger.waitFor({ timeout: 60_000 })
+      // the home organization once the fresh load's store has booted
+      await app.waitForFunction(() => !!window.PLANNER?.homeOrg, null, { timeout: 30_000 })
+      const home = await evaluate(app, () => window.PLANNER.homeOrg)
+      sent.length = 0
+      await trigger.click()
+      expect(
+        await until(async () => projectsPartProblems(sent, { pageOf: home }).length === 0, 30_000),
+        `the scope menu: ${projectsPartProblems(sent, { pageOf: home }).join('; ')}`,
+      )
+      await app.locator(`[${marks.scopeSearch}]`).fill(run.tag)
+      await app.locator(`[${marks.scopeChoice}="project:${M.id}"]`).waitFor({ timeout: 60_000 })
+      await app.keyboard.press('Escape')
+      return `booted M's Board with no ${PROJECTS_PART} and a byIds read of M, listed Alpha and Zulu under M in the New task picker from projectNav.targets, and offered M in Team sync's scope menu from the home organization's list`
+    } finally {
+      app.off('websocket', record)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+    }
+  })
+}
+
 /** The step that checks the All projects directory
  *  (projectDirectoryCheck). */
 export const PROJECT_DIRECTORY_STEP = 'ui/project-directory'
@@ -9467,10 +9603,6 @@ export const PROJECT_DIRECTORY_MARKS = {
   status: 'data-directory-status',
   state: 'data-project-directory-state',
 }
-
-/** The note the directory gives for a project the workspace has not
- *  delivered yet, which the step waits out. */
-export const NOT_LOADED_YET = 'has not loaded yet'
 
 /** The group of each row the directory shows, by id, read from
  *  `sequence`, the page's group headings (`{ group }`, 'favorites' or
@@ -9599,18 +9731,10 @@ async function projectDirectoryCheck() {
         "M's sub-projects do not list Alpha and Zulu",
       )
       const path = () => new URL(app.url()).pathname
-      let pressed = false
-      const opened = await until(async () => {
-        if (atProject(path(), Z.num)) return true
-        // the directory left for another page, so wait and press nothing more
-        if (!path().endsWith('/projects')) return false
-        const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
-        // a project the workspace has not delivered yet: the directory says
-        // so and moves nothing, so the step presses again
-        if (!pressed || note.includes(NOT_LOADED_YET)) await child(Z).click()
-        pressed = true
-        return atProject(path(), Z.num)
-      }, 60_000)
+      // a row opens its project at once, while the page checks it
+      // (src/components/projectNavRows.tsx useNavOpen), so one press does
+      await child(Z).click()
+      const opened = await until(async () => atProject(path(), Z.num), 60_000)
       expect(opened, `Zulu's page did not open from the directory, which went to ${path()}`)
       // and the page shows Zulu, whose name the header holds
       const scope = app.locator('[data-scope-crumb] h1')
@@ -9728,13 +9852,10 @@ async function sidebarProjectsCheck() {
       )
       // Zulu opened from the tree
       const path = () => new URL(app.url()).pathname
-      const opened = await until(async () => {
-        if (atProject(path(), Z.num)) return true
-        // a project the workspace has not delivered yet: the tree says so
-        // in a toast and moves nothing, so the step presses again
-        await child(Z).locator('button').first().click()
-        return atProject(path(), Z.num)
-      }, 60_000)
+      // a row opens its project at once, while the page checks it
+      // (src/components/projectNavRows.tsx useNavOpen), so one press does
+      await child(Z).locator('button').first().click()
+      const opened = await until(async () => atProject(path(), Z.num), 60_000)
       expect(opened, `Zulu's page did not open from the tree, which went to ${path()}`)
       await tree.locator(`[${m.child}="${Z.id}"][data-on]`).waitFor({ timeout: 30_000 })
       // no scrollbar beside the tree
@@ -11905,6 +12026,9 @@ async function main() {
   await inboxListCheck()
   // the run's projects read by id, while M is active
   await projectByIdsCheck()
+  // the boot, the New task picker and Team sync's scope menu with no
+  // projects part, while M is active
+  await projectsPartCheck()
   // a desktop alert from the deployment's feed and the summary after a
   // dropped socket, while t0 is active
   await inboxFeedCheck()

@@ -5,18 +5,21 @@
    (components/SidebarProjects.tsx), Search's project results
    (panels/Palette.tsx) and the project chooser
    (components/ProjectChooser.tsx). Of the store they read the
-   organizations' names, the home organization, whether the person is an
-   organization admin and whether the workspace holds a project and is
-   current, and they open a project the workspace does not hold through
-   projectNav.resolve (openResolved, useNavOpen), which every navigation
-   the person makes drops (navMoved). */
+   organizations' names, the home organization and whether the person is
+   an organization admin. They open a project at once (useNavOpen),
+   seeding its row's facts into the store's project cache
+   (P.seedProjects), and App shows "Opening <name>…" until the cache
+   answers for it. Startup's check of an address by number reads
+   projectNav.resolve (openResolved), which every navigation the person
+   makes drops (navMoved). */
 
-import { type ReactNode, useCallback, useEffect, useRef } from 'react'
+import { type ReactNode, useCallback } from 'react'
 import type {
   NavChildren,
   NavPage,
   NavProject,
   NavSearch,
+  NavTargetRow,
 } from '../../convex/model/projectNavReads'
 import { noProjectsHint } from '../lib/noProjects'
 import type { BatchAt } from '../lib/pagedList'
@@ -158,92 +161,97 @@ export function noNavProjectsHint(): string {
 }
 
 /** What opening a project through projectNav.resolve came to
-    (openResolved): open, the workspace holding it; not loaded, the
-    server's ok, with the project's name, while the workspace, current,
-    did not hold it, or did not become current within NAV_OPEN_WAIT_MS;
-    unavailable, a project the person cannot open; unchecked, the
-    access_unchecked refusal with its sentence; or failed, a read that
-    failed. */
+    (openResolved): open, with the project the server named; unavailable,
+    a project the person cannot open; unchecked, the access_unchecked
+    refusal with its sentence; or failed, a read that failed. */
 export type NavOpening =
   | { state: 'open'; id: string }
-  | { state: 'not_loaded'; name: string }
   | { state: 'unavailable' }
   | { state: 'unchecked'; message: string }
   | { state: 'failed' }
-
-/** How long an open waits at most, after the server's ok, for a workspace
-    that is not current (P.workspaceCurrent) to hold the project. */
-export const NAV_OPEN_WAIT_MS = 10_000
 
 /** The refusal's sentence where the server gives none. */
 const UNCHECKED_TEXT = 'Qivo could not finish checking whether you can open this project.'
 
 /**
  * Asks the server whether the person may open the project `ask` names
- * (P.resolveProject) and calls `done` once with what that came to. On ok,
- * a project the workspace holds opens at once. Otherwise the decision
- * waits for the store's next repaint, as the delivery that brings the
- * project can arrive with the answer and paint after it: it opens once the
- * workspace holds the project, and ends not loaded once the workspace is
- * current without it (P.workspaceCurrent), or at the latest after
- * NAV_OPEN_WAIT_MS. Only that wait follows the store. Answers a function
- * that stops it, after which `done` is never called.
+ * (P.resolveProject), for an address that names a project by its
+ * organization and number, and calls `done` once with what that came to.
+ * On ok it seeds the project's facts, and its parent's, into the project
+ * cache (P.seedProjects), so the scope it opens names it at once. Answers
+ * a function that stops it, after which `done` is never called.
  */
 export function openResolved(ask: ProjectAsk, done: (opening: NavOpening) => void): () => void {
   let live = true
-  let stopWait = () => {}
-  const finish = (opening: NavOpening) => {
-    if (!live) return
-    live = false
-    stopWait()
-    done(opening)
-  }
   void P.resolveProject(ask).then((answer) => {
     if (!live) return
-    if (answer === null) return finish({ state: 'failed' })
+    live = false
+    if (answer === null) return done({ state: 'failed' })
     if (answer.state !== 'ok')
-      return finish(
+      return done(
         answer.reason === 'access_unchecked'
           ? { state: 'unchecked', message: answer.message ?? UNCHECKED_TEXT }
           : { state: 'unavailable' },
       )
-    const { id, name } = answer.project
-    if (P.heldProject(id)) return finish({ state: 'open', id })
-    const look = () => {
-      if (P.heldProject(id)) finish({ state: 'open', id })
-      else if (P.workspaceCurrent()) finish({ state: 'not_loaded', name })
-    }
-    const off = P.updates.workspace.subscribe(look)
-    // a paint owed at the answer runs on a 0 ms timer at the latest (owe)
-    const repaint = setTimeout(look, 0)
-    const bound = setTimeout(() => finish({ state: 'not_loaded', name }), NAV_OPEN_WAIT_MS)
-    stopWait = () => {
-      off()
-      clearTimeout(repaint)
-      clearTimeout(bound)
-    }
+    seedNavRow(answer.project)
+    done({ state: 'open', id: answer.project.id })
   })
   return () => {
     live = false
-    stopWait()
   }
 }
 
-/** What a list says when opening project `name` came to `opening`, or
-    null where it opened. */
-export function navOpenText(opening: NavOpening, name: string): string | null {
-  switch (opening.state) {
-    case 'open':
-      return null
-    case 'not_loaded':
-      return `${name} has not loaded yet. Try again in a moment.`
-    case 'unavailable':
-      return `You can no longer open ${name}.`
-    case 'unchecked':
-      return opening.message
-    case 'failed':
-      return `Couldn't open ${name}. Try again.`
-  }
+/** A navigation row as the open rule takes it: a projectNav.page or
+    children row (a sub-project's `parent_id`), or a search or resolve row
+    (`parent`, its top-level project). Main Search's project results name
+    no organization number (`num`), and seed nothing. */
+export type NavOpenRow = Omit<NavProject, 'num'> & {
+  num?: number
+  parent_id?: string | null
+  parent?: (Omit<NavProject, 'num' | 'org_id'> & { num?: number; org_id?: string }) | null
+}
+
+/** Seeds `row`'s facts, and its top-level project's where the row names
+    it whole, into the store's project cache (P.seedProjects), so a scope
+    opened from the row names its project and its views ask at once. A row
+    without its number seeds nothing, and App says it opens the project
+    until the cache answers. */
+export function seedNavRow(row: NavOpenRow) {
+  if (row.num === undefined) return
+  const parent = row.parent ?? null
+  P.seedProjects([
+    {
+      id: row.id,
+      org_id: row.org_id,
+      name: row.name,
+      num: row.num,
+      parent_id: parent?.id ?? row.parent_id ?? null,
+    },
+    ...(parent && parent.num !== undefined
+      ? [
+          {
+            id: parent.id,
+            org_id: parent.org_id ?? row.org_id,
+            name: parent.name,
+            num: parent.num,
+            parent_id: null,
+          },
+        ]
+      : []),
+  ])
+}
+
+/** Seeds target row `row`'s facts and its parent's (projectNav.targets,
+    components/TargetPicker.tsx), so a create or a move into it reads its
+    organization and parent at once. */
+export function seedTargetRow(row: NavTargetRow) {
+  seedNavRow({
+    id: row.id,
+    org_id: row.org_id,
+    name: row.name,
+    num: row.num,
+    parent: { id: row.parent_id, org_id: row.org_id, name: row.parent_name, num: row.parent_num },
+  })
 }
 
 /* Who hears the person's navigations (navMoved): each open that waits
@@ -272,61 +280,44 @@ export function onNavMove(heard: () => void): () => void {
 }
 
 /**
- * The open rule of the lists on the navigation reads. `open(row)` opens a
- * project the workspace holds at once with `go(id)`, reading nothing. One
- * it does not hold says "Opening <name>…" through `say` and opens through
- * openResolved: `go(id)` once the workspace holds it, with `say(null)`,
- * which ends the line, else the outcome's sentence (navOpenText). A
- * second press of the row it waits for does nothing, and a press on
- * another row replaces the wait. `cancel()` drops it and says nothing, as
- * a caller does on a page move or a new search, which ends its own line.
- * The caller hiding (React's Activity runs this hook's cleanup) or going
- * drops it too, and so does every navigation the person makes (navMoved):
- * another view, page, project or Team sync scope, Back or Forward, or an
- * open that starts to wait in another list. So nothing opens later in a
- * place the person left, and only one open waits at a time. These, and a
- * press on a held row, also end the "Opening <name>…" line with
- * `say(null)`, so no list says it opens what nothing waits for.
+ * The open rule of the lists on the navigation reads. `open(row)` seeds the
+ * row's facts into the store's project cache (seedNavRow) and opens the
+ * project at once with `go(id)`, as for any row: App sets the scope and
+ * shows "Opening <name>…" until the cache answers for it, the lost note if
+ * it answers the project gone and the failure's sentence with Retry. It
+ * ends any line the caller shows (`say(null)`) and tells every check that
+ * waits that the person moved (navMoved). `cancel()` does nothing now that
+ * no open waits; callers keep it for a page move or a new search.
  */
 export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
-  const wait = useRef<{ id: string; stop: () => void } | null>(null)
   const goNow = useLatest(go)
   const sayNow = useLatest(say)
-  const cancel = useCallback(() => {
-    wait.current?.stop()
-    wait.current = null
-  }, [])
-  // drops a wait with its line
-  const drop = useCallback(() => {
-    if (wait.current) sayNow(null)
-    cancel()
-  }, [cancel, sayNow])
-  useEffect(() => drop, [drop])
-  const open = (row: { id: string; name: string }) => {
-    if (P.heldProject(row.id)) {
-      drop()
-      return goNow(row.id)
-    }
-    if (wait.current?.id === row.id) return
-    cancel()
-    // another list's open that waits, and startup's check, give way
+  const cancel = useCallback(() => {}, [])
+  const open = (row: NavOpenRow) => {
+    seedNavRow(row)
+    noteOpenedName(row.id, row.name)
+    sayNow(null)
     navMoved()
-    sayNow(`Opening ${row.name}…`)
-    const at = { id: row.id, stop: () => {} }
-    const stopOpen = openResolved(row.id, (opening) => {
-      if (wait.current !== at) return
-      cancel()
-      if (opening.state === 'open') {
-        sayNow(null)
-        goNow(opening.id)
-      } else sayNow(navOpenText(opening, row.name))
-    })
-    const off = onNavMove(drop)
-    at.stop = () => {
-      stopOpen()
-      off()
-    }
-    wait.current = at
+    goNow(row.id)
   }
   return { open, cancel }
 }
+
+/* The name each row open showed for its project, by id, newest last and
+   at most OPENED_NAMES of them, for App's "Opening <name>…" where the row
+   gave no number to seed the project cache with, as a Search result. */
+const openedNames = new Map<string, string>()
+const OPENED_NAMES = 100
+
+/** Notes `name` as the name a row showed for project `id`. */
+function noteOpenedName(id: string, name: string) {
+  openedNames.delete(id)
+  openedNames.set(id, name)
+  if (openedNames.size > OPENED_NAMES) {
+    const oldest = openedNames.keys().next().value
+    if (oldest !== undefined) openedNames.delete(oldest)
+  }
+}
+
+/** The name the last row open of project `id` showed, or undefined. */
+export const openedName = (id: string): string | undefined => openedNames.get(id)

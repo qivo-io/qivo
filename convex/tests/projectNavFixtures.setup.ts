@@ -9,6 +9,7 @@
 
 import { ConvexError } from 'convex/values'
 import { expect } from 'vitest'
+import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId, newWindowKey } from '../lib/db'
@@ -25,7 +26,7 @@ import {
   navResolveOf,
   PAGE_LIST,
 } from '../model/projectNavReads'
-import { NOW, type OrgFixture, plantSeat, type T, uuid } from './helpers.setup'
+import { type as, NOW, type OrgFixture, plantSeat, type T, uuid } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { withReach } from './projectReach.setup'
 
@@ -183,6 +184,26 @@ export async function ready(t: T, f: Pick<OrgFixture, 'org' | 'otherOrg'>): Prom
   await keyOrg(t, f.org.id)
   await keyOrg(t, f.otherOrg.id)
   await withReach(t)
+}
+
+/** Every row the navigation reads answer `caller` about the projects
+ * `ids`: their byIds rows, and the first batch of page, of targets and of
+ * children under each of them that is a top-level project, for the cases
+ * that check that no stored field leaves the server. The organization's
+ * reach rows and name keys must be complete (ready). */
+export async function navRowsOf(
+  caller: ReturnType<typeof as>,
+  ids: readonly string[],
+): Promise<object[]> {
+  const rowsOf = (answer: { state: string; rows?: readonly object[] }) =>
+    answer.state === 'ok' && answer.rows ? [...answer.rows] : []
+  const byIds = await caller.query(api.projectNav.byIds, { ids: [...ids] })
+  const listed = await caller.query(api.projectNav.page, {})
+  const writable = await caller.query(api.projectNav.targets, {})
+  const children = await Promise.all(
+    ids.map((project_id) => caller.query(api.projectNav.children, { project_id })),
+  )
+  return [...byIds.rows, ...rowsOf(listed), ...rowsOf(writable), ...children.flatMap(rowsOf)]
 }
 
 /** `p` as a navigation row. */

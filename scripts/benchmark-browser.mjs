@@ -17,13 +17,15 @@
 // checkout's, and prints both medians side by side. Taking turns puts both
 // under the same machine load, which moves single numbers a lot. The App
 // render counts (*AppRenders) do not depend on load at all. A revision from
-// after the workspace parts and before the projects part stopped sending
-// milestones joins the milestones of every projects part, which this
-// checkout's perf server no longer sends, so it cannot load here; measure
-// such a revision with its own checkout's benchmark on the same machine
-// instead. So it is for a revision before the Inbox feed, whose workspace
-// waits for the inbox part (workspace.inbox), which this checkout's perf
-// server no longer answers either.
+// after the workspace parts and before the workspace's projects part went
+// subscribes that part (workspace.projects) and sizes its windows from root
+// fields this checkout's perf server no longer sends, so it cannot load
+// here, and the perf server answers its read of the part with an error that
+// says so; measure such a revision with its own checkout's benchmark on the
+// same machine instead. That holds for the default baseline too, the merge
+// base, until main carries this change. So it is for a revision before the
+// Inbox feed, whose workspace waits for the inbox part (workspace.inbox),
+// which this checkout's perf server no longer answers either.
 //
 // Every sample ends on the Overview and the Roadmap after the Board was
 // open (which stays loaded, hidden): the page's memory, and a remote change
@@ -836,24 +838,27 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     }),
   )
   assert.notEqual(await page.evaluate((id) => window.PLANNER.anyTask(id).start, taskId), initial)
-  // The person's own create into the first sub-project, on a workspace that
-  // holds no task, from its send (P.addIssue) to its confirmation
-  // (P.hasUnconfirmed). The stand-in stores and answers it (issues:create),
-  // and deletes it again, untimed, so the phases after it find the tasks
-  // they found before. A build that creates without an ask (P.createOnItsWay)
-  // still holds no task after it; an older one asks for every task here.
+  // The person's own create into the sub-project of the task the drag
+  // moved, which the person may write and the Roadmap's answer names, so
+  // a build that holds no project list finds it answered in its project
+  // cache, on a workspace that holds no task, from its send (P.addIssue)
+  // to its confirmation (P.hasUnconfirmed). The stand-in stores and
+  // answers it (issues:create), and deletes it again, untimed, so the
+  // phases after it find the tasks they found before. A build that
+  // creates without an ask (P.createOnItsWay) still holds no task after
+  // it; an older one asks for every task here.
   phase('create')
   metrics.create.push(
     await timed(async () => {
-      const made = await page.evaluate(() => {
-        const sub = window.PLANNER.projects.find((p) => p.type === 'project')
+      const made = await page.evaluate((id) => {
+        const sub = window.PLANNER.anyTask(id).project
         return window.PLANNER.addIssue({
-          project: sub.id,
+          project: sub,
           title: 'Check the spare sensors on the north bench before the cold week',
           status: 'todo',
           priority: 'medium',
         })
-      })
+      }, taskId)
       assert.ok(made, 'The create must go out')
       await page.waitForFunction(() => !window.PLANNER.hasUnconfirmed(), null, {
         timeout: timeout * 10,

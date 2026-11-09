@@ -33,7 +33,10 @@ export type EndAction = { hook: string; label: string; busy: boolean; run: () =>
  * `moreHook`. The button stays focusable while it reads. `onMore` replaces
  * the list's own Load more, as a picker that moves focus to the first new
  * row does. `action`, when given, draws Load more and Try again instead,
- * as CommandChoiceEnd draws them as cmdk items.
+ * as CommandChoiceEnd draws them as cmdk items. `choosable` counts the
+ * rows a person may pick, where the list shows one they may not, as the
+ * Move window's own sub-project, so a confirmed end with none of them
+ * left says the list is empty.
  */
 export function ChoiceEnd<A extends HeldPick, Row>({
   end,
@@ -44,6 +47,7 @@ export function ChoiceEnd<A extends HeldPick, Row>({
   moreHook = 'data-picker-more',
   onMore,
   action,
+  choosable = list.rows.length,
 }: {
   end: ListEnd
   tooLong: boolean
@@ -53,6 +57,7 @@ export function ChoiceEnd<A extends HeldPick, Row>({
   moreHook?: string
   onMore?: () => void
   action?: (act: EndAction) => ReactNode
+  choosable?: number
 }) {
   const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
   const more = onMore ?? list.more
@@ -132,7 +137,7 @@ export function ChoiceEnd<A extends HeldPick, Row>({
     case 'none':
       return <p className="px-2 py-1 text-sm text-text-2">{words.none}</p>
     case 'end':
-      return list.rows.length === 0 ? (
+      return choosable === 0 ? (
         <p data-picker-empty="" className="px-2 py-1 text-sm text-text-2">
           {words.empty}
         </p>

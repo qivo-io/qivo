@@ -2,7 +2,10 @@
  * part and adopts the results of one Convex transition together
  * (src/store/liveParts.ts), so it shows one consistent state, and a change
  * re-sends only the parts it changed. Readers and budgets are in
- * lib/workspaceParts.ts.
+ * lib/workspaceParts.ts. No part sends a project, grant or team grant: the
+ * app reads every project it shows from the navigation reads, the store's
+ * project cache (projectNav.byIds) and the views' own reads
+ * (projectNav.ts).
  *
  * - root: the caller's seats and organizations, the caller's own profiles,
  *   their team memberships and the teams those name, and whether the login
@@ -13,8 +16,8 @@
  *   refuses with lib/access.ts accessUnchecked's sentence), the teams they
  *   name, each organization and its counters, so it reruns on seat and
  *   membership changes, a change to one of the caller's teams,
- *   organization settings and every task or project created, archived,
- *   restored or deleted (the numbers and live counts in org_counters). It
+ *   organization settings and every task created, archived, restored or
+ *   deleted (the task number and live task count in org_counters). It
  *   sends no other person's profile, membership or Team sync stamp, and no
  *   team the caller is not in. In the timing of 8 November 2026 at
  *   02fa0e0a on a local backend on Boat (8 vCPU), one call at a time, one
@@ -24,12 +27,8 @@
  *   people. Every root case took 7 to 29 ms of JavaScript quiet and 11 to
  *   66 ms beside eight busy loops (lib/workspaceParts.ts readRoot has the
  *   cases).
- * - projects (per window of its projects' window keys, which the server
- *   picks at random, lib/db.ts newWindowKey): the projects the caller can
- *   see, with grants and team grants. Two ranges per project, beside the
- *   caller's levels on it. It sends no milestone; the app reads them
- *   through milestones.ts.
- * - tasks (per window of its tasks' window keys): the caller's working set,
+ * - tasks (per window of its tasks' window keys, which the server picks at
+ *   random, lib/db.ts newWindowKey): the caller's working set,
  *   with links, labels, attachments and follows, and the anonymized load of
  *   the window's tasks the caller is not shown. Five ranges for the window
  *   and its relation rows, one or two per task for its subtasks, five per
@@ -61,22 +60,21 @@
  * for many such teams all of the organization's teams, so a team edit
  * anywhere in the organization reruns it (lib/access.ts projectLevelsOf,
  * OWN_READS). An edit of one of those reruns the parts that read it. Every
- * one of those reads is bounded. A check its bounds stop answers the
- * projects and tasks parts `overflow` where what ran out is the room for
- * the projects the window asks about (lib/access.ts roomSpent) and the
- * window can still be cut, and else `{state: 'refused', message}` with
- * lib/access.ts accessUnchecked's sentence, as a window too full to cut
- * does. Each windowed part stays inside Convex's limits at any size by
- * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
- * chooses the windows from the organization's counts of the rows they read,
- * without asking (lib/idWindows.ts startWindows).
- * A windowed part refuses (bad_request) a window that is not one of
- * lib/idWindows.ts's grid. */
+ * one of those reads is bounded. A check its bounds stop answers the tasks
+ * part `overflow` where what ran out is the room for the projects the
+ * window asks about (lib/access.ts roomSpent) and the window can still be
+ * cut, and else `{state: 'refused', message}` with lib/access.ts
+ * accessUnchecked's sentence, as a window too full to cut does. The tasks
+ * part stays inside Convex's limits at any size by answering `split` or
+ * `overflow` (lib/workspaceParts.ts), and the app chooses its windows from
+ * the organization's count of active tasks, without asking
+ * (lib/idWindows.ts startWindows). It refuses (bad_request) a window that
+ * is not one of lib/idWindows.ts's grid. */
 
 import { v } from 'convex/values'
 import { authedQuery, badRequest, seatQuery } from './lib/functions'
 import { type IdWindow, isIdWindow } from './lib/idWindows'
-import { readProjects, readRoot, readTasks } from './lib/workspaceParts'
+import { readRoot, readTasks } from './lib/workspaceParts'
 
 const GONE = { state: 'gone' as const }
 
@@ -95,12 +93,6 @@ function gridWindow(w: IdWindow): IdWindow {
 export const root = authedQuery({
   args: {},
   handler: async (ctx) => await readRoot(ctx),
-})
-
-export const projects = seatQuery({
-  args: windowArgs,
-  handler: async (ctx, w) =>
-    ctx.me === null ? GONE : await readProjects(ctx, ctx.me, gridWindow(w)),
 })
 
 export const tasks = seatQuery({

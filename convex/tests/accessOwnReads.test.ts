@@ -23,13 +23,12 @@ import {
 } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
-import { halve, type IdWindow, idWindows, inIdWindow } from '../lib/idWindows'
 import { MAIN_SEARCH, mainSearchPage } from '../lib/mainSearch'
 import { nameKey } from '../lib/nameKey'
 import { inWorkingSet } from '../lib/workingSet'
-import { readProjects } from '../lib/workspaceParts'
 import { postMessage } from '../model/messages'
 import { planReach } from '../model/projectNav'
+import { navByIdsOf } from '../model/projectNavReads'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import {
   as,
@@ -806,20 +805,21 @@ describe("the finding at Convex's real limits", () => {
 
   it("answers every caller's read of the person within the limits", async () => {
     const { f, me, families, other, task } = await finding()
-    // the projects part of each window that holds a meta, among 64, cut
-    // where it asks; every window holds sub-projects shared with 3 teams
-    const shown = new Set<string>()
+    // the reads by id the app opens these projects through, where the
+    // projects part's windows read them: each meta the person reaches
+    // through sub-projects shared with 3 teams, and none of another family,
+    // nothing listed apart
     const metas = [...families.map((family) => family.meta), other.meta]
-    const windows: IdWindow[] = idWindows(64).filter((w) =>
-      metas.some((meta) => inIdWindow(meta.window_key!, w)),
+    const seats = new Map([[me.org_id, me]])
+    const byIds = await t.run((ctx) =>
+      navByIdsOf(
+        ctx,
+        seats,
+        metas.map((m) => m.id),
+      ),
     )
-    while (windows.length > 0) {
-      const w = windows.shift()!
-      const part = await t.run((ctx) => readProjects(ctx, me, w))
-      expect(part.state, JSON.stringify(w)).not.toBe('refused')
-      if (part.state === 'overflow') windows.push(...halve(w)!)
-      else if (part.state === 'ok') for (const p of part.projects) shown.add(p.id)
-    }
+    expect(byIds.unchecked).toEqual([])
+    const shown = new Set(byIds.rows.map((row) => row.id))
     for (const family of families) expect(shown.has(family.meta.id)).toBe(true)
     expect(shown.has(other.meta.id)).toBe(false)
     // the task window, Search scoped to the meta, the inbox
@@ -1008,7 +1008,9 @@ describe('projectLevelsOf past its bounds of own rows', () => {
     })
     expect(got.answers).toEqual(['viewer', null, 'user'])
     console.info(`past roots: ${JSON.stringify(got.reads)}`)
-    expect((await t.run((ctx) => readProjects(ctx, me, { from: '', to: null }))).state).toBe('ok')
+    // the read by id answers the project past the roots whole
+    const seats = new Map([[me.org_id, me]])
+    expect((await t.run((ctx) => navByIdsOf(ctx, seats, [f.sub.id]))).unchecked).toEqual([])
   })
 
   it('shows a parent from reach rows for a person in 3 teams whose teams hold more than OWN_READS.rows shares, which the legacy path refuses', async () => {

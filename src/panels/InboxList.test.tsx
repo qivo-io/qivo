@@ -916,7 +916,7 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
     ).toBe(false)
   })
 
-  it('offers Open task in board for a task the workspace does not hold, by its reference, and not where the store lacks its project', async () => {
+  it('offers Open task in board for a task the workspace does not hold, by its reference, on every row with a project', async () => {
     await openInbox(
       () => {
         project('firmware', 'Firmware', { parent_id: 'atlas' })
@@ -944,8 +944,12 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
     })
     // App reveals the card the Board names it by, its handle
     expect(store.P.handleOfOpen(boardOpens[0].open)).toBe('QN-1')
+    // a row whose project the store has not named is offered too, and the
+    // open rule's own check decides whether it opens (App)
     await rowMenu(key('task-a-0001'))
-    expect(document.querySelector('[data-msg-menu-board]')).toBeNull()
+    await press(document.querySelector('[data-msg-menu-board]'))
+    expect(boardOpens).toHaveLength(2)
+    expect(boardOpens[1].project).toBe('elsewhere')
   })
 })
 

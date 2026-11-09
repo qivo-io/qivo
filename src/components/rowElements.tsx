@@ -241,7 +241,8 @@ export function priorityIcon(statics: StaticControls | null, priority: string, s
   )
 }
 
-type ProjectRef = { id: string; name: string }
+/** A project as a name shows it: its id, for its number tag, and name. */
+export type ProjectRef = { id: string; name: string }
 
 /** ProjectName: a project's name, with its number when another project
     shown has the same name. Plain text when no name needs its number. */

@@ -192,6 +192,18 @@ export function parseSyncScope(pref: string | null | undefined): SyncPlaceScope 
   return m[1] === 'team' ? { kind: 'team', id: m[2] } : { kind: 'project', id: m[2] }
 }
 
+/** The project number an `unresolved:` segment names, which Team sync asks
+    projectNav.resolve about: `<n>`, read in the home organization, or
+    `<n>@<org_id>`, read in the organization an address pinned other than
+    the home one (src/lib/router.ts); null for any other segment, a scope
+    the page cannot honour. */
+export function syncProjectNumber(segment: string): { num: number; org_id: string | null } | null {
+  const m = /^(\d+)(?:@([0-9a-z-]+))?$/.exec(segment)
+  if (!m) return null
+  const num = Number(m[1])
+  return Number.isSafeInteger(num) && num >= 1 ? { num, org_id: m[2] ?? null } : null
+}
+
 /** The key of `scope` (parseSyncScope's form), `''` for none. */
 export function syncScopeKey(scope: SyncPlaceScope): string {
   if (scope.kind === 'none') return ''

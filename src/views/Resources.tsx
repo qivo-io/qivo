@@ -106,6 +106,10 @@ type Props = {
   gutter?: number
   height: number | string
   info: ScopeInfo
+  /** the scope's sub-projects as the Roadmap's answer names them
+      (useRoadmapView selection), for "This project"; null in My view and
+      before an answer */
+  selection?: readonly string[] | null
   panelRef: Ref<HTMLElement>
   bodyRef: Ref<HTMLDivElement>
   /** the bars being dragged, by task uuid */
@@ -129,6 +133,7 @@ function ResourceStrip({
   gutter = 0,
   height,
   info,
+  selection = null,
   panelRef,
   bodyRef,
   livePositions,
@@ -160,7 +165,7 @@ function ResourceStrip({
   }, [selectedUser, onActiveWeek])
   // Filters clear transient hover/focus but retain a clicked week while its
   // person remains visible. Changing the grid itself releases the week lock.
-  const lockContext = JSON.stringify([info.id, info.wide, P.gridEpoch, mode, viewMode, w0, w1])
+  const lockContext = JSON.stringify([info.id, info.mine, P.gridEpoch, mode, viewMode, w0, w1])
   const highlightContext = JSON.stringify([filterKey, lockContext, people.map((p) => p.id)])
   const activeContext = useRef(highlightContext)
   useEffect(() => {
@@ -178,7 +183,7 @@ function ResourceStrip({
     onActiveWeek?.(lockedCell.current?.week ?? null)
     return () => onActiveWeek?.(null)
   }, [onActiveWeek])
-  const scopeOnly = viewMode === 'scope' && !info.wide
+  const scopeOnly = viewMode === 'scope' && !info.mine
   const capById = new Map(people.map((p) => [p.id, capacityOf(p.person)]))
 
   /* Each person's figures, once for each answer of the owner-load cache,
@@ -190,7 +195,7 @@ function ResourceStrip({
   const peopleKey = people.map((p) => `${p.org}:${p.id}`).join()
   const base = useMemo(() => {
     const range = { from: w0, to: w1 }
-    const scopeSet = new Set([info.id, ...info.subIds])
+    const scopeSet = new Set([info.id, ...(selection ?? [])])
     const inScope = scopeOnly ? (pid: string) => scopeSet.has(pid) : undefined
     const out = new Map<string, Figures>()
     for (const { id, org } of people) {
@@ -208,7 +213,7 @@ function ResourceStrip({
     return { out, range, inScope }
     // the views' news and the people's signature cover what the figures read
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [views, peopleKey, w0, w1, scopeOnly, info.id, info.subIds.join(), P.gridEpoch])
+  }, [views, peopleKey, w0, w1, scopeOnly, info.id, (selection ?? []).join(), P.gridEpoch])
   /** Person `id`'s figures, a drag applied as the change of its task alone:
       only a person who owns a dragged task spreads again. */
   const figures = (id: string): Figures | undefined => {
@@ -254,7 +259,7 @@ function ResourceStrip({
           <h3>Team utilization</h3>
         </div>
         <div className="rs-actions">
-          {!info.wide && (
+          {!info.mine && (
             <div data-strip-scope={viewMode}>
               <Seg
                 value={viewMode}

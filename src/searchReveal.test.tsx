@@ -10,6 +10,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
+import { queryProjectNav } from './store/projectNavStandIn.setup'
 
 /* A task picked in Search while the Board shows, and a task an Inbox row
    or the Inbox pane's Task actions open with Open task in board, on App
@@ -142,28 +143,31 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
       else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
       return () => {}
     })
-    // Search finds the task on the server
-    network.query.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'search:page'
-        ? {
-            rows: [
-              {
-                kind: 'task',
-                org_id: snap.orgs[0].id,
-                id: SOAK,
-                num: 2,
-                title: 'Run the soak test',
-                status: 'progress',
-                is_group: false,
-                archived: false,
-                project: { id: project.id, name: project.name },
-                parent: null,
-              },
-            ],
-            next_cursor: null,
-            coverage: { complete: true },
-          }
-        : null,
+    // Search finds the task on the server, and the Board's address by
+    // number resolves through projectNav.resolve
+    network.query.mockImplementation(async (ref, args) =>
+      getFunctionName(ref) === 'projectNav:resolve'
+        ? queryProjectNav(snap, 'projectNav:resolve', args)
+        : getFunctionName(ref) === 'search:page'
+          ? {
+              rows: [
+                {
+                  kind: 'task',
+                  org_id: snap.orgs[0].id,
+                  id: SOAK,
+                  num: 2,
+                  title: 'Run the soak test',
+                  status: 'progress',
+                  is_group: false,
+                  archived: false,
+                  project: { id: project.id, name: project.name },
+                  parent: null,
+                },
+              ],
+              next_cursor: null,
+              coverage: { complete: true },
+            }
+          : null,
     )
     network.mutation.mockResolvedValue(null)
     const { TASKS } = await import('./store/liveParts')
@@ -427,16 +431,28 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
   snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
   snap.myProfileIds.push('me-guest')
   // my guest seat leads Guest work, so it edits that organization's task;
-  // like the home seat it is an organization admin, which gives no level
+  // like the home seat it is an organization admin, which gives no level.
+  // It sits under a top-level project of its own organization, as every
+  // writer stores one that holds tasks
+  const guestProgram = {
+    ...snap.projects[0],
+    id: 'guest-program',
+    org_id: GUEST,
+    type: 'meta' as const,
+    key: 'GPRG',
+    name: 'Guest program',
+    parent_id: undefined,
+    lead_id: 'me-guest',
+  }
   const guestProject = {
     ...snap.projects[0],
     id: 'guest-work',
     org_id: GUEST,
     name: 'Guest work',
-    parent_id: undefined,
+    parent_id: guestProgram.id,
     lead_id: 'me-guest',
   }
-  snap.projects.push(guestProject)
+  snap.projects.push(guestProgram, guestProject)
   const task = (org: string, project: string, num: number, title: string) => ({
     id: SOAK,
     org_id: org,

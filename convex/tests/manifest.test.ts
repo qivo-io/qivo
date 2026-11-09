@@ -717,7 +717,7 @@ projectNav:page query public {"type":"object","value":{"org_id":{"fieldType":{"t
 projectNav:resolve query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
 projectNav:search query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:setFavorite mutation public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"favorite":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-projectNav:targets query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
+projectNav:targets query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"parent_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectSettings:archived query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:archivedSubProjects query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -828,7 +828,6 @@ webhooks:remove mutation internal {"type":"object","value":{"owner":{"fieldType"
 webhooks:removeOrganization mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}}
 webhooks:save mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task.created"},{"type":"literal","value":"task.updated"},{"type":"literal","value":"task.deleted"},{"type":"literal","value":"task.restored"},{"type":"literal","value":"comment.created"}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":true},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"encrypted_secret":{"fieldType":{"type":"string"},"optional":false},"secret_hash":{"fieldType":{"type":"string"},"optional":true},"legacy_secret_hash":{"fieldType":{"type":"string"},"optional":true},"expires_at":{"fieldType":{"type":"number"},"optional":true}}}
 webhooks:sweep mutation internal {"type":"object","value":{}}
-workspace:projects query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:root query public {"type":"object","value":{}}
 workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 `
@@ -1372,18 +1371,17 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     deleteMcpToken: 'authedMutation',
   },
   // The workspace in live parts. The root reads every seat of the login,
-  // with the caller's own profiles, memberships and teams; each other part
+  // with the caller's own profiles, memberships and teams; the tasks part
   // takes one organization and answers gone, without throwing, where the
-  // caller holds no seat.
+  // caller holds no seat. No part sends a project or a message.
   workspace: {
     root: 'authedQuery',
-    projects: 'seatQuery',
     tasks: 'seatQuery',
   },
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 253
+const PUBLIC_COUNT = 252
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

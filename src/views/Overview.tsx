@@ -33,6 +33,7 @@ import {
 } from 'react'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
+import { usePagedList } from '@/lib/pagedList'
 import { SCROLL_ANCHORING } from '@/lib/scrollAnchoring'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
@@ -49,9 +50,12 @@ import type {
   OverviewView,
 } from '@/store/overviewLists'
 import type { StoreVersion } from '@/store/updates'
+import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
 import type { Figure, Missing, OverviewRow } from '../../convex/lib/overview'
+import type { NavChildRow, NavChildren } from '../../convex/model/projectNavReads'
 import { NoProjects } from '../components/NoProjects'
+import { navCursors } from '../components/projectNavRows'
 import {
   Avatar,
   EmptyState,
@@ -61,6 +65,7 @@ import {
   ProjectName,
   StatusDot,
 } from '../components/qivo'
+import { useHolds } from '../components/useHolds'
 import { personLabel, useOrgPeople, usePeople } from '../components/usePeople'
 import { ViewNote } from '../components/ViewNote'
 import { OVERVIEW_BATCH } from '../store/overviewLists'
@@ -231,7 +236,9 @@ function OvLeadStat({ info }: { info: ScopeInfo }) {
   if (!u || u.state === 'gone') return null
   // Inheritance changes who is accountable, so keep it explicit. The owning
   // team remains in project settings; repeating it here dilutes the identity.
-  const meta = info.metas[0]
+  // P.leadOf names no lead from a seed's facts, so the cell shows only once
+  // the project cache's rows say who leads.
+  const meta = info.meta
   const inherited = !proj.lead && !!meta && meta.id !== proj.id
   return (
     <div data-ov-lead={u.id} className="flex min-w-0 items-center gap-3">
@@ -1172,7 +1179,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // scope, the one that narrows to my own tasks. The Overview renders
   // no filter row, so it takes no `filters`: the scope's own `only` predicate
   // is the whole narrowing, and nothing invisible can be left switched on.
-  const wide = info.wide
+  const wide = info.mine
   const mine = info.mine
   // "grouped" scopes get the health table, a lone sub-project gets the
   // status distribution: one project's sub-projects, or My view's projects
@@ -1218,9 +1225,28 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // a kept answer still decides it while it refreshes, so the note stays
   // through a return or a reconnect
   const noTasks = given(anyTask)?.value === false
+  const holds = useHolds(mine && (state === 'ok' || state === 'refreshing') && noTasks)
+  // the sub-projects a top-level project's Overview past its limits offers,
+  // whose summary names none: the first batch of the person's sub-projects
+  // of it (projectNav.children), read only while that note shows; past the
+  // batch the sidebar lists the rest
+  const overBudgetChoices = usePagedList<NavChildren, NavChildRow>({
+    key: state === 'over_budget' && info.isMeta ? JSON.stringify(['ov-children', info.id]) : null,
+    source: {
+      kind: 'live',
+      query: api.projectNav.children,
+      args: (at) => ({ project_id: info.id, ...navCursors(at) }),
+    },
+    batch: (a) => (a.state === 'ok' ? a : null),
+    id: (row) => row.id,
+    most: 25,
+  })
   if (mine) {
-    // My view's projects are the ones the app holds (coordinator, 1 November 2026)
-    if (info.metas.length === 0)
+    // whether the person sees any project or sub-project at all is the
+    // server's word (useHolds), read only while My view holds none of the
+    // person's tasks; until it confirms one, the page says what its own
+    // answer says, which is true whatever the projects
+    if (holds === 'none')
       emptyNote = (
         <NoProjects
           icon="chart"
@@ -1228,7 +1254,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           onNewProject={() => actions.newProject({ kind: 'program' })}
         />
       )
-    else if (info.subIds.length === 0)
+    else if (holds === 'no_sub')
       emptyNote = (
         <EmptyState
           icon="chart"
@@ -1257,7 +1283,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           icon="chart"
           title="No tasks yet"
           actionLabel={P.canWrite(info.id) ? 'New task' : undefined}
-          onAction={() => actions.newIssue({ project: ok.sub_projects?.[0] ?? info.subIds[0] })}
+          onAction={() => actions.newIssue({ project: ok.sub_projects?.[0] ?? info.id })}
         />
       )
   }
@@ -1289,12 +1315,14 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         title="This view could not be loaded within the Overview's limits."
         hint={
           info.isMeta
-            ? 'Choose a sub-project to see its figures.'
+            ? overBudgetChoices.next || overBudgetChoices.stopped
+              ? 'Choose a sub-project to see its figures. The sidebar lists the rest.'
+              : 'Choose a sub-project to see its figures.'
             : mine
               ? 'Open a project or sub-project.'
               : 'Open its Board, or find its tasks with Search.'
         }
-        projects={info.isMeta ? info.groups.map((g) => g.proj) : undefined}
+        projects={info.isMeta ? overBudgetChoices.rows : undefined}
         onProject={open}
         action={
           sub && actions.openPalette

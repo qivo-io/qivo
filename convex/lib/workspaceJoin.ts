@@ -7,17 +7,19 @@
  * joinParts takes the root part and every part of every seat's
  * organization, as one Convex transition left them, and lists each section
  * per organization in seat order and, within one, window by window, so the
- * rows keep the order the windows give them: tasks by window key, projects
- * by creation within each window, and hidden load rows in their own order
- * (lib/workspaceParts.ts byLoad). The profiles, team memberships and teams
- * are the caller's own, which the root part sends; no part sends anyone
- * else's, nor a label, so the workspace holds none (the app reads them by
- * id or a batch at a time). */
+ * rows keep the order the windows give them: tasks by window key and
+ * hidden load rows in their own order (lib/workspaceParts.ts byLoad). The
+ * profiles, team memberships and teams are the caller's own, which the
+ * root part sends; no part sends anyone else's, nor a label, nor a
+ * project, grant or team grant, so the workspace holds none: the app reads
+ * people and labels by id or a batch at a time, and every project it shows
+ * through the navigation reads, projectNav.byIds and the views' own
+ * answers (convex/projectNav.ts). */
 
 import { joinLists } from './arrayLimit.ts'
 import { shownAvatarColor } from './avatarColors.ts'
 import { type IdWindow, idWindows, inIdWindow, piecesAfter, startWindows } from './idWindows.ts'
-import type { readProjects, readRoot, readTasks } from './workspaceParts.ts'
+import type { readRoot, readTasks } from './workspaceParts.ts'
 
 /* What a reader behind a part answers (lib/workspaceParts.ts), the types
  * taken from the readers rather than from `api`, which lists this module. */
@@ -39,13 +41,11 @@ export type RootSeats = Exclude<RootAnswer, null | Seatless>
 /** The organizations of the root part's answer, none without a seat. */
 export const rootOrgs = (root: RootAnswer): RootSeats['orgs'] =>
   root === null || 'deleting' in root ? [] : root.orgs
-export type ProjectsPart = Ok<typeof readProjects>
 export type TasksPart = Ok<typeof readTasks>
 
 /** The parts of one organization, its windows in order, chunked lists
  * (lib/arrayLimit.ts) joined. */
 export type OrgParts = {
-  projects: readonly ProjectsPart[]
   tasks: readonly TasksPart[]
 }
 
@@ -70,12 +70,9 @@ export function partRows<A extends { state: 'ok'; more?: Record<string, unknown[
  *
  * The profiles, memberships and teams are the root part's, the caller's
  * own. A membership goes out only for one of those profiles and one of
- * those teams of the profile's organization, and a grant of the projects
- * part only for one of those profiles: the projects part still sends every
- * grant on the projects it holds, and a removed seat's memberships and
- * grants can outlive its profile for a moment (model/cascade.ts
- * removeProfile), so the store's levels read the caller's own rows and
- * nobody else's. */
+ * those teams of the profile's organization, as a removed seat's
+ * memberships can outlive its profile for a moment (model/cascade.ts
+ * removeProfile). */
 export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredAt: string) {
   const profiles = [...root.profiles]
   const teams = [...root.teams]
@@ -85,9 +82,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     const org = orgOfProfile.get(m.profile_id)
     return org !== undefined && orgOfTeam.get(m.team_id) === org
   })
-  const projects: ProjectsPart['projects'] = []
-  const access: ProjectsPart['access'] = []
-  const teamAccess: ProjectsPart['teamAccess'] = []
   const issues: TasksPart['issues'] = []
   const links: TasksPart['links'] = []
   const issueLabels: TasksPart['issueLabels'] = []
@@ -95,11 +89,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
   const issueSubs: TasksPart['issueSubs'] = []
   const orgLoad: TasksPart['orgLoad'] = []
   for (const org of orgs) {
-    for (const part of org.projects) {
-      projects.push(...part.projects)
-      for (const g of part.access) if (orgOfProfile.has(g.profile_id)) access.push(g)
-      teamAccess.push(...part.teamAccess)
-    }
     for (const part of org.tasks) {
       issues.push(...part.issues)
       links.push(...part.links)
@@ -116,9 +105,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     teams,
     teamMembers,
     profiles,
-    projects,
-    access,
-    teamAccess,
     issues,
     links,
     issueLabels,
@@ -187,42 +173,29 @@ export function rootOf(whole: ServerRows): RootSeats {
 
 /** The parts a server holding `workspace` would answer, for stand-ins of
  * the server (tests, the browser benchmark): `windows` gives each
- * organization's windows per kind (lib/idWindows.ts). The app never sees a
- * row's window key, so a stand-in places tasks and projects by id, which
- * the app cannot tell apart from keys the server picked. Inverse of
+ * organization's task windows (lib/idWindows.ts). The app never sees a
+ * row's window key, so a stand-in places tasks by id, which the app cannot
+ * tell apart from keys the server picked. Inverse of
  * joinParts, with rootOf, for a workspace whose sections hold no row of an
  * organization it does not list. A hidden load row names no task, so every
  * one goes to the first task window. */
 export function splitWorkspace(
   workspace: Omit<Workspace, 'create'>,
-  windows: (orgId: string, kind: 'tasks' | 'projects') => readonly IdWindow[],
+  windows: (orgId: string) => readonly IdWindow[],
 ) {
-  /** `rows` of `orgId` cut into its windows of `kind`. */
-  const cut = <R extends { id: string }>(
-    orgId: string,
-    kind: 'tasks' | 'projects',
-    rows: readonly R[],
-  ) => windows(orgId, kind).map((w) => rows.filter((row) => inIdWindow(row.id, w)))
+  /** `rows` of `orgId` cut into its task windows. */
+  const cut = <R extends { id: string }>(orgId: string, rows: readonly R[]) =>
+    windows(orgId).map((w) => rows.filter((row) => inIdWindow(row.id, w)))
   const orgOfProfile = new Map(workspace.profiles.map((p) => [p.id, p.org_id]))
   return workspace.orgs.map((org) => {
     const id = org.id
     const mine = <R>(rows: readonly R[], orgOf: (row: R) => string | undefined) =>
       rows.filter((row) => orgOf(row) === id)
-    const projects = mine(workspace.projects, (p) => p.org_id)
     const issues = mine(workspace.issues, (t) => t.org_id)
-    const projectWindows = cut(id, 'projects', projects)
-    const taskWindows = cut(id, 'tasks', issues)
+    const taskWindows = cut(id, issues)
     const owners = mine(workspace.orgLoad, (r) => orgOfProfile.get(r.owner_id))
     return {
       org_id: id,
-      projects: projectWindows.map((ps) => {
-        const ids = new Set(ps.map((p) => p.id))
-        return {
-          projects: ps,
-          access: workspace.access.filter((g) => ids.has(g.project_id)),
-          teamAccess: workspace.teamAccess.filter((g) => ids.has(g.project_id)),
-        }
-      }),
       tasks: taskWindows.map((ts, i) => {
         const ids = new Set(ts.map((t) => t.id))
         return {
@@ -241,11 +214,8 @@ export function splitWorkspace(
 /** Runs one-shot query `name` with `args`, as a client does. */
 export type QueryByName = (name: string, args: Record<string, unknown>) => Promise<unknown>
 
-/* The windowed parts by kind. */
-const WINDOWED_NAMES = {
-  tasks: 'workspace:tasks',
-  projects: 'workspace:projects',
-} as const
+/* The windowed part. */
+const TASKS_PART = 'workspace:tasks'
 
 /* A part's answer before its rows are taken. */
 type Answered = { state: string; split?: boolean; pieces?: number; message?: string }
@@ -261,46 +231,39 @@ function rowsOrThrow(name: string, answer: unknown) {
 /**
  * The workspace of the caller of `query` read once, as the app holds it once
  * every part answered: the root, with the caller's own profiles,
- * memberships and teams, and each organization's projects and tasks,
- * each window cut where it answers overflow or split, as the app cuts them
+ * memberships and teams, and each organization's tasks, each task window
+ * cut where it answers overflow or split, as the app cuts them
  * (lib/idWindows.ts piecesAfter), joined by joinParts with the local time
  * as delivery time. Null without a seat. It holds no other person and no
- * label: a test or script that needs them reads people.settingsPage,
- * pickers.mentions, teams.picker or labels.picker. For tests and scripts that read the workspace
+ * label and no project: a test or script that needs them reads
+ * people.settingsPage, pickers.mentions, teams.picker, labels.picker or the
+ * navigation reads (projectNav.page, children and byIds), and the tests
+ * take their reference projects from convex/tests/projectsOracle.setup.ts.
+ * For tests and scripts that read the workspace
  * once rather than subscribing; its parts are read at different moments, so
  * a write meanwhile can show in some and not others.
  */
 export async function readWorkspace(query: QueryByName): Promise<Workspace | null> {
   const root = (await query('workspace:root', {})) as RootAnswer
   if (root === null || 'deleting' in root) return null
-  /** The answers of window `w` of `kind`, cut wherever one overflows or
+  /** The answers of task window `w`, cut wherever one overflows or
    * splits. */
-  const windowRows = async (
-    kind: keyof typeof WINDOWED_NAMES,
-    org_id: string,
-    w: IdWindow,
-  ): Promise<unknown[]> => {
-    const name = WINDOWED_NAMES[kind]
-    const answer = (await query(name, { org_id, from: w.from, to: w.to })) as Answered
+  const windowRows = async (org_id: string, w: IdWindow): Promise<unknown[]> => {
+    const answer = (await query(TASKS_PART, { org_id, from: w.from, to: w.to })) as Answered
     const pieces = piecesAfter(w, answer)
-    if (pieces === null) return [rowsOrThrow(name, answer)]
+    if (pieces === null) return [rowsOrThrow(TASKS_PART, answer)]
     const rows: unknown[] = []
-    for (const piece of pieces) rows.push(...(await windowRows(kind, org_id, piece)))
+    for (const piece of pieces) rows.push(...(await windowRows(org_id, piece)))
     return rows
   }
   const orgs: OrgParts[] = []
   for (const row of root.orgs) {
     const { id } = row
     // as the app chooses them (src/store/liveParts.ts)
-    const counts = startWindows(row)
-    const windows = async <P>(kind: keyof typeof WINDOWED_NAMES): Promise<P[]> => {
-      const rows: unknown[] = []
-      for (const w of idWindows(counts[kind])) rows.push(...(await windowRows(kind, id, w)))
-      return rows as P[]
-    }
+    const tasks: unknown[] = []
+    for (const w of idWindows(startWindows(row).tasks)) tasks.push(...(await windowRows(id, w)))
     orgs.push({
-      projects: await windows<ProjectsPart>('projects'),
-      tasks: await windows<TasksPart>('tasks'),
+      tasks: tasks as TasksPart[],
     })
   }
   return joinParts(root, orgs, new Date().toISOString())

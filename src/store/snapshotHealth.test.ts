@@ -6,7 +6,7 @@ import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
 import type { Seatless } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { shownOf } from './personShown.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
    delivery (plan item 8). The network double captures each snapshot
@@ -47,6 +47,9 @@ const DEACTIVATED: Seatless = { deleting: false, create: 'blocked' }
 describe('snapshot trouble', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
+  /* The organization Settings › Archived projects names for its restore,
+     which a project write needs (P.unarchiveProject). */
+  const archivedShown = () => ({ orgId: snapshot.projects[0].org_id })
   let subscriptions: Subscription[]
   let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
@@ -83,6 +86,8 @@ describe('snapshot trouble', () => {
   async function boot() {
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
   }
 
   beforeEach(async () => {
@@ -94,7 +99,9 @@ describe('snapshot trouble', () => {
     vi.stubGlobal('window', { showToast, setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     const [org] = snapshot.orgs
     const [me] = snapshot.profiles
     snapshot.issues.push({
@@ -218,8 +225,10 @@ describe('snapshot trouble', () => {
     P.addLabel({ name: 'Bench' })
     P.setOrg({ name: 'Renamed Labs' })
     P.addTeam('Field crew')
-    P.updateProject(project, { name: 'Renamed project' })
-    P.removeProject(project)
+    // the project's page names its organization, so these reach the pause
+    const shown = { orgId: snapshot.orgs[0].id }
+    P.updateProject(project, { name: 'Renamed project' }, {}, shown)
+    P.removeProject(project, undefined, shown)
     P.createParent(task.id, 'Sensor work')
     await settle()
     // nothing was painted, so no rollback took the saved read mark away
@@ -229,6 +238,14 @@ describe('snapshot trouble', () => {
     expect(P.org.name).toBe('Testbed Labs')
     expect(P.teams).toHaveLength(teams)
     expect(P.project(project)?.name).toBe('Task creation fixture')
+    // the project writes reached the pause rather than refusing for want of
+    // the page's organization, and a paused delete is no failed one
+    const projectErrors = vi
+      .mocked(console.error)
+      .mock.calls.filter(([text]) =>
+        /a project change needs|project delete failed/.test(String(text)),
+      )
+    expect(projectErrors).toEqual([])
     // one action can reach several mutators, so the pause toasts once
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
   })
@@ -702,7 +719,7 @@ describe('snapshot trouble', () => {
     const { P } = store
     const [task] = P.issues
     P.updateIssue(task.id, { status: 'progress' })
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     for (const request of sent)
       request.reject(
@@ -728,7 +745,7 @@ describe('snapshot trouble', () => {
       await boot()
       const { P } = store
       const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
-      const restore = P.unarchiveProject(snapshot.projects[0].id)
+      const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
       const acted = kind === 'restore' ? P.restoreDeletedItems(items) : P.purgeDeletedItems(items)
       await settle()
       expect(sentNames()).toEqual(['projects:unarchive', `deletedItems:${kind}`])
@@ -745,7 +762,7 @@ describe('snapshot trouble', () => {
       // organization's parts loaded again
       live().deliver(structuredClone(snapshot))
       await settle()
-      const again = P.unarchiveProject(snapshot.projects[0].id)
+      const again = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
       await settle()
       sent[sent.length - 1].reject(
         new ConvexError({ code: 'forbidden', message: 'no permission on this project' }),
@@ -759,7 +776,7 @@ describe('snapshot trouble', () => {
     await boot()
     const { P } = store
     const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     const restored = P.restoreDeletedItems(items)
     P.addProject({ type: 'meta', key: 'NEW', name: 'New' })
     await settle()
@@ -784,7 +801,7 @@ describe('snapshot trouble', () => {
     snapshot.myProfileIds.push(seat.id)
     await boot()
     const { P } = store
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     sent[0].reject(
       new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
@@ -792,7 +809,7 @@ describe('snapshot trouble', () => {
     expect(await restore).toBe(false)
     expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
     // the same when the delivery that drops the seat arrives first
-    const again = P.unarchiveProject(snapshot.projects[0].id)
+    const again = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     const left = structuredClone(snapshot)
     left.myProfileIds = [seat.id]

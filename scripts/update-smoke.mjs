@@ -206,11 +206,19 @@ async function assertPhoneDialogBounds(width) {
 }
 
 async function verifyLazyLoading() {
-  // Luma Sensor's Board, as no view shows a scope over all projects
-  const num = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
-  assert.ok(num != null, 'Northstar holds no Luma Sensor')
+  // Luma Sensor's Board, as no view shows a scope over all projects. The
+  // page runs the production build, so the dev server's modules
+  // (browser-demo.mjs navProject) would read with a client of their own,
+  // signed out; Luma Sensor's row in the All projects directory the
+  // sign-in opens gives its number, as its open moves the address there
+  const row = page
+    .locator('[data-directory-row]')
+    .filter({ has: page.getByText('Luma Sensor', { exact: true }) })
+    .first()
+  await row.locator('[data-directory-open]').click()
+  await page.waitForURL(/\/p\/\d+$/)
+  const num = Number(new URL(page.url()).pathname.match(/\/p\/(\d+)$/)?.[1])
+  assert.ok(Number.isInteger(num), 'Northstar holds no Luma Sensor')
   const boardURL = `${demo.base}/app/${demo.orgSlug}/board/p/${num}`
   // the sign-in document, the directory, downloaded every view already;
   // routing turns Playwright's cache off, so the cold Board requests its

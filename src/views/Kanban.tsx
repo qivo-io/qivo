@@ -19,6 +19,7 @@ import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { NoProjects } from '../components/NoProjects'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
+import { useHolds } from '../components/useHolds'
 import { personLabel, sortName, usePeople } from '../components/usePeople'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
@@ -28,12 +29,13 @@ import {
   type IssueVM,
   type NamedPerson,
   P,
+  type ProjectFacts,
   type ProjectPlace,
-  type ProjectVM,
   type ScopeInfo,
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
+import type { ScopeGroup } from '../store/scopeGroups'
 import { BoardFrame, BoardNote, IncompleteNote } from './board/BoardNote'
 import { createEstimateCache } from './board/cardEstimate'
 import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
@@ -412,12 +414,16 @@ function useLaneWheelSnap(enabled: boolean) {
    same clipping keeps a departing heading below the status-header band. */
 function LaneHeader({
   proj,
+  loading = false,
   owner,
   stick,
   onOpen,
   onAdd,
 }: {
-  proj?: ProjectVM | null
+  proj?: ProjectFacts | null
+  /** a group whose project the project cache has not answered: its
+      heading says it is loading, never a wrong name */
+  loading?: boolean
   /** a person lane's owner (null = Unassigned) */
   owner?: string | null
   stick: number
@@ -430,7 +436,9 @@ function LaneHeader({
   // user" before the server's answer says so
   const leadId = proj ? P.leadOf(proj.id) : owner
   const lead = leadId ? P.person(leadId, proj?.org) : null
-  const name = proj?.name || personLabel(lead, owner ? 'Unknown user' : 'Unassigned')
+  const name = loading
+    ? 'Loading…'
+    : proj?.name || personLabel(lead, owner ? 'Unknown user' : 'Unassigned')
   return (
     <div
       data-lane={proj?.id || `assignee:${owner || 'unassigned'}`}
@@ -502,7 +510,7 @@ function LaneHeader({
       <div className="[flex:1]" />
       {/* The lane lead's full name stays available through the portrait's
           tooltip and accessible label. */}
-      {((lead && lead.state !== 'gone') || !proj) && <Avatar id={leadId} size={28} />}
+      {!loading && ((lead && lead.state !== 'gone') || !proj) && <Avatar id={leadId} size={28} />}
     </div>
   )
 }
@@ -685,14 +693,17 @@ function KanbanBoard({
 
   // `wide` = the scope that names no project, My view; `mine` is the same
   // scope, the one that narrows to my own tasks
-  const wide = info.wide
+  const wide = info.mine
   const mine = info.mine
   // Scopes that hold project groups worth labelling: one project's sub-projects, or,
   // in My view, the projects themselves. A lone sub-project is its own project
   // group, which pools unless assignee grouping is selected.
   const grouped = wide || info.isMeta
   const byAssignee = tweaks.metaViz === 'assignees'
-  const subIds = info.subIds
+  // the groups and their sub-projects from the answer on screen
+  // (useBoardView, store/scopeGroups.ts)
+  const groups = view.groups
+  const subIds = groups.flatMap((g) => g.subIds)
   const bindSnap = useLaneWheelSnap(
     (byAssignee || (grouped && tweaks.metaViz === 'swimlanes')) && !dragId,
   )
@@ -752,11 +763,10 @@ function KanbanBoard({
        moment Focus emptied them, with no note (it isn't clearable) and, in
        the Boards layout, nothing left to draw. The answer's held_projects
        says it (useBoardView), with the groups of the cards on screen, and
-       before an answer the loading frame holds every group of a project's
-       selection, which no clearable filter drops (`dropsEmpty`). */
+       before an answer the loading frame holds no group (`dropsEmpty`). */
   const clearable = view.clearable
   const dropsEmpty = clearable && !view.frame
-  const holdsScoped = (g: { proj: ProjectVM; subIds: string[] }) => view.holds(g.proj.id, g.subIds)
+  const holdsScoped = (g: ScopeGroup) => view.holds(g.id, g.subIds)
   const byPrio = (a, b) => P.PRIORITIES[a.priority].rank - P.PRIORITIES[b.priority].rank
 
   const counts = {}
@@ -795,12 +805,12 @@ function KanbanBoard({
   })
   // side-boards: each group its own mini board
   const boards = sideBoards
-    ? info.groups.flatMap((g) => {
+    ? groups.flatMap((g) => {
         const gset = new Set(g.subIds)
         const list = visible.filter((i) => gset.has(i.project))
         if (!holdsScoped(g) || (dropsEmpty && list.length === 0)) return []
         const cells = statuses.map((s) =>
-          cellOf(`${g.proj.id}:${s.id}`, list.filter((i) => i.status === s.id).sort(byPrio)),
+          cellOf(`${g.id}:${s.id}`, list.filter((i) => i.status === s.id).sort(byPrio)),
         )
         return [{ g, cells }]
       })
@@ -808,7 +818,9 @@ function KanbanBoard({
   // swimlanes and pooled: one shared grid
   type Lane = {
     key: string
-    proj: ProjectVM | null
+    proj: ProjectFacts | null
+    /** a group whose project the project cache has not answered */
+    loading?: boolean
     projectIds?: string[]
     owner?: string | null
     items: IssueVM[]
@@ -824,13 +836,14 @@ function KanbanBoard({
           }),
         )
       : swimlanes
-        ? info.groups
+        ? groups
             .filter((g) => holdsScoped(g))
             .map((g) => {
               const gset = new Set(g.subIds)
               return {
-                key: g.proj.id,
+                key: g.id,
                 proj: g.proj,
+                loading: g.proj === null,
                 projectIds: g.subIds,
                 items: visible.filter((i) => gset.has(i.project)),
               }
@@ -840,7 +853,7 @@ function KanbanBoard({
   // all swimlanes filtered away: keep one unlabeled empty lane so the status
   // columns still render their (empty) stacks
   if (!sideBoards && lanes.length === 0) lanes = [{ key: 'pool', proj: null, items: [] }]
-  const headed = (lane: Lane) => !!lane.proj || lane.owner !== undefined
+  const headed = (lane: Lane) => !!lane.proj || !!lane.loading || lane.owner !== undefined
   /** The name a lane's heading shows, or null for a lane without one. */
   const laneName = (lane: Lane) =>
     lane.proj
@@ -872,10 +885,10 @@ function KanbanBoard({
         ]),
         ...headingOwners,
         ...(swimlanes
-          ? info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' }))
+          ? groups.flatMap((g) => (g.proj ? [{ org: g.proj.org, id: P.leadOf(g.id) ?? '' }] : []))
           : []),
       ],
-      [view.tasks, headingOwners, info.groups, swimlanes, P.contextVersion],
+      [view.tasks, headingOwners, groups, swimlanes, P.contextVersion],
     ),
   )
 
@@ -941,7 +954,7 @@ function KanbanBoard({
           groups: CardGroup[]
           width: number
           kind: string
-          projects: typeof P.projects
+          projects: typeof P.projectsVersion
           dates: string
           value: number
         }
@@ -962,7 +975,7 @@ function KanbanBoard({
       known.groups === cell.groups &&
       known.width === cardWidth &&
       known.kind === layoutKey &&
-      known.projects === P.projects &&
+      known.projects === P.projectsVersion &&
       known.dates === dateFormatInUse()
     )
       return known.value
@@ -974,7 +987,7 @@ function KanbanBoard({
       groups: cell.groups,
       width: cardWidth,
       kind: layoutKey,
-      projects: P.projects,
+      projects: P.projectsVersion,
       dates: dateFormatInUse(),
       value,
     })
@@ -1105,6 +1118,10 @@ function KanbanBoard({
     },
   })
   const defaultProject = subIds[0] || null
+  // the empty Board, whose My view note asks the server whether the person
+  // sees any project (useHolds), only while that note could show
+  const empty = visible.length === 0 && view.state !== 'incomplete' && view.empty()
+  const holds = useHolds(mine && view.shows && empty && !view.busy)
   // null in My view: a create needs a project, and a status column across
   // every project names none, so ColHeaderRow drops the + rather than
   // opening a dialog with nothing chosen
@@ -1117,18 +1134,8 @@ function KanbanBoard({
   // a message in place of the columns: a selection past the Board's
   // limits, a Board that did not load
   if (!view.shows) return <BoardNote view={view} info={info} actions={actions} variant="desktop" />
-  if (subIds.length === 0) {
-    if (wide) {
-      return info.metas.length === 0 ? (
-        <NoProjects
-          icon="layers"
-          title="Nothing to show yet"
-          onNewProject={() => actions.newProject({ kind: 'program' })}
-        />
-      ) : (
-        <EmptyState icon="layers" title="Nothing to show yet" hint="Tasks live in sub-projects." />
-      )
-    }
+  // a top-level project whose answer names no sub-project
+  if (!mine && info.isMeta && view.selection !== null && view.selection.length === 0)
     return (
       <EmptyState
         icon="layers"
@@ -1138,14 +1145,31 @@ function KanbanBoard({
         onAction={() => actions.newProject({ parent: info.id })}
       />
     )
-  }
   // an incomplete Board is no empty one: its note says tasks are missing
-  if (visible.length === 0 && view.state !== 'incomplete' && view.empty()) {
+  if (empty) {
     // a kept answer with no rows, while the fresh one is on its way
     if (view.busy) return <EmptyState icon="board" title="Loading tasks…" />
     // My view empties for a reason of its own — an empty board here doesn't
-    // mean nobody has created anything, only that none of it landed on me
+    // mean nobody has created anything, only that none of it landed on me.
+    // Whether the person sees any project or sub-project at all is the
+    // server's word (useHolds), never taken as none before it confirmed it
     if (mine) {
+      if (holds === 'none')
+        return (
+          <NoProjects
+            icon="layers"
+            title="Nothing to show yet"
+            onNewProject={() => actions.newProject({ kind: 'program' })}
+          />
+        )
+      if (holds === 'no_sub')
+        return (
+          <EmptyState
+            icon="layers"
+            title="Nothing to show yet"
+            hint="Tasks live in sub-projects."
+          />
+        )
       return <EmptyState icon="user" title="Nothing assigned to you" />
     }
     return (
@@ -1192,6 +1216,7 @@ function KanbanBoard({
           <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
             {boards.map(({ g, cells: boardCells }) => {
               const proj = g.proj
+              const name = proj?.name ?? 'Loading…'
               return (
                 /* Built like a swimlane, for the same reason: a box whose edges
                  scroll past the pane's is not a box. This layout is a row of
@@ -1207,8 +1232,8 @@ function KanbanBoard({
                  The shared clipping hook keeps body content below the lid
                  and inside the foot's rounded border, above one underlay. */
                 <div
-                  key={proj.id}
-                  data-board-group={proj.id}
+                  key={g.id}
+                  data-board-group={g.id}
                   style={{ borderRadius: PANEL_R }}
                   className="[width:248px] [flex-shrink:0] [overflow:clip] [box-shadow:var(--qivo-shadow-card)]"
                 >
@@ -1226,17 +1251,23 @@ function KanbanBoard({
                       {/* pressable for the same reason the swimlane lid is, and by
                       the same hook: a heading that names a project is the way
                       into it, whichever layout drew it */}
-                      <Button
-                        type="button"
-                        data-lane-open={proj.id}
-                        onClick={() => actions.setScope(proj.id)}
-                        className="-mx-1 h-control-xs min-w-0 justify-start rounded-sm border-0 px-1 text-md font-semibold"
-                        variant="ghost"
-                      >
-                        <span className="truncate">
-                          <ProjectName project={proj} />
+                      {proj ? (
+                        <Button
+                          type="button"
+                          data-lane-open={proj.id}
+                          onClick={() => actions.setScope(proj.id)}
+                          className="-mx-1 h-control-xs min-w-0 justify-start rounded-sm border-0 px-1 text-md font-semibold"
+                          variant="ghost"
+                        >
+                          <span className="truncate">
+                            <ProjectName project={proj} />
+                          </span>
+                        </Button>
+                      ) : (
+                        <span className="min-w-0 truncate text-md font-semibold text-text-3">
+                          {name}
                         </span>
-                      </Button>
+                      )}
                       <div className="[flex:1]" />
                       {/* the one create affordance left in a sentinel scope, so it
                       has to keep its promise: a viewer's grant can't hold a
@@ -1244,14 +1275,14 @@ function KanbanBoard({
                       OTHER project's sub-projects. In My view the task it
                       creates is unassigned, so it won't land on this board —
                       createIssue's inScope jumps to its sub-project instead. */}
-                      {['lead', 'user'].includes(P.levelOn(proj.id) || '') && (
+                      {proj && ['lead', 'user'].includes(P.levelOn(proj.id) || '') && (
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
                           className="w-control-xs h-control-xs"
-                          aria-label={`New task in ${proj.name}`}
-                          title={`New task in ${proj.name}`}
+                          aria-label={`New task in ${name}`}
+                          title={`New task in ${name}`}
                           onClick={() => actions.newIssue({ project: proj.id })}
                         >
                           <Icon name="plus" size={16} />
@@ -1461,6 +1492,7 @@ function KanbanBoard({
                   {headed(lane) && (
                     <LaneHeader
                       proj={lane.proj}
+                      loading={lane.loading}
                       owner={lane.owner}
                       stick={0}
                       onOpen={actions.setScope}

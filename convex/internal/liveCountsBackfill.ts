@@ -1,11 +1,11 @@
 /* One-time migration that counts every organization's active tasks and
  * live projects into its org_counters row (schema.ts `active_tasks`,
- * `live_projects`), the rows the app's windows read. The app sizes an
- * organization's first task and project windows by them
- * (lib/idWindows.ts startWindows). Until they are counted it sizes them by
- * the task and project numbers handed out, which count every task and
- * project ever created, as releases before did, so the workspace loads the
- * same before the backfill as it did before this release. Organizations
+ * `live_projects`): the app sizes an organization's first task windows by
+ * the active tasks (lib/idWindows.ts startWindows), and admin usage reads
+ * the live projects (model/usage.ts). Until they are counted the app sizes
+ * its task windows by the task numbers handed out, which count every task
+ * ever created, as releases before did, so the workspace loads the same
+ * before the backfill as it did before this release. Organizations
  * created since this release are counted from their start (model/orgs.ts
  * insertOrgRows).
  *

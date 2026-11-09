@@ -28,7 +28,11 @@ import { taskRow } from './views/boardFixture.setup'
    preferences (prefs:get), never the browser's copy, and a write of it
    goes out at once (prefs:save). Every subscription is logged in order with
    resolve's answer, so a case can tell that no view read anything before
-   the server said the person may open the project.
+   the server said the person may open the project. A project scope opens
+   at once and the store's project cache checks it (projectNav.byIds,
+   answered by the live double, which a case can hold, fail or refuse
+   through `cache`); only a project address by number goes through
+   resolve.
 
    The person holds a user seat in Testbed Labs, with Luma Sensor and its
    sub-projects Firmware and Electronics, and one in Partner Co, with
@@ -39,10 +43,20 @@ import { taskRow } from './views/boardFixture.setup'
    the person archived or deleted (onProjectGone). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('./lib/convex', async () => ({
-  convex: network,
-  live: (await import('./store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, which answers the project
+// cache's reads (projectNav.byIds) from the server's copy unless a case
+// holds, fails or refuses them, and lists the reads it opened
+const double = vi.hoisted(() => ({
+  live: null as null | {
+    forceProjectNav(force: ForcedProjectNav | null): void
+    byIdsReads(): string[][]
+  },
 }))
+vi.mock('./lib/convex', async () => {
+  const live = (await import('./store/guard/liveDouble.setup')).liveOver(network)
+  double.live = live
+  return { convex: network, live }
+})
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -234,6 +248,11 @@ async function app(
     return null
   })
   store = await import('./store/planner')
+  // the project cache's reads answer from the server's copy, whatever a
+  // case held before, unless the case holds them from the boot on, and
+  // count from this boot
+  cache(holdAtBoot ? { byIdsLoading: true } : null)
+  readsBefore = double.live?.byIdsReads().length ?? 0
   remembers = vi.spyOn(store.P, 'saveUINow')
   await store.initStore()
   pickLib = await import('./lib/projectPick')
@@ -249,6 +268,19 @@ async function app(
     ),
   )
 }
+
+/** Makes the project cache's reads (projectNav.byIds) answer with `force`
+    from now on (`byIdsLoading` never answers, `unchecked` the refusal,
+    `fail` a failure), or from the server's copy again with null, at once
+    for the reads watched. */
+const cache = (force: ForcedProjectNav | null) => double.live?.forceProjectNav(force)
+/** Whether the next boot's project cache reads answer nothing until a
+    case lets them, from before the store's first registration on. */
+let holdAtBoot = false
+/** The ids of every project cache read the store opened, in order. */
+const cacheReads = () => (double.live?.byIdsReads() ?? []).slice(readsBefore)
+// how many project cache reads the double had opened before this boot
+let readsBefore = 0
 
 /** Holds resolve's answers until the answer it returns is called. */
 function holdResolve() {
@@ -320,6 +352,7 @@ async function leave() {
 
 beforeEach(() => {
   phone = false
+  holdAtBoot = false
   force = {}
   hold = null
   resolveWith = null
@@ -364,34 +397,34 @@ afterEach(async () => {
 })
 
 describe('opening the remembered project', { timeout: 60_000 }, () => {
-  it('opens a remembered project of either seat, and a sub-project, after one resolve of its id, before any view reads', async () => {
+  it('opens a remembered project of either seat, and a sub-project, at once, and mounts no view before the project cache answers it', async () => {
     const snap = world()
     for (const [id, org] of [
       [LUMA, ORG],
       [PORTAL, PARTNER],
       [FW, ORG],
     ] as const) {
-      const release = holdResolve()
-      await app(structuredClone(snap), '/app/testbed', remembering(id, org))
+      await app(structuredClone(snap), '/app/testbed', remembering(id, org), () =>
+        cache({ byIdsLoading: true }),
+      )
       const entries = history.length
       await chooser('checking')
-      const name = snap.projects.find((p) => p.id === id)?.name
-      expect(line()).toBe(`Opening ${name}…`)
-      expect(asks.map((a) => a.args)).toEqual([{ project_id: id }])
+      // the cache knows no name of it before its answer
+      expect(line()).toBe('Opening the project you opened last…')
+      expect(cacheReads().flat()).toContain(id)
+      expect(asks).toEqual([])
       expect(viewReads()).toEqual([])
       expect(q('[data-project-picker]')).toBeNull()
-      await release()
+      await act(async () => cache(null))
       await until(() => shown() === 'overview', 'the Overview')
       const p = store.P.project(id)
       expect(location.pathname).toBe(
         `/app/${org === ORG ? 'testbed' : 'partner'}/overview/p/${p?.num}`,
       )
-      // the address became the view's in place, and nothing more was asked
+      // the address became the view's in place, and resolve was never asked
       expect(history.length).toBe(entries)
-      expect(asks).toHaveLength(1)
-      // the view's reads start only after the answer
+      expect(asks).toEqual([])
       await until(() => viewReads().length > 0, "the Overview's reads")
-      expect(viewReads()[0].at).toBeGreaterThan(answeredAt[0])
       // unchanged, so not sent again
       expect(sentProjects()).toEqual([])
       await leave()
@@ -431,8 +464,9 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await app(structuredClone(snap), '/app/testbed', remembering(managed))
     await chooser('lost')
     expect(note()).toBe('The project you opened last is no longer available to you.')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: managed }])
-    // the store agrees with resolve, and the list holds only their own
+    // the project cache read it by ordinary access, never by management
+    expect(cacheReads().flat()).toContain(managed)
+    expect(asks).toEqual([])
     expect(store.P.canSee(managed)).toBe(false)
     await until(() => picks().length === 2, 'the two seats’ projects')
     expect(picks()).toEqual([LUMA, PORTAL])
@@ -443,76 +477,52 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await leave()
     await app(structuredClone(snap), '/app/testbed', remembering(LUMA))
     await until(() => shown() === 'overview', 'the Overview')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: LUMA }])
+    expect(asks).toEqual([])
     expect(location.pathname).toBe('/app/testbed/overview/p/10')
-    await until(() => viewReads().length > 0, "the Overview's reads")
-    expect(viewReads()[0].at).toBeGreaterThan(answeredAt[0])
   })
 
   it('says a check that could not finish with Retry, never the chooser or a view, and opens once Retry gets ok', async () => {
     const snap = world()
-    force = { unchecked: NAV_UNCHECKED }
-    await app(snap, '/app/testbed', remembering(LUMA))
+    await app(snap, '/app/testbed', remembering(LUMA), () => cache({ unchecked: NAV_UNCHECKED }))
     await chooser('retry')
     expect(line()).toBe(NAV_UNCHECKED)
     expect(q('[data-project-picker]')).toBeNull()
     expect(viewReads()).toEqual([])
     await leave()
     // a failed read
-    force = {}
-    resolveWith = () => {
-      throw new Error('the read failed')
-    }
-    await app(snap, '/app/testbed', remembering(LUMA))
+    await app(snap, '/app/testbed', remembering(LUMA), () => cache({ fail: true }))
     await chooser('retry')
     expect(line()).toBe("Couldn't check the project you opened last.")
     expect(q('[data-project-picker]')).toBeNull()
     expect(shown()).toBeUndefined()
     // the sidebar stays usable meanwhile
     expect(q('aside [data-mine-nav]')).not.toBeNull()
-    resolveWith = null
+    // Retry reads the project again, from a fresh read
+    const reads = cacheReads().length
     await click(q('[data-project-chooser-retry]'))
+    expect(cacheReads().length).toBeGreaterThan(reads)
+    await chooser('retry')
+    // and the project opens once its read answers ok
+    await act(async () => cache(null))
     await until(() => shown() === 'overview', 'the Overview')
-    expect(asks).toHaveLength(2)
+    expect(asks).toEqual([])
     expect(location.pathname).toBe('/app/testbed/overview/p/10')
   })
 
-  it("says Couldn't open with Retry where the server says ok and the current workspace lacks the project", async () => {
-    const snap = world()
-    // the server holds a project the workspace's delivery has not brought
-    const held = structuredClone(snap)
-    const late = meta(held, 'Late programme')
-    resolveWith = (args) => queryProjectNav(held, 'projectNav:resolve', args)
-    await app(snap, '/app/testbed', remembering(late))
-    await chooser('retry')
-    expect(line()).toBe("Couldn't open Late programme.")
-    expect(q('[data-project-picker]')).toBeNull()
-    expect(shown()).toBeUndefined()
-    expect(viewReads()).toEqual([])
-    // Retry asks again, and opens once the delivery brought it
-    resolveWith = (args) => {
-      publish({ ...held, delivered_at: '2026-09-15T09:00:00.000Z' })
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
-    await click(q('[data-project-chooser-retry]'))
-    await until(() => shown() === 'overview', 'the Overview')
-    expect(asks).toHaveLength(2)
-    expect(store.P.scopeInfo(late)?.name).toBe('Late programme')
-  })
-
-  it('drops a check’s answer once the person moved to another address meanwhile', async () => {
-    const release = holdResolve()
-    await app(world(), '/app/testbed', remembering(LUMA))
+  it('drops the remembered project once the person moved to another address while the cache checked it', async () => {
+    await app(world(), '/app/testbed', remembering(LUMA), () => cache({ byIdsLoading: true }))
     await chooser('checking')
     // Back or Forward reaches an address under a slug this login cannot
     // resolve, which shows the chooser with its note and checks nothing
     await go('/app/globex/board/p/3')
     await chooser('lost')
-    await release()
+    await act(async () => cache(null))
+    await settle()
     expect(chooserState()).toBe('lost')
     expect(note()).toBe('That project is not available to you.')
     expect(shown()).toBeUndefined()
     expect(viewReads()).toEqual([])
+    expect(asks).toEqual([])
   })
 
   it('keeps the remembered project for a task address of a task in it, else opens the task’s sub-project, checking nothing', async () => {
@@ -541,6 +551,82 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await until(() => lastSent() === FW, 'Firmware remembered')
   })
 
+  it('keeps the remembered project for a task address while the project cache has not named the task’s project, and settles the scope once it does', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, org, name] of [
+      [LUMA, ORG, 'Luma Sensor'],
+      [PORTAL, PARTNER, 'Firmware'],
+    ] as const) {
+      // the cache answers nothing yet, so the first render cannot name
+      // Firmware's parent
+      holdAtBoot = true
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id, org))
+      // the boot opens the remembered project and checks it, with the task
+      // over it
+      await chooser('checking')
+      await act(async () => cache(null))
+      // must fail for a boot that took the task's own sub-project while the
+      // cache had not named it, and for one that never settles once it does
+      await until(() => crumb() === name, `${name}'s Board`)
+      await until(() => store.P.projectState(FW) === 'ok', "Firmware's answer")
+      await settle()
+      expect(crumb()).toBe(name)
+      expect(shown()).toBe('kanban')
+      expect(asks).toEqual([])
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
+  })
+
+  it('lands a task address on the task’s sub-project where the project cache answers the remembered project gone', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    const archived = meta(snap, 'Old programme')
+    const project = snap.projects.find((p) => p.id === archived)
+    if (project) project.archived_at = NOW
+    const lost = meta(snap, 'Taken away', ORG, false)
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, held] of [
+      [archived, true],
+      [lost, true],
+      [lost, false],
+    ] as const) {
+      // held, the cache answers nothing until both projects can come in
+      // one answer
+      holdAtBoot = held
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id))
+      if (held) {
+        await chooser('checking')
+        await act(async () => cache(null))
+      }
+      // must fail for a guard that loses the scope the settle moved to
+      // Firmware, which shows the chooser with "That project is not
+      // available to you."
+      await until(() => crumb() === 'Firmware', "Firmware's Board")
+      await settle()
+      expect(crumb()).toBe('Firmware')
+      expect(shown()).toBe('kanban')
+      expect(chooserState()).toBeUndefined()
+      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
+  })
+
   it('never restores a saved All projects or My view, and lets an address that names a scope win', async () => {
     const snap = world()
     for (const scope of ['all', 'mine']) {
@@ -555,16 +641,18 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     expect(location.pathname).toBe('/app/~/board/mine')
     await leave()
     // an address that once named all projects names no scope, so the
-    // startup rule checks the remembered project and opens it in place
+    // startup rule opens the remembered project in place, which the
+    // project cache checks
     await app(structuredClone(snap), '/app/~/board/all', remembering(LUMA))
     await until(() => shown() === 'kanban', 'Luma Sensor’s Board')
     expect(location.pathname).toBe('/app/testbed/board/p/10')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: LUMA }])
+    expect(asks).toEqual([])
     await leave()
-    // a held project's address opens it, with no check, and is remembered
+    // a project's address by number opens it after one check of the
+    // number, and is remembered
     await app(structuredClone(snap), '/app/partner/roadmap/p/13', remembering(LUMA))
     await until(() => shown() === 'roadmap', 'the Roadmap')
-    expect(asks).toEqual([])
+    expect(asks.map((a) => a.args)).toEqual([{ org_id: PARTNER, num: 13 }])
     await until(() => lastSent() === PORTAL, 'Partner portal remembered')
   })
 })
@@ -767,19 +855,19 @@ describe('at the design size', { timeout: 60_000 }, () => {
     return { next, ids }
   }
 
-  it('opens a remembered project that sorts 150th after one resolve, with no picker and no view read before', async () => {
+  it('opens a remembered project that sorts 150th at once, with no picker and no view read before the project cache answers it', async () => {
     const { next, ids } = manyProjects()
-    const release = holdResolve()
-    await app(next, '/app/testbed', remembering(ids[149]))
+    await app(next, '/app/testbed', remembering(ids[149]), () => cache({ byIdsLoading: true }))
     await chooser('checking')
-    expect(line()).toBe('Opening Sensor programme 149…')
+    expect(line()).toBe('Opening the project you opened last…')
     expect(q('[data-project-picker]')).toBeNull()
     expect(viewReads()).toEqual([])
-    await release()
+    // one read of its id, whatever its place among the 200
+    expect(cacheReads()).toEqual([[ids[149]]])
+    await act(async () => cache(null))
     await until(() => shown() === 'overview', 'the Overview')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: ids[149] }])
+    expect(asks).toEqual([])
     await until(() => viewReads().length > 0, "the Overview's reads")
-    expect(viewReads()[0].at).toBeGreaterThan(answeredAt[0])
   })
 
   it('lists 25 at first, 50 with Load more, and then asks for a search at a lowered bound', async () => {
@@ -797,22 +885,21 @@ describe('at the design size', { timeout: 60_000 }, () => {
     )
   })
 
-  it('opens a remembered 28th of 30 sub-projects after one resolve, with no picker and no view read before', async () => {
+  it('opens a remembered 28th of 30 sub-projects at once, with no picker and no view read before the project cache answers it', async () => {
     const next = world()
     // Luma Sensor's 30 sub-projects, the design size, in place of its two
     next.projects = next.projects.filter((p) => p.parent_id !== LUMA)
     const kids: string[] = []
     for (let n = 1; n <= 30; n++) kids.push(sub(next, LUMA, `Module ${String(n).padStart(2, '0')}`))
-    const release = holdResolve()
-    await app(next, '/app/testbed', remembering(kids[27]))
+    await app(next, '/app/testbed', remembering(kids[27]), () => cache({ byIdsLoading: true }))
     await chooser('checking')
-    expect(line()).toBe('Opening Module 28…')
+    expect(line()).toBe('Opening the project you opened last…')
     expect(q('[data-project-picker]')).toBeNull()
     expect(viewReads()).toEqual([])
-    await release()
+    await act(async () => cache(null))
     await until(() => shown() === 'overview', 'the Overview')
     expect(store.P.scopeInfo(kids[27])?.name).toBe('Module 28')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: kids[27] }])
+    expect(asks).toEqual([])
   })
 })
 
@@ -857,7 +944,8 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     })
     await chooser('lost')
     expect(note()).toBe('Luma Sensor is no longer available to you.')
-    expect(store.P.project(PORTAL)).toBeDefined()
+    // the chooser lists what the person still opens
+    await until(() => picks().includes(PORTAL), 'the other seat’s project')
     expect(location.pathname).toBe('/app/testbed')
     // the loss leaves what is remembered
     expect(sentProjects()).toEqual([LUMA])
@@ -901,8 +989,9 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
       delivered_at: '2026-09-15T09:00:00.000Z',
     })
     await chooser('lost')
-    expect(store.P.canSee(LUMA)).toBe(true)
     expect(note()).toBe('Firmware is no longer available to you.')
+    // the parent stays among the projects the person opens
+    await until(() => picks().includes(LUMA), 'the parent')
     await leave()
     // My view stays as it is
     for (const address of ['/app/~/board/mine']) {
@@ -914,6 +1003,67 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
       expect(q('[data-project-chooser]')).toBeNull()
       await leave()
     }
+  })
+
+  it("writes the address of each page opened over a scope the project cache cannot name, and replaces only the lost scope's own address", async () => {
+    const snap = world()
+    await app(snap, '/app/testbed', remembering(LUMA), () => cache({ fail: true }))
+    await chooser('retry')
+    expect(location.pathname).toBe('/app/testbed')
+    // the Inbox and Settings over the scope whose read failed write their
+    // own addresses, each in an entry of its own
+    await click(q('[data-view-switch] [aria-label^="Inbox"]'))
+    // must fail for an address sync that stops on every page while the
+    // scope has no facts
+    await until(() => location.pathname === '/app/~/inbox', "the Inbox's address")
+    // a view pill closes the Inbox over the scope, whose address cannot
+    // name it yet, so the address leaves the Inbox for the front door, in
+    // an entry of its own
+    const opened = history.length
+    await click(
+      [...document.querySelectorAll('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === 'Overview',
+      ),
+    )
+    // must fail for an address sync that keeps the Inbox's address once
+    // the Inbox closed over a scope with no facts
+    await until(() => location.pathname === '/app/testbed', 'the front door')
+    expect(history.length).toBe(opened + 1)
+    await chooser('retry')
+    await click(q('[data-view-switch] [aria-label^="Inbox"]'))
+    await until(() => location.pathname === '/app/~/inbox', "the Inbox's address again")
+    const entries = history.length
+    await click(q('[data-settings-nav]'))
+    await until(() => q('[data-settings-stand-in]'), 'Settings')
+    await until(() => location.pathname === '/app/~/settings/account', "Settings' address")
+    expect(history.length).toBe(entries + 1)
+    // the scope turns gone while Settings shows, and Settings keeps its entry
+    publish({
+      ...server,
+      access: server.access.filter((a) => a.project_id !== LUMA),
+      delivered_at: '2026-09-15T09:00:00.000Z',
+    })
+    await act(async () => cache(null))
+    await until(() => store.P.projectState(LUMA) === 'gone', 'the loss')
+    await settle()
+    expect(location.pathname).toBe('/app/~/settings/account')
+    expect(history.length).toBe(entries + 1)
+    await act(async () => history.back())
+    await settle()
+    await until(() => location.pathname === '/app/~/inbox', 'the Inbox again')
+    await leave()
+    // a scope lost on its own address gives that address way in place
+    await app(structuredClone(world()), '/app/testbed/board/p/10')
+    await until(() => shown() === 'kanban', 'the Board')
+    const before = history.length
+    publish({
+      ...server,
+      access: server.access.filter((a) => a.project_id !== LUMA),
+      delivered_at: '2026-09-15T09:00:00.000Z',
+    })
+    await chooser('lost')
+    expect(location.pathname).toBe('/app/testbed')
+    expect(history.length).toBe(before)
   })
 
   it("moves to the gone project's parent from Settings, else to the chooser without a note, and leaves the scope for another project's archive", async () => {
@@ -998,10 +1148,14 @@ describe('a project address the workspace does not hold', { timeout: 60_000 }, (
     expect(asks.map((a) => a.args)).toEqual([{ org_id: ORG, num: 99 }])
     expect(location.pathname).toBe('/app/testbed')
     await leave()
+    // an address by uuid names the scope at once, which the project cache
+    // checks, so resolve is never asked
     const far = crypto.randomUUID()
     await app(structuredClone(snap), `/app/testbed/board/p/${far}`)
     await chooser('lost')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: far }])
+    expect(note()).toBe('That project is not available to you.')
+    expect(cacheReads().flat()).toContain(far)
+    expect(asks).toEqual([])
     await leave()
     await app(structuredClone(snap), '/app/globex/board/p/3', remembering(LUMA))
     await chooser('lost')
@@ -1022,8 +1176,8 @@ describe('a project address the workspace does not hold', { timeout: 60_000 }, (
     await chooser('retry')
     expect(asks).toHaveLength(2)
     expect(location.pathname).toBe('/app/testbed/board/p/99')
-    // Back or Forward from a project to an address the workspace does not
-    // hold checks it, and its answer takes that entry, pushing none
+    // Back or Forward from a project to a number the person cannot open
+    // checks it, and its answer takes that entry, pushing none
     resolveWith = null
     await go('/app/testbed/board/p/10')
     await until(() => shown() === 'kanban', "Luma Sensor's Board")
@@ -1034,18 +1188,12 @@ describe('a project address the workspace does not hold', { timeout: 60_000 }, (
     expect(asks.map((a) => a.args)).toEqual([
       { org_id: ORG, num: 99 },
       { org_id: ORG, num: 99 },
+      { org_id: ORG, num: 10 },
       { org_id: ORG, num: 99 },
     ])
     expect(location.pathname).toBe('/app/testbed')
     expect(history.length).toBe(entries)
     // and one the server says the person may open opens in it, in place
-    const held = structuredClone(server)
-    server.projects = server.projects.filter((p) => p.id !== PORTAL && p.parent_id !== PORTAL)
-    publish({ ...server, delivered_at: '2026-09-15T09:00:00.000Z' })
-    resolveWith = (args) => {
-      publish({ ...held, delivered_at: '2026-09-15T10:00:00.000Z' })
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
     await go('/app/partner/roadmap/p/13')
     const now = history.length
     await until(() => shown() === 'roadmap', "Partner portal's Roadmap")
@@ -1118,165 +1266,104 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
       await act(async () => {
         for (const read of windowReads) read(taskAnswer('unavailable'))
       })
-      await until(() => asks.length === 1, 'the check of the remembered project')
-      expect(asks[0].args).toEqual({ project_id: PORTAL })
+      // the remembered project opens as the scope, which the project cache
+      // checks
       await until(() => shown() === 'kanban', "Partner portal's Board")
+      expect(cacheReads().flat()).toContain(PORTAL)
+      expect(asks).toEqual([])
     } finally {
       TASKS.atBoot = true
     }
   })
 
-  it('drops startup’s check when Back or Forward reaches such a task, so the check’s answer, landing first, leaves the task to name its project', async () => {
+  it('keeps the remembered scope while Back or Forward reaches such a task, and moves to the task’s own project once its answer names it', async () => {
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = false
     try {
-      const release = holdResolve()
-      await app(world(), '/app/testbed', remembering(PORTAL, PARTNER))
+      await app(world(), '/app/testbed', remembering(PORTAL, PARTNER), () =>
+        cache({ byIdsLoading: true }),
+      )
       await chooser('checking')
-      expect(asks.map((a) => a.args)).toEqual([{ project_id: PORTAL }])
       await go('/app/testbed/board/tasks/qn-7')
       await until(() => windowReads.length > 0, "the window's read")
-      // the task's wait, as on a boot, and no chooser under its window
-      expect(q('[data-project-chooser]')).toBeNull()
-      // the remembered project's answer lands before the task's
-      await release()
-      expect(shown()).toBeUndefined()
-      expect(viewReads()).toEqual([])
+      // the remembered scope stays beneath the task while its answer is on
+      // its way, as a task address keeps the scope it does not leave
+      expect(store.P.scopeInfo(PORTAL)).toMatchObject({ id: PORTAL, state: 'loading' })
+      await act(async () => cache(null))
       await act(async () => {
         for (const read of windowReads) read(taskAnswer())
       })
-      await until(() => shown() === 'kanban', "Firmware's Board")
-      expect(q('[data-scope-crumb] h1')?.textContent).toBe('Firmware')
+      await until(
+        () => shown() === 'kanban' && q('[data-scope-crumb] h1')?.textContent === 'Firmware',
+        "Firmware's Board",
+      )
       expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
-      expect(asks).toHaveLength(1)
+      expect(asks).toEqual([])
       // a task's address chose it, so nothing is remembered
       expect(sentProjects()).toEqual([])
     } finally {
       TASKS.atBoot = true
     }
   })
+
+  it('lands on the task’s own sub-project when its answer comes in the render of a workspace update and the project cache names its project later', async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    try {
+      for (const gone of [false, true]) {
+        const snap = world()
+        // the remembered project, Partner portal, or one the cache answers
+        // gone, and neither holds Firmware
+        const lost = meta(snap, 'Taken away', ORG, false)
+        const [remembered, org] = gone ? [lost, ORG] : [PORTAL, PARTNER]
+        // the cache answers nothing yet, so the task's answer cannot name
+        // Firmware's parent
+        holdAtBoot = true
+        await app(snap, '/app/testbed/board/tasks/qn-7', remembering(remembered, org))
+        await until(() => windowReads.length > 0, "the window's read")
+        // the task's answer and a workspace update, here the partner
+        // organization's new name, land in one render
+        await act(async () => {
+          for (const read of windowReads) read(taskAnswer())
+          const next = structuredClone(server)
+          next.orgs[1].name = 'Partner Company'
+          publish(next)
+        })
+        await settle()
+        await act(async () => cache(null))
+        // must fail for a settle record the same render cleared, which
+        // keeps Partner portal or shows the chooser's lost note
+        await until(() => crumb() === 'Firmware', "Firmware's Board")
+        await settle()
+        expect(crumb()).toBe('Firmware')
+        expect(shown()).toBe('kanban')
+        expect(chooserState()).toBeUndefined()
+        expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+        expect(asks).toEqual([])
+        // a task's address chose the scope, so nothing is remembered
+        expect(sentProjects()).toEqual([])
+        await leave()
+      }
+    } finally {
+      TASKS.atBoot = true
+    }
+  })
 })
 
-describe('an open or a check that waits, and the person’s next move', { timeout: 60_000 }, () => {
-  /** `snap` and a copy whose Late programme the server lists and opens
-      while the workspace's delivery has not brought it, with the copy's
-      delivery a moment later. */
-  function lateWorld() {
-    const snap = world()
-    const held = structuredClone(snap)
-    const late = meta(held, 'Late programme')
-    return { snap, held, late }
-  }
-  let hour = 9
-  /** Delivers `value` to the workspace, newer than the delivery before. */
-  const deliver = (value: Snapshot) =>
-    publish({
-      ...structuredClone(value),
-      delivered_at: `2026-09-15T${String(hour++ % 24).padStart(2, '0')}:00:00.000Z`,
-    })
+describe('a check that waits, and the person’s next move', { timeout: 60_000 }, () => {
   const viewPill = (name: string) =>
     [...document.querySelectorAll('[data-view-switch] button')].find(
       (b) => b.textContent?.trim() === name,
     )
-  const toast = () => q('.planner-toast-host')?.textContent ?? ''
   const crumb = () => q('[data-scope-crumb] h1')?.textContent
 
-  it('drops a sidebar open once the person moves elsewhere, with its toast, so its answer opens nothing', async () => {
-    const { snap, held, late } = lateWorld()
-    // the server's ok, with the delivery that brings the project
-    resolveWith = (args) => {
-      deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
-    await app(snap, '/app/testbed/overview/p/10', {}, () => {
-      server = held
-    })
-    // Back follows the view pill, so it reaches the Board's entry
-    const moves: [string, () => Promise<unknown>][] = [
-      ['My view', () => click(q('aside [data-mine-nav]'))],
-      ['the Inbox', () => click(q('[data-view-switch] [aria-label^="Inbox"]'))],
-      ['All projects', () => click(q('aside [data-all-nav]'))],
-      ['Team sync', () => click(q('aside [data-sync-nav]'))],
-      ['a view pill', () => click(viewPill('Board'))],
-      ['Back', () => act(async () => history.back())],
-    ]
-    for (const [what, moveOn] of moves) {
-      // on Luma Sensor's Overview, with a workspace that lacks the project
-      await go('/app/testbed/overview/p/10')
-      await until(() => shown() === 'overview' && crumb() === 'Luma Sensor', `${what}: Luma Sensor`)
-      deliver(snap)
-      server = held
-      await settle()
-      expect(store.P.project(late)).toBeUndefined()
-      const release = holdResolve()
-      await until(() => q(`aside [data-project-row="${late}"] button`), `${what}: the row`)
-      await click(q(`aside [data-project-row="${late}"] button`))
-      expect(toast()).toContain('Opening Late programme…')
-      const from = location.pathname
-      await moveOn()
-      await settle()
-      const there = location.pathname
-      expect(there, what).not.toBe(from)
-      expect(toast(), what).not.toContain('Opening Late programme…')
-      await release()
-      // the answer brought the project, and opened nothing
-      expect(store.P.project(late), what).toBeDefined()
-      expect(location.pathname, what).toBe(there)
-      expect(toast(), what).not.toContain('Late programme')
-    }
-    expect(sentProjects()).not.toContain(late)
-  })
-
-  it('drops a sidebar open once Back or Forward reaches a project address the workspace does not hold on the same view, so that address’s answer alone decides', async () => {
-    const { snap, held, late } = lateWorld()
-    // the server's ok for Late programme, with the delivery that brings
-    // it, and unavailable for number 99
-    resolveWith = (args) => {
-      if ((args as { project_id?: string }).project_id === late) deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
-    await app(snap, '/app/testbed', {}, () => {
-      server = held
-    })
-    // the chooser on the Overview, with no project
-    await chooser('choose')
-    expect(store.P.project(late)).toBeUndefined()
-    const release = holdResolve()
-    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
-    await click(q(`aside [data-project-row="${late}"] button`))
-    expect(toast()).toContain('Opening Late programme…')
-    // an earlier project's address on the Overview, with no scope and no
-    // task on either side
-    await go('/app/testbed/overview/p/99')
-    await settle()
-    expect(toast()).not.toContain('Opening Late programme…')
-    await chooser('checking')
-    expect(line()).toBe('Opening that project…')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: late }, { org_id: ORG, num: 99 }])
-    expect(location.pathname).toBe('/app/testbed/overview/p/99')
-    await release()
-    // the sidebar's answer brought its project and opened nothing
-    expect(store.P.project(late)).toBeDefined()
-    await chooser('lost')
-    expect(note()).toBe('That project is not available to you.')
-    expect(shown()).toBeUndefined()
-    expect(viewReads()).toEqual([])
-    expect(toast()).not.toContain('Late programme')
-    expect(sentProjects()).toEqual([])
-  })
-
   it('drops an address’s check once Back or Forward reaches the front door, where the startup rule decides', async () => {
-    const { snap, held, late } = lateWorld()
-    // the server's ok for Late programme, number 15, with the delivery
-    // that brings it
-    resolveWith = (args) => {
-      deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
+    const snap = world()
+    // Late programme, number 15, which the server's check answers ok
+    meta(snap, 'Late programme')
     const release = holdResolve()
-    await app(snap, '/app/testbed/overview/p/15', {}, () => {
-      server = held
-    })
+    await app(snap, '/app/testbed/overview/p/15')
     await chooser('checking')
     expect(line()).toBe('Opening that project…')
     expect(asks.map((a) => a.args)).toEqual([{ org_id: ORG, num: 15 }])
@@ -1287,8 +1374,7 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     await chooser('choose')
     expect(line()).not.toBe('Opening that project…')
     await release()
-    // the check's answer brought the project and opened nothing
-    expect(store.P.project(late)).toBeDefined()
+    // the check's answer opened nothing
     expect(chooserState()).toBe('choose')
     expect(shown()).toBeUndefined()
     expect(viewReads()).toEqual([])
@@ -1309,79 +1395,12 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(location.pathname).toBe('/app/testbed')
   })
 
-  it('drops a sidebar open once the person picks another Team sync scope, so its answer leaves Team sync shown', async () => {
-    const { snap, held, late } = lateWorld()
-    resolveWith = (args) => {
-      deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
-    await app(snap, '/app/testbed/overview/p/10', {}, () => {
-      server = held
-    })
-    await until(() => shown() === 'overview' && crumb() === 'Luma Sensor', 'Luma Sensor')
-    await click(q('aside [data-sync-nav]'))
-    await until(() => shown() === 'sync' && q('[data-sync-scope] [data-fieldselect]'), 'Team sync')
-    expect(store.P.project(late)).toBeUndefined()
-    const release = holdResolve()
-    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
-    await click(q(`aside [data-project-row="${late}"] button`))
-    expect(toast()).toContain('Opening Late programme…')
-    // the scope menu, opened from its trigger, then its All projects choice
-    const from = location.pathname
-    await click(q('[data-sync-scope] [data-sync-scope-trigger]'))
-    await until(() => q('[data-sync-scope-choice="all"]'), 'the scope menu')
-    await click(q('[data-sync-scope-choice="all"]'))
-    const there = location.pathname
-    expect(there).not.toBe(from)
-    expect(there).toContain('/sync/all')
-    expect(toast()).not.toContain('Opening Late programme…')
-    await release()
-    // the answer brought the project, and opened nothing
-    expect(store.P.project(late)).toBeDefined()
-    expect(shown()).toBe('sync')
-    expect(location.pathname).toBe(there)
-    expect(toast()).not.toContain('Late programme')
-    expect(sentProjects()).not.toContain(late)
-  })
-
-  it('drops a pick that waits in the chooser once the person searches again, so its answer opens nothing', async () => {
-    const { snap, held, late } = lateWorld()
-    resolveWith = (args) => {
-      deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
-    await app(snap, '/app/testbed', {}, () => {
-      server = held
-    })
-    await chooser('choose')
-    await until(() => picks().includes(late), 'the row the workspace lacks')
-    const release = holdResolve()
-    await click(q(`[data-project-pick="${late}"]`))
-    expect(note()).toBe('Opening Late programme…')
-    const field = q<HTMLInputElement>('[data-project-picker-search]')
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
-        field,
-        'Partner',
-      )
-      field?.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    expect(note()).toBe('')
-    await until(() => picks().join() === PORTAL, 'the new results')
-    await release()
-    expect(store.P.project(late)).toBeDefined()
-    expect(chooserState()).toBe('choose')
-    expect(note()).toBe('')
-    expect(shown()).toBeUndefined()
-    expect(viewReads()).toEqual([])
-    expect(sentProjects()).toEqual([])
-  })
-
-  it('drops startup’s check for a view pill and for an open that starts to wait in a list, so its answer opens nothing', async () => {
-    const { snap, held, late } = lateWorld()
+  it('drops the check of a numbered address for a view pill and for a row that opens meanwhile, so its answer opens nothing', async () => {
+    const snap = world()
     let release = holdResolve()
-    await app(structuredClone(snap), '/app/testbed', remembering(PORTAL, PARTNER))
+    await app(structuredClone(snap), '/app/partner/overview/p/13')
     await chooser('checking')
+    expect(asks.map((a) => a.args)).toEqual([{ org_id: PARTNER, num: 13 }])
     await click(viewPill('Board'))
     // the chooser takes the check's place, on the view the person chose
     await chooser('choose')
@@ -1392,26 +1411,21 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(chooserState()).toBe('choose')
     expect(shown()).toBeUndefined()
     expect(viewReads()).toEqual([])
-    expect(location.pathname).toBe('/app/testbed')
     await leave()
-    // a sidebar row the workspace does not hold, whose answer lands second
-    resolveWith = (args) => {
-      if ((args as { project_id?: string }).project_id === late) deliver(held)
-      return queryProjectNav(held, 'projectNav:resolve', args)
-    }
+    // a sidebar row opens its project at once, and the check's answer,
+    // landing second, changes nothing
     release = holdResolve()
-    await app(structuredClone(snap), '/app/testbed', remembering(PORTAL, PARTNER), () => {
-      server = held
-    })
+    await app(structuredClone(snap), '/app/partner/overview/p/13')
     await chooser('checking')
-    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
-    await click(q(`aside [data-project-row="${late}"] button`))
-    await chooser('choose')
+    await until(() => q(`aside [data-project-row="${LUMA}"] button`), 'the row')
+    await click(q(`aside [data-project-row="${LUMA}"] button`))
+    await until(() => shown() === 'overview' && crumb() === 'Luma Sensor', "Luma Sensor's Overview")
     await release()
-    await until(() => shown() === 'overview', "Late programme's Overview")
-    expect(crumb()).toBe('Late programme')
-    expect(asks.map((a) => a.args)).toEqual([{ project_id: PORTAL }, { project_id: late }])
-    await until(() => lastSent() === late, 'the pick remembered')
-    expect(sentProjects()).toEqual([late])
+    expect(crumb()).toBe('Luma Sensor')
+    expect(location.pathname).toBe('/app/testbed/overview/p/10')
+    expect(asks.map((a) => a.args)).toEqual([{ org_id: PARTNER, num: 13 }])
+    // remembered once the cache answered it ok
+    await until(() => lastSent() === LUMA, 'the row remembered')
+    expect(sentProjects()).toEqual([LUMA])
   })
 })

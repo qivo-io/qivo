@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
+import { oracleScope } from '../store/oracleScope.setup'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { loadBoard, loadBoardWithTasks, spread, taskRow } from './boardFixture.setup'
@@ -567,6 +568,8 @@ describe('the Roadmap at the design size', () => {
               ...base,
               id: top,
               type: 'meta',
+              // a top-level project, whatever the base holds by then
+              parent_id: undefined,
               key: `T${s}`,
               num: 100 + s,
               name: `Top ${s / 3}`,
@@ -820,14 +823,14 @@ describe("Team sync's opening", () => {
     const { TeamOpening } = await import('./teamSync/TeamOpening')
     const { syncDay } = await import('../lib/teamSync')
     let show = true
-    const view = (info: Parameters<Parameters<typeof board.renderView>[1]>[0]) => (
+    const view = (_info: Parameters<Parameters<typeof board.renderView>[1]>[0]) => (
       <div data-scroll data-sync-page>
         {show && (
           <TeamOpening
             rows={board.P.issues}
             tasks={board.P.issues}
             humans={[]}
-            subIds={info.subIdSet}
+            subIds={new Set(board.P.issues.map((it) => it.project))}
             metaIds={new Set()}
             day={syncDay(Date.now())}
             now={Date.now()}
@@ -958,7 +961,7 @@ describe('figures for many groups at once', () => {
       { scope: 'plan' },
     )
     const { P } = board
-    const info = P.scopeInfo('plan')
+    const info = oracleScope(board.snapshot, 'plan')
     if (!info) throw new Error('missing the scope')
     // the scope's groups, a few overlapping lists, and an empty one
     const lists = [

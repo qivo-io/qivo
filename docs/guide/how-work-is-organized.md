@@ -103,13 +103,19 @@ hundreds of them, and archived tasks within a few minutes.
 ## Creating a task
 
 Use a Board column's **+**, a project or sub-project heading's **+**, or
-**New task** on an empty Board. Choose **Project** and **Sub-project**, enter
-a required **Title**, then select **Create** or press Enter. Qivo opens the
-new task so you can add its other details.
+**New task** on an empty Board. Choose a **Sub-project**, enter a required
+**Title**, then select **Create** or press Enter. Qivo opens the new task so
+you can add its other details.
 
-The dialog starts in the project or sub-project you opened it from. Its
-pickers show only writable destinations and omit projects without
-sub-projects. Creating outside the current scope opens the task's
+The **Sub-project** picker lists the sub-projects you can add tasks to,
+under their project's name, 25 at a time with **Load more** and a search
+of either name. The dialog starts in the sub-project you opened it from,
+or in a project on its first sub-project you can add tasks to, shown at the
+top of the list until the list reaches it or you search. **Create**
+turns on once Qivo has checked the sub-project you choose. Under the picker
+the dialog says it is opening that sub-project while it checks it, and if
+the check fails or cannot finish it says so with **Retry**, keeping the
+title you typed. Creating outside the current scope opens the task's
 sub-project. A confirmation shows the new task ID, and the task window has a
 shareable URL.
 
@@ -121,7 +127,7 @@ Remaining to the project's review time ([Review time](./will-it-be-ready-in-time
 view's Swimlanes by project or Side-by-side boards, or open the project
 first. A task you create in My view that is not yours opens in its
 sub-project, on the Board, the Overview or the Roadmap you were on.
-Phones use the same project/sub-project picker. Relationship
+Phones use the same **Sub-project** picker. Relationship
 pickers keep their separate quick-create flow for subtasks, linked tasks and
 parents. Use **Move** to relocate an existing task while keeping its ID.
 

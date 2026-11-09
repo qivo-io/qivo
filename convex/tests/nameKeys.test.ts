@@ -34,6 +34,7 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { expectExact, keysOf } from './nameKeys.setup'
+import { ready as navListsReady, navRowsOf } from './projectNavFixtures.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 const START = Date.parse('2026-05-04T10:00:00.000Z')
@@ -906,7 +907,7 @@ describe('readiness', () => {
     expect(await t.run((ctx) => ctx.db.query('org_ready').collect())).toEqual([])
   })
 
-  it('never reaches the app or the export', async () => {
+  it("never reaches the workspace's own parts, the navigation reads or the export", async () => {
     const t = newT()
     const f = await withOrg(t)
     // keyed rows of every table, from their writers
@@ -929,16 +930,13 @@ describe('readiness', () => {
     )
     expect(keyed.every((count) => count > 0)).toBe(true)
     const snap = (await workspaceOf(as(t, f.admin)))!
-    const rows = [
-      ...snap.profiles,
-      ...snap.teamMembers,
-      ...snap.teams,
-      ...snap.projects,
-      ...snap.access,
-      ...snap.teamAccess,
-    ]
-    // the admin's own profile, membership and team, the projects and the
-    // admin's own grants
+    // the admin's own profile, membership and team from the root part, and
+    // the projects the lead reads from the navigation reads, the app's only
+    // project rows (projectNav.byIds, page, targets and children)
+    await navListsReady(t, f)
+    const nav = await navRowsOf(as(t, f.user), [id, f.meta.id, f.sub.id])
+    expect(nav.length).toBeGreaterThan(3)
+    const rows = [...snap.profiles, ...snap.teamMembers, ...snap.teams, ...nav]
     expect(rows.length).toBeGreaterThanOrEqual(6)
     for (const row of rows) expect(row).not.toHaveProperty('name_key')
     const page = makeFunctionReference<

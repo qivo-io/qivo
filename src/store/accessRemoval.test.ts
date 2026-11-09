@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RemovalAnswer } from './planner'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 type IssueRow = Snapshot['issues'][number]
@@ -102,7 +102,9 @@ describe('removing access through the server preview', () => {
     vi.resetModules()
     requests = []
     queries = []
-    const snap: Snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    const snap: Snapshot = underProgram(plannerFixture())
     org = snap.orgs[0].id
     work = snap.projects[0].id
     const someone = (id: string) =>
@@ -168,6 +170,8 @@ describe('removing access through the server preview', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   }
 
   beforeEach(() => {
@@ -653,7 +657,6 @@ describe('removing access through the server preview', () => {
       await load()
       expect(await P.removeAccess(crewGrant(), { keep: true }, annAnswer())).toBe(true)
       // the store holds no one else's level; the requests say what changed
-      expect(P.heldProject(work)?.teamAccess?.crew).toBeUndefined()
       expect(requests).toEqual([
         {
           name: 'projects:removeAccess',
@@ -663,8 +666,6 @@ describe('removing access through the server preview', () => {
       await load()
       refused.add(work)
       expect(await P.removeAccess(crewGrant(), { keep: true }, annAnswer())).toBe(false)
-      expect(P.heldProject(work)?.access?.ann).toBeUndefined()
-      expect(P.heldProject(work)?.teamAccess?.crew).toBe('user')
     })
 
     it('paints no Viewer grant for a team change, which the delivery brings', async () => {
@@ -678,7 +679,6 @@ describe('removing access through the server preview', () => {
           }),
       )
       const removed = P.removeAccess(leaving('ann'), { keep: true }, annAnswer())
-      expect(P.heldProject(work)?.access?.ann).toBeUndefined()
       expect(vm('t4').assignee).toBe('ann')
       deliver((snap) => {
         snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== 'ann')
@@ -953,13 +953,14 @@ describe('removing access through the server preview', () => {
     await load((snap) => {
       snap.projects[0].lead_id = 'dan'
     })
-    expect(await P.setProjectAccess(work, 'leo', 'lead')).toBe(true)
+    // as the settings page that showed Dan as the lead presses it
+    expect(
+      await P.setProjectAccess(work, 'leo', 'lead', { orgId: org, leadId: 'dan', level: 'user' }),
+    ).toBe(true)
     // the server applies the same rule (convex/lib/projectGrants.ts)
     expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
       ['projects:update', { lead_id: 'leo' }],
     ])
-    expect(P.heldProject(work)?.lead).toBe('leo')
-    expect(P.heldProject(work)?.access).toEqual({ dan: 'user', leo: 'lead' })
   })
 
   it("changes one person's or team's level with that grant alone", async () => {
@@ -968,7 +969,9 @@ describe('removing access through the server preview', () => {
     // the page sends the level it showed, as the store holds no one else's
     const shown = (level: 'user' | 'viewer') => ({ orgId: org, leadId: null, level })
     expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('user'))).toBe(true)
-    expect(await P.setProjectTeamAccess(work, 'crew', 'viewer')).toBe(true)
+    expect(
+      await P.setProjectTeamAccess(work, 'crew', 'viewer', { orgId: org, level: 'user' }),
+    ).toBe(true)
     // the level a person already has sends nothing
     expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('viewer'))).toBe(true)
     expect(requests.map((r) => [r.name, r.args])).toEqual([
@@ -982,7 +985,6 @@ describe('removing access through the server preview', () => {
       ],
     ])
     // the store holds no one else's level; the requests say what changed
-    expect(P.heldProject(work)?.teamAccess).toEqual({ crew: 'viewer' })
   })
 
   it('invites with the level the page’s lookup found as expected, and none without a lookup', async () => {

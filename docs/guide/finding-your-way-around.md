@@ -23,11 +23,12 @@ its sub-projects, 25 at first and more as you scroll or press **Load more**,
 up to 100, after which it asks you to search. One project stays expanded at
 a time, the one you are in. When you open a project from elsewhere, such as
 **All projects**, Search or a link, the tree loads on until it shows that
-project and brings its row into view. A project Qivo has not loaded yet
-opens once the server confirms that you can open it, with a note that
-says **Opening** and its name meanwhile, or that you can no longer open
-it. If you switch views, go elsewhere or open another project first, Qivo
-stops opening it. The tree loads no tasks.
+project and brings its row into view. A project opens at once. Where Qivo
+has not yet checked a project you open from a link or the one you had
+open last time, the page says it is opening the project, with its name
+where Qivo knows it, until it has checked it. It then says so if you can no
+longer open it, or that Qivo couldn't open it, with **Retry**. The tree
+loads no tasks.
 
 The tree says so when its list is not ready yet, when Qivo could not finish
 checking which projects you can see, with **Retry**, and when it checked
@@ -100,10 +101,8 @@ restored or your access returns. Removing your seat removes its stars.
 **Sub-projects** under a project lists its sub-projects, 25 at first and
 more as you scroll or press **Load more**, up to 100, and then asks you to
 search. One project's list is open at a time. Selecting a project or a
-sub-project opens it as the sidebar does. One Qivo has not loaded yet opens
-once the server confirms that you can open it, and the line above the list
-says **Opening** and its name meanwhile, or says that you can no longer
-open it. A project's **…** menu opens its
+sub-project opens it at once, as the sidebar does. A project's **…** menu
+opens its
 **Archived tasks** and, for those who may add one, **New sub-project…**.
 
 The field at the top finds projects and sub-projects by their own names,
@@ -194,8 +193,9 @@ and shows nothing of it before that check. Otherwise Qivo asks you to choose
 a project from a list of your projects, your favorites first, and when you
 can no longer open the project you opened last, it says that the project
 is no longer available to you. It never opens another project, **My view**
-or all projects by itself. If you switch views or go elsewhere before the
-check answers, Qivo does not open the project you opened last. Opening **My
+or all projects by itself. If you switch views before the check answers,
+the project opens on the view you chose; if you open another project or My
+view, that one opens instead. Opening **My
 view**, **All projects** or Team sync does not change the project Qivo
 remembers, and neither does reading a task in the Inbox or opening one by
 its link. A jump from Team sync or the Inbox to a project's Board or

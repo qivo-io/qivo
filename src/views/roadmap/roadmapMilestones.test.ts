@@ -21,12 +21,14 @@ import {
    line that says what is missing. */
 
 const W = TODAY_WEEK
-const project = (id: string) => ({ wide: false, mine: false, id, metas: [{ id: 'plan' }] })
-const MINE = { wide: true, mine: true, id: 'mine', metas: [{ id: 'plan' }, { id: 'luma' }] }
+// a scope whose top-level project the project cache names, Plan, as
+// P.scopeInfo answers topId
+const project = (id: string) => ({ mine: false, id, topId: 'plan' as string | null })
+const MINE = { mine: true, id: 'mine', topId: null }
 const TRACKS = [
-  { proj: { id: 'plan' }, subIds: ['plan-a', 'plan-b'] },
-  { proj: { id: 'luma' }, subIds: ['luma-a'] },
-  { proj: { id: 'cloud' }, subIds: ['cloud-a'] },
+  { id: 'plan', subIds: ['plan-a', 'plan-b'] },
+  { id: 'luma', subIds: ['luma-a'] },
+  { id: 'cloud', subIds: ['cloud-a'] },
 ]
 
 const row = (id: string, week: number, proj = 'plan'): Marker => ({
@@ -57,7 +59,7 @@ describe('markerProjects', () => {
     // a sub-project held with its parent names the parent
     expect(markerProjects(project('plan-a'), [], null)).toEqual(['plan'])
     // one held without its parent names itself, which the server folds
-    expect(markerProjects({ ...project('orphan'), metas: [] }, [], null)).toEqual(['orphan'])
+    expect(markerProjects({ ...project('orphan'), topId: null }, [], null)).toEqual(['orphan'])
   })
 
   it("names My view's tracks once each and sorted, before the filters prune them", () => {
@@ -165,7 +167,7 @@ describe('markerView', () => {
   it("shows the rows a sub-project's read answers for a top-level project the store does not hold", () => {
     // a sub-project held without its parent names itself, which the server
     // folds to the parent, whose milestones it answers
-    const projects = markerProjects({ ...project('orphan'), metas: [] }, [], null) ?? []
+    const projects = markerProjects({ ...project('orphan'), topId: null }, [], null) ?? []
     const plan = planOf(projects, W - 2, W + 6)
     const view = markerView(plan, ok([row('a', W, 'parent')]), null, W - 2, W + 6, projects)
     // must fail: every row dropped as one of a project not named

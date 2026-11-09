@@ -23,7 +23,6 @@ export function plannerFixture(): Snapshot {
         slug: 'testbed',
         created_at: NOW,
         next_issue_num: 0,
-        next_project_num: 1,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',

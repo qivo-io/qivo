@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* Tasks load on demand (store/liveParts.ts, store/planner.ts P.askTasks):
    a store boots without them, as the app does, asks for every task once
@@ -76,7 +76,9 @@ describe('tasks on demand', () => {
       setTimeout,
       clearTimeout,
     })
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     snapshot.orgs[0].next_issue_num = 3
     snapshot.issues.push(
       task(snapshot, '01000000-a', 1),
@@ -113,6 +115,8 @@ describe('tasks on demand', () => {
 
   const boot = async () => {
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await tick()
   }
   const held = (uuid: string) => store.P.handleOf(uuid) !== null
@@ -128,8 +132,9 @@ describe('tasks on demand', () => {
     // a wait that reads the share keeps waiting
     expect(store.P.stillLoading()).toBe(0)
     expect(held('01000000-a')).toBe(false)
-    // the projects and people are there
-    expect(store.P.projects).toHaveLength(1)
+    // the organization and the person are there; the workspace holds no
+    // project, which the views read by id
+    expect(store.P.orgs).toHaveLength(1)
     store.P.askTasks('script')
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
     expect(store.P.tasksArriving()).toBe(true)
@@ -175,26 +180,28 @@ describe('tasks on demand', () => {
     await tick()
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
     expect(store.P.project(project.id)?.name).toBe('Renamed elsewhere')
-    // the person's rename, accepted, stays painted over a later delivery
-    // that does not hold it yet
-    await store.P.updateProject(project.id, { name: 'Mine' })
+    // the person's organization rename, accepted, stays painted over a
+    // later delivery that does not hold it yet (a project write paints
+    // nothing, so the organization's name stands for a painted write)
+    const org = snapshot.orgs[0]
+    await store.P.setOrg({ name: 'Mine' })
     await tick()
     project.description = 'changed too'
     deliver(structuredClone(snapshot))
     await tick()
-    expect(store.P.project(project.id)?.name).toBe('Mine')
+    expect(store.P.org.name).toBe('Mine')
     // the server applies it and every window answers: the complete
     // delivery holds the write, so the server's rows show from then on
-    project.name = 'Mine'
+    org.name = 'Mine'
     deliver(structuredClone(snapshot))
     double.live?.holdWindow(null)
     await tick()
     await tick()
     expect(store.P.tasksHeld()).toBe(true)
-    project.name = 'Later'
+    org.name = 'Later'
     deliver(structuredClone(snapshot))
     await tick()
-    expect(store.P.project(project.id)?.name).toBe('Later')
+    expect(store.P.org.name).toBe('Later')
   })
 
   it('stops only the task load on a failing window, and keeps writes as made until Try again', async () => {
@@ -211,13 +218,13 @@ describe('tasks on demand', () => {
     expect(store.P.editsPaused()).toBe(false)
     expect(store.P.tasksHeld()).toBe(false)
     expect(store.P.tasksArriving()).toBe(false)
-    // a project rename stays painted over someone else's later one
+    // an organization rename stays painted over someone else's later one
     const project = snapshot.projects[0]
-    await store.P.updateProject(project.id, { name: 'Mine' })
-    project.name = 'Theirs'
+    await store.P.setOrg({ name: 'Mine' })
+    snapshot.orgs[0].name = 'Theirs'
     deliver(structuredClone(snapshot))
     await tick()
-    expect(store.P.project(project.id)?.name).toBe('Mine')
+    expect(store.P.org.name).toBe('Mine')
     // a create goes ahead, and asks nothing
     store.__layerProbe?.asks()
     const created = store.P.addIssue({ project: project.id, title: 'New during the failure' })
@@ -232,7 +239,7 @@ describe('tasks on demand', () => {
     expect(store.P.taskLoad()).toMatchObject({ state: 'failed', retrying: true })
     for (let i = 0; i < 3; i++) await tick()
     expect(store.P.taskLoad()).toEqual({ state: 'all' })
-    expect(store.P.project(project.id)?.name).toBe('Theirs')
+    expect(store.P.org.name).toBe('Theirs')
   })
 
   it('stops the task load when the windows stay silent, never as a load without tasks', async () => {

@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
-import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture as fixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 
@@ -42,7 +42,9 @@ describe('task creation through the client store', () => {
     showToast = vi.fn()
     vi.stubGlobal('window', { showToast })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = fixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snap = underProgram(fixture())
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
@@ -60,6 +62,8 @@ describe('task creation through the client store', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   })
 
   afterEach(() => {
@@ -68,6 +72,26 @@ describe('task creation through the client store', () => {
   })
 
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
+
+  it('sends no create into a project the project cache has not answered, and says why', async () => {
+    // a sub-project the New task picker only seeded, which no read answered
+    P.seedProjects([
+      {
+        id: 'seeded-only',
+        org_id: snap.orgs[0].id,
+        name: 'Seeded',
+        num: 77,
+        parent_id: snap.projects[0].parent_id ?? null,
+      },
+    ])
+    expect(P.projectState('seeded-only')).toBe('loading')
+    expect(P.addIssue({ project: 'seeded-only', title: 'Too early' })).toBeNull()
+    expect(requests).toEqual([])
+    expect(showToast).toHaveBeenCalledWith('Loading this project…', 'error')
+    // an answered one creates
+    expect(P.addIssue({ project: snap.projects[0].id, title: 'In time' })).not.toBeNull()
+    expect(requests.map((r) => r.name)).toEqual(['issues:create'])
+  })
 
   it('keeps the handle when creation succeeds with the previewed number', async () => {
     const moved = vi.fn()

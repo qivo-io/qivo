@@ -25,12 +25,19 @@ import {
   syncWalk,
 } from '../lib/teamSync'
 import type { Whole } from './guard/liveDouble.setup'
-import { type IssueVM, P, type ProjectVM, type TeamVM } from './planner'
+import { oracleLevels } from './oracleScope.setup'
+import { type IssueVM, P, type TeamVM } from './planner'
 
-export type SyncProject = Pick<
-  ProjectVM,
-  'id' | 'type' | 'org' | 'parent' | 'children' | 'teamAccess'
->
+/** A project as the scope world reads it, from the server's whole: its
+    sub-projects and its team shares by team. */
+export type SyncProject = {
+  id: string
+  type: 'meta' | 'project'
+  org: string
+  parent: string | undefined
+  children: string[] | undefined
+  teamAccess: Record<string, string>
+}
 export type SyncTeam = Pick<TeamVM, 'id' | 'org'>
 /** What a blocker lookup needs: its display key and whether it is finished
     (a group is finished when all its known leaves are, as `P.isDone`). */
@@ -126,15 +133,38 @@ export function blockersOf(
 }
 
 /** The page's scope world (TeamSync.tsx): the home organization, the
- * store's projects and teams and what the person can see. */
-export const worldOf = (whole: Pick<Whole, 'teams'>): ScopeWorld => ({
-  homeOrg: P.homeOrg,
-  projects: P.projects,
-  // every team of the server's data, as the agenda resolves a scope by
-  // them; the store holds the person's own teams alone
-  teams: whole.teams.map((t) => ({ id: t.id, org: t.org_id })),
-  canSee: (id) => P.canSee(id),
-})
+ * server's live projects with their sub-projects and team shares, its
+ * teams and what the person sees, by the navigation reads' rule
+ * (oracleLevels), as the store judged it while it held every project. */
+export const worldOf = (whole: Whole): ScopeWorld => {
+  const levels = oracleLevels(whole)
+  const live = whole.projects.filter((p) => !p.archived_at)
+  const byOrder = (a: (typeof live)[number], b: (typeof live)[number]) =>
+    a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at)
+  return {
+    homeOrg: P.homeOrg,
+    projects: live.map((p) => ({
+      id: p.id,
+      type: p.type === 'meta' ? ('meta' as const) : ('project' as const),
+      org: p.org_id,
+      parent: p.parent_id ?? undefined,
+      children:
+        p.type === 'meta'
+          ? live
+              .filter((c) => c.parent_id === p.id)
+              .sort(byOrder)
+              .map((c) => c.id)
+          : undefined,
+      teamAccess: Object.fromEntries(
+        whole.teamAccess.filter((g) => g.project_id === p.id).map((g) => [g.team_id, g.level]),
+      ),
+    })),
+    // every team of the server's data, as the agenda resolves a scope by
+    // them; the store holds the person's own teams alone
+    teams: whole.teams.map((t) => ({ id: t.id, org: t.org_id })),
+    canSee: (id) => levels.has(id),
+  }
+}
 
 /** A person of the server's data as the oracle walks them: their name,
     kind, teams and Team sync stamp, which the store holds for the person's
@@ -160,11 +190,7 @@ export function peopleOf(whole: Pick<Whole, 'profiles' | 'teamMembers'>): Oracle
  * opening's Needs an owner, each walker's Done since from their exact
  * reading point, each row's blockers and banner verdict, each walker's
  * week hours (P.weekLoadOf) and the sub-projects the person may edit. */
-export function meetingOf(
-  scope: SyncScope,
-  now: number,
-  whole: Pick<Whole, 'teams' | 'profiles' | 'teamMembers'>,
-) {
+export function meetingOf(scope: SyncScope, now: number, whole: Whole) {
   const world = worldOf(whole)
   const subIds = scopeProjectIds(scope, world)
   const rows = syncRows(P.issues, subIds)

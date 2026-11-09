@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -21,6 +21,9 @@ describe('a parent outside the working set', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
   let reject: (reason: unknown) => void
+  let resolve: (value: null) => void
+  // a later delivery of the server's whole, as `edit` leaves it
+  let deliver: (edit: (whole: Snapshot) => void) => Promise<void>
 
   const task = (id: string, num: number, project_id: string, extra = {}) => ({
     id,
@@ -48,7 +51,9 @@ describe('a parent outside the working set', () => {
     )
     vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     const here = snapshot.projects[0].id
     const there = crypto.randomUUID()
     snapshot.projects.push({
@@ -69,16 +74,27 @@ describe('a parent outside the working set', () => {
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation(
       () =>
-        new Promise((_yes, no) => {
+        new Promise((yes, no) => {
+          resolve = yes
           reject = no
         }),
     )
     network.onUpdate.mockImplementation((ref, _args, receive) => {
-      if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snapshot))
+      if (getFunctionName(ref) === 'workspace:whole') {
+        receive(structuredClone(snapshot))
+        deliver = async (edit) => {
+          const later = structuredClone(snapshot)
+          edit(later)
+          receive(later)
+          for (let i = 0; i < 8; i++) await Promise.resolve()
+        }
+      }
       return vi.fn()
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await Promise.resolve()
   })
   afterEach(() => {
@@ -111,19 +127,66 @@ describe('a parent outside the working set', () => {
     expect(vm('orphan')).toMatchObject({ parent: null, hasHiddenParent: false })
   })
 
-  it("archiving a subtask's project leaves its parent in another project without it", () => {
+  // the sub-project There, which holds far-parent and far-child
+  const thereId = () => snapshot.projects.find((p) => p.key === 'THERE')?.id ?? ''
+
+  /* The server's whole once project `id` is archived: the project marked
+     archived, its tasks out of the working set, and a task whose parent
+     left with them sent with a hidden parent (convex/lib/workingSet.ts
+     parentLink). */
+  const archived = (id: string) => (whole: Snapshot) => {
+    const project = whole.projects.find((p) => p.id === id)
+    if (project) project.archived_at = '2026-10-02T00:00:00.000Z'
+    const gone = new Set(whole.issues.filter((t) => t.project_id === id).map((t) => t.id))
+    whole.issues = whole.issues
+      .filter((t) => !gone.has(t.id))
+      .map((t) =>
+        t.parent_id && gone.has(t.parent_id)
+          ? { ...t, parent_id: undefined, has_hidden_parent: true }
+          : t,
+      )
+  }
+
+  it("archiving a subtask's project leaves its parent in another project without it", async () => {
     const { P } = store
+    const there = thereId()
     expect(vm('near-parent')).toMatchObject({ isGroup: true, hasHiddenSubtasks: false })
-    P.archiveProject(snapshot.projects[1].id)
+    P.archiveProject(there, { orgId: snapshot.orgs[0].id })
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toEqual({
+      org_id: snapshot.orgs[0].id,
+      id: there,
+    })
+    // the write paints nothing; the delivery without the archived tasks
+    // takes them away
+    expect(vm('near-parent')).toMatchObject({ isGroup: true })
+    await deliver(archived(there))
+    // deliveries wait while the write is on its way
+    resolve(null)
+    await settle()
     // a subtask in an archived project makes no task in an active one a group
-    expect(vm('near-parent')).toMatchObject({ isGroup: false, hasHiddenSubtasks: false })
+    await vi.waitFor(() =>
+      expect(vm('near-parent')).toMatchObject({ isGroup: false, hasHiddenSubtasks: false }),
+    )
   })
 
-  it("archiving the parent's project leaves its child with a parent outside this view", () => {
+  it("archiving the parent's project leaves its child with a parent outside this view", async () => {
     const { P } = store
+    const there = thereId()
     expect(vm('near-child')?.parent).toBe(vm('far-parent')?.id)
-    P.archiveProject(snapshot.projects[1].id)
-    expect(vm('far-parent')).toBeUndefined()
+    P.archiveProject(there, { orgId: snapshot.orgs[0].id })
+    expect(vm('far-parent')).toBeDefined()
+    await deliver(archived(there))
+    // deliveries wait while the write is on its way
+    resolve(null)
+    await settle()
+    await vi.waitFor(() => expect(vm('far-parent')).toBeUndefined())
     expect(vm('near-child')).toMatchObject({ parent: null, hasHiddenParent: true })
+  })
+
+  it('sends no archive without the organization of the page that showed the project', () => {
+    const { P } = store
+    const calls = network.mutation.mock.calls.length
+    P.archiveProject(thereId())
+    expect(network.mutation.mock.calls.length).toBe(calls)
   })
 })

@@ -1427,7 +1427,7 @@ describe('the benchmark server', () => {
     expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
-  it('sends no milestone in its projects part, while the milestone reads answer the planted ones', async () => {
+  it('sends no milestone in its workspace parts, while the milestone reads answer the planted ones', async () => {
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&programs=3&milestoneweeks=3&milestoneprograms=2',
     )
@@ -1443,9 +1443,9 @@ describe('the benchmark server', () => {
     const root = await read('workspace:root', {})
     const org = root.orgs[0]
     const parts = []
-    for (const w of idWindows(startWindows(org).projects))
-      parts.push(await read('workspace:projects', { org_id: org.id, ...w }))
-    expect(parts.flatMap((part) => part.projects).length).toBe(snap.projects.length)
+    for (const w of idWindows(startWindows(org).tasks))
+      parts.push(await read('workspace:tasks', { org_id: org.id, ...w }))
+    expect(parts.length).toBeGreaterThan(0)
     for (const part of parts) {
       expect(part.state).toBe('ok')
       expect(part).not.toHaveProperty('milestones')
@@ -1632,7 +1632,7 @@ describe('the benchmark server', () => {
     )
   }, 60_000)
 
-  it('leaves the programs unheldprojects names out of the projects part while projectNav.byIds answers them, with its forced states', async () => {
+  it('answers projectNav.byIds of every program the person sees, with its forced states, and no part sends a project', async () => {
     /** What snapshot:forMe and then byIds of the programs answer with `params`. */
     const byIds = async (params) => {
       const { posted, send } = await server(
@@ -1640,6 +1640,8 @@ describe('the benchmark server', () => {
       )
       await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
       const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
+      const root = JSON.parse(posted.find((m) => m.to === 'root').text)
       await send({ type: 'query', id: 'all', name: 'projectNav:page', args: {} })
       const page = JSON.parse(posted.find((m) => m.to === 'all').text)
       const ids = page.rows.map((row) => row.id)
@@ -1647,6 +1649,7 @@ describe('the benchmark server', () => {
       const answer = posted.find((m) => m.to === 'ids')
       return {
         snap,
+        root,
         ids,
         answer:
           answer === undefined
@@ -1657,22 +1660,98 @@ describe('the benchmark server', () => {
       }
     }
     const plain = await byIds('')
+    // the whole holds every program, and the root sends none
     expect(plain.snap.projects.filter((p) => !p.parent_id)).toHaveLength(4)
+    expect(plain.root).not.toHaveProperty('projects')
+    expect(plain.root).not.toHaveProperty('live_projects')
     expect(plain.answer.rows.map((row) => row.id)).toEqual(plain.ids)
     expect(plain.answer.unchecked).toEqual([])
-    const left = await byIds('unheldprojects=2')
-    // the two highest-numbered programs and their sub-projects leave the part
-    const held = left.snap.projects.filter((p) => !p.parent_id).map((p) => p.name)
-    expect(held).toEqual(['Testbed program', 'Testbed program 2'])
-    expect(left.snap.projects).toHaveLength(6)
-    // while byIds still answers them
-    expect(left.answer.rows).toHaveLength(4)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect((await byIds('unheldprojects=2&projectnav=byids-loading')).answer).toBeNull()
-    expect((await byIds('unheldprojects=2&projectnav=byids-error')).answer.error).toContain('fails')
-    const apart = await byIds('unheldprojects=2&projectnav=byids-unchecked')
+    expect((await byIds('projectnav=byids-loading')).answer).toBeNull()
+    expect((await byIds('projectnav=byids-error')).answer.error).toContain('fails')
+    const apart = await byIds('projectnav=byids-unchecked')
     expect(apart.answer).toMatchObject({ rows: [], unchecked: apart.ids })
     expect(apart.answer.message).toContain('could not finish checking')
+  }, 60_000)
+
+  it("answers projectNav.holds from the workspace, or as holds asks, and the targets through projectnav's states", async () => {
+    /** What `name` answers with `args` on a workspace with `params`. */
+    const ask = async (params, name, args = {}) => {
+      const { posted, send } = await server(
+        `tasks=20&programs=3&subprojects=3&latency=0&mbps=100000&${params}`,
+      )
+      await send({ type: 'query', id: 'read', name, args })
+      const answer = posted.find((m) => m.to === 'read')
+      return answer === undefined
+        ? null
+        : answer.error
+          ? { error: answer.error }
+          : JSON.parse(answer.text)
+    }
+    expect(await ask('', 'projectNav:holds')).toEqual({ state: 'ok', top: true, sub: true })
+    expect(await ask('holds=none', 'projectNav:holds')).toEqual({
+      state: 'ok',
+      top: false,
+      sub: false,
+    })
+    expect(await ask('holds=no-sub', 'projectNav:holds')).toEqual({
+      state: 'ok',
+      top: true,
+      sub: false,
+    })
+    expect(await ask('holds=loading', 'projectNav:holds')).toBeNull()
+    // the New task dialog's targets take projectnav's states
+    const targets = await ask('', 'projectNav:targets')
+    expect(targets.state).toBe('ok')
+    expect(targets.rows.length).toBeGreaterThan(0)
+    expect(targets.rows.every((row) => row.parent_name)).toBe(true)
+    expect(await ask('projectnav=stopped', 'projectNav:targets')).toMatchObject({ stopped: true })
+    expect(await ask('projectnav=empty', 'projectNav:targets')).toEqual({
+      state: 'ok',
+      rows: [],
+      next: null,
+      stopped: false,
+    })
+    expect((await ask('projectnav=error', 'projectNav:targets')).error).toContain('fails')
+    // a build from before the projects part went subscribes it, which this
+    // server says it does not serve, rather than failing without a word
+    const removed = await ask('', 'workspace:projects', { from: '' })
+    expect(removed.error).toContain(
+      'workspace:projects is no workspace part this perf server serves',
+    )
+    expect(removed.error).toContain('its own checkout')
+  }, 60_000)
+
+  it("answers Team sync's scope menu with syncmenu's states, apart from the other navigation reads", async () => {
+    /** What projectNav.page answers with `args` on a workspace with `params`. */
+    const page = async (params, args = {}) => {
+      const { posted, send } = await server(
+        `tasks=20&programs=12&subprojects=1&latency=0&mbps=100000&${params}`,
+      )
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const org = snap.orgs[0].id
+      await send({
+        type: 'query',
+        id: 'read',
+        name: 'projectNav:page',
+        args: typeof args === 'function' ? args(org) : args,
+      })
+      const answer = posted.find((m) => m.to === 'read')
+      return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+    }
+    const home = (org) => ({ org_id: org })
+    expect((await page('syncmenu=small', home)).rows).toHaveLength(5)
+    // the sidebar's list, with no org_id, keeps its own batches
+    expect((await page('syncmenu=small')).rows).toHaveLength(12)
+    expect(await page('syncmenu=stopped', home)).toMatchObject({ stopped: true })
+    expect((await page('syncmenu=error', home)).error).toContain('fails')
+    expect(await page('syncmenu=not-ready', home)).toEqual({ state: 'not_ready' })
+    expect(await page('syncmenu=empty', home)).toEqual({
+      state: 'ok',
+      rows: [],
+      next: null,
+      stopped: false,
+    })
   }, 60_000)
 
   it('remembers the first program as the project opened last, or none or a lost one as startup asks', async () => {
@@ -1940,46 +2019,6 @@ describe('the benchmark server', () => {
       state: 'refused',
       message: 'no permission to manage users on this project',
     })
-    // unheld: once read, the workspace's parts leave the project out while
-    // its page's reads still answer it
-    const unheld = await ask('projectsettings=unheld', 'projectSettings:get', byId)
-    expect(unheld.answer.state).toBe('ok')
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    await unheld.send({ type: 'query', id: 'after', name: 'snapshot:forMe', args: {} })
-    const after = JSON.parse(unheld.posted.find((m) => m.to === 'after').text)
-    expect(after.projects.some((p) => p.id === unheld.project.id)).toBe(false)
-    // a level change goes into the workspace the reads answer from
-    await unheld.send({
-      type: 'mutation',
-      id: 'write',
-      name: 'projects:setAccess',
-      args: {
-        org_id: unheld.snap.orgs[0].id,
-        id: unheld.project.id,
-        user_id: unheld.snap.profiles[3].id,
-        level: 'viewer',
-        expected: { level: null },
-      },
-    })
-    await vi.waitFor(() => expect(unheld.posted.some((m) => m.id === 'write')).toBe(true))
-    await unheld.send({
-      type: 'query',
-      id: 'users',
-      name: 'projectSettings:users',
-      args: { org_id: unheld.snap.orgs[0].id, project_id: unheld.project.id },
-    })
-    const users = JSON.parse(unheld.posted.find((m) => m.to === 'users').text)
-    expect(users.rows.map((r) => [r.id, r.level])).toContainEqual([
-      unheld.snap.profiles[3].id,
-      'viewer',
-    ])
-    // a page read by its number leaves the project it found out as well
-    const numbered = await ask('projectsettings=unheld', 'projectSettings:get', byNum)
-    expect(numbered.answer).toMatchObject({ state: 'ok', project: { id: numbered.project.id } })
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    await numbered.send({ type: 'query', id: 'after', name: 'snapshot:forMe', args: {} })
-    const afterNum = JSON.parse(numbered.posted.find((m) => m.to === 'after').text)
-    expect(afterNum.projects.some((p) => p.id === numbered.project.id)).toBe(false)
   }, 60_000)
 
   it("answers Settings' project lists from the workspace, with the archive, the hidden projects and the states the page asks for", async () => {
@@ -2092,7 +2131,11 @@ describe('the benchmark server', () => {
       lead_id: before.profiles[0].id,
       sort_order: Math.max(...siblings.map((p) => p.sort_order)) + 1,
     })
-    expect(after.orgs[0].next_project_num).toBe(before.orgs[0].next_project_num + 1)
+    // numbered past every project the server holds, as org_counters numbers
+    // it, with no project number in the root
+    expect(row.num).toBeGreaterThan(Math.max(...before.projects.map((p) => p.num)))
+    expect(after.orgs[0]).not.toHaveProperty('next_project_num')
+    expect(after.orgs[0]).not.toHaveProperty('live_projects')
     // under the hidden program, which the workspace leaves out, it stays out
     // and Settings' lists and its page still answer it
     const lists = async (tag) => {
@@ -2822,23 +2865,20 @@ describe('Deleted items on the benchmark page', () => {
     expect(root.orgs.map((o) => o.name)).toEqual(['Testbed Labs', 'Partner Co'])
     expect(root.myProfileIds).toHaveLength(2)
     const partner = root.orgs[1]
-    // its parts hold its projects, the root its seat, and the first one's
-    // parts neither
-    const [projectWindow] = idWindows(startWindows(partner).projects)
-    const projects = await two.read('workspace:projects', { org_id: partner.id, ...projectWindow })
-    expect(projects.projects.map((p) => p.name)).toEqual(['Partner launch', 'Partner web'])
+    // the root holds its seat, and no workspace part a project: the project
+    // picker offers its project, so its scope can be chosen
+    const nav = await two.read('projectNav:page')
     expect(root.profiles.filter((p) => p.org_id === partner.id).map((p) => p.id)).toEqual([
       'perf-partner-seat',
     ])
-    const [firstWindow] = idWindows(startWindows(root.orgs[0]).projects)
-    const first = await two.read('workspace:projects', { org_id: two.org, ...firstWindow })
-    expect(first.projects.length).toBeGreaterThan(0)
-    expect(first.projects.some((p) => p.org_id === partner.id)).toBe(false)
-    // the project picker offers its project, so its scope can be chosen
-    const nav = await two.read('projectNav:page')
     expect(nav.rows.filter((row) => row.org_id === partner.id).map((row) => row.name)).toEqual([
       'Partner launch',
     ])
+    // and the reads by id name it and its sub-project
+    const named = await two.read('projectNav:byIds', {
+      ids: ['perf-partner-top', 'perf-partner-web'],
+    })
+    expect(named.rows.map((row) => row.name)).toEqual(['Partner launch', 'Partner web'])
     // Deleted items reads both, and the scope of Partner Co its own
     const both = await two.read('deletedItems:page')
     expect(new Set(both.items.map((row) => row.org_name))).toEqual(

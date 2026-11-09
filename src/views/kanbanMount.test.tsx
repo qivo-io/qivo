@@ -305,16 +305,24 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
         })
     })
     await board.render(root)
-    const waiting = () =>
+    // the estimated height of a card still to mount, as the slices that
+    // run meanwhile mount some of them
+    const perCard = () =>
       Number.parseFloat(
         document.querySelector<HTMLElement>('[data-board-pending]')?.style.height ?? '0',
-      )
-    const before = waiting()
+      ) /
+      (500 - cards().length)
+    const before = perCard()
     expect(before).toBeGreaterThan(0)
     // the tasks keep their objects, and each card gains its delay banner
+    // once the project cache answers the projects' new rule, which the
+    // store paints in the next frame, run here from the slices' queue
     for (const project of board.snapshot.projects) project.track_delay = true
     await board.deliver()
-    expect(waiting()).toBeGreaterThan(before)
+    await vi.waitFor(async () => {
+      await slice()
+      expect(perCard()).toBeGreaterThan(before)
+    })
   })
 
   it('sizes the waiting cards again when the date format changes', async () => {
@@ -335,12 +343,27 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
 
   it('keeps the cards it sized when a change moves only the store context', async () => {
     const board = await loadBoard(network, tasks(500))
+    const painted = board.P.projectsVersion
     await board.render(root)
+    // the project cache's answers of the Board's projects land first
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(board.snapshot.projects.every((p) => board.P.projectState(p.id) !== 'loading')).toBe(
+          true,
+        ),
+      ),
+    )
+    // and the store paints them in its next frame, which this suite runs
+    // from the slices' queue
+    for (let n = 0; n < 50 && board.P.projectsVersion === painted; n++) await slice()
+    expect(board.P.projectsVersion).not.toBe(painted)
+    const projects = board.P.projectsVersion
     const delay = vi.spyOn(board.P, 'delayColor')
     // a person's new name renders every mounted card again, and sizes none
     board.snapshot.profiles[0].name = 'Planner Renamed'
     await board.deliver()
     expect(document.querySelector('[aria-label$=": Planner Renamed"]')).not.toBeNull()
+    expect(board.P.projectsVersion).toBe(projects)
     expect(delay.mock.calls.length).toBeLessThan(cards().length * 4)
     expect(delay.mock.calls.length).toBeLessThan(100)
   })

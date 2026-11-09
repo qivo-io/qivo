@@ -677,7 +677,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.body.textContent).toContain('Nothing matches your filters')
   })
 
-  it('stands every lane and side-board of the selection in its frame, also under a clearable filter', async () => {
+  it('shows its frame with no lane or side-board until the answer names them, also under a clearable filter', async () => {
     for (const metaViz of ['swimlanes', 'sideboards'] as const) {
       const board = await loadBoard(network, plan, { scope: 'plan', metaViz })
       await board.render(root)
@@ -690,7 +690,10 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       board.server.hold = true
       await board.filter({ priority: 'urgent' })
       expect(state()).toBe('refreshing')
-      expect(groups()).toBe(shown)
+      // the groups come from the answer (store/scopeGroups.ts), so the
+      // frame stands its columns with none until it arrives
+      expect(groups()).toBe(0)
+      expect(busy()).toBe(true)
       expect(document.querySelector('[data-card]')).toBeNull()
       expect(document.body.textContent).not.toContain('Nothing matches your filters')
       // the answer drops the lanes without cards and says nothing matches
@@ -1015,9 +1018,11 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(document.querySelector('[data-status-count]')).toBeNull()
     expect(document.querySelector('[data-card]')).toBeNull()
     const choices = [...document.querySelectorAll<HTMLButtonElement>('[data-board-choice]')]
-    expect(choices.map((b) => b.dataset.boardChoice)).toEqual(
-      board.P.scopeInfo('plan')?.groups.map((g) => g.proj.id),
-    )
+    // the answer's sub-projects, in its order
+    expect(choices.map((b) => b.dataset.boardChoice)).toEqual([
+      board.snapshot.projects[0].id,
+      'two',
+    ])
     await act(async () => choices[1].click())
     expect(board.actions.setScope).toHaveBeenCalledWith('two')
   })

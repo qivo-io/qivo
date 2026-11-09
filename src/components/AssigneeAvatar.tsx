@@ -110,12 +110,16 @@ export function OwnerPickList({
   onClose,
   onPick,
   off,
+  editable,
 }: {
   issue: IssueVM
   field?: OwnerField
   onClose: (then: () => void) => void
   onPick?: (profileId: string | null) => void
   off?: string
+  /** the person's right from the view's own answer (Team sync's agenda
+      `editable`), which decides in place of the project cache's level */
+  editable?: boolean
 }) {
   const shown = field ?? issue.ownerField
   const holder = issue[shown] || null
@@ -265,7 +269,7 @@ export function OwnerPickList({
   const pick = (id: string | null) => {
     if (off) return
     const live = liveTask(issue.id)
-    if (!live || !P.canWrite(live.project)) return
+    if (!live || !(editable ?? P.canWrite(live.project))) return
     onClose(() => {
       const now = liveTask(issue.id)
       if (!now) return
@@ -512,6 +516,7 @@ export function AssigneeAvatar({
   variant = 'portrait',
   backLayer = false,
   offTitle,
+  editable,
 }: {
   issue: IssueVM
   compact?: boolean
@@ -519,6 +524,10 @@ export function AssigneeAvatar({
   onPick?: (profileId: string | null) => void
   variant?: 'portrait' | 'chevron' | 'label'
   backLayer?: boolean
+  /** the person's right on the task from the view's own answer, as Team
+      sync's agenda answers `editable`, which decides in place of the
+      project cache's level (P.canWrite); false says the read-only text */
+  editable?: boolean
   /** why the control is off although the person may edit the task, such
       as Team sync's stale meeting. Given it, the picker does not open, and
       a list already open closes and writes nothing (OwnerPickList `off`).
@@ -531,10 +540,14 @@ export function AssigneeAvatar({
   // the person's own new task, which the server has not stored yet, has no
   // owners to read until it has (P.createOnItsWay)
   const waits = offTitle ?? (P.createOnItsWay(issue.uuid) ? WAITS_FOR_SAVE : undefined)
-  const editor = P.canWrite(issue.project)
+  const editor = editable ?? P.canWrite(issue.project)
   // a project that takes no write says why first, as while it loads
   // (P.writeNote), then the task's own wait
-  const off = editor ? waits : (P.writeNote(issue.project) ?? READ_ONLY_PROJECT)
+  const off = editor
+    ? waits
+    : editable === false
+      ? READ_ONLY_PROJECT
+      : (P.writeNote(issue.project) ?? READ_ONLY_PROJECT)
   const canWrite = editor && !waits
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !editor) return portrait
@@ -587,7 +600,14 @@ export function AssigneeAvatar({
         )}
       >
         {(close) => (
-          <OwnerPickList issue={issue} field={field} onClose={close} onPick={onPick} off={off} />
+          <OwnerPickList
+            issue={issue}
+            field={field}
+            onClose={close}
+            onPick={onPick}
+            off={off}
+            editable={editable}
+          />
         )}
       </Popover>
     </span>

@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { pastCloseTicks } from '../lib/discardQuestion.setup'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* Closing the task window while it holds text the person typed and has not
    sent, on the real store and the real editors. The window closes the way
@@ -41,7 +41,9 @@ const COMMENT = '00000000-0000-4000-8000-000000000002'
 
 async function open({ embedded = false, title = 'Run the soak test', comment = false } = {}) {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  const snap: Snapshot = underProgram(plannerFixture())
   const comments = comment
     ? [
         {

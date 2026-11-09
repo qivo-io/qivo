@@ -138,6 +138,8 @@ async function boot() {
   })
   store = await import('./planner')
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
 }
 
 beforeEach(() => {
@@ -794,11 +796,14 @@ describe('the writes', () => {
     await watch('sync', range(['plan', 'ship']), 3)
     await watch('sync', null, 3)
     const P = store.P
-    P.archiveProject('ship')
+    // the organization of the page that showed the project, which a
+    // project write needs
+    const shown = { orgId: P.homeOrg }
+    P.archiveProject('ship', shown)
     writes[0].resolve(null)
     await turns()
     expect(names('sync')).toEqual(['Alpha', 'Beta'])
-    const restored = P.unarchiveProject('ship')
+    const restored = P.unarchiveProject('ship', shown)
     writes[1].resolve(null)
     await expect(restored).resolves.toBe(true)
     // the window on Ship's milestone shows the server's answer
@@ -813,12 +818,13 @@ describe('the writes', () => {
     await boot()
     await watch('up', upcoming(['plan', 'ship']))
     const P = store.P
-    P.archiveProject('ship')
+    const shown = { orgId: P.homeOrg }
+    P.archiveProject('ship', shown)
     expect(names('up')).toEqual(['Alpha', 'Beta', 'Later'])
     writes[0].reject(new ConvexError({ code: 'rule', message: 'no' }))
     await turns()
     expect(names('up')).toEqual(['Alpha', 'Sail', 'Beta', 'Later'])
-    const removed = P.removeProject('plan')
+    const removed = P.removeProject('plan', undefined, shown)
     writes[1].resolve(null)
     await expect(removed).resolves.toBe(true)
     await turns()

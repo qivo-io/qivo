@@ -690,11 +690,7 @@ describe('the project picker', { timeout: 30_000 }, () => {
     const next = base()
     top(next, 'Luma Sensor')
     await load(next)
-    const spies = [
-      vi.spyOn(store.P, 'visibleProjects'),
-      vi.spyOn(store.P, 'project'),
-      vi.spyOn(store.P, 'canSee'),
-    ]
+    const spies = [vi.spyOn(store.P, 'project'), vi.spyOn(store.P, 'canSee')]
     await withTrigger()
     // a closed picker holds no read
     expect(subs).toEqual([])

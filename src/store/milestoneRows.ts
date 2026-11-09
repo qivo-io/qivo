@@ -1,7 +1,7 @@
 /* The milestones the store's milestone reads hold (store/planner.ts
    P.watchMilestones: convex/milestones.ts get, section and between), and
    the paints of a person's milestone writes over them. They are the only
-   milestones the store keeps, as the workspace's projects part sends none.
+   milestones the store keeps, as no workspace part sends one.
 
    - Each read keeps its last answer, by slot, as its anchor: the ask it
      answers, its rows in the server's order, and the answer's `next`,
