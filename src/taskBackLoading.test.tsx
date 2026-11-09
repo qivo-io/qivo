@@ -206,7 +206,8 @@ function partner(snap: Snapshot) {
     organization's slug after the load began and before App's first render.
     `shape` changes the workspace first. Answers the store, the
     organization's slug and a function that publishes the workspace again
-    with a change. */
+    with a change, in an act of its own (`change`) or in the caller's
+    (`publishChange`). */
 async function bootLoading(
   held = true,
   reached?: (org: string) => string,
@@ -280,14 +281,14 @@ async function bootLoading(
       </TooltipProvider>,
     ),
   )
-  const change = (edit: (snap: Snapshot) => void) =>
-    act(async () => {
-      const next = structuredClone(snap)
-      edit(next)
-      next.delivered_at = '2026-09-15T09:00:00.000Z'
-      publish(next)
-    })
-  return { store, org: location.pathname.split('/')[2], change, snap }
+  const publishChange = (edit: (snap: Snapshot) => void) => {
+    const next = structuredClone(snap)
+    edit(next)
+    next.delivered_at = '2026-09-15T09:00:00.000Z'
+    publish(next)
+  }
+  const change = (edit: (snap: Snapshot) => void) => act(async () => publishChange(edit))
+  return { store, org: location.pathname.split('/')[2], change, publishChange, snap }
 }
 
 /** Makes the project at board/p/1 top-level, so the sidebar lists it, adds
@@ -494,6 +495,43 @@ describe('Back to a task still to arrive', { timeout: 60_000 }, () => {
     expect(history.length).toBe(entries)
     // the page under the window lost its project, so the task's answer
     // moves nothing, and closing it shows the chooser with the note
+    await close()
+    await waitFor(
+      () => document.querySelector('[data-project-chooser-state="lost"]'),
+      'the chooser',
+    )
+    expect(document.querySelector('[data-project-chooser-note]')?.textContent).toBe(
+      'Task creation fixture is no longer available to you.',
+    )
+    expect(location.pathname).not.toBe(`/app/${org}/board/p/2`)
+  })
+
+  it("shows the chooser when the project goes in the frame the task arrives, also once the cache names the task's project", async () => {
+    const { store, org, publishChange, snap } = await bootLoading(true, undefined, secondProject)
+    const second = snap.projects.find((project) => project.num === 2)?.id
+    await back(`/app/${org}/board/p/1`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    // the project cache answers the loss at once, and the store repaints
+    // for it a frame later (store/planner.ts projectFrame), so App first
+    // renders it with the task's answer, which comes within that frame
+    await act(async () => {
+      publishChange((next) => {
+        next.projects = next.projects.filter((project) => project.num !== 1)
+      })
+      for (const answer of arriving.splice(0)) answer()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    // the window's own read of the task arrives and names the task's
+    // project with the cache, whose answer the store takes in a frame
+    // later, and App renders it before the close
+    await arrive()
+    await waitFor(() => store.P.project(second), "the task's project")
+    await act(async () => {})
     await close()
     await waitFor(
       () => document.querySelector('[data-project-chooser-state="lost"]'),

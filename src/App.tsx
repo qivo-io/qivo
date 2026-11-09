@@ -1608,7 +1608,13 @@ function App() {
     }
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
-    if (pending.page !== pageKey(here) || sync) {
+    // a project scope the project cache answers gone has left the page,
+    // also before App renders that news (store/planner.ts projectFrame
+    // repaints a frame later), which can then land with the task's answer.
+    // The access guard drops it after this effect, so the answer moves
+    // nothing, as when the guard ran first
+    const lost = !!scope && !P.isMineScope(scope) && P.scopeInfo(scope).state === 'gone'
+    if (pending.page !== pageKey(here) || sync || lost) {
       if (waiting) openStartup()
       return
     }
