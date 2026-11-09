@@ -1,9 +1,9 @@
 /* Convex refuses a function result that holds an array of more than 8,192
- * values. The workspace parts (lib/workspaceParts.ts) send their lists
- * through chunkLists, and the app joins them back with joinLists
- * (lib/workspaceJoin.ts partRows), so no list of a large organization fails
- * a part. No imports, so the app can import this file as it
- * does limits.ts. */
+ * values. No Convex function sends such lists any more, since the workspace
+ * parts that did went. chunkLists stays for the browser benchmark's perf
+ * server alone (scripts/perf/server.mjs wireSnapshot), which sends a
+ * baseline build's whole snapshot with its long lists in parts, as forMe
+ * did. No imports, so the perf server's worker can load this file. */
 
 /** The most values one array in a function result may hold. A mutable
  * object, so tests can lower it. */
@@ -38,20 +38,4 @@ export function chunkLists<L extends Record<string, unknown[]>>(
   }
   const out = Object.keys(more).length === 0 ? heads : { ...heads, more }
   return out as L & { more?: MoreRows<L> }
-}
-
-/** `result` with the rows chunkLists moved to `more` joined back onto their
- * lists, in order, and `more` dropped. */
-export function joinLists<R extends { more?: Record<string, unknown[][] | undefined> }>(
-  result: R,
-): Omit<R, 'more'> {
-  const { more, ...rest } = result
-  if (more === undefined) return rest
-  const lists: Record<string, unknown> = rest
-  for (const [name, chunks] of Object.entries(more)) {
-    const head = lists[name]
-    if (chunks === undefined || !Array.isArray(head)) continue
-    lists[name] = head.concat(...chunks)
-  }
-  return rest
 }
