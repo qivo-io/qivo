@@ -455,4 +455,39 @@ describe('Move window', () => {
       network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:move'),
     ).toEqual([])
   })
+
+  it('says at its end that no other sub-project takes the task where the list holds only Current, and not beside another row', async () => {
+    carries = false
+    /** The person edits only `edits` of WEB's sub-projects, and views WEB. */
+    const editing = (edits: () => string[]) => (snap: Snapshot, web: string) => {
+      const me = snap.profiles[0].id
+      snap.profiles[0].org_role = 'user'
+      for (const p of snap.projects) p.lead_id = edits().includes(p.id) ? me : undefined
+      snap.access.push({ project_id: web, profile_id: me, level: 'viewer' })
+    }
+    // FE, the task's own sub-project, alone
+    await load(editing(() => [ids.fe]))
+    const lone = P.issues.find((it) => it.uuid === 'lone')
+    if (!lone) throw new Error('no task')
+    await openFor(lone.id)
+    const picker = () => document.querySelector<HTMLElement>('[data-target-picker]')
+    await vi.waitFor(() => expect(picker()?.dataset.pickerState).toBe('ready'))
+    expect(
+      [...document.querySelectorAll<HTMLElement>('[data-target]')].map((r) => r.dataset.target),
+    ).toEqual([ids.fe])
+    // must fail for an end that counts Current as a choice
+    expect(picker()?.textContent).toContain('No other sub-project you can move it to.')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    // with BE as well, one other sub-project to move to, the end says nothing
+    await load(editing(() => [ids.fe, ids.be]))
+    const again = P.issues.find((it) => it.uuid === 'lone')
+    if (!again) throw new Error('no task')
+    await openFor(again.id)
+    await vi.waitFor(() => expect(picker()?.dataset.pickerState).toBe('ready'))
+    expect(
+      [...document.querySelectorAll<HTMLElement>('[data-target]')].map((r) => r.dataset.target),
+    ).toEqual([ids.be, ids.fe])
+    expect(picker()?.textContent).not.toContain('No other sub-project you can move it to.')
+  })
 })

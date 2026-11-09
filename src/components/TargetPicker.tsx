@@ -93,7 +93,12 @@ export function TargetPicker({
     most: TARGETS_MOST,
   })
   const answered = !search.tooLong && query === search.typed
-  const end = answered ? listEnd(list, query !== '') : 'loading'
+  // the rows a person may pick, the current sub-project left out, so a
+  // confirmed end that holds only it says there is none, and a search that
+  // matches only it says nothing matches
+  const choosable = list.rows.filter((row) => row.id !== current).length
+  const listed = answered ? listEnd(list, query !== '') : 'loading'
+  const end = listed === 'end' && choosable === 0 && query !== '' ? 'none' : listed
   const group = useId()
   /** Seeds `row`'s facts and its parent's, then hands it on. */
   const choose = (row: NavTargetRow) => {
@@ -187,7 +192,14 @@ export function TargetPicker({
             })}
           </fieldset>
         ))}
-        <ChoiceEnd end={end} tooLong={search.tooLong} list={list} words={words} menu={false} />
+        <ChoiceEnd
+          end={end}
+          tooLong={search.tooLong}
+          list={list}
+          words={words}
+          menu={false}
+          choosable={choosable}
+        />
       </div>
     </div>
   )
