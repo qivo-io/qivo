@@ -310,7 +310,9 @@ export type DeliverArgs = {
  */
 export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   const answered = await deliverOnce(args)
-  if (args.automatic) retryWhenBusy(args)
+  // an early false made no claim, so the busy line it leaves in view, such
+  // as one of a save by hand, is not this attempt's to try again
+  if (args.automatic && answered) retryWhenBusy(args)
   return answered
 }
 

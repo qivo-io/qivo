@@ -418,6 +418,34 @@ describe('the automatic attempt', () => {
     expect(download).toHaveBeenCalledTimes(1)
   })
 
+  it('tries no save by hand again that the route answered busy, also on the minutes after it', async () => {
+    const file = { name: 'x.zip', createWritable: vi.fn(), getFile: vi.fn() }
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn(async () => file)
+    vi.stubGlobal('isSecureContext', true)
+    const fetcher = vi.fn(
+      async () => new Response(null, { status: 429, headers: { 'Retry-After': '1' } }),
+    )
+    vi.stubGlobal('fetch', fetcher)
+    serve(['ready'])
+    // the page cannot save when the job shows ready, so its automatic
+    // attempt is refused here and spends nothing
+    planner.cannotSaveText.mockReturnValue('Saving is paused while the connection is down.')
+    await mount()
+    expect(claims()).toEqual([])
+    planner.cannotSaveText.mockReturnValue(null)
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-busy="server"]')).not.toBeNull()
+    // a minute on, the automatic attempt makes no claim, since this page
+    // claimed a link by hand, and leaves that busy answer alone
+    await act(async () => vi.advanceTimersByTime(61_000))
+    await settle()
+    // past the route's wait, which runs on the real clock here
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1_200)))
+    await settle()
+    expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: false }])
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it('makes none a second time after its claim was refused', async () => {
     desktop()
     serve(['collecting'])
