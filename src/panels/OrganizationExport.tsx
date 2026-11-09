@@ -351,11 +351,22 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   )
 }
 
-/** Whether the panel of organization `orgId` shows `delivery`: never one
- * of another organization; one of an export the status answers; and one
- * whose export left the answer, such as an older archive a newer one
- * ended, while it runs, while its saved file's record is pending or
- * failed, or while it says to wait. */
+/* The states of a finished attempt that failed or says to wait. */
+const FAILED_STATES: ReadonlySet<DeliveryState['state']> = new Set([
+  'busy',
+  'stopped',
+  'unwritable',
+  'unconfirmed',
+  'refused',
+])
+
+/** Whether the panel of organization `orgId` shows `delivery`. It never
+ * shows one of another organization, and always one of an export the
+ * status answers. One whose export left the answer, such as an older
+ * archive a newer one ended, shows while it runs, while its saved file's
+ * record is pending, failed or refused, and once it failed or says to
+ * wait, until another save or a new export replaces it (Save export…,
+ * Download, the automatic attempt or Export data). */
 function shows(
   delivery: DeliveryState,
   orgId: string,
@@ -365,7 +376,7 @@ function shows(
   if (delivery.orgId !== orgId) return false
   if (answered.includes(delivery.exportId) || running) return true
   if (delivery.state === 'saved') return delivery.record !== 'recorded'
-  return delivery.state === 'busy'
+  return FAILED_STATES.has(delivery.state)
 }
 
 /** What the server's refusal says, or `fallback`. */

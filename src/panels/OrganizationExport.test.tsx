@@ -644,6 +644,84 @@ describe('starting, joining, downloading and cancelling', () => {
     )
   })
 
+  it("keeps an older archive's failed save in view once a newer archive ends it, in either way", async () => {
+    // the file way, whose save the network breaks off after the newer
+    // archive ended the older one
+    const file = {
+      name: 'older.zip',
+      createWritable: async () => new WritableStream<Uint8Array>(),
+      getFile: async () => ({ size: 0 }),
+    }
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn(async () => file)
+    vi.stubGlobal('isSecureContext', true)
+    let breakOff = () => {}
+    const gate = new Promise<void>((resolve) => {
+      breakOff = resolve
+    })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024))
+      },
+      async pull(controller) {
+        await gate
+        controller.error(new TypeError('network error'))
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'application/zip', 'Content-Length': '2048' },
+          }),
+      ),
+    )
+    serve(['older'])
+    await mount()
+    await press('[data-export-download="older"]')
+    await act(async () => server.finish())
+    await settle()
+    expect(container.querySelector('[data-export-older]')).toBeNull()
+    expect(container.querySelector('[data-export-saving]')).not.toBeNull()
+    await act(async () => breakOff())
+    await settle()
+    expect((await shown('[data-export-stopped]'))?.textContent).toBe(
+      'The save stopped before it finished, so the file you chose holds no export.',
+    )
+
+    // the desktop way, whose download fails after the newer archive ended
+    // the older one and leaves a partial file it could not delete
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    vi.resetModules()
+    let fail = () => {}
+    const failed = new Promise<void>((resolve) => {
+      fail = resolve
+    })
+    const download = vi.fn(async () => {
+      await failed
+      return { state: 'failed', leftover: 'qivo-northstar-2026-11-09.zip' }
+    })
+    ;(window as { qivoDesktop?: unknown }).qivoDesktop = { orgExport: { download } }
+    serve(['older'])
+    await mount()
+    await press('[data-export-download="older"]')
+    expect(download).toHaveBeenCalledTimes(1)
+    await act(async () => server.finish())
+    await settle()
+    expect(container.querySelector('[data-export-older]')).toBeNull()
+    await act(async () => fail())
+    await settle()
+    expect((await shown('[data-export-unconfirmed]'))?.textContent).toBe(
+      "The download didn't finish, so no export was saved. Try again. The desktop app couldn't delete the unfinished file qivo-northstar-2026-11-09.zip in your Downloads folder, so delete it yourself.",
+    )
+    // until the person acts again, here Export data
+    await press('[data-export-start]')
+    expect(stateShown()).toBe('collecting')
+    expect(container.querySelector('[data-export-unconfirmed]')).toBeNull()
+  })
+
   it('never shows a delivery of another organization', async () => {
     desktop()
     serve(['claimed'])

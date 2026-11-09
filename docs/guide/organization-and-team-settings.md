@@ -146,7 +146,9 @@ Chrome and Edge on a computer tell Qivo when the file is saved; other
 browsers cannot, so their downloads do not count. A save counts only when it
 finishes within 30 minutes after the export stops being available, so start
 a large download well before then. The page shows the date of the last
-confirmed save.
+confirmed save. A save that stops or fails says so on the page until you
+save or start another export, also once a newer export replaced the one it
+was saving.
 
 ## Deleting an organization
 
