@@ -33,8 +33,8 @@ Removing a person's or a team's grant asks first when someone would lose
 sight of open tasks they are assigned to or reviewing in that project or its
 sub-projects. Removing a member from a team, or deleting a team, asks the same
 way for every project the team shares. Qivo works this out on the server over
-every task, not only the tasks the app has loaded, so the project and team
-pages open at once while tasks are still loading. A removal Qivo cannot check
+every task, as the app holds no task of its own, so the project and team
+pages open at once. A removal Qivo cannot check
 removes nothing, and the app says so. The window lists up to 120 of those
 tasks, says how many more there are, and counts any in projects you cannot
 see without naming them. It offers two choices. **Keep as Viewer** gives each of those people a Viewer

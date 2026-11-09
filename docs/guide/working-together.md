@@ -194,9 +194,8 @@ project, sends none.
 **Subscriptions.** Click the eye button in a task window to open
 **Subscribers**, then use the eye beside **Me** to subscribe or unsubscribe.
 Anyone with access to the task can see its subscriber list, including viewers.
-The eye and **Subscribers** work in every task window, also on a task that
-has not loaded into the workspace yet, except while Qivo cannot check that
-task for changes. An archived task's window has no eye button.
+The eye and **Subscribers** work in every task window, except while Qivo
+cannot check that task for changes. An archived task's window has no eye button.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user
