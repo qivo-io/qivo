@@ -25,9 +25,10 @@ a time, the one you are in. When you open a project from elsewhere, such as
 **All projects**, Search or a link, the tree loads on until it shows that
 project and brings its row into view. A project opens at once. Where Qivo
 has not yet checked a project you open from a link or the one you had
-open last time, the page says **Opening** and its name until it has, then
-says so if you can no longer open it, or that Qivo couldn't open it, with
-**Retry**. The tree loads no tasks.
+open last time, the page says it is opening the project, with its name
+where Qivo knows it, until it has checked it. It then says so if you can no
+longer open it, or that Qivo couldn't open it, with **Retry**. The tree
+loads no tasks.
 
 The tree says so when its list is not ready yet, when Qivo could not finish
 checking which projects you can see, with **Retry**, and when it checked
