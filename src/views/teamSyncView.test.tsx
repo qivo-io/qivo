@@ -8,6 +8,7 @@ import type { UnsentScope } from '../lib/leaveGuard'
 import { ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import { type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import {
+  answerProjectNav,
   type ForcedProjectNav,
   NAV_UNCHECKED,
   queryProjectNav,
@@ -119,10 +120,10 @@ async function open(
   prepare: (snap: Snapshot) => void,
   place: (snap: Snapshot) => SyncPlace,
   options: Parameters<typeof loadBoard>[2] = {},
-  setup: (board: Awaited<ReturnType<typeof loadBoard>>) => void = () => {},
+  setup: (board: Awaited<ReturnType<typeof loadBoard>>) => void | Promise<void> = () => {},
 ) {
   const board = await loadBoard(network, prepare, options)
-  setup(board)
+  await setup(board)
   const { TeamSync } = await import('./TeamSync')
   const calls: Calls = { places: [], opened: [], shown: [], boards: [] }
   const first = place(board.snapshot)
@@ -1070,6 +1071,90 @@ describe('a meeting that stops fitting', () => {
       // a narrower scope from the note asks about the card's unsent note
       await click(document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`))
       expect(calls.places.at(-1)?.closes?.length).toBeGreaterThan(0)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    "leaves a gone project out of the stale note's smaller scopes, and says a failed read of one with Retry, never the loading line",
+    async () => {
+      const gone = crypto.randomUUID()
+      let failing = true
+      const { board } = await open(
+        (snap) => {
+          people({})(snap)
+          underProgram(snap)
+          // a second sub-project under the program, whose read fails
+          snap.projects.push({
+            ...snap.projects[0],
+            id: 'fail-sub',
+            key: 'FAIL',
+            num: 50,
+            name: 'Failing sub',
+          })
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: 'team' }),
+        {},
+        async (b) => {
+          // the fitted answer names a sub-project the person no longer
+          // sees, and the failing one
+          b.server.sync.edit = (answer) =>
+            answer.state === 'ok'
+              ? { ...answer, sub_projects: [...answer.sub_projects, gone, 'fail-sub'] }
+              : answer
+          // one project a read, the reads answered here, Failing sub's
+          // failing while `failing` holds
+          const { PROJECT_CACHE } = await import('../store/projectCache')
+          PROJECT_CACHE.chunk = 1
+          ;(
+            double.live as unknown as { forceProjectNav(f: 'client' | null): void }
+          ).forceProjectNav('client')
+          const base = network.onUpdate.getMockImplementation()
+          network.onUpdate.mockImplementation((ref, args, next, fail) => {
+            if (getFunctionName(ref) !== 'projectNav:byIds')
+              return base?.(ref, args, next, fail) ?? (() => {})
+            if (failing && (args as { ids: string[] }).ids.includes('fail-sub'))
+              fail?.(new Error('the byIds read failed'))
+            else answerProjectNav(b.snapshot, 'projectNav:byIds', args, next, fail)
+            return () => {}
+          })
+        },
+      )
+      try {
+        expect(state()).toBe('ok')
+        board.server.sync.force = { state: 'over_ceiling' }
+        await board.answer()
+        await settle()
+        await frame()
+        expect(state()).toBe('stale')
+        const note = () => document.querySelector('[data-sync-stale-note]')?.textContent ?? ''
+        await vi.waitFor(() =>
+          expect(note()).toContain("Couldn't load some of the smaller projects."),
+        )
+        // must fail for a note that waits for every named project
+        expect(note()).not.toContain('Loading the smaller teams and projects…')
+        expect(board.P.projectState(gone)).toBe('gone')
+        expect(document.querySelector(`[data-sync-choice="project:${gone}"]`)).toBeNull()
+        expect(
+          document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`),
+        ).not.toBeNull()
+        // Retry reads the failed one again, which answers now
+        failing = false
+        await click(document.querySelector('[data-sync-names-retry]'))
+        await frame()
+        await vi.waitFor(() =>
+          expect(document.querySelector('[data-sync-choice="project:fail-sub"]')).not.toBeNull(),
+        )
+        expect(note()).not.toContain("Couldn't load some of the smaller projects.")
+        // the gone project stays out, and no line says the list loads
+        expect(note()).not.toContain('Loading the smaller teams and projects…')
+      } finally {
+        const { PROJECT_CACHE } = await import('../store/projectCache')
+        PROJECT_CACHE.chunk = 100
+        ;(double.live as unknown as { forceProjectNav(f: 'client' | null): void }).forceProjectNav(
+          null,
+        )
+      }
     },
     BOARD_TEST_TIMEOUT,
   )

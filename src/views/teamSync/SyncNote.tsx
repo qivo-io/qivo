@@ -53,15 +53,17 @@ function pickerChoices(): SyncChoice[] {
 }
 
 /** The smaller scopes a meeting past its limits offers (useNarrower):
-    the choices, null for a sub-project, which has nothing smaller, and a
-    line that says the list is loading, could not load, or goes on in the
-    scope menu past its first batch. */
-type Narrower = { choices: SyncChoice[] | null; line: string | null }
+    the choices, null for a sub-project, which has nothing smaller, a line
+    that says the list is loading, could not load, or goes on in the scope
+    menu past its first batch, and a Retry where the project cache could
+    not read a project it names. */
+type Narrower = { choices: SyncChoice[] | null; line: string | null; retry?: () => void }
 
 /* What a note's choices say past their first batch, and while they come. */
 const MORE_IN_MENU = 'More teams and projects are in the menu above.'
 const CHOICES_LOADING = 'Loading the smaller teams and projects…'
 const CHOICES_FAILED = "Couldn't load the smaller teams and projects. Use the menu above."
+const NAMES_FAILED = "Couldn't load some of the smaller projects. Retry asks again."
 
 /** A project of the home organization as a choice, its name through the
     project cache where it knows the project, else the row's own. */
@@ -91,7 +93,7 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
   // the scope's project and the fitted answer's projects, named while the
   // note shows, so the cache answers whether the scope is a top-level
   // project and what each choice is called
-  useProjects(
+  const retry = useProjects(
     active ? [scopeId, ...(answer?.top_projects ?? []), ...(answer?.sub_projects ?? [])] : [],
   )
   const facts = scopeId ? P.project(scopeId) : undefined
@@ -137,20 +139,38 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
   if (!active) return { choices: [], line: null }
   const own = scope.kind === 'all' ? pickerChoices().filter((c) => c.key !== 'all') : []
   if (scope.kind === 'project') {
-    if (!facts) return { choices: [], line: CHOICES_LOADING }
+    if (!facts) {
+      // the scope's project loads, could not be read, or is gone, which
+      // App's guard takes the page off
+      const state = P.projectState(scopeId)
+      if (state === 'loading') return { choices: [], line: CHOICES_LOADING }
+      if (state === 'failed' || state === 'unchecked')
+        return { choices: [], line: NAMES_FAILED, retry }
+      return { choices: [], line: null }
+    }
     if (facts.type !== 'meta') return { choices: null, line: null }
   }
   if (scope.kind !== 'all' && scope.kind !== 'team' && scope.kind !== 'project')
     return { choices: [], line: null }
   if (fromAnswer && answer) {
     const ids = scope.kind === 'all' ? answer.top_projects : answer.sub_projects
+    // each project the cache names is a choice; one it leaves out is gone
+    // and offered no more; one it could not read says so with Retry, and
+    // only one it still reads keeps the loading line
+    let loading = false
+    let failed = false
     const named = ids.flatMap((id) => {
       const p = P.project(id)
-      return p ? [projectChoice(p)] : []
+      if (p) return [projectChoice(p)]
+      const state = P.projectState(id)
+      if (state === 'loading') loading = true
+      else if (state === 'failed' || state === 'unchecked') failed = true
+      return []
     })
     return {
       choices: [...own, ...named],
-      line: named.length < ids.length ? CHOICES_LOADING : null,
+      line: failed ? NAMES_FAILED : loading ? CHOICES_LOADING : null,
+      ...(failed ? { retry } : {}),
     }
   }
   const list = read?.kind === 'children' ? children : pages
@@ -246,6 +266,7 @@ function overText(state: 'over_ceiling' | 'over_budget', smaller: Narrower) {
       : "This selection could not be loaded within Team sync's limits."
   return {
     title,
+    retry: smaller.retry,
     choices: smaller.choices ?? [],
     // a sub-project offers nothing smaller: its Board shows its tasks
     hint:
@@ -322,7 +343,13 @@ export function SyncNote({
           hint={text.hint}
           choices={text.choices}
           onPick={onPick}
-          action={text.board ? { label: 'Show it on the Board', onClick: board } : undefined}
+          action={
+            text.board
+              ? { label: 'Show it on the Board', onClick: board }
+              : text.retry
+                ? { label: 'Retry', onClick: text.retry }
+                : undefined
+          }
         />
       )
     }
@@ -474,6 +501,13 @@ export function StaleNote({
               <span className="truncate">{c.label}</span>
             </Button>
           ))}
+        </div>
+      )}
+      {text?.retry && (
+        <div>
+          <Button type="button" data-sync-names-retry="" onClick={text.retry}>
+            Retry
+          </Button>
         </div>
       )}
       {(failed || text?.board) && (
