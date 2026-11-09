@@ -152,7 +152,8 @@ afterEach(async () => {
 })
 
 /** Waits for `find` to answer, through lazy modules that can take seconds
-    to load on a busy worker. */
+    to load on a busy worker. The budget is 20 s, because CI's runner under
+    the full suite once took over 10 s to settle a chooser after a close. */
 function waitFor<T>(find: () => T | null | undefined, what: string) {
   return vi.waitFor(
     () => {
@@ -160,7 +161,7 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
       if (!found) throw new Error(`missing ${what}`)
       return found
     },
-    { timeout: 10_000 },
+    { timeout: 20_000 },
   )
 }
 
@@ -356,7 +357,7 @@ const arrive = () =>
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
-describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
+describe('Back to a task still to arrive', { timeout: 60_000 }, () => {
   it('holds its address in a window that shows, and opens the task in its own scope once it arrives', async () => {
     // the fixture's project under a top-level project, as every writer
     // stores one that holds tasks, so the project cache answers it
@@ -580,7 +581,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
   })
 })
 
-describe("Back to another organization's task still to arrive", { timeout: 30_000 }, () => {
+describe("Back to another organization's task still to arrive", { timeout: 60_000 }, () => {
   it.each([
     ['Back', 'QN-2'],
     ['Back', 'qn-2'],
@@ -605,7 +606,7 @@ describe("Back to another organization's task still to arrive", { timeout: 30_00
   })
 })
 
-describe('Back to a task during the first load', { timeout: 30_000 }, () => {
+describe('Back to a task during the first load', { timeout: 60_000 }, () => {
   it("holds its address while the task's read is on its way, then opens the task", async () => {
     const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
     const address = `/app/${store.P.org.slug}/inbox/tasks/qn-2`
@@ -665,7 +666,7 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
   })
 })
 
-describe('Settings while a task is still to arrive', { timeout: 30_000 }, () => {
+describe('Settings while a task is still to arrive', { timeout: 60_000 }, () => {
   afterEach(async () => {
     // a page of Settings reports no fault
     if (settingsStore) {
@@ -815,7 +816,7 @@ describe('Settings while a task is still to arrive', { timeout: 30_000 }, () => 
 })
 
 describe('Back and Forward on a task address', {
-  timeout: 30_000,
+  timeout: 60_000,
 }, () => {
   it('opens a task from its own read on Back, and again on Forward', async () => {
     const { store, org, snap } = await bootLoading()
@@ -858,7 +859,7 @@ describe('Back and Forward on a task address', {
   })
 })
 
-describe('Back to an address that is gone', { timeout: 30_000 }, () => {
+describe('Back to an address that is gone', { timeout: 60_000 }, () => {
   it('checks a project address the workspace does not hold on Back, keeping its entry, and shows the chooser where it is not available', async () => {
     const { store, org } = await bootLoading(false)
     await back(`/app/${org}/board/mine`)
