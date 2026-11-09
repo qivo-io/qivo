@@ -1041,7 +1041,7 @@ function App() {
      finished saving (projectTarget), when it is nowhere or in a page that
      move hides, such as the Projects page with its New project or a row's
      menu button. A kept view hidden behind another page takes no focus. */
-  const focusAfterMove = useRef<(() => HTMLElement | null) | null>(null)
+  const focusAfterMove = useRef<(() => HTMLElement | null | 'waits') | null>(null)
   /* The sidebar's request to focus a project's row once its tree shows it
      (components/SidebarProjects.tsx), which the server's list brings only
      after the save, with the scope it was made in. App holds it, not the
@@ -1069,7 +1069,7 @@ function App() {
     // a target that waits for the project cache (projectTarget) is asked
     // again in a later commit, as App renders again once the cache answers
     const element = target()
-    if (element === null && projectTargetWaits.current) return
+    if (element === 'waits') return
     focusAfterMove.current = null
     restoreFocus(element)
   })
@@ -2187,12 +2187,9 @@ function App() {
      focus request (focusRow) waits for. The phone header shows New task
      once the project cache answers for the project (P.canWrite), so for a
      new sub-project the creator may add tasks to (`tasks`), while the
-     cache is still loading it, projectTarget answers null and sets
-     projectTargetWaits, and the focus after a move asks again in a later
-     commit. */
-  const projectTargetWaits = useRef(false)
-  const projectTarget = (id: string, tasks = false) => {
-    projectTargetWaits.current = false
+     cache is still loading it, projectTarget answers 'waits', and the focus
+     after a move asks again in a later commit. */
+  const projectTarget = (id: string, tasks = false): HTMLElement | null | 'waits' => {
     const row = [
       ...document.querySelectorAll<HTMLElement>(
         `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
@@ -2202,17 +2199,18 @@ function App() {
     const newTask = document.querySelector<HTMLElement>('[data-mobile-new-task]')
     if (newTask) return newTask
     const actions = document.querySelector<HTMLElement>('[data-mobile-project-actions]')
-    if (actions && tasks && P.projectState(id) === 'loading') {
-      projectTargetWaits.current = true
-      return null
-    }
+    if (actions && tasks && P.projectState(id) === 'loading') return 'waits'
     return actions
   }
   /* Where focus goes as New sub-project closes after a create, for an
      opener that names nothing else. The empty states and Add sub-project
      buttons that open the dialog leave once the sub-project shows. */
-  const afterNewSubProject = () =>
-    createdProject.current ? projectTarget(createdProject.current, true) : null
+  const afterNewSubProject = () => {
+    const target = createdProject.current ? projectTarget(createdProject.current, true) : null
+    // the dialog's own close takes the opener while the target waits, and
+    // the focus after the move gives New task its focus once it shows
+    return target === 'waits' ? null : target
+  }
 
   // Jump from the issue window to the roadmap to plan an issue in context.
   // Switches to the issue's project/roadmap and closes the window so the
