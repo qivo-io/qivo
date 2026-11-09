@@ -434,7 +434,7 @@ function NewIssueModal({
     }
   }, [contextWritable])
   // a context the cache does not answer as a sub-project may be a
-  // top-level project: the first batch of the targets under it, while
+  // top-level project, so the first batch of the targets under it, while
   // nothing is chosen, gives its first writable sub-project; a sub-project
   // or a project with none answers an empty batch
   const defaults = usePagedList<NavTargets, NavTargetRow>({

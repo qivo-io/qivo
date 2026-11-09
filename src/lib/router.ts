@@ -323,8 +323,8 @@ export const scopeForIssue = (
   return it.project
 }
 
-/** Whether the project cache has not named task `it`'s project yet: no
-    facts and still loading, so scopeForIssue cannot tell whether it lies
+/** Whether the project cache has not named task `it`'s project yet, with
+    no facts and still loading, so scopeForIssue cannot tell whether it lies
     in the preferred scope. */
 export const taskProjectPending = (it: ScopeTask): boolean =>
   !P.project(it.project) && P.projectState(it.project) === 'loading'

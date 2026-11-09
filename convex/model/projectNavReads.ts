@@ -1832,7 +1832,7 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * and accents, matched before the cut, and is refused past LIMITS.search.
  * `parent_id` lists only the sub-projects under that top-level project, in
  * the same order, which the New task dialog reads for the first writable
- * sub-project of the project it opens in: the walk starts at the parent's
+ * sub-project of the project it opens in. The walk starts at the parent's
  * own place, reads no other parent's sub-projects and ends past it, and a
  * parent the caller has no seat for, a sub-project, an archived project or
  * an unknown id answers an empty last batch, as a parent with no writable

@@ -2247,8 +2247,8 @@ release step.
 
 From the release after v0.1.161, the app reads `projectNav.byIds`, new in
 that release, for every project its views, dialogs and pages name, as the
-workspace holds no project, so that release is the backend's floor for its app:
-from it on, never return the backend to a commit before it, roll forward
+workspace holds no project, so that release is the backend's floor for its app.
+From it on, never return the backend to a commit before it; roll forward
 instead. The same release adds `projectNav.targets`, with `parent_id` for
 the sub-projects under one top-level project, and `projectNav.holds`,
 lets `projectNav.page` take `org_id` and `team_id`, adds `lead_id` and
@@ -2467,7 +2467,7 @@ rollback past that release fails to deploy; it is a rollback floor anyway
 
 Each organization's `org_counters` row counts its active tasks and its
 live projects (`active_tasks`, `live_projects`). `active_tasks` alone sizes
-the app's task windows: the app starts as many as those rows need. From the
+the app's task windows, as the app starts as many as those rows need. From the
 release after v0.1.161 the app holds no project, so `live_projects` serves
 only the organization's usage figures (`convex/model/usage.ts`). Every
 write that adds, archives, restores or deletes a task or project keeps the

@@ -15287,7 +15287,7 @@ export const PLANNER = {
         { view: true },
       )
       // the read follows the hidden-tab gate (lib/viewVisibility.ts), as the
-      // project cache and the targets pickers do: it stops while the page is
+      // project cache and the targets pickers do. It stops while the page is
       // hidden, keeping the answer it had, which counts as unknown until the
       // read runs again on show. A watch that joins a subscription another
       // reader holds, such as an open Move window's first batch, hears no

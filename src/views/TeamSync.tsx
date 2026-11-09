@@ -503,7 +503,7 @@ export function TeamSync({
       stop()
     }
   }, [askedNum, askedOrg, tries])
-  // where the numbered address's resolve stands: loading until its answer
+  // where the numbered address's resolve stands, loading until its answer
   // for this address and this try
   const resolving: ResolveState | null =
     askedKey === null

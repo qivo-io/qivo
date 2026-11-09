@@ -320,11 +320,11 @@ describe('the project lookups', () => {
       if (!found) throw new Error('the workspace holds no task')
       return { ...found, project: w.heldSub.id }
     }
-    // must fail for lookups that read the seed's placeholders as real: the
+    // must fail for lookups that read the seed's placeholders as real, the
     // parent's lead as inherited, and delays tracked
     expect(P.leadOf(w.heldSub.id)).toBeNull()
     expect(P.tracksDelay(task())).toBe(false)
-    // its row answers: its own lead, and no delays tracked
+    // its row answers with its own lead and no delays tracked
     force.byIdsLoading = false
     rerun()
     await vi.waitFor(() => expect(P.projectState(w.heldSub.id)).toBe('ok'))

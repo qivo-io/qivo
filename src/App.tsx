@@ -1615,7 +1615,7 @@ function App() {
   }, [openIssue, rev, refRev, scope, view, settingsPage, inboxOpen, projectsOpen, sync, opening])
   // the scope a task address kept while the project cache had not named
   // the task's project (scopeToSettle), which App names with the cache
-  // meanwhile: once the cache names it, the task's own sub-project unless
+  // meanwhile. Once the cache names it, the task's own sub-project unless
   // it lies in the preferred project, as the boot would have chosen with
   // the name, and nothing where the cache answers the project gone or the
   // person moved on

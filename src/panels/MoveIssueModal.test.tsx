@@ -436,7 +436,7 @@ describe('Move window', () => {
       )
     expect(move()?.disabled).toBe(false)
     // someone lowers the person's access to BE to View while the window is
-    // open: BE and WEB lose the lead they gave, and a Viewer grant stays
+    // open, so BE and WEB lose the lead they gave and a Viewer grant stays
     for (const p of world.projects)
       if (p.id === ids.be || p.parent_id === undefined) p.lead_id = undefined
     world.access.push({ project_id: ids.be, profile_id: world.profiles[0].id, level: 'viewer' })

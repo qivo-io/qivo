@@ -979,7 +979,7 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     await until(() => q('[data-settings-stand-in]'), 'Settings')
     await until(() => location.pathname === '/app/~/settings/account', "Settings' address")
     expect(history.length).toBe(entries + 1)
-    // the scope turns gone while Settings shows: Settings keeps its entry
+    // the scope turns gone while Settings shows, and Settings keeps its entry
     publish({
       ...server,
       access: server.access.filter((a) => a.project_id !== LUMA),
