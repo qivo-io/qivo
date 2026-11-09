@@ -225,8 +225,10 @@ describe('snapshot trouble', () => {
     P.addLabel({ name: 'Bench' })
     P.setOrg({ name: 'Renamed Labs' })
     P.addTeam('Field crew')
-    P.updateProject(project, { name: 'Renamed project' })
-    P.removeProject(project)
+    // the project's page names its organization, so these reach the pause
+    const shown = { orgId: snapshot.orgs[0].id }
+    P.updateProject(project, { name: 'Renamed project' }, {}, shown)
+    P.removeProject(project, undefined, shown)
     P.createParent(task.id, 'Sensor work')
     await settle()
     // nothing was painted, so no rollback took the saved read mark away
@@ -236,6 +238,14 @@ describe('snapshot trouble', () => {
     expect(P.org.name).toBe('Testbed Labs')
     expect(P.teams).toHaveLength(teams)
     expect(P.project(project)?.name).toBe('Task creation fixture')
+    // the project writes reached the pause rather than refusing for want of
+    // the page's organization, and a paused delete is no failed one
+    const projectErrors = vi
+      .mocked(console.error)
+      .mock.calls.filter(([text]) =>
+        /a project change needs|project delete failed/.test(String(text)),
+      )
+    expect(projectErrors).toEqual([])
     // one action can reach several mutators, so the pause toasts once
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
   })
