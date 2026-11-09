@@ -6081,7 +6081,7 @@ async function createAnswerCheck() {
         }),
         `${key} does not hold the new title`,
       )
-      return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered and no task window`
+      return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered`
     } finally {
       app.off('websocket', record)
     }
@@ -6347,7 +6347,7 @@ async function teamSyncCheck() {
       expect(adds(AGENDA_QUERY) >= 1, 'the load did not subscribe the agenda')
       await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
       await page.locator(`[data-sync-card="${t.key}"]`).waitFor({ timeout: 60_000 })
-      return `opened ${M.key}'s meeting on the agenda without task windows, with ${t.key} on its agent's line`
+      return `opened ${M.key}'s meeting on the agenda, with ${t.key} on its agent's line`
     } finally {
       app.off('websocket', record)
     }
