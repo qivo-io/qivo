@@ -176,7 +176,7 @@ export function BillingOverview({
             <CancelSubscription
               available={billing.cancel_available}
               endsAt={billing.current_period_end}
-              lastExportAt={billing.last_export_at}
+              lastExportAt={billing.last_export_confirmed_at}
               busy={busy}
               onCancel={onCancel}
               onExport={onExport}

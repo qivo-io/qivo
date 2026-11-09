@@ -214,7 +214,7 @@ export function orgExportStandIn(opts: {
   /** orgRemovals.state's answer now. */
   const removalState = () => ({
     slug: opts.slug ?? 'northstar',
-    last_export_at: lastExportAt,
+    last_export_confirmed_at: lastExportAt,
     deletion: null,
   })
 

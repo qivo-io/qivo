@@ -161,8 +161,8 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
               Any paid subscription ends now, and nothing is refunded. The organization becomes
               read-only for 30 days so admins can export its data, and is then deleted with all of
               its projects, tasks, comments and files.{' '}
-              {state.last_export_at
-                ? `The last saved export was confirmed on ${billingDate(state.last_export_at)}.`
+              {state.last_export_confirmed_at
+                ? `The last saved export was confirmed on ${billingDate(state.last_export_confirmed_at)}.`
                 : 'No saved export has been confirmed yet.'}
             </AlertDialogDescription>
           </AlertDialogHeader>

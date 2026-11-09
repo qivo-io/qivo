@@ -530,7 +530,8 @@ type Delivery = {
  * then, and a file erased three seconds into a download no longer stopped
  * it. So the record says that the backend read the whole archive into the
  * response, not that the client received it, and it leaves
- * organizations.last_export_at, which the deletion reminder reads, alone.
+ * organizations.last_export_confirmed_at, which the deletion reminder reads,
+ * alone.
  * The app records a saved download itself once the desktop app or the
  * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's

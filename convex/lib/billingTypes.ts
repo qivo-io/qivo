@@ -91,7 +91,9 @@ export type BillingDetails = {
   cancel_available: boolean
   // When an organization that never completed checkout is deleted.
   checkout_due_at: string | null
-  last_export_at: string | null
+  // The last saved export an admin's app confirmed
+  // (organizations.last_export_confirmed_at).
+  last_export_confirmed_at: string | null
   // Present while the organization is read-only before its deletion.
   deletion: { reason: OrgRemovalReason; delete_after: string } | null
   sync_pending: boolean

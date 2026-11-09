@@ -300,9 +300,9 @@ export const jobsOf = (ctx: QueryCtx, orgId: string) =>
 /** Sets job `job`'s `served_at` the first time the route serves its
  * archive whole, every byte read into the response by the backend, which
  * does not wait for the client (http.ts archiveStream). It leaves
- * organizations.last_export_at alone, because the backend cannot know that
- * the client received the archive, so a served archive never stops the
- * deletion reminder (model/orgRetention.ts). The app records a download
+ * organizations.last_export_confirmed_at alone, because the backend cannot
+ * know that the client received the archive, so a served archive never
+ * stops the deletion reminder (model/orgRetention.ts). The app records a download
  * only once the desktop app or the browser confirmed the saved file
  * (orgRemovals.ts recordExport). */
 export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): Promise<void> {

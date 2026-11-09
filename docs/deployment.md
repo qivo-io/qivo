@@ -2309,12 +2309,21 @@ people only with a new desktop build. The same release prepares
 removes `orgExport.page`. Only a save the desktop app or the browser
 confirms calls `orgRemovals.recordExport`, which now takes the export's id
 and records only a served archive of that organization that is ready or
-ended less than 30 minutes before. The app needs a backend from v0.1.153
+ended less than 30 minutes before. It records the save in the new optional
+field `organizations.last_export_confirmed_at`, which the export section,
+the Delete organization and Cancel subscription questions,
+`orgRemovals.state`, Billing's details and the deletion reminder now read
+alone. Until this release the browser export set `last_export_at` when its
+download started, so an export recorded before this release does not count
+as a confirmed save, and the reminder goes out for it. `recordExport` still
+sets `last_export_at` beside the new field, which nothing reads, so a backend
+rolled back to an earlier release still counts a confirmed save. The field
+needs no backfill. The app needs a backend from v0.1.153
 (`b4dc7775`) on for its export, which first shipped `claimDownload` and the
 route, and the floors above already hold it. Against a backend from v0.1.153
-to before this release the archive downloads but its record is refused, so
-the deletion reminder still goes out. The release needs no backfill and no
-release step.
+to before this release the archive downloads but its record is refused, and
+the app shows no confirmed save, so the deletion reminder still goes out.
+The release needs no backfill and no release step.
 
 ## Node.js version
 
@@ -2976,11 +2985,13 @@ of each part's size cover the backend's read, not the client's transfer,
 and `served_at` means the backend read the whole archive, not that the
 client received it. A served archive does not count as an export for the
 deletion reminder by itself. Only `orgRemovals.recordExport` writes
-`organizations.last_export_at`, which the app calls once the desktop app or
-the browser confirmed a saved file of exactly the archive's bytes, and which
-records only a served archive of that organization that is ready or ended
-less than 30 minutes before. Other browsers' downloads record nothing, so
-the reminder still goes out after them.
+`organizations.last_export_confirmed_at`, which the reminder reads, and
+which the app calls once the desktop app or the browser confirmed a saved
+file of exactly the archive's bytes. It records only a served archive of
+that organization that is ready or ended less than 30 minutes before. Other
+browsers' downloads record nothing, so the reminder still goes out after
+them. The older `organizations.last_export_at`, which earlier releases set
+when a browser download started, is no longer read.
 A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the
@@ -2994,8 +3005,7 @@ progress, and `organization export sweep` (every 15 minutes) expires ready
 archives whose timer was lost, restarts erase legs that stopped and deletes
 history older than 30 days. A branch preview registers neither, so there
 only the steps, the erase legs and the scheduled expiry run. The tables start
-empty, need no backfill, and `organizations.last_export_at` keeps its
-meaning.
+empty and need no backfill.
 
 A rollback past the release that added the job deploys, because Convex
 leaves the rows of tables the schema does not list alone, but the earlier

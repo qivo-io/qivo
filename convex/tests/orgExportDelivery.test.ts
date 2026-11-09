@@ -659,6 +659,7 @@ describe('what a download records', () => {
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
     // the backend cannot know that the client received the archive, so the
     // organization's last export stays unset
+    expect((await orgRow(t, f.org.id))?.last_export_confirmed_at).toBeUndefined()
     expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // an admin who did not ask downloads without a request row
     expect((await requestsOf(t, exportId)).map((row) => row.profile_id)).toEqual([f.admin.id])
@@ -669,7 +670,7 @@ describe('what a download records', () => {
     const again = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect((await drain(t, again)).error).toBeNull()
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
+    expect((await orgRow(t, f.org.id))?.last_export_confirmed_at).toBeUndefined()
     // the leases are gone
     expect((await jobOf(t, exportId))?.streams).toBeUndefined()
 

@@ -94,7 +94,7 @@ const DETAILS = {
   portal_available: false,
   cancel_available: false,
   checkout_due_at: null,
-  last_export_at: null,
+  last_export_confirmed_at: null,
   deletion: null,
   sync_pending: false,
   sync_error: null,
@@ -198,7 +198,7 @@ beforeEach(async () => {
     else if (name === 'billing:details') next(structuredClone(DETAILS))
     else if (name === 'billing:status') next({ writable: true })
     else if (name === 'orgRemovals:state')
-      next({ slug: 'testbed', last_export_at: null, deletion: null })
+      next({ slug: 'testbed', last_export_confirmed_at: null, deletion: null })
     // an export the server is preparing, so the export section shows it
     else if (name === 'orgExport:status')
       next(orgExportStandIn({ now: () => Date.now(), states: ['collecting'] }).status())

@@ -955,7 +955,7 @@ describe('teardowns', () => {
     // a recent saved export, so no deletion email is queued
     await t.run(async (ctx) => {
       const org = await byId(ctx, 'organizations', f.org.id)
-      if (org) await ctx.db.patch(org._id, { last_export_at: new Date().toISOString() })
+      if (org) await ctx.db.patch(org._id, { last_export_confirmed_at: new Date().toISOString() })
     })
     const { delete_after } = await as(t, f.admin).action(api.orgRemovals.request, {
       org_id: f.org.id,

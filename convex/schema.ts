@@ -1236,7 +1236,15 @@ export default defineSchema({
     // archive's bytes. An export job's archive does not set it, whether only
     // prepared or served by the /exports/ route, since the backend cannot
     // know that the client received it. Qivo cannot see the file reach disk
-    // itself, so this only decides whether to remind admins.
+    // itself, so this only decides whether to remind admins. The settings
+    // pages, Billing and the deletion reminder read it alone.
+    last_export_confirmed_at: v.optional(v.string()),
+    // The last export before last_export_confirmed_at existed. Until the
+    // release after v0.1.161 the browser export set it when its download
+    // started, so a value may record a download that never finished.
+    // recordExport still sets it beside last_export_confirmed_at, so a
+    // rolled-back backend's reminder sees confirmed saves, but nothing reads
+    // it. Later work removes it with its write.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1349,9 +1357,9 @@ export default defineSchema({
   // job and its request rows stay 30 days as export history.
   // completed_at says when an archive was prepared and served_at when the
   // backend first read it whole into a download's response. Neither
-  // preparing nor serving an archive sets organizations.last_export_at, the
-  // record of exports an admin's app confirmed as saved, which the deletion
-  // reminder reads. Code from before the release of served_at, streams and the
+  // preparing nor serving an archive sets
+  // organizations.last_export_confirmed_at, the record of exports an admin's
+  // app confirmed as saved, which the deletion reminder reads. Code from before the release of served_at, streams and the
   // step's Deleted items state does not accept a row that holds one
   // (docs/deployment.md).
   org_exports: defineTable({

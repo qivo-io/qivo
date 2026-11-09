@@ -59,7 +59,7 @@ const summary = (): BillingDetails => ({
   portal_available: false,
   cancel_available: false,
   checkout_due_at: null,
-  last_export_at: null,
+  last_export_confirmed_at: null,
   deletion: null,
   sync_pending: false,
   sync_error: null,

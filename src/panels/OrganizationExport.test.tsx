@@ -273,6 +273,13 @@ describe('the job', () => {
 
   it('says how each way saves in the record line, counting only confirmed saves', async () => {
     serve()
+    // an export recorded before confirmed saves, which a backend from before
+    // them answers alone, is no confirmed save
+    const query = server.query
+    server.query = (name) =>
+      name === 'orgRemovals:state'
+        ? { ...(query(name) as object), last_export_at: '2026-11-05T10:00:00.000Z' }
+        : query(name)
     await mount()
     expect(container.querySelector('[data-org-last-export]')?.textContent).toBe(
       "No saved export has been confirmed yet. This browser can't tell Qivo when a download finishes. Chrome and Edge on a computer can. Deletion reminders count only confirmed saves.",
@@ -283,6 +290,11 @@ describe('the job', () => {
 describe('the automatic attempt', () => {
   it('claims once with automatic when a current answer turns ready for the admin who asked', async () => {
     const download = desktop()
+    // the route serves the archive as the desktop app downloads it
+    download.mockImplementation(async () => {
+      server.serve('export-1')
+      return { state: 'completed', file: 'a.zip', bytes: 2048 }
+    })
     serve(['collecting'])
     await mount()
     expect(claims()).toEqual([])
@@ -291,6 +303,9 @@ describe('the automatic attempt', () => {
     expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: true }])
     expect(download).toHaveBeenCalledTimes(1)
     expect(sent('orgRemovals:recordExport')).toEqual([{ org_id: 'org-1', export_id: 'export-1' }])
+    expect(container.querySelector('[data-org-last-export]')?.textContent).toMatch(
+      /^Last saved export confirmed on .*2026\./,
+    )
     // once the save ended, Download is offered again
     expect(button('[data-export-download="latest"]')?.disabled).toBe(false)
     // more answers bring no second attempt

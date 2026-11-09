@@ -13,8 +13,10 @@
  *
  * Admins are emailed when the period starts, unless one of them saved an
  * export within EXPORT_FRESH_DAYS before the service ended
- * (organizations.last_export_at), which orgRemovals.ts recordExport sets
- * once the desktop app or a browser confirmed the saved archive. An export
+ * (organizations.last_export_confirmed_at), which orgRemovals.ts
+ * recordExport sets once the desktop app or a browser confirmed the saved
+ * archive. The older last_export_at does not count, since the browser
+ * export of earlier releases set it when a download started. An export
  * job's archive does not count by itself, whether only prepared or served by
  * the /exports/ route, because the backend cannot know that the client
  * received it. */
@@ -203,7 +205,7 @@ async function queueDeletionNotices(ctx: MutationCtx, removal: Doc<'org_removals
   const org = await byId(ctx, 'organizations', removal.org_id)
   if (!org) return
   const freshAfter = Date.parse(removal.ended_at) - EXPORT_FRESH_DAYS * DAY_MS
-  if (org.last_export_at && Date.parse(org.last_export_at) >= freshAfter) return
+  if (org.last_export_confirmed_at && Date.parse(org.last_export_confirmed_at) >= freshAfter) return
   const profiles = await ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', removal.org_id))

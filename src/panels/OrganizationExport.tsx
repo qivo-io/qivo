@@ -332,8 +332,8 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
 
       {removal && (
         <p data-org-last-export className="mt-3 text-sm text-text-2">
-          {removal.last_export_at
-            ? `Last saved export confirmed on ${billingDate(removal.last_export_at)}.`
+          {removal.last_export_confirmed_at
+            ? `Last saved export confirmed on ${billingDate(removal.last_export_confirmed_at)}.`
             : 'No saved export has been confirmed yet.'}{' '}
           {wayLine[way]} Deletion reminders count only confirmed saves.
         </p>

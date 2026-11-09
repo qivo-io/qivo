@@ -64,9 +64,9 @@
  * the archive, not the client's transfer. An archive the backend read
  * whole sets only the job's first served_at (recordDelivery), so a
  * download the client abandons can still set it. The route never writes
- * the organization's last_export_at, which the deletion reminder reads, so
- * neither a prepared archive (completed_at) nor a served one counts as a
- * backup. Only orgRemovals.ts recordExport sets it, which the app calls
+ * the organization's last_export_confirmed_at, which the deletion reminder
+ * reads, so neither a prepared archive (completed_at) nor a served one
+ * counts as a backup. Only orgRemovals.ts recordExport sets it, which the app calls
  * once the desktop app or a browser confirmed a saved file of exactly the
  * archive's bytes, and which records only a served archive of the
  * organization that is ready or ended less than DELIVERY.streamMs before.
@@ -580,13 +580,13 @@ export const releaseDelivery = internalMutation({
 /** Records that the route handed its reader, the runtime, the last byte of
  * export `export_id`'s archive in the job's first served_at
  * (model/orgExports.ts noteDelivered) and ends download `stream`'s lease.
- * It leaves organizations.last_export_at alone, since the backend cannot
- * know that the client received the archive, so a served archive does not
- * count as an export for the deletion reminder until the app confirms the
- * saved file (orgRemovals.ts recordExport, which requires served_at). It
- * needs no authority,
- * since the route checked the admin before every part it read, and writes
- * no request row, so an admin who did not ask downloads as one who did. */
+ * It leaves organizations.last_export_confirmed_at alone, since the
+ * backend cannot know that the client received the archive, so a served
+ * archive does not count as an export for the deletion reminder until the
+ * app confirms the saved file (orgRemovals.ts recordExport, which requires
+ * served_at). It needs no authority, since the route checked the admin
+ * before every part it read, and writes no request row, so an admin who did
+ * not ask downloads as one who did. */
 export const recordDelivery = internalMutation({
   args: { export_id: v.string(), stream: v.string() },
   handler: async (ctx, { export_id, stream }): Promise<null> => {

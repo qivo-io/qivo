@@ -222,7 +222,7 @@ const exportNow = (t: T, f: Awaited<ReturnType<typeof withOrg>>) =>
       .query('organizations')
       .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
       .unique()
-    if (org) await ctx.db.patch(org._id, { last_export_at: new Date().toISOString() })
+    if (org) await ctx.db.patch(org._id, { last_export_confirmed_at: new Date().toISOString() })
   })
 
 /* An export job of `orgId` planted as the job leaves a ready archive that
@@ -257,14 +257,15 @@ const plantArchive = (t: T, orgId: string, fields: Partial<Doc<'org_exports'>> =
 const record = (t: T, profile: Doc<'profiles'>, orgId: string, exportId: string) =>
   as(t, profile).mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
 
-/* `orgId`'s last_export_at, or null. */
+/* `orgId`'s last confirmed saved export (last_export_confirmed_at), or
+ * null. */
 const lastExport = (t: T, orgId: string) =>
   t.run(async (ctx) => {
     const org = await ctx.db
       .query('organizations')
       .withIndex('by_uuid', (q) => q.eq('id', orgId))
       .unique()
-    return org?.last_export_at ?? null
+    return org?.last_export_confirmed_at ?? null
   })
 
 const subscription = (overrides: Partial<Doc<'billing_subscriptions'>>) =>
@@ -1524,7 +1525,7 @@ describe('the hourly sweep', () => {
     vi.stubEnv('BILLING_ENABLED', 'true')
     await t.run(async (ctx) => {
       for (const org of await ctx.db.query('organizations').collect())
-        await ctx.db.patch(org._id, { last_export_at: NOW })
+        await ctx.db.patch(org._id, { last_export_confirmed_at: NOW })
     })
     SWEEP_PAGES.removals = 1
     SWEEP_PAGES.subscriptions = 1
@@ -1565,7 +1566,7 @@ describe('the hourly sweep', () => {
           ...(sub.org_id === f.org.id ? { complimentary_until: at(-1) } : {}),
         })
       for (const org of await ctx.db.query('organizations').collect())
-        await ctx.db.patch(org._id, { last_export_at: NOW })
+        await ctx.db.patch(org._id, { last_export_confirmed_at: NOW })
     })
     SWEEP_PAGES.subscriptions = 1
     expect(await legs(t, sweepRun(t))).toBeGreaterThanOrEqual(3)
@@ -1716,6 +1717,40 @@ describe('recording a saved export', () => {
     vi.advanceTimersByTime(5000)
     expect(await record(t, f.admin, f.org.id, exportId)).toBeNull()
     expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
+    // the older field too, which a rolled-back backend's reminder reads
+    const org = await t.run((ctx) =>
+      ctx.db
+        .query('organizations')
+        .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
+        .unique(),
+    )
+    expect(org?.last_export_at).toBe(new Date().toISOString())
+    expect(await as(t, f.admin).query(api.orgRemovals.state, { org_id: f.org.id })).toMatchObject({
+      last_export_confirmed_at: new Date().toISOString(),
+    })
+  })
+
+  it('counts no export recorded before confirmed saves, in the settings, Billing or the reminder', async () => {
+    const { t, f } = await unbilled()
+    // the browser export of earlier releases set last_export_at when its
+    // download started, which no save confirmed
+    await t.run(async (ctx) => {
+      const org = await ctx.db
+        .query('organizations')
+        .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
+        .unique()
+      if (org) await ctx.db.patch(org._id, { last_export_at: NOW })
+    })
+    expect(await as(t, f.admin).query(api.orgRemovals.state, { org_id: f.org.id })).toMatchObject({
+      last_export_confirmed_at: null,
+    })
+    expect(await as(t, f.admin).query(api.billing.details, { org_id: f.org.id })).toMatchObject({
+      last_export_confirmed_at: null,
+    })
+    await t.run((ctx) =>
+      scheduleRemoval(ctx, { orgId: f.org.id, reason: 'requested', endedAt: NOW }),
+    )
+    expect((await deletionNotices(t)).length).toBeGreaterThan(0)
   })
 
   it('records a saved archive that expired or that a newer one ended, within DELIVERY.streamMs of its end', async () => {

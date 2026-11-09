@@ -605,7 +605,7 @@ export const state = orgQuery({
     const removal = await orgRemovalFor(ctx, org.id)
     return {
       slug: org.slug,
-      last_export_at: org.last_export_at ?? null,
+      last_export_confirmed_at: org.last_export_confirmed_at ?? null,
       deletion: removal
         ? {
             reason: removal.reason,
@@ -620,12 +620,14 @@ export const state = orgQuery({
   },
 })
 
-/** Records in organizations.last_export_at that an admin saved export
- * `export_id` of `org_id`. The app calls it only after the desktop app or a
- * browser confirmed a saved file of exactly the archive's bytes
+/** Records in organizations.last_export_confirmed_at that an admin saved
+ * export `export_id` of `org_id`. The app calls it only after the desktop
+ * app or a browser confirmed a saved file of exactly the archive's bytes
  * (src/lib/orgExport.ts); the server cannot check that confirmation. It is
  * that field's only writer, since the /exports/ route records an archive it
- * served on the job alone (model/orgExports.ts noteDelivered). The export
+ * served on the job alone (model/orgExports.ts noteDelivered). It also sets
+ * the older last_export_at, which nothing reads, so a backend rolled back to
+ * a release that reads it still counts the save (schema.ts). The export
  * must be the organization's (an unknown and a foreign id are refused
  * alike) and an archive the route served that is ready or ended less than
  * DELIVERY.streamMs before (model/orgExports.ts recordable), else the rule
@@ -643,7 +645,8 @@ export const recordExport = authedMutation({
     if (job === null || job.org_id !== org_id) throw notFound('export not found')
     if (!recordable(job, Date.now()))
       throw rule('This export can no longer be recorded. Prepare a new export.')
-    await ctx.db.patch(org._id, { last_export_at: isoNow() })
+    const at = isoNow()
+    await ctx.db.patch(org._id, { last_export_confirmed_at: at, last_export_at: at })
     return null
   },
 })
