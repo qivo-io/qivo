@@ -12918,11 +12918,18 @@ export const PLANNER = {
   /** The lead of project `id`: its own, else its top-level project's, from
       the project cache (projectNav.byIds lead_id), or null where neither
       the project nor its parent has one known. */
+  /** The lead of project `id`, its own or else its parent's, from the
+      project cache, or null where it has none or the cache knows only a
+      navigation row's seed of the project or its parent (ProjectFacts
+      `partial`), which knows no lead, so no view shows an inherited lead
+      that may be wrong. */
   leadOf: (id: string) => {
     const p = PLANNER.project(id)
-    if (!p) return null
+    if (!p || p.partial) return null
     if (p.lead) return p.lead
-    return (p.parent ? PLANNER.project(p.parent)?.lead : undefined) ?? null
+    const parent = p.parent ? PLANNER.project(p.parent) : undefined
+    if (parent?.partial) return null
+    return parent?.lead ?? null
   },
   statusOf: (id: string) => STATUSES.find((s) => s.id === id),
   /* stale — no activity (updated_at) for the organization's standard
@@ -13017,10 +13024,14 @@ export const PLANNER = {
     const { issue, facts } = windowDelayIssue(it)
     return judgeDelay(issue, it.org, viewDelayCtx, facts)
   },
+  /** Whether the task's project tracks delays, from the project cache's
+      row; false while the cache knows only a navigation row's seed of it
+      (ProjectFacts `partial`), so no view paints a delay the project may
+      not track. */
   tracksDelay: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
     const p = it && PLANNER.project(it.project)
-    return !!p && p.trackDelay !== false
+    return !!p && !p.partial && p.trackDelay !== false
   },
   /* The remaining time a task in this project gets on entering Review: the
      project's own value, else its parent's, else DEFAULT_REVIEW_HOURS, as

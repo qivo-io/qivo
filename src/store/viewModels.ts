@@ -277,6 +277,11 @@ export type ProjectFacts = {
   trackDelay: boolean
   lead: string | undefined
   reviewHours: number | undefined
+  /** true for a navigation row's seed, which knows no lead, delay setting
+      or Review time: the store's lead and delay lookups read them as
+      unknown (P.leadOf, P.tracksDelay) until the project cache's row
+      comes */
+  partial?: true
 }
 
 /** A projectNav.byIds row as the facts the store answers for it. */
@@ -293,8 +298,9 @@ export const shapeCachedProject = (row: NavByIdRow): ProjectFacts => ({
 })
 
 /** A navigation row's seed as the facts the store answers until the
-    project cache's row comes: tracking delays, as a project nothing says
-    otherwise of, with no lead and no Review time known. */
+    project cache's row comes, marked `partial`: its name, number and
+    parent, with no lead, delay setting or Review time known, which the
+    lookups read as unknown rather than as these placeholders. */
 export const shapeSeededProject = (seed: ProjectSeed): ProjectFacts => ({
   id: seed.id,
   org: seed.org_id,
@@ -305,6 +311,7 @@ export const shapeSeededProject = (seed: ProjectSeed): ProjectFacts => ({
   trackDelay: true,
   lead: undefined,
   reviewHours: undefined,
+  partial: true,
 })
 
 /* Projects shown together under one name get their number as a tag

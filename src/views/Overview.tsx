@@ -236,6 +236,8 @@ function OvLeadStat({ info }: { info: ScopeInfo }) {
   if (!u || u.state === 'gone') return null
   // Inheritance changes who is accountable, so keep it explicit. The owning
   // team remains in project settings; repeating it here dilutes the identity.
+  // P.leadOf names no lead from a seed's facts, so the cell shows only once
+  // the project cache's rows say who leads.
   const meta = info.meta
   const inherited = !proj.lead && !!meta && meta.id !== proj.id
   return (

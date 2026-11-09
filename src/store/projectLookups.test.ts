@@ -271,6 +271,71 @@ describe('the project lookups', () => {
     expect(P.writeNote(w.hidden.id)).toBe("You can't open this project.")
   })
 
+  it("reads a seeded project's lead and delay setting as unknown until its row answers", async () => {
+    const w = world()
+    // Held sub has a lead of its own and tracks no delays, which its row
+    // says and a seed cannot
+    const sub = w.snap.projects.find((p) => p.id === w.heldSub.id)
+    if (!sub) throw new Error('no Held sub')
+    sub.track_delay = false
+    sub.lead_id = 'someone-else'
+    // a task the workspace holds in Edits, which the views would show in
+    // Held sub as a card of its answer
+    w.snap.issues.push({
+      id: 'seeded-task',
+      org_id: w.org,
+      project_id: w.edits.id,
+      num: 77,
+      title: 'Seeded task',
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    const force: ForcedProjectNav = {}
+    const { P, rerun } = await start(w.snap, force)
+    // Held program, which the caller leads, answers first
+    P.nameProjects('parent', [w.held.id])
+    await vi.waitFor(() => expect(P.leadOf(w.held.id)).toBe(w.snap.profiles[0].id))
+    // a sidebar row seeds Held sub while its read has not answered
+    force.byIdsLoading = true
+    P.seedProjects([
+      {
+        id: w.heldSub.id,
+        org_id: w.org,
+        name: 'Held sub',
+        num: w.heldSub.num,
+        parent_id: w.held.id,
+      },
+    ])
+    P.nameProjects('test', [w.heldSub.id])
+    expect(P.project(w.heldSub.id)?.name).toBe('Held sub')
+    expect(P.projectState(w.heldSub.id)).toBe('loading')
+    const task = () => {
+      const found = P.issues.find((it) => it.uuid === 'seeded-task')
+      if (!found) throw new Error('the workspace holds no task')
+      return { ...found, project: w.heldSub.id }
+    }
+    // must fail for lookups that read the seed's placeholders as real: the
+    // parent's lead as inherited, and delays tracked
+    expect(P.leadOf(w.heldSub.id)).toBeNull()
+    expect(P.tracksDelay(task())).toBe(false)
+    // its row answers: its own lead, and no delays tracked
+    force.byIdsLoading = false
+    rerun()
+    await vi.waitFor(() => expect(P.projectState(w.heldSub.id)).toBe('ok'))
+    expect(P.leadOf(w.heldSub.id)).toBe('someone-else')
+    expect(P.tracksDelay(task())).toBe(false)
+    // and a row that tracks them says so
+    sub.track_delay = true
+    rerun()
+    await vi.waitFor(() => expect(P.tracksDelay(task())).toBe(true))
+  })
+
   it('names no gone project from a navigation row that seeds it again', async () => {
     const w = world()
     const { P } = await start(w.snap)
