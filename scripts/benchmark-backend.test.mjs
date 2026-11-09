@@ -25,7 +25,7 @@ function fakeGit(answers, failures = {}) {
 describe('the backend benchmark baseline', () => {
   it('uses the named revision, skipping flags, once it resolves to a commit', async () => {
     const { git } = fakeGit({ 'rev-parse --verify --quiet v0.1.5^{commit}': 'e758e51' })
-    await expect(resolveBaseline(['--guards-only', 'v0.1.5'], git)).resolves.toEqual({
+    await expect(resolveBaseline(['--current-only', 'v0.1.5'], git)).resolves.toEqual({
       commit: 'e758e51',
       chosen: 'v0.1.5',
     })
@@ -43,7 +43,7 @@ describe('the backend benchmark baseline', () => {
 
   it('defaults to the merge base of HEAD and origin/main', async () => {
     const { git } = fakeGit({ 'merge-base HEAD origin/main': 'a387612' })
-    await expect(resolveBaseline(['--guards-only'], git)).resolves.toEqual({
+    await expect(resolveBaseline(['--current-only'], git)).resolves.toEqual({
       commit: 'a387612',
       chosen: 'merge base of HEAD and origin/main',
     })

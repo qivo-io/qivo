@@ -1,17 +1,18 @@
 // Hermetic Convex measurement of the workspace's root part
-// (convex/workspace.ts), the Inbox feed and activity writes, the activity
-// write compared with a committed revision.
+// (convex/workspace.ts), the Inbox feed and an activity write, the
+// activity write compared with a committed revision.
 //
-//   node scripts/benchmark-backend.mjs [revision] [--guards-only] [--current-only]
+//   node scripts/benchmark-backend.mjs [revision] [--current-only]
 //
-// The root part and the feed are each read in their own transaction in an
-// organization of 100, 1,000 and 10,000 tasks: one row per part with its
-// ranges, documents and milliseconds, and the parts a task rename changes
-// with the bytes they re-send, none since no part sends a task. `revision` is the commit the
-// working tree's logActivity is compared with. It defaults to the merge
-// base of HEAD and origin/main, so a branch is measured against the commit
-// it started from, and to HEAD in a checkout without origin/main.
-// --current-only measures the working tree alone and needs no revision.
+// The root part and the feed are each read in their own transaction, one
+// row per part with its ranges, documents, bytes and milliseconds, in an
+// organization at everyday figures. Neither reads a task, a project or
+// the history, so the benchmark seeds none and no organization size
+// changes them. `revision` is the commit the working tree's logActivity is
+// compared with. It defaults to the merge base of HEAD and origin/main, so
+// a branch is measured against the commit it started from, and to HEAD in
+// a checkout without origin/main. --current-only measures the working tree
+// alone and needs no revision.
 import { realpathSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -109,10 +110,7 @@ async function main(args) {
       return server.ssrLoadModule(target)
     }
     const harness = await server.ssrLoadModule('/convex/tests/backendPerformance.setup.ts')
-    const options = {
-      guardsOnly: args.includes('--guards-only'),
-      report: (row) => console.log(JSON.stringify(row)),
-    }
+    const options = { report: (row) => console.log(JSON.stringify(row)) }
     let compared = { currentOnly: true }
     if (baseline !== null) {
       const oldActivity = await oldModule('convex/model/activity.ts')
