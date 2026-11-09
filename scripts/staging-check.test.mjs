@@ -53,6 +53,8 @@ import {
   FORMERLY_BARE,
   freeMilestoneWeek,
   freePastMilestoneWeek,
+  HIDDEN_TASK_WINDOW_STEP,
+  HIDDEN_WINDOW_READS,
   hasTag,
   historyRows,
   IMAGE_ANSWER_DELAY_MS,
@@ -128,6 +130,7 @@ import {
   projectDeleteRoute,
   projectPagesMax,
   projectsPartProblems,
+  querySetChanges,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -1287,6 +1290,71 @@ describe('staging check REST contract', () => {
     expect(at.every((n) => n > 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
   })
+  it("names the hidden task window's step and reads, and names a Remove by its Add", () => {
+    expect(HIDDEN_TASK_WINDOW_STEP).toBe('ui/hidden-task-window')
+    expect(HIDDEN_WINDOW_READS).toEqual([
+      'snapshot:threadComments',
+      'inbox:item',
+      'taskWindow:task',
+    ])
+    // the store reads them by those names, and the window marks its reads
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    for (const read of ['api.snapshot.threadComments', 'api.inbox.item', 'api.taskWindow.task'])
+      expect(store).toContain(read)
+    const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
+    expect(window).toContain('data-task-window-reads=')
+    // it runs after the badge's step and before the Inbox list's, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = [
+      'await inboxBadgeCheck()',
+      'await hiddenTaskWindowCheck()',
+      'await inboxListCheck()',
+    ]
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const step = script.slice(
+      script.indexOf('async function hiddenTaskWindowCheck()'),
+      script.indexOf('export const INBOX_LIST_STEP'),
+    )
+    // it hides the page as a background tab is, waits 15 s for no read, and
+    // removes t0's notification in its cleanup
+    expect(step).toContain("document.dispatchEvent(new Event('visibilitychange'))")
+    expect(step).toContain('await sleep(15_000)')
+    expect(step.indexOf('finally')).toBeLessThan(step.indexOf('Remove notification'))
+    // a Remove carries its queryId alone, named per socket by its Add
+    const frame = (socket, modifications) => ({
+      socket,
+      text: JSON.stringify({
+        type: 'ModifyQuerySet',
+        baseVersion: 1,
+        newVersion: 2,
+        modifications,
+      }),
+    })
+    const changes = querySetChanges([
+      frame(1, [
+        { type: 'Add', queryId: 4, udfPath: 'inbox:item', args: [{}] },
+        { type: 'Add', queryId: 5, udfPath: 'taskWindow:task', args: [{}] },
+      ]),
+      { socket: 1, text: 'not json' },
+      { socket: 1, text: JSON.stringify({ type: 'Mutation', udfPath: 'messages:readItem' }) },
+      frame(1, [{ type: 'Remove', queryId: 4 }]),
+      // the same id on another connection is another query
+      frame(2, [{ type: 'Remove', queryId: 5 }]),
+      frame(2, [{ type: 'Add', queryId: 5, udfPath: 'snapshot:threadComments', args: [{}] }]),
+      frame(2, [{ type: 'Remove', queryId: 5 }]),
+    ])
+    expect(changes).toEqual([
+      { change: 'add', query: 'inbox:item' },
+      { change: 'add', query: 'taskWindow:task' },
+      { change: 'remove', query: 'inbox:item' },
+      { change: 'remove', query: null },
+      { change: 'add', query: 'snapshot:threadComments' },
+      { change: 'remove', query: 'snapshot:threadComments' },
+    ])
+  })
+
   it("names the Inbox list's step, its read and marks, and reads its frames", () => {
     expect(INBOX_LIST_STEP).toBe('ui/inbox-list')
     expect(INBOX_PAGE_QUERY).toBe('inbox:page')

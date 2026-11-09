@@ -255,8 +255,12 @@
  * whose window must draw the New divider above that comment from its inbox
  * item (inbox.item) and read the item (messages.readItem), so the summary
  * drops back, and removes t0's item from Nora's Inbox with the row's own
- * action, messages.removeItem (ui/inbox-badge). It mentions Nora on t0
- * again and opens the Inbox in a fresh load, which must list t0's row
+ * action, messages.removeItem (ui/inbox-badge). With t0 open at its
+ * address and the page hidden, the window's reads must leave the socket,
+ * a mention from the Standard agent must reach the badge and no read go
+ * out, and on show the reads must come back, the comment stand under the
+ * New divider and one read go out (ui/hidden-task-window). It mentions
+ * Nora on t0 again and opens the Inbox in a fresh load, which must list t0's row
  * from the deployment's pages (inbox.page) with M and Alpha in its crumb,
  * find it by a search on the server, send
  * the row's read, unread, snooze and remove by organization and task,
@@ -6645,6 +6649,187 @@ async function inboxBadgeCheck() {
   })
 }
 
+/** The step that holds an open task window's reads to a hidden page
+ *  (hiddenTaskWindowCheck). */
+export const HIDDEN_TASK_WINDOW_STEP = 'ui/hidden-task-window'
+
+/** The task window's reads the step watches leave a hidden page and come
+ *  back on show: its thread, its inbox item and its own read of the task. */
+export const HIDDEN_WINDOW_READS = ['snapshot:threadComments', 'inbox:item', 'taskWindow:task']
+
+/** The queries that frames `frames` a page sent on its sync sockets add
+ *  and remove, in order, each `{ change, query }`. A frame is `{ socket,
+ *  text }`, `socket` a number for each connection. A Remove carries only
+ *  its queryId, so it is named by the Add of that id on the same socket,
+ *  and is null when the frames hold none. Any other frame, also one that
+ *  is no JSON, changes nothing. */
+export function querySetChanges(frames) {
+  const names = new Map()
+  const changes = []
+  for (const { socket, text } of frames) {
+    let message
+    try {
+      message = JSON.parse(text)
+    } catch {
+      continue
+    }
+    if (message?.type !== 'ModifyQuerySet' || !Array.isArray(message.modifications)) continue
+    for (const m of message.modifications) {
+      const id = `${socket}:${m?.queryId}`
+      if (m?.type === 'Add') {
+        names.set(id, m.udfPath)
+        changes.push({ change: 'add', query: m.udfPath })
+      } else if (m?.type === 'Remove')
+        changes.push({ change: 'remove', query: names.get(id) ?? null })
+    }
+  }
+  return changes
+}
+
+/** An open task window stops its reads while its page is hidden and reads
+ *  again on return. As Nora it opens t0 at its address, waits for the
+ *  item's current answer, records the page's socket frames, and hides the
+ *  page by overriding document.visibilityState and dispatching
+ *  visibilitychange. The frames must then remove HIDDEN_WINDOW_READS. The
+ *  Standard agent mentions Nora on t0 over REST, the unread summary must
+ *  count it, and no messages.readItem may leave in the next 15 s. It then
+ *  shows the page, and the frames must add those reads again, the agent's
+ *  comment must stand right under the New divider, one messages.readItem
+ *  must leave and the summary must drop back. Its cleanup shows the page
+ *  and removes t0's notification from the Inbox row's menu, as
+ *  ui/inbox-badge does, so the next step finds Nora's Inbox as this one
+ *  did. It runs after ui/inbox-badge, while t0 is active. */
+async function hiddenTaskWindowCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  await check(HIDDEN_TASK_WINDOW_STEP, async () => {
+    const taskAddress = `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${t0.key.toLowerCase()}`
+    /** The store's unread summary, once it holds a current answer. */
+    const summary = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxSummary ?? null)
+      return now?.state === 'ok' && now.current ? now : null
+    }
+    /** The store's inbox item of t0, once it holds a current answer. */
+    const item = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxItem ?? null)
+      return now?.task === t0.id && now.state === 'ok' && now.current ? now : null
+    }
+    /** Hides or shows the page as the browser does for a background tab. */
+    const setHidden = (hidden) =>
+      evaluate(
+        app,
+        (on) => {
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            get: () => (on ? 'hidden' : 'visible'),
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+        },
+        hidden,
+      )
+    const frames = []
+    let sockets = 0
+    const record = (ws) => {
+      const socket = ++sockets
+      ws.on('framesent', (frame) => frames.push({ socket, text: String(frame.payload) }))
+    }
+    /** The queries changed `change` ('add' or 'remove') since frame `from`. */
+    const changed = (change, from) =>
+      querySetChanges(frames)
+        .slice(querySetChanges(frames.slice(0, from)).length)
+        .filter((c) => c.change === change)
+        .map((c) => c.query)
+    const reads = (from) =>
+      frames.slice(from).filter((f) => sentMutation(f.text, 'messages:readItem') !== null).length
+    /** Whether `after` counts one more than `before`, or both more than 99. */
+    const oneMore = (before, after) =>
+      before.answer.unread_more
+        ? after.answer.unread_more
+        : after.answer.unread_count === before.answer.unread_count + 1 ||
+          (before.answer.unread_count === 99 && after.answer.unread_more)
+    app.on('websocket', record)
+    try {
+      await app.goto(taskAddress, { waitUntil: 'domcontentloaded' })
+      expect(await until(async () => (await item()) !== null, 60_000), "t0's item did not answer")
+      expect(
+        await until(async () => ((await item())?.item?.unread_count ?? 0) === 0, 60_000),
+        'opening t0 did not read its item',
+      )
+      expect(await until(async () => (await summary()) !== null, 60_000), 'no summary answered')
+      const before = await summary()
+      const hiddenAt = frames.length
+      await setHidden(true)
+      expect(
+        await until(
+          async () => HIDDEN_WINDOW_READS.every((q) => changed('remove', hiddenAt).includes(q)),
+          30_000,
+        ),
+        `the hidden page kept the window's reads: ${JSON.stringify(changed('remove', hiddenAt))}`,
+      )
+      const comment = await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+        body: `${run.tag} hidden window for @[${nora.name}](user:${nora.id})`,
+      })
+      let after = null
+      expect(
+        await until(async () => {
+          after = await summary()
+          return after !== null && oneMore(before, after)
+        }, 60_000),
+        `the summary did not count the mention while hidden: ${JSON.stringify(after?.answer ?? null)}`,
+      )
+      await sleep(15_000)
+      eq(reads(hiddenAt), 0, 'reads of the item sent while the page was hidden')
+      const shownAt = frames.length
+      await setHidden(false)
+      expect(
+        await until(
+          async () => HIDDEN_WINDOW_READS.every((q) => changed('add', shownAt).includes(q)),
+          30_000,
+        ),
+        `the shown page did not read the window again: ${JSON.stringify(changed('add', shownAt))}`,
+      )
+      const under = () =>
+        evaluate(
+          app,
+          (id) => {
+            const mark = document.querySelector('[data-spine] > [data-unread-divider="mark"]')
+            return mark?.nextElementSibling?.getAttribute('data-comment') === id
+          },
+          comment.id,
+        )
+      expect(await until(under, 60_000), "the agent's comment is not under the New divider")
+      expect(await until(async () => reads(shownAt) === 1, 60_000), 'the return sent no read')
+      let back = null
+      expect(
+        await until(async () => {
+          back = await summary()
+          if (back === null || back.answer.unread_more !== before.answer.unread_more) return false
+          return (
+            before.answer.unread_more || back.answer.unread_count === before.answer.unread_count
+          )
+        }, 60_000),
+        `the summary did not drop back: ${JSON.stringify(back?.answer ?? null)}`,
+      )
+      eq(reads(shownAt), 1, 'reads of the item sent on return')
+      return `the hidden page removed ${HIDDEN_WINDOW_READS.join(', ')}, the badge counted the mention with no read for 15 s, and the return added them again, drew New above the comment and sent one read`
+    } finally {
+      app.off('websocket', record)
+      await setHidden(false).catch(() => {})
+      // the row's own Remove notification leaves Nora's Inbox as it was
+      try {
+        await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+        const row = app.locator(`[data-message="${t0.id}"]`)
+        await row.waitFor({ timeout: 30_000 })
+        await row.click({ button: 'right' })
+        await app.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
+        await until(async () => (await row.count()) === 0, 30_000)
+      } catch (e) {
+        console.error(`${HIDDEN_TASK_WINDOW_STEP}: could not remove t0's notification:`, e)
+      }
+    }
+  })
+}
+
 /** The step that lists Nora's Inbox from the deployment's pages and acts
  *  on a row by its organization and task (inboxListCheck). */
 export const INBOX_LIST_STEP = 'ui/inbox-list'
@@ -6703,7 +6888,7 @@ export function sentMutation(text, udfPath) {
  *  its card ringed. Back in the Inbox, when the first page has a Next, Next
  *  and Previous must show t0's row again; else it notes one page. Last,
  *  Remove notification (messages.removeItem with the cutoff) leaves Nora's
- *  Inbox as the step found it. It runs after ui/inbox-badge, which removed
+ *  Inbox as the step found it. It runs after ui/hidden-task-window, which removed
  *  t0's item, and before the run archives M, which holds t0; the cleanup,
  *  which deletes M, removes the comment with t0. */
 async function inboxListCheck() {
@@ -12002,6 +12187,9 @@ async function main() {
   // the Inbox badge from the deployment's unread summary, and the read of
   // a mentioned task on opening it, while t0 is active
   await inboxBadgeCheck()
+  // an open task window's reads leave a hidden page and come back on show,
+  // with the read on open held until then, while t0 is active
+  await hiddenTaskWindowCheck()
   // the Inbox list from the deployment's pages, with a row's actions by
   // organization and task, while t0 is active
   await inboxListCheck()
