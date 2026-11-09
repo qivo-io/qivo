@@ -17,13 +17,15 @@
 // checkout's, and prints both medians side by side. Taking turns puts both
 // under the same machine load, which moves single numbers a lot. The App
 // render counts (*AppRenders) do not depend on load at all. A revision from
-// after the workspace parts and before the projects part stopped sending
-// milestones joins the milestones of every projects part, which this
-// checkout's perf server no longer sends, so it cannot load here; measure
-// such a revision with its own checkout's benchmark on the same machine
-// instead. So it is for a revision before the Inbox feed, whose workspace
-// waits for the inbox part (workspace.inbox), which this checkout's perf
-// server no longer answers either.
+// after the workspace parts and before the workspace's projects part went
+// subscribes that part (workspace.projects) and sizes its windows from root
+// fields this checkout's perf server no longer sends, so it cannot load
+// here, and the perf server answers its read of the part with an error that
+// says so; measure such a revision with its own checkout's benchmark on the
+// same machine instead. That holds for the default baseline too, the merge
+// base, until main carries this change. So it is for a revision before the
+// Inbox feed, whose workspace waits for the inbox part (workspace.inbox),
+// which this checkout's perf server no longer answers either.
 //
 // Every sample ends on the Overview and the Roadmap after the Board was
 // open (which stays loaded, hidden): the page's memory, and a remote change

@@ -7,8 +7,7 @@
 // real client does: decode the text and update the app.
 //
 // It serves the workspace in live parts (convex/workspace.ts), its tasks
-// and projects in the id windows the app asks for, cut from the whole
-// workspace it holds
+// in the id windows the app asks for, cut from the whole workspace it holds
 // (convex/lib/workspaceJoin.ts splitWorkspace), and the root part with the
 // signed-in person's own profiles, memberships and teams alone (rootOf),
 // so the app holds nobody else and no label, and names every other person,
@@ -21,10 +20,12 @@
 // src/store/projectNavStandIn.setup.ts).
 // It also answers snapshot:forMe, the one query apps before the parts read,
 // with the whole it holds, milestones included, for a baseline build. A
-// baseline build from after the parts and before the projects part
-// stopped sending milestones joins the parts this server sends and
-// cannot load against it (scripts/benchmark-browser.mjs --baseline), so
-// measure such a build in a checkout of its own. It answers the task
+// baseline build from after the parts and before the workspace's projects
+// part went subscribes that part (workspace:projects) and sizes its windows
+// from root fields this server no longer sends, so it cannot load against
+// it (scripts/benchmark-browser.mjs --baseline): a read of a part this
+// server does not serve answers an error that says so (readPart). Measure
+// such a build in a checkout of its own. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the
 // workspace it holds, which a write sends
 // again with the parts it changed. The task window's relation pickers' read
@@ -2120,7 +2121,10 @@ function partsNow() {
 const PART_KINDS = {
   'workspace:tasks': 'tasks',
 }
-/** What workspace part `name` answers for `args`. */
+/** What workspace part `name` answers for `args`. A part this server does
+    not serve, such as the projects part a build from before its removal
+    subscribes, throws an error that names it and says how to measure such
+    a build. */
 function readPart(name, args) {
   const parts = partsNow()
   // the organization's parts the read names, the first one's by default
@@ -2129,6 +2133,10 @@ function readPart(name, args) {
   // (convex/lib/workspaceParts.ts readRoot)
   if (name === 'workspace:root') return rootOf(partsWorkspace())
   const kind = PART_KINDS[name]
+  if (kind === undefined)
+    throw new Error(
+      `${name} is no workspace part this perf server serves (workspace:root and ${Object.keys(PART_KINDS).join(', ')} only); a build from before the workspace's projects part went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
+    )
   const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
 }

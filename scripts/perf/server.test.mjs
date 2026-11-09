@@ -1712,6 +1712,13 @@ describe('the benchmark server', () => {
       stopped: false,
     })
     expect((await ask('projectnav=error', 'projectNav:targets')).error).toContain('fails')
+    // a build from before the projects part went subscribes it, which this
+    // server says it does not serve, rather than failing without a word
+    const removed = await ask('', 'workspace:projects', { from: '' })
+    expect(removed.error).toContain(
+      'workspace:projects is no workspace part this perf server serves',
+    )
+    expect(removed.error).toContain('its own checkout')
   }, 60_000)
 
   it("answers Team sync's scope menu with syncmenu's states, apart from the other navigation reads", async () => {
