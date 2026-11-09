@@ -1925,6 +1925,10 @@ let writes = 0
 const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
 const comments = []
+/* The arguments of the comment thread the page read last, as a
+   subscription or a watched part, kept once its read stops, so comments
+   delivered while a hidden page paused it reach it when it reads again. */
+let lastThread = null
 /* The task window's thread on the task the benchmark opens (the thread,
    threadchanges and threadstate parameters): the task, its history oldest
    first in insertion order, and per kind the oldest place an earlier read
@@ -3236,19 +3240,23 @@ const scenarios = {
     return emitWorkspace()
   },
   /* Another person posts `count` comments at once on the one open thread,
-     which reach it in one delivery; answers the last one's text. */
+     which reach it in one delivery; answers the last one's text. With no
+     thread read live, as while a hidden page pauses its reads, they go to
+     the thread the page read last, which answers them when it reads
+     again. */
   deliverComments(count = 1) {
     const active = [
       ...(listeners.get('snapshot:threadComments') || []),
       ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:threadComments'),
     ]
-    if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
+    const thread = active.length === 0 ? lastThread : active.length === 1 ? active[0].args : null
+    if (thread === null) throw new Error('Benchmark requires one open comment thread')
     let body = ''
     for (let k = 0; k < count; k++) {
       body = `Benchmark delivered comment ${comments.length + 1}`
       comments.push({
         id: id('5', 800000 + comments.length),
-        issue_id: active[0].args.issue_id,
+        issue_id: thread.issue_id,
         author: profiles[1].id,
         body,
         created_at: new Date().toISOString(),
@@ -3336,6 +3344,7 @@ port.onmessage = async ({ data }) => {
         },
       }
       subscriptions.set(sub, { name, subscription })
+      if (name === 'snapshot:threadComments') lastThread = args
       const group = listeners.get(name) || new Set()
       listeners.set(name, group)
       group.add(subscription)
@@ -3345,6 +3354,7 @@ port.onmessage = async ({ data }) => {
       return
     }
     case 'watch': {
+      if (data.name === 'snapshot:threadComments') lastThread = data.args
       watchedParts.set(data.id, {
         name: data.name,
         args: data.args,

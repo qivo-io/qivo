@@ -102,11 +102,12 @@
 // newest of them shows with no thread page loading and, in a build that
 // marks it, the window's reads current (data-task-window-reads), with the
 // longest animation frame from the show on. threadReturnArrivedHidden says
-// whether their delivery reached the page while it was hidden: on this
-// branch the window's reads keep running while hidden, so it does, and the
-// return times only what showing the page costs. --phone runs the same
-// with the window at the phone's 390 by 844, which it narrows to once the
-// task is open, as the phone phases above do.
+// whether their delivery reached the page while it was hidden: the
+// window's reads pause while the page is hidden, so it does not (0), and
+// the comments arrive on the return, which then reads the thread again.
+// The perf server keeps them for the thread the page read last. --phone
+// runs the same with the window at the phone's 390 by 844, which it
+// narrows to once the task is open, as the phone phases above do.
 import assert from 'node:assert/strict'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -1703,7 +1704,8 @@ async function runThreadReturnSample(origin, arrivals, metrics) {
   }
   metrics.threadReturnHeldBefore.push(await heldRows(page, true))
   // the page hidden, and the comments posted while it is; their delivery
-  // reaches the page within two seconds if its reads keep running
+  // would reach the page within two seconds if its reads kept running,
+  // but they pause while it is hidden, so they arrive on the return
   phase('threadReturnHidden')
   await setHidden(page, true)
   const bytes = await page.evaluate(() => window.__perf.wireBytes)

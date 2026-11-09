@@ -2356,6 +2356,32 @@ describe('the benchmark server', () => {
     )
   })
 
+  it('keeps comments delivered while no thread read is live for the thread read last, answering them when it reads again', async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const args = { issue_id: TASK_1 }
+    await send({ type: 'subscribe', id: 'thread', name: 'snapshot:threadComments', args })
+    const results = (to) =>
+      posted.filter((m) => m.type === 'result' && m.to === to).map((m) => JSON.parse(m.text))
+    await vi.waitFor(() => expect(results('thread')).toHaveLength(1))
+    // a hidden page pauses the read
+    await send({ type: 'unsubscribe', id: 'thread' })
+    await send({ type: 'scenario', id: 'hidden', name: 'deliverComments', args: [2] })
+    const last = posted.find((m) => m.type === 'answer' && m.id === 'hidden')
+    expect(last?.failure).toBeUndefined()
+    expect(results('thread')).toHaveLength(1)
+    // shown again, the thread reads both
+    await send({ type: 'subscribe', id: 'again', name: 'snapshot:threadComments', args })
+    await vi.waitFor(() => expect(results('again')).toHaveLength(1))
+    expect(
+      results('again')[0]
+        .comments.slice(-2)
+        .map((c) => c.body),
+    ).toEqual([
+      `Benchmark delivered comment ${Number(last.value.match(/\d+$/)[0]) - 1}`,
+      last.value,
+    ])
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
