@@ -433,7 +433,11 @@ describe('the automatic attempt', () => {
     await act(async () => server.finish())
     await settle()
     expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: true }])
-    expect(text()).toContain('Your browser is downloading the export.')
+    // the page says this download does not count, and how to save one that does
+    expect(container.querySelector('[data-export-sent]')?.textContent).toBe(
+      "Your browser is downloading the export. Qivo can't confirm this download, so it doesn't count toward deletion reminders. Save export… saves a copy that Qivo counts.",
+    )
+    expect(text()).not.toContain("This browser can't tell Qivo when a download finishes, so")
     expect(sent('orgRemovals:recordExport')).toEqual([])
     expect(button('[data-export-download="latest"]')?.textContent).toBe('Save export…')
   })

@@ -519,6 +519,13 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
           does. Qivo can't tell when that download finishes, so it doesn't count toward deletion
           reminders.
         </p>
+      ) : delivery.way === 'file' ? (
+        // the automatic attempt of a page that holds no file for the job,
+        // after a reload or in another tab
+        <p data-export-sent="">
+          Your browser is downloading the export. Qivo can't confirm this download, so it doesn't
+          count toward deletion reminders. Save export… saves a copy that Qivo counts.
+        </p>
       ) : (
         <p data-export-sent="">
           Your browser is downloading the export. This browser can't tell Qivo when a download
