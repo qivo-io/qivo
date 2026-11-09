@@ -20,7 +20,7 @@
 
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../../convex/_generated/api'
+import { api, internal } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { BoardAnswer, BoardFilters, BoardScope } from '../../convex/lib/board'
 import { taskOwnerId } from '../../convex/lib/review'
@@ -716,6 +716,73 @@ describe("delays where tasks compete for their owner's hours", () => {
     expect(compared.rows - before.rows).toBe(4)
     const statuses = answer.rows.map((row) => verdicts.get(row.id) ?? null).sort()
     expect(statuses).toEqual(['late', 'late', 'ok', 'ok'])
+  })
+
+  it('judges each card as the REST and MCP task read does, for staff and for a guest, on a pinned clock', async () => {
+    // the server judges by UTC day (convex/lib/machineDelay.ts), so the
+    // store reads the time in UTC too, at a Wednesday noon away from a
+    // midnight and a week's end
+    const zone = process.env.TZ
+    process.env.TZ = 'UTC'
+    try {
+      const now = Date.parse('2026-09-09T12:00:00.000Z')
+      const today = '2026-09-09'
+      const t = newT()
+      const f = await withReadingAdmin(t)
+      await t.run(async (ctx) => {
+        const sub = await ctx.db.get(f.sub._id)
+        if (sub) await ctx.db.patch(sub._id, { track_delay: true })
+      })
+      // the week of 21 September, due that Friday; the admin's and the
+      // guest's fit their weeks, the user's 50 hours do not
+      const planned = (owner: Doc<'profiles'>, hours: number) =>
+        plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          status: 'progress',
+          assignee_id: owner.id,
+          remaining_hours: hours,
+          start_week: '2026-09-21',
+          end_week: '2026-09-21',
+          due_date: '2026-09-25',
+        })
+      for (const [owner, hours] of [
+        [f.admin, 20],
+        [f.admin, 20],
+        [f.user, 30],
+        [f.user, 20],
+        [f.guest, 10],
+      ] as const)
+        await planned(owner, hours)
+      const seen = new Set<string>()
+      for (const reader of [f.admin, f.guest]) {
+        const P = await storeOf(t, reader, now)
+        const answer = await boardFor(t, reader, projectScope(reader, f.sub.id))
+        if (answer.state !== 'ok') throw new Error(answer.state)
+        const verdicts = await expectDelays(t, P, reader, answer, `${reader.name}, machine`)
+        for (const row of answer.rows) {
+          const machine = await t.query(internal.machine.rest.getIssue, {
+            callerId: reader.id,
+            access: 'read',
+            today,
+            ref: row.id,
+          })
+          const card = verdicts.get(row.id)
+          expect(card, `${reader.name}: ${row.id} judged`).toBeDefined()
+          expect(machine.delay?.status ?? null, `${reader.name}: ${row.id}`).toBe(
+            card === 'unknown' ? 'unavailable' : (card ?? null),
+          )
+          seen.add(`${reader.name} ${card}`)
+        }
+        vi.useRealTimers()
+      }
+      // both readers met a card on track and one that is not
+      for (const reader of [f.admin, f.guest])
+        for (const status of ['ok', 'late'])
+          expect(seen.has(`${reader.name} ${status}`), `${reader.name} ${status}`).toBe(true)
+    } finally {
+      process.env.TZ = zone
+    }
   })
 })
 

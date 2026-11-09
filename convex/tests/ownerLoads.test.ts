@@ -591,6 +591,26 @@ describe('who receives which spans', () => {
     }
   })
 
+  it('gives a guest the hidden work they review without a task id, and none of the hidden work they only assign', async () => {
+    const fx = await setup()
+    // two review hand-offs in a project the guest cannot see: the review's
+    // owner is its reviewer (convex/lib/review.ts taskOwnerId)
+    const review = { project_id: fx.sib.id, status: 'review' as const }
+    await task(fx, { ...review, assignee_id: fx.user.id, reviewer_id: fx.guest.id, ...plan(7) })
+    await task(fx, { ...review, assignee_id: fx.guest.id, reviewer_id: fx.user.id, ...plan(4) })
+    // the one they review is their load, anonymized
+    const own = await spansOf(fx, fx.guest, fx.guest.id)
+    expect(own.map((s) => [s.issue_id, s.project_id, Number(s.remaining)])).toEqual([
+      [null, null, 7],
+    ])
+    // the one they only assign is the reviewer's, of which a guest reads
+    // no hidden span
+    expect(await spansOf(fx, fx.guest, fx.user.id)).toEqual([])
+    // staff read both hand-offs by id, each in its reviewer's load
+    expect((await spansOf(fx, fx.admin, fx.guest.id)).map((s) => Number(s.remaining))).toEqual([7])
+    expect((await spansOf(fx, fx.admin, fx.user.id)).map((s) => Number(s.remaining))).toContain(4)
+  })
+
   it('answers hidden spans alike in either creation order or project', async () => {
     const answer = async (order: 'ab' | 'ba' | 'apart') => {
       const fx = await setup()
