@@ -121,13 +121,13 @@ const projectsTable = defineTable({
   review_hours: v.optional(v.number()),
   archived_at: v.optional(v.string()),
   created_at: v.string(),
-  // server-owned: where the project sorted in the app's project windows,
+  // Server-owned, set once when the project is stored (lib/db.ts
+  // newWindowKey). It placed the project in the app's project windows,
   // which no read uses since the workspace's projects part went
-  // (t3/limits-projects-part); the window keys' data stage recorded in
-  // later-work removes it with by_org_window
-  // (lib/db.ts newWindowKey), set once. Never sent to clients, REST, MCP,
-  // webhooks or the export. A project stored before it had one sorts first,
-  // in the first window, until internal/windowKeysBackfill gives it one.
+  // (t3/limits-projects-part), and the window keys' data stage recorded in
+  // later-work removes it with by_org_window. Never sent to clients, REST,
+  // MCP, webhooks or the export. internal/windowKeysBackfill still gives
+  // one to a project stored before it.
   window_key: v.optional(v.string()),
   // The name as name-ordered lists sort and search it (lib/nameKey.ts),
   // server-owned and written with the name. Never sent to clients, REST,
