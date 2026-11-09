@@ -496,8 +496,11 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
  * Retry-After beside Content-Disposition, because the export page reads the
  * route with fetch from the app's origin when it saves into a file the
  * person chose (src/lib/orgExport.ts), and says how long to wait after a
- * 429. The archive holds no file contents and the route grants nothing
- * else. */
+ * 429. Every refusal, the 404 and the 429, is also an attachment with no
+ * body, so a browser that loaded the link as a page, which sends no Origin
+ * to echo, shows at most a failed download and never replaces the page
+ * that asked; the export page loads it in a hidden frame for that reason.
+ * The archive holds no file contents and the route grants nothing else. */
 
 /* What deliveryOf answers for an archive the route may serve. */
 type Delivery = {
@@ -638,6 +641,7 @@ const serveExport = answerAfterBody(async (ctx, request) => {
     headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Retry-After')
   const refuse = (status = 404): Response => {
     headers.set('Cache-Control', 'no-store')
+    headers.set('Content-Disposition', 'attachment')
     return new Response(null, { status, headers })
   }
   const id = url.pathname.slice(EXPORTS.length)

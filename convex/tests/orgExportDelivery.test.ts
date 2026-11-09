@@ -465,7 +465,14 @@ describe('the /exports/ route', () => {
       // profile document the claim signs
       ["the admin's uuid", await mint(exportId, f.admin.id)],
     ]
-    for (const [label, path] of cases) await expectRefused(await get(t, path), label)
+    for (const [label, path] of cases) {
+      await expectRefused(await get(t, path), label)
+      // a browser that loads the link as a page, which sends no Origin,
+      // downloads nothing
+      const loaded = await t.fetch(path)
+      await expectRefused(loaded, label)
+      expect(loaded.headers.get('Content-Disposition'), label).toBe('attachment')
+    }
     // the good link still works
     expect((await get(t, good)).status).toBe(200)
     // an expired one does not
@@ -620,6 +627,8 @@ describe('the /exports/ route', () => {
     await expectRefused(file, 'file gateway')
     expect(file.headers.get('Access-Control-Allow-Origin')).toBe(APP)
     expect(file.headers.get('Access-Control-Expose-Headers')).toBe('Content-Disposition')
+    // the file gateway's refusal stays a plain 404
+    expect(file.headers.get('Content-Disposition')).toBeNull()
   })
 
   it('answers a preflight with GET and OPTIONS, echoing only app origins', async () => {
@@ -800,6 +809,7 @@ describe('what a download records', () => {
     const third = await get(t, long)
     expect(third.status).toBe(429)
     expect(third.headers.get('Retry-After')).toBe(String(DELIVERY.retrySeconds))
+    expect(third.headers.get('Content-Disposition')).toBe('attachment')
     expect(third.headers.get('X-Content-Type-Options')).toBe('nosniff')
     // the app's page reads the wait from its fetch
     expect(third.headers.get('Access-Control-Allow-Origin')).toBe(APP)

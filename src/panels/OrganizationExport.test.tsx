@@ -88,7 +88,6 @@ beforeEach(() => {
   network.onUpdate.mockReset()
   planner.cannotSaveText.mockReset().mockReturnValue(null)
   planner.hasUnsavedWork.mockReset().mockReturnValue(false)
-  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -97,6 +96,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  for (const frame of document.querySelectorAll('iframe')) frame.remove()
   Reflect.deleteProperty(document, 'visibilityState')
   delete (window as { showSaveFilePicker?: unknown }).showSaveFilePicker
   delete (window as { qivoDesktop?: unknown }).qivoDesktop
@@ -366,6 +366,25 @@ describe('the automatic attempt', () => {
     await act(async () => step())
     await settle()
     expect(claims()).toEqual([])
+  })
+
+  it('makes none after this page downloaded the export by hand', async () => {
+    const download = desktop()
+    serve(['ready'])
+    // the page cannot save when the job shows ready, so no attempt yet
+    planner.cannotSaveText.mockReturnValue('Saving is paused.')
+    await mount()
+    expect(claims()).toEqual([])
+    planner.cannotSaveText.mockReturnValue(null)
+    await press('[data-export-download="latest"]')
+    expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: false }])
+    // the next answers and minutes bring no second download of the archive
+    await act(async () => server.publish())
+    await settle()
+    await act(async () => vi.advanceTimersByTime(60_000))
+    await settle()
+    expect(claims()).toHaveLength(1)
+    expect(download).toHaveBeenCalledTimes(1)
   })
 
   it('makes none a second time after its claim was refused', async () => {

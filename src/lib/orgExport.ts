@@ -22,8 +22,9 @@ import { beginUpdateBlock } from './updateSafety'
  *   into a file the person chose, through pipeTo with backpressure, so the
  *   page holds only the stream's queued chunks and never the archive; the
  *   save counts once the file closed with exactly the archive's bytes;
- * - link: other browsers navigate to the link and download it themselves,
- *   which nothing confirms.
+ * - link: other browsers load the link in a hidden frame and download it
+ *   themselves, which nothing confirms; the page itself never navigates, so
+ *   a refusal cannot replace it.
  * Only a confirmed save calls orgRemovals.recordExport, which names the
  * archive, so a download the app did not see saved never holds back the
  * deletion reminder.
@@ -92,7 +93,7 @@ let way: ExportWay | null = null
 
 /** How this page saves an export, read once a page load: the desktop app
  * when its bridge offers the download (a test build from before it takes
- * the link way, which hands the link to the system browser), a file when
+ * the link way, whose download Electron asks where to save), a file when
  * the page is a secure context with showSaveFilePicker, else the link. */
 export function exportWay(): ExportWay {
   if (way !== null) return way
@@ -136,6 +137,8 @@ const listeners = new Set<() => void>()
 const files = new Map<string, ExportFile>()
 // the exports whose automatic attempt this page made
 const attempted = new Set<string>()
+// the exports this page claimed a link for, by hand or automatically
+const delivered = new Set<string>()
 // what a saved, unrecorded delivery needs to record again
 let unrecorded: { orgId: string; exportId: string } | null = null
 
@@ -262,16 +265,6 @@ const retryAfterOf = (response: Response): number | null => {
   return Number.isInteger(seconds) && seconds > 0 ? seconds : null
 }
 
-/* Waits, up to about ten seconds, until no change waits for the server and
-   no field holds typed text, because the link way's navigation fires the
-   page's beforeunload: with a write in flight the browser would ask to
-   leave, and for LEAVING_MS after it a failed request counts as cut off by
-   the page's own load (lib/leaveGuard.ts pageLeaving). */
-async function settled(): Promise<void> {
-  for (let tries = 0; tries < 40 && P.hasUnsavedWork(); tries++)
-    await new Promise((resolve) => setTimeout(resolve, 250))
-}
-
 /** One save of export `exportId` of `orgId`, whose archive holds
  * `archiveBytes`. */
 export type DeliverArgs = {
@@ -292,12 +285,15 @@ export type DeliverArgs = {
  * while the page cannot save (P.cannotSaveText, shown as refused), and in
  * the file way without a file. An automatic attempt counts as made once
  * the server answered its claim, also a refusal, never when the page
- * refused it itself. The link is used at once and kept nowhere.
+ * refused it itself, and none is made for an export this page already
+ * claimed a link for, whose download may still hold one of the route's
+ * leases. The link is used at once and kept nowhere.
  */
 export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   const { orgId, exportId, archiveBytes, automatic } = args
   const how = args.via ?? exportWay()
-  if (running !== null || (automatic && attempted.has(exportId))) return false
+  if (running !== null) return false
+  if (automatic && (attempted.has(exportId) || delivered.has(exportId))) return false
   if (how === 'file' && !args.file) return false
   const paused = P.cannotSaveText()
   if (paused) {
@@ -308,7 +304,6 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   running = controller
   set({ exportId, state: 'claiming' })
   try {
-    if (how === 'link') await settled()
     let claim: { url: string; expires_at: string } | { url: null; reason: string }
     try {
       claim = await convex.mutation(api.orgExport.claimDownload, {
@@ -331,6 +326,7 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
       return true
     }
     const url = claim.url
+    delivered.add(exportId)
     if (how === 'link') {
       openLink(url)
       set({ exportId, state: 'sent', way: exportWay() })
@@ -346,15 +342,22 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   }
 }
 
-/* Sends the browser to `url` with a clicked anchor in the same tab, with
-   no download attribute and no target, as attachments download. */
+/* Downloads `url` in a hidden frame, so the page itself never navigates: a
+   refusal, which the route answers as an attachment with no body, shows at
+   most a failed download and never replaces the app, and the page's
+   beforeunload never fires. The frame goes after a minute, by when the
+   browser has taken the download over; not on its load event, which some
+   browsers fire for the frame's first blank page. */
 function openLink(url: string): void {
-  const a = document.createElement('a')
-  a.href = browserBackendUrl(url)
-  a.rel = 'noopener'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
+  const frame = document.createElement('iframe')
+  frame.hidden = true
+  frame.tabIndex = -1
+  frame.setAttribute('aria-hidden', 'true')
+  frame.referrerPolicy = 'no-referrer'
+  frame.dataset.exportFrame = ''
+  frame.src = browserBackendUrl(url)
+  document.body.appendChild(frame)
+  window.setTimeout(() => frame.remove(), 60_000)
 }
 
 async function viaDesktop(
@@ -524,5 +527,6 @@ export function resetExportDelivery(): void {
   way = null
   files.clear()
   attempted.clear()
+  delivered.clear()
   publish()
 }

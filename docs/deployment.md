@@ -2305,8 +2305,10 @@ people only with a new desktop build. The same release prepares
 **Settings → Organization → General → Export data** with the server job
 (`orgExport.request`, `status` and `cancel`) and saves its archive through
 `orgExport.claimDownload` and the `/exports/` route, which now exposes
-`Retry-After` to the app's origins, instead of building a ZIP in the tab, and
-removes `orgExport.page`. Only a save the desktop app or the browser
+`Retry-After` to the app's origins and answers its refusals as attachments
+with no body, so a link loaded as a page never replaces it, instead of
+building a ZIP in the tab, and removes `orgExport.page`. Browsers without a
+file picker download the link in a hidden frame of the page. Only a save the desktop app or the browser
 confirms calls `orgRemovals.recordExport`, which now takes the export's id
 and records only a served archive of that organization that is ready or
 ended less than 30 minutes before. It records the save in the new optional

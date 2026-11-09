@@ -13,7 +13,6 @@ const network = vi.hoisted(() => ({ mutation: vi.fn() }))
 vi.mock('./convex', () => ({ convex: network }))
 const planner = vi.hoisted(() => ({
   cannotSaveText: vi.fn((): string | null => null),
-  hasUnsavedWork: vi.fn(() => false),
 }))
 vi.mock('../store/planner', () => ({ P: planner }))
 
@@ -140,7 +139,6 @@ beforeEach(async () => {
   order.length = 0
   network.mutation.mockReset()
   planner.cannotSaveText.mockReset().mockReturnValue(null)
-  planner.hasUnsavedWork.mockReset().mockReturnValue(false)
   serve()
   vi.stubGlobal('isSecureContext', true)
   m = await import('./orgExport')
@@ -149,6 +147,7 @@ beforeEach(async () => {
 })
 afterEach(() => {
   m.resetExportDelivery()
+  for (const frame of document.querySelectorAll('iframe')) frame.remove()
   delete (window as { showSaveFilePicker?: unknown }).showSaveFilePicker
   delete (window as { qivoDesktop?: unknown }).qivoDesktop
   vi.unstubAllGlobals()
@@ -456,15 +455,9 @@ describe('the desktop way', () => {
   })
 
   it('downloads by the link when the desktop app refuses the link, recording nothing', async () => {
-    const clicked: string[] = []
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicked.push(this.href)
-    })
     bridge(async () => ({ state: 'refused' }))
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
-    expect(clicked).toEqual([LINK])
+    expect([...document.querySelectorAll('iframe')].map((frame) => frame.src)).toEqual([LINK])
     expect(records()).toEqual([])
     expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'desktop' })
   })
@@ -498,41 +491,54 @@ describe('the desktop way', () => {
 })
 
 describe('the link way', () => {
-  it('clicks one anchor to the link with no download and no target, and removes it; no fetch, no record', async () => {
-    const clicked: HTMLAnchorElement[] = []
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicked.push(this)
-    })
+  /** The hidden frames the page made. */
+  const frames = () => [...document.querySelectorAll<HTMLIFrameElement>('iframe')]
+
+  it('downloads the link in one hidden frame and never navigates the page; no fetch, no record', async () => {
+    const clicks = vi.spyOn(HTMLAnchorElement.prototype, 'click')
     const fetcher = vi.fn()
     vi.stubGlobal('fetch', fetcher)
+    const page = window.location.href
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: true })
-    expect(clicked).toHaveLength(1)
-    expect(clicked[0].href).toBe(LINK)
-    expect(clicked[0].hasAttribute('download')).toBe(false)
-    expect(clicked[0].hasAttribute('target')).toBe(false)
-    expect(clicked[0].rel).toBe('noopener')
-    expect(clicked[0].isConnected).toBe(false)
+    expect(frames()).toHaveLength(1)
+    const [frame] = frames()
+    expect(frame.src).toBe(LINK)
+    expect(frame.hidden).toBe(true)
+    expect(frame.referrerPolicy).toBe('no-referrer')
+    // a refusal lands in the frame, never in the page
+    expect(clicks).not.toHaveBeenCalled()
+    expect(window.location.href).toBe(page)
     expect(fetcher).not.toHaveBeenCalled()
     expect(records()).toEqual([])
     expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'link' })
   })
 
-  it('waits for no write in flight before it claims and navigates', async () => {
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    planner.hasUnsavedWork.mockReturnValue(true)
-    const sending = m.deliverExport({
-      orgId: ORG,
-      exportId: EXPORT,
-      archiveBytes: 1,
-      automatic: true,
-    })
-    await new Promise((r) => setTimeout(r, 600))
-    expect(sent()).toEqual([])
-    planner.hasUnsavedWork.mockReturnValue(false)
-    await sending
-    expect(sent().map(([name]) => name)).toEqual(['orgExport:claimDownload'])
+  it('removes its frame after a minute', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: false })
+      expect(frames()).toHaveLength(1)
+      vi.advanceTimersByTime(59_999)
+      expect(frames()).toHaveLength(1)
+      vi.advanceTimersByTime(1)
+      expect(frames()).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('makes no automatic attempt for an export this page already claimed a link for', async () => {
+    await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: false })
+    expect(
+      await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: true }),
+    ).toBe(false)
+    expect(sent()).toEqual([
+      ['orgExport:claimDownload', { org_id: ORG, export_id: EXPORT, automatic: false }],
+    ])
+    expect(frames()).toHaveLength(1)
+    // a download by hand may still go
+    await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: false })
+    expect(frames()).toHaveLength(2)
   })
 })
 
