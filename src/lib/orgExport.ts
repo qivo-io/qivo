@@ -14,7 +14,8 @@ import { beginUpdateBlock } from './updateSafety'
  *
  * Every path asks for the file first, then claims a two-minute link
  * (orgExport.claimDownload), then starts the request at once and keeps the
- * link nowhere. There are three ways, by where the page runs (exportWay):
+ * link nowhere, except that the link way leaves it in its hidden frame for
+ * a minute. There are three ways, by where the page runs (exportWay):
  * - desktop: the desktop app downloads the link into the Downloads folder
  *   and answers when its download item completed with every byte
  *   (desktop/exportDownload.ts);
@@ -306,7 +307,8 @@ export type DeliverArgs = {
  * claimed a link for, whose download may still hold one of the route's
  * leases. An automatic attempt that the route answered busy with its wait
  * tries once more after it (retryWhenBusy). The link is used at once and
- * kept nowhere.
+ * kept nowhere, except that the link way leaves it in its hidden frame for
+ * a minute (openLink).
  */
 export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   const answered = await deliverOnce(args)

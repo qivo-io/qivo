@@ -37,8 +37,11 @@ type NavigationEvent = { url: string; isMainFrame: boolean; preventDefault: () =
  * Handles `will-navigate` and `will-redirect`. Only the app origin's pages
  * load in the window, so a link or a server redirect to any other page, sign-in
  * providers included, goes to the system instead. Provider sign-in already runs
- * in the system browser (`qivo:auth:open-oauth`). Subframes are left alone:
- * Qivo pages embed none, and a subframe gets no permission and no IPC.
+ * in the system browser (`qivo:auth:open-oauth`). Subframes are left alone.
+ * The only one a Qivo page makes is the organization export's hidden
+ * download frame (src/lib/orgExport.ts openLink), whose download Electron
+ * handles as any other (will-download), and a subframe gets no permission
+ * and no IPC.
  */
 export function createNavigationGuard(appOrigin: string, openExternal: (url: string) => void) {
   return (event: NavigationEvent): void => {
