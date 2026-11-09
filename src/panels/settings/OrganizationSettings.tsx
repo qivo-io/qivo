@@ -22,6 +22,7 @@ import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { OrgPatch, OrgVM, ProjectCreatorsAnswer } from '../../store/planner'
 import { P } from '../../store/planner'
+import { usePlannerVersion } from '../../store/usePlannerVersion'
 import { OrganizationDeletion } from '../OrganizationDeletion'
 import { OrganizationExport } from '../OrganizationExport'
 import { DraftConflictLine, TextField } from './controls'
@@ -393,7 +394,16 @@ function OrgNumberField({
   )
 }
 
+/** Organization › General, from the organization's row of the root part
+    (P.org), which every member holds. While the root part may be out of
+    date (P.rootStale), as after a reconnect or while the socket is down,
+    the page says so in its state attribute and `aria-busy`, with no
+    visible mark, and every field stays editable. A draft stays against its
+    base, a save waits while offline, and each save sends its base so the
+    server refuses one over a change made meanwhile. */
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
+  // P.rootStale, read below, changes with the store's health
+  usePlannerVersion('health')
   const canManage = P.isAdmin()
   // the store mounts the app once it has loaded (AuthGate), so neither state
   // shows today; neither shows defaults as the saved settings
@@ -406,115 +416,122 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
         </p>
       </>
     )
+  const stale = P.rootStale()
   return (
     <>
       <PageTitle>Organization</PageTitle>
-      <SettingsSection title="Name and address">
-        <TextField
-          label="Organization name"
-          record={P.org.id}
-          value={P.org.name}
-          limit={LIMITS.orgName}
-          probe="data-org-name"
-          onCommit={(v, save) => {
-            // the toast waits for the server, so a refusal never reads as done
-            void P.setOrg({ name: v }, undefined, save.as('name')).then((saved) => {
-              if (saved) window.showToast?.('Organization renamed')
-            })
-          }}
-        />
-        <OrgAddressField />
-      </SettingsSection>
-      <SettingsSection title="Access and limits">
-        <OrgNumberField
-          field="max_attachment_mb"
-          label="Max attachment size"
-          value={P.org.maxAttachmentMb}
-          fallback={LIMITS.attachmentLimit.max}
-          limit={LIMITS.attachmentLimit}
-          what="attachment size"
-          unit="MiB per file"
-          probe="data-org-attachment-limit"
-          disabled={!canManage}
-          hint={
-            canManage
-              ? `${LIMITS.attachmentLimit.min}–${LIMITS.attachmentLimit.max} MiB, including description images. Existing files are unaffected.`
-              : 'Only an organization admin can change the attachment limit.'
-          }
-          onCommit={(mib, save) => {
-            void P.setOrg({ maxAttachmentMb: mib }, undefined, save.as('max_attachment_mb')).then(
-              (saved) => {
-                if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
-              },
-            )
-          }}
-        />
-      </SettingsSection>
-      <SettingsSection title="Calendar">
-        <SettingsField label="Date format" width={330}>
-          <NativeSelect
-            value={P.org.dateFormat || 'YYYY-MM-DD'}
-            onChange={(e) => {
-              const format = e.target.value as OrgPatch['dateFormat']
-              void P.setOrg({ dateFormat: format }).then((saved) => {
-                if (saved) window.showToast?.(`Date format set to ${format}`)
+      <div data-org-state={stale ? 'stale' : 'current'} aria-busy={stale || undefined}>
+        <SettingsSection title="Name and address">
+          <TextField
+            label="Organization name"
+            record={P.org.id}
+            value={P.org.name}
+            limit={LIMITS.orgName}
+            probe="data-org-name"
+            onCommit={(v, save) => {
+              // the toast waits for the server, so a refusal never reads as done
+              void P.setOrg({ name: v }, undefined, save.as('name')).then((saved) => {
+                if (saved) window.showToast?.('Organization renamed')
               })
             }}
-            className="h-control w-60 bg-surface-1 font-sans text-base"
-          >
-            {P.DATE_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f}, {P.fmtFullWith(f, new Date())}
-              </option>
-            ))}
-          </NativeSelect>
-        </SettingsField>
-        <WeekStartField />
-        <SettingsField label="Week 1 of the year" width={330}>
-          <NativeSelect
-            value={P.org.weekOneRule || 'first4day'}
-            aria-label="Week 1 of the year"
-            data-week-one
-            onChange={(e) => {
-              const rule = e.target.value as OrgPatch['weekOneRule']
-              void P.setOrg({ weekOneRule: rule }).then((saved) => {
-                if (saved) window.showToast?.('Week numbering updated')
+          />
+          <OrgAddressField />
+        </SettingsSection>
+        <SettingsSection title="Access and limits">
+          <OrgNumberField
+            field="max_attachment_mb"
+            label="Max attachment size"
+            value={P.org.maxAttachmentMb}
+            fallback={LIMITS.attachmentLimit.max}
+            limit={LIMITS.attachmentLimit}
+            what="attachment size"
+            unit="MiB per file"
+            probe="data-org-attachment-limit"
+            disabled={!canManage}
+            hint={
+              canManage
+                ? `${LIMITS.attachmentLimit.min}–${LIMITS.attachmentLimit.max} MiB, including description images. Existing files are unaffected.`
+                : 'Only an organization admin can change the attachment limit.'
+            }
+            onCommit={(mib, save) => {
+              void P.setOrg({ maxAttachmentMb: mib }, undefined, save.as('max_attachment_mb')).then(
+                (saved) => {
+                  if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
+                },
+              )
+            }}
+          />
+        </SettingsSection>
+        <SettingsSection title="Calendar">
+          <SettingsField label="Date format" width={330}>
+            <NativeSelect
+              value={P.org.dateFormat || 'YYYY-MM-DD'}
+              onChange={(e) => {
+                const format = e.target.value as OrgPatch['dateFormat']
+                void P.setOrg({ dateFormat: format }).then((saved) => {
+                  if (saved) window.showToast?.(`Date format set to ${format}`)
+                })
+              }}
+              className="h-control w-60 bg-surface-1 font-sans text-base"
+            >
+              {P.DATE_FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {f}, {P.fmtFullWith(f, new Date())}
+                </option>
+              ))}
+            </NativeSelect>
+          </SettingsField>
+          <WeekStartField />
+          <SettingsField label="Week 1 of the year" width={330}>
+            <NativeSelect
+              value={P.org.weekOneRule || 'first4day'}
+              aria-label="Week 1 of the year"
+              data-week-one
+              onChange={(e) => {
+                const rule = e.target.value as OrgPatch['weekOneRule']
+                void P.setOrg({ weekOneRule: rule }).then((saved) => {
+                  if (saved) window.showToast?.('Week numbering updated')
+                })
+              }}
+              className="h-control w-60 bg-surface-1 font-sans text-base"
+            >
+              <option value="first4day">First 4-day week (ISO 8601)</option>
+              <option value="jan1">Week containing Jan 1</option>
+              <option value="firstfull">First full week</option>
+            </NativeSelect>
+          </SettingsField>
+        </SettingsSection>
+        <SettingsSection title="People">
+          <ProjectCreatorsField setPage={setPage} />
+          <OrgNumberField
+            field="default_plannable_hours"
+            label="Default plannable hours per week"
+            value={P.org.defaultPlannableHours}
+            fallback={DEFAULT_PLANNABLE_HOURS}
+            limit={LIMITS.plannableHours}
+            what="plannable hours"
+            unit="h per week, for new users"
+            probe="data-org-plannable"
+            onCommit={(h, save) => {
+              void P.setOrg(
+                { defaultPlannableHours: h },
+                undefined,
+                save.as('default_plannable_hours'),
+              ).then((saved) => {
+                if (saved) window.showToast?.(`New users start on ${h} h per week`)
               })
             }}
-            className="h-control w-60 bg-surface-1 font-sans text-base"
-          >
-            <option value="first4day">First 4-day week (ISO 8601)</option>
-            <option value="jan1">Week containing Jan 1</option>
-            <option value="firstfull">First full week</option>
-          </NativeSelect>
-        </SettingsField>
-      </SettingsSection>
-      <SettingsSection title="People">
-        <ProjectCreatorsField setPage={setPage} />
-        <OrgNumberField
-          field="default_plannable_hours"
-          label="Default plannable hours per week"
-          value={P.org.defaultPlannableHours}
-          fallback={DEFAULT_PLANNABLE_HOURS}
-          limit={LIMITS.plannableHours}
-          what="plannable hours"
-          unit="h per week, for new users"
-          probe="data-org-plannable"
-          onCommit={(h, save) => {
-            void P.setOrg(
-              { defaultPlannableHours: h },
-              undefined,
-              save.as('default_plannable_hours'),
-            ).then((saved) => {
-              if (saved) window.showToast?.(`New users start on ${h} h per week`)
-            })
-          }}
-        />
-      </SettingsSection>
-      {canManage && <OrganizationExport key={P.org.id} orgId={P.org.id} />}
-      {canManage && !DEMO_MODE && (
-        <OrganizationDeletion key={`deletion:${P.org.id}`} orgId={P.org.id} orgName={P.org.name} />
-      )}
+          />
+        </SettingsSection>
+        {canManage && <OrganizationExport key={P.org.id} orgId={P.org.id} />}
+        {canManage && !DEMO_MODE && (
+          <OrganizationDeletion
+            key={`deletion:${P.org.id}`}
+            orgId={P.org.id}
+            orgName={P.org.name}
+          />
+        )}
+      </div>
     </>
   )
 }

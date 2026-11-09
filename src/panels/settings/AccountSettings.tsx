@@ -14,6 +14,7 @@ import {
 import { DEMO_MODE } from '../../lib/demoMode'
 import type { UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
+import { usePlannerVersion } from '../../store/usePlannerVersion'
 import { AppearanceSettings } from '../AppearanceSettings'
 import { ConnectedApps } from '../ConnectedApps'
 import { BackLink, DemoCapabilityNotice } from './controls'
@@ -34,10 +35,17 @@ export function AccountPage({
   onBackPage?: (page: string) => void
 }) {
   const [signingOut, setSigningOut] = useState(false)
+  // P.rootStale, read below, changes with the store's health
+  usePlannerVersion('health')
   // the person's seat once the store has loaded. AuthGate mounts the app
   // only then, so it is there today; a missing one says so rather than
   // showing an empty name as the saved one
   const profile = P.loaded ? P.user(P.CURRENT_USER) : undefined
+  // the profile is the root part's, which may be out of date after a
+  // reconnect or while the socket is down (P.rootStale). The card says so
+  // in its state attribute only, and the name and picture stay editable,
+  // since each save sends its base and the server refuses a stale one
+  const stale = !!profile && P.rootStale()
   const sections = [
     { id: 'profile', label: 'Profile', icon: 'user', hint: 'Name, picture and sign out' },
     { id: 'appearance', label: 'Appearance', icon: 'cog', hint: 'Theme and background' },
@@ -87,7 +95,11 @@ export function AccountPage({
       {showProfile && (
         <SettingsSection title={heading('Profile')}>
           <SettingsField label="Signed in as" width={400}>
-            <div className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]">
+            <div
+              data-account-profile={profile ? (stale ? 'stale' : 'current') : undefined}
+              aria-busy={stale || undefined}
+              className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
+            >
               {profile ? (
                 <>
                   <Avatar id={profile.id} size={40} />

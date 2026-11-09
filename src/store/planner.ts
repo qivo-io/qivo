@@ -10990,6 +10990,13 @@ export const PLANNER = {
       or that the server accepted this visit (heldBack), so a return
       draws no New mark at an unread start that is their choice. */
   unreadChoiceHeld: (): boolean => heldBack(itemHold),
+  /** Whether the root part's values on screen may be out of date, the
+      caller's profiles and the organizations' settings that Account and
+      Organization › General show. That is when the store holds a workspace and the
+      root part's latest answer did not arrive on the socket's newest
+      connection (snapshotCurrent), or the socket is down now, when no
+      transition can say so. Its changes reach the `health` section. */
+  rootStale: (): boolean => hasSnapshot && (!snapshotCurrent || syncStatus.down()),
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
   // the marks of the person's own Inbox writes by inboxMarkKey, which the
@@ -16840,6 +16847,18 @@ function snapshotRecovered() {
    second send (resumeAfterPause) and the view preferences a paused save
    kept. */
 let savePauseKind: SavePause['kind'] | null = null
+/* Whether P.rootStale was true when the screen last heard of it, so a
+   change emits the store's health once (noteRootStale). */
+let rootStaleShown = false
+/* Tells the screen when P.rootStale changed, after a transition and when
+   the socket drops or comes back. */
+function noteRootStale() {
+  const now = PLANNER.rootStale()
+  if (now === rootStaleShown) return
+  rootStaleShown = now
+  emit('health')
+}
+syncStatus.subscribeDown(noteRootStale)
 syncStatus.subscribe((ended) => {
   if (!PLANNER.loaded) return
   const kind = savePause()?.kind ?? null
@@ -17016,6 +17035,7 @@ function startParts(
         }
         settleRefreshing(news.sides)
       })
+      noteRootStale()
     },
     online,
     { ...(first?.address ? { address: first.address } : {}), paused: windowHidden },
@@ -17086,6 +17106,7 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   // the parts run again have delivered nothing yet
   snapshotCurrent = false
+  noteRootStale()
   if (parts?.retry()) return
   // nothing failed any more, such as a stall: start every part afresh
   const epoch = storeEpoch
