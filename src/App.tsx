@@ -843,8 +843,15 @@ function useTasksLoadingNews() {
 
 /* ---------- root ---------- */
 /** A task address's scope to settle once the project cache names the
-    task's project (App's scopeToSettle). */
-type ScopeSettle = { issue: string; task: ScopeTask; preferred: string }
+    task's project (App's scopeToSettle). `preferred` is the scope it
+    queued, and `over` the scope on screen when it was marked, which the
+    render before the queued scope commits still shows. */
+type ScopeSettle = {
+  issue: string
+  task: ScopeTask
+  preferred: string
+  over: string | undefined
+}
 
 /** The project cache owner under which App names the project of a task
     whose scope it settles. */
@@ -853,15 +860,16 @@ const SETTLE_OWNER = 'task scope'
 /** The scope `chosen` that scopeForIssue gave task `task`, open as
     `issue`, over `preferred`, to settle once the project cache names the
     task's project, when it kept the preferred scope only for want of that
-    name (taskProjectPending), else null. */
+    name (taskProjectPending), else null. `over` is the scope on screen. */
 function settleOf(
   issue: string | null | undefined,
   task: ScopeTask | undefined,
   preferred: string | null | undefined,
   chosen: string | undefined,
+  over: string | undefined,
 ): ScopeSettle | null {
   return issue && task && preferred && chosen === preferred && taskProjectPending(task)
-    ? { issue, task, preferred }
+    ? { issue, task, preferred, over }
     : null
 }
 
@@ -934,17 +942,19 @@ function App() {
      which the settle effect below revisits once the cache names it: the
      open task, its project and owner, and the preferred project. */
   const scopeToSettle = useRef<ScopeSettle | null>(
-    r0 && !r0.sync && !r0.scope ? settleOf(r0.issue, task0, remembered, r0Scope) : null,
+    r0 && !r0.sync && !r0.scope ? settleOf(r0.issue, task0, remembered, r0Scope, r0Scope) : null,
   )
   /** Marks the scope `chosen` that scopeForIssue gave task `task`, open as
-      `issue`, over `preferred`, to settle (settleOf). */
+      `issue`, over `preferred`, to settle (settleOf), with `over` the
+      scope on screen. */
   const settleLater = (
     issue: string | null | undefined,
     task: ScopeTask | undefined,
     preferred: string | null | undefined,
     chosen: string | undefined,
+    over: string | undefined,
   ) => {
-    scopeToSettle.current = settleOf(issue, task, preferred, chosen)
+    scopeToSettle.current = settleOf(issue, task, preferred, chosen, over)
   }
   // counts the person's scope moves, so one that keeps the scope as it was
   // commits too and the save effect looks again
@@ -1626,7 +1636,7 @@ function App() {
     }
     // the scope Back or Forward gives a task address (onPop)
     const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(task, pending.preferred)
-    if (!liveScope(pending.scope)) settleLater(openIssue, task, pending.preferred, sc)
+    if (!liveScope(pending.scope)) settleLater(openIssue, task, pending.preferred, sc, scope)
     // the entry names the task, which takes it over in place
     replaceNextHistory.current = true
     if (liveScope(sc) && sc !== scope) {
@@ -1646,15 +1656,25 @@ function App() {
   // the name, and nothing where the cache answers the task's project gone
   // or the person moved on. A preferred project the cache answers gone is
   // the access guard's to settle, as the guard, which runs after this
-  // effect, would otherwise lose the scope this effect moved
+  // effect, would otherwise lose the scope this effect moved. In the
+  // render in which the pending task's effect marked it, the preferred
+  // project it queued has not committed yet, so the scope on screen is
+  // still the one it was marked over (`over`), as when the task's answer
+  // and a workspace update share that render. That is no move of the
+  // person's, so the mark stays
   useEffect(() => {
     const settle = scopeToSettle.current
     const done = () => {
       scopeToSettle.current = null
       P.nameProjects(SETTLE_OWNER, [])
     }
-    if (!settle) return done()
-    if (scope !== settle.preferred || !sameTask(openIssue, settle.issue)) return done()
+    if (!settle || !sameTask(openIssue, settle.issue)) return done()
+    if (scope !== settle.preferred) {
+      if (scope === settle.over) return
+      return done()
+    }
+    // from now on a return to the scope it was marked over is a move
+    if (settle.over !== scope) scopeToSettle.current = { ...settle, over: scope }
     P.nameProjects(SETTLE_OWNER, [settle.task.project])
     if (P.scopeInfo(settle.preferred).state === 'gone') return
     if (!P.project(settle.task.project)) {
@@ -1885,6 +1905,7 @@ function App() {
         !r.sync && !liveScope(r.scope) ? task : undefined,
         preferred,
         next.scope,
+        was.scope,
       )
       setScope(next.scope)
       setView(next.view)

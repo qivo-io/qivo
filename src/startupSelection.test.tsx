@@ -1305,6 +1305,50 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
       TASKS.atBoot = true
     }
   })
+
+  it('lands on the task’s own sub-project when its answer comes in the render of a workspace update and the project cache names its project later', async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    try {
+      for (const gone of [false, true]) {
+        const snap = world()
+        // the remembered project, Partner portal, or one the cache answers
+        // gone, and neither holds Firmware
+        const lost = meta(snap, 'Taken away', ORG, false)
+        const [remembered, org] = gone ? [lost, ORG] : [PORTAL, PARTNER]
+        // the cache answers nothing yet, so the task's answer cannot name
+        // Firmware's parent
+        holdAtBoot = true
+        await app(snap, '/app/testbed/board/tasks/qn-7', remembering(remembered, org))
+        await until(() => windowReads.length > 0, "the window's read")
+        // the task's answer and a workspace update, here the partner
+        // organization's new name, land in one render
+        await act(async () => {
+          for (const read of windowReads) read(taskAnswer())
+          const next = structuredClone(server)
+          next.orgs[1].name = 'Partner Company'
+          publish(next)
+        })
+        await settle()
+        await act(async () => cache(null))
+        // must fail for a settle record the same render cleared, which
+        // keeps Partner portal or shows the chooser's lost note
+        await until(() => crumb() === 'Firmware', "Firmware's Board")
+        await settle()
+        expect(crumb()).toBe('Firmware')
+        expect(shown()).toBe('kanban')
+        expect(chooserState()).toBeUndefined()
+        expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+        expect(asks).toEqual([])
+        // a task's address chose the scope, so nothing is remembered
+        expect(sentProjects()).toEqual([])
+        await leave()
+      }
+    } finally {
+      TASKS.atBoot = true
+    }
+  })
 })
 
 describe('a check that waits, and the person’s next move', { timeout: 60_000 }, () => {
