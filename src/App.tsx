@@ -880,7 +880,8 @@ function App() {
   // opens at once and the project cache checks it (scopeShows)
   const liveScope = (s: string | null | undefined): s is string => !!s
   // the remembered project (UIPrefs.lastProject), which a task address
-  // prefers when the project cache names it as the task's
+  // keeps while the project cache has not named the task's project, and
+  // once it has, where the task lies in it (scopeForIssue)
   const remembered = rememberedScope() ?? null
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
@@ -909,10 +910,15 @@ function App() {
   const [scope, setScope] = useState<string | undefined>(bootScope)
   /* How the scope's project was opened (ScopeOpened), for the chooser's
      line while the project cache checks it and its note once it answers
-     the project gone. */
+     the project gone. A task address that keeps the remembered project
+     opened it as the remembered one, as its address names no scope. */
   const scopeOpened = useRef<ScopeOpened | null>(
     bootScope && !P.isMineScope(bootScope)
-      ? { id: bootScope, of: liveScope(r0Scope) ? 'address' : 'remembered' }
+      ? {
+          id: bootScope,
+          of:
+            liveScope(r0Scope) && (r0?.scope || r0Scope !== remembered) ? 'address' : 'remembered',
+        }
       : null,
   )
   /* The scope a task's address chose at the boot, on Back or Forward, or
@@ -1610,6 +1616,11 @@ function App() {
     replaceNextHistory.current = true
     if (liveScope(sc) && sc !== scope) {
       if (!pending.scope) taskScope.current = sc
+      // the remembered project a boot's task kept with no scope on screen
+      // (bootHold) opens as the remembered one, for the chooser's line and
+      // note
+      if (scope === undefined && sc === pending.preferred && sc === rememberedScope())
+        scopeOpened.current = { id: sc, of: 'remembered' }
       setScope(sc)
     } else if (waiting) openStartup()
   }, [openIssue, rev, refRev, scope, view, settingsPage, inboxOpen, projectsOpen, sync, opening])
@@ -1617,8 +1628,10 @@ function App() {
   // the task's project (scopeToSettle), which App names with the cache
   // meanwhile. Once the cache names it, the task's own sub-project unless
   // it lies in the preferred project, as the boot would have chosen with
-  // the name, and nothing where the cache answers the project gone or the
-  // person moved on
+  // the name, and nothing where the cache answers the task's project gone
+  // or the person moved on. A preferred project the cache answers gone is
+  // the access guard's to settle, as the guard, which runs after this
+  // effect, would otherwise lose the scope this effect moved
   useEffect(() => {
     const settle = scopeToSettle.current
     const done = () => {
@@ -1628,6 +1641,7 @@ function App() {
     if (!settle) return done()
     if (scope !== settle.preferred || !sameTask(openIssue, settle.issue)) return done()
     P.nameProjects(SETTLE_OWNER, [settle.task.project])
+    if (P.scopeInfo(settle.preferred).state === 'gone') return
     if (!P.project(settle.task.project)) {
       if (P.projectState(settle.task.project) === 'gone') done()
       return
@@ -1886,7 +1900,13 @@ function App() {
      too and loading never reads as lost. A lost one leaves no scope and the
      chooser with "<name> is no longer available to you." (lostNote), never
      another project or My view: someone else's change must not choose for
-     the person. Its address gives way to the front door in place. */
+     the person. Its address gives way to the front door in place. A task
+     address's scope that kept the preferred project only while the cache
+     had not named the task's project (scopeToSettle) is the exception. It
+     waits while the cache reads the task's project, then moves to the
+     task's own sub-project, as the boot would have chosen had it known the
+     preferred project gone, and is lost with its note only where the cache
+     answers the task's project gone too. */
   useEffect(() => {
     if (!scope || P.isMineScope(scope)) {
       P.nameProjects('scope', [])
@@ -1895,6 +1915,19 @@ function App() {
     const info = P.scopeInfo(scope)
     P.nameProjects('scope', info.topId && info.topId !== scope ? [scope, info.topId] : [scope])
     if (info.state !== 'gone') return
+    const settle = scopeToSettle.current
+    if (settle?.preferred === scope && sameTask(openIssue, settle.issue)) {
+      const own = settle.task.project
+      const ownState = P.project(own) ? 'ok' : P.projectState(own)
+      if (ownState === 'loading') return
+      scopeToSettle.current = null
+      // a failed or unchecked read of it shows its own sentence with Retry
+      if (ownState !== 'gone') {
+        taskScope.current = own
+        setScope(own)
+        return
+      }
+    }
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
     const note = lostNote(scope, scopeOpened.current, was?.name ?? null)
     scopeOpened.current = null
@@ -1911,7 +1944,7 @@ function App() {
       note,
       lost: { id: scope, top: was?.top ?? null },
     }))
-  }, [scope, rev])
+  }, [scope, rev, openIssue])
 
   /* Startup's check (Opening `checking`): one projectNav.resolve read of
      the project an address names by its organization and number, once a

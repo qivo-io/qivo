@@ -585,6 +585,48 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     }
   })
 
+  it('lands a task address on the task’s sub-project where the project cache answers the remembered project gone', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    const archived = meta(snap, 'Old programme')
+    const project = snap.projects.find((p) => p.id === archived)
+    if (project) project.archived_at = NOW
+    const lost = meta(snap, 'Taken away', ORG, false)
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, held] of [
+      [archived, true],
+      [lost, true],
+      [lost, false],
+    ] as const) {
+      // held, the cache answers nothing until both projects can come in
+      // one answer
+      holdAtBoot = held
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id))
+      if (held) {
+        await chooser('checking')
+        await act(async () => cache(null))
+      }
+      // must fail for a guard that loses the scope the settle moved to
+      // Firmware, which shows the chooser with "That project is not
+      // available to you."
+      await until(() => crumb() === 'Firmware', "Firmware's Board")
+      await settle()
+      expect(crumb()).toBe('Firmware')
+      expect(shown()).toBe('kanban')
+      expect(chooserState()).toBeUndefined()
+      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
+  })
+
   it('never restores a saved All projects or My view, and lets an address that names a scope win', async () => {
     const snap = world()
     for (const scope of ['all', 'mine']) {
