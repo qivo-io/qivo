@@ -538,8 +538,10 @@ Next it makes a task of its own and deletes it over REST, then, with a file
 of the browser's origin private file system standing in for the save
 picker, which no headless browser can press, presses **Export data** in
 **Settings → Organization → General** as Nora. It waits up to five minutes
-for the deployment's export job to be ready, notes how long it took, waits
-for the automatic save into that file and its record, reads the file back,
+for the deployment's export job to be ready, its own job and not an earlier
+ready archive, which it tells apart by the job's id, notes how long it
+took, waits for the automatic save into that file and its record, reads
+the file back,
 unzips it and checks its format 4 manifest, t0 in `data/tasks`, its deleted
 task in `deleted/tasks` and `deleted/items`, no file contents and its size,
 and that the record line shows today's date (`ui/org-export`). It writes on

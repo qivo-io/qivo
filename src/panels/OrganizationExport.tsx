@@ -221,6 +221,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       description="Download the organization's data as a ZIP archive: every project and its tasks, archived work included, comments, history, people and roles, teams, project access, labels, milestones, organization settings, agent key details, and the Deleted items Qivo still keeps, in a folder of their own, each marked complete or partial."
       data-org-export=""
       data-export-state={status.state === 'loading' ? 'unknown' : latestState}
+      data-export-id={latestId ?? undefined}
       data-export-delivery={way}
       aria-busy={status.state === 'refreshing' || undefined}
     >

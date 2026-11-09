@@ -10255,6 +10255,9 @@ export const ORG_EXPORT_STEP = 'ui/org-export'
 export const ORG_EXPORT_MARKS = {
   section: 'data-org-export',
   state: 'data-export-state',
+  // the latest job's id, so the step tells its own job from an earlier
+  // ready archive
+  id: 'data-export-id',
   delivery: 'data-export-delivery',
   start: 'data-export-start',
   saved: 'data-export-saved',
@@ -10297,7 +10300,10 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  With the stand-in picker on (ORG_EXPORT_PICKER) it opens the page,
  *  waits for the section's state from the deployment's answer, checks that
  *  the page saves into a chosen file, presses Export data, waits until the
- *  job is ready (ORG_EXPORT_READY_MS, the time it took in its note), then
+ *  section shows its own job, collecting or under another id than the
+ *  latest before, so an earlier ready archive never stands in for it, and
+ *  then until that job is ready (ORG_EXPORT_READY_MS for both, the time
+ *  it took in its note), then
  *  for the saved line and the recorded mark, reads the file back from the
  *  origin private file system, unzips it with fflate and checks the
  *  manifest (format qivo-organization-export, version 4, the
@@ -10341,13 +10347,25 @@ async function orgExportCheck() {
       const before = await section.getAttribute(m.state)
       if (before === 'collecting')
         throw new Error('an export of the organization is already being prepared')
+      // an earlier ready archive, within its four hours, reads ready too
+      const earlier = await section.getAttribute(m.id)
       const started = Date.now()
       await app.locator(`[${m.start}]`).click()
+      const own = async () =>
+        (await section.getAttribute(m.state)) === 'collecting' ||
+        (await section.getAttribute(m.id)) !== earlier
       expect(
-        await until(
-          async () => (await section.getAttribute(m.state)) === 'ready',
-          ORG_EXPORT_READY_MS,
-        ),
+        await until(own, ORG_EXPORT_READY_MS),
+        `the section still shows the export from before the press, ${earlier ?? 'none'}`,
+      )
+      const ready = await until(
+        async () =>
+          (await section.getAttribute(m.id)) !== earlier &&
+          (await section.getAttribute(m.state)) === 'ready',
+        Math.max(1, ORG_EXPORT_READY_MS - (Date.now() - started)),
+      )
+      expect(
+        ready,
         `the export reads ${await section.getAttribute(m.state)} after ${ORG_EXPORT_READY_MS / 60_000} minutes`,
       )
       const took = Math.round((Date.now() - started) / 1000)
