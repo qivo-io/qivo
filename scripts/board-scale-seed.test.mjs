@@ -37,7 +37,6 @@ import {
   threadCommentBody,
   threadCommentId,
   threeByteText,
-  windowKeyNote,
 } from './board-scale-seed.mjs'
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
@@ -1305,11 +1304,7 @@ describe('board-scale-seed --relations', () => {
     )
   })
 
-  it("says where the task's window key puts it, never that its id does", async () => {
-    expect(windowKeyNote('00000000')).toContain('00000000, 0% into the key space')
-    expect(windowKeyNote('40000000')).toContain('40000000, 25% into the key space')
-    expect(windowKeyNote('ffffffff')).toContain('100% into the key space')
-    // the run reads the stored task's key, which the server chose
+  it('ends the relations run with what the task holds, and names no window key, which no read uses', async () => {
     fake.projects = KEYS.map((key) => ({
       id: `project-${key}`,
       key,
@@ -1331,8 +1326,8 @@ describe('board-scale-seed --relations', () => {
       fake.issues = []
     }
     expect(fake.calls.filter(([name]) => name === 'issues:create')).toHaveLength(205)
-    expect(lines.at(-1)).toBe(windowKeyNote('c0000000'))
-    expect(lines.join('\n')).not.toMatch(/first stage/)
+    expect(lines.at(-1)).toMatch(/^Done: the task /)
+    expect(lines.join('\n')).not.toMatch(/window key|c0000000|first stage/)
   })
 })
 

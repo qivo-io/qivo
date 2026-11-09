@@ -696,8 +696,9 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets any count from 0 to 30,000, which the app's workspace
-parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
+time. `--tasks` sets any count from 0 to 30,000, for the Board's, the
+Roadmap's and Search's reads of a large organization, which read their own
+answers. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
@@ -752,10 +753,7 @@ window shows 20 of 100 tasks done and Σ 133h. The task's own description is
 task made for it: 70 in Luma Sensor's sub-projects, 15 in Luma Cloud's and
 Pilot & Launch's, and 15 in **Partner pilot**, a project the seed makes that
 only Nora sees, so anyone else who is no organization admin finds those
-links left out. Five of the linked tasks have one subtask each. The run
-ends by naming the task's window key, which the backend chose: a workspace
-that loads in stages (`--tasks 6000` or more) watches its task windows from
-the lowest keys up, so the key says which stage brings the task. A second
+links left out. Five of the linked tasks have one subtask each. A second
 run adds only what is missing. It leaves archived subtasks and linked tasks
 archived and says how many of them the task's window no longer lists.
 
