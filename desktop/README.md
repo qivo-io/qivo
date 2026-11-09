@@ -24,6 +24,9 @@ that the client needs:
   Linux builds have no feed and never update themselves.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
+- Organization exports download into the Downloads folder, and the app tells
+  Qivo when one finished, which deletion reminders count. The download runs
+  in the app and shows no progress, and it cannot be stopped from the page.
 
 ## Security
 
@@ -32,9 +35,16 @@ The shell follows Electron's
 
 - The renderer has context isolation, the Chromium sandbox and no Node.js.
   The preload exposes only `window.qivoDesktop`, whose members are the
-  settings, notifications, updates, power (the wake from sleep) and sign-in
-  bridges, and every IPC handler accepts calls only from the top-level page
-  of the configured app origin.
+  settings, notifications, updates, power (the wake from sleep),
+  organization export and sign-in bridges, and every IPC handler accepts
+  calls only from the top-level page of the configured app origin.
+- The shell downloads only organization export links the app's own page
+  asks for ([exportDownload.ts](exportDownload.ts)): the export route's
+  shape over HTTPS on a Convex site (the build's own export origin once it
+  sets one), one at a time, a ZIP file up to the export's 95 MiB cap, into
+  the Downloads folder under the name the answer gives, made unique, never
+  where the page says. It removes the file of a download that did not
+  finish. Every other download keeps Electron's own save dialog.
 - The window loads only pages of the configured app origin. A link, a
   redirect or `window.open` to any other page, sign-in providers included,
   goes to the system instead: `http`, `https`, `mailto` and `tel` links open

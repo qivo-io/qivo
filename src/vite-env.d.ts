@@ -62,11 +62,23 @@ type QivoDesktopBridge = {
   power?: {
     onResume(listener: () => void): () => void
   }
+  /** An organization export's download into the Downloads folder, answered
+      when it finished (desktop/exportDownload.ts); absent in a shell built
+      before it, where the export page takes the link way. */
+  orgExport?: {
+    download(url: string): Promise<QivoDesktopExportDownload>
+  }
   auth: {
     beginOAuth(): Promise<{ callbackURL: string }>
     openOAuth(url: string): Promise<boolean>
   }
 }
+
+/** What the desktop app's export download answers: the saved file's name
+    and bytes when it completed whole, else how it ended. */
+type QivoDesktopExportDownload =
+  | { state: 'completed'; file: string; bytes: number }
+  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
 
 interface Window {
   qivoDesktop?: QivoDesktopBridge

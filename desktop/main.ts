@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -10,11 +11,13 @@ import {
   Notification,
   nativeImage,
   powerMonitor,
+  session,
   shell,
   Tray,
 } from 'electron'
 import electronUpdater from 'electron-updater'
 import { resolveAppURL } from './appURL.js'
+import { answerExportDownload, createExportDownloads } from './exportDownload.js'
 import { createLeavePrompt } from './leavePrompt.js'
 import { guardWindow, isOAuthProviderURL } from './navigation.js'
 import { forwardResume } from './power.js'
@@ -63,6 +66,15 @@ type UpdateState = {
 
 let updateState: UpdateState = { status: 'idle', blocked: false }
 let updaterReady = false
+
+// Organization exports the page asks the shell to download into the
+// Downloads folder (exportDownload.ts); every other download keeps
+// Electron's own save dialog.
+const exportDownloads = createExportDownloads({
+  downloadsDir: () => app.getPath('downloads'),
+  exists: (file) => fs.existsSync(file),
+  remove: (file) => fs.rmSync(file, { force: true }),
+})
 
 function isAuthorizedRenderer(event: {
   sender: Electron.WebContents
@@ -445,6 +457,17 @@ function installIPC(): void {
     if (wasBlocked && !value && updateState.status === 'downloaded' && updateState.version)
       updatePrompt.notify(updateState.version)
   })
+  // the export page's download of an organization export, which the shell
+  // saves into Downloads and answers when it finished (exportDownload.ts)
+  ipcMain.handle('qivo:org-export:download', (event, raw: unknown) =>
+    answerExportDownload({
+      authorized: isAuthorizedRenderer(event),
+      raw,
+      packaged: app.isPackaged,
+      contents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+      downloads: exportDownloads,
+    }),
+  )
   ipcMain.handle('qivo:auth:begin-oauth', (event) => {
     if (!isAuthorizedRenderer(event)) throw new Error('unauthorized')
     const state = crypto.randomBytes(32).toString('base64url')
@@ -506,6 +529,9 @@ if (refusedSwitches.length > 0) {
     // a wake from sleep tells the page, whose notification leader then
     // checks for missed Inbox activity at once (power.ts)
     forwardResume(powerMonitor, () => mainWindow)
+    // an organization export the page asked for saves into Downloads; the
+    // listener leaves every other download alone
+    session.defaultSession.on('will-download', exportDownloads.willDownload)
     const startupDeepLink = process.argv.find((arg) => arg.startsWith('qivo://'))
     if (startupDeepLink) consumeDeepLink(startupDeepLink)
     app.on('activate', showWindow)
