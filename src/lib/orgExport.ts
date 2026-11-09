@@ -116,6 +116,7 @@ export type DeliveryState = { orgId: string; exportId: string } & (
   | { state: 'saving'; written: number; total: number }
   | { state: 'downloading' }
   | { state: 'saved'; file: string | null; record: 'pending' | 'recorded' | 'failed' }
+  | { state: 'saved'; file: string | null; record: 'refused'; message: string }
   | { state: 'sent'; way: ExportWay }
   | { state: 'busy'; retryAfter: number | null }
   | { state: 'stopped'; removed: boolean }
@@ -492,16 +493,24 @@ async function intoFile(
   }
 }
 
-/* Records the confirmed save of export `exportId` (saved as `file`). */
+/* Records the confirmed save of export `exportId` (saved as `file`). A
+   refusal of the server, such as an archive past its record window, keeps
+   its sentence and offers no Try again, which the same refusal would
+   answer; a failure to reach the server leaves the record to Try again. */
 async function record(orgId: string, exportId: string, file: string | null): Promise<void> {
   set({ orgId, exportId, state: 'saved', file, record: 'pending' })
   try {
     await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
     unrecorded = null
     set({ orgId, exportId, state: 'saved', file, record: 'recorded' })
-  } catch {
-    unrecorded = { orgId, exportId }
-    set({ orgId, exportId, state: 'saved', file, record: 'failed' })
+  } catch (error) {
+    const message = refusalOf(error)
+    unrecorded = message === null ? { orgId, exportId } : null
+    set(
+      message === null
+        ? { orgId, exportId, state: 'saved', file, record: 'failed' }
+        : { orgId, exportId, state: 'saved', file, record: 'refused', message },
+    )
   }
 }
 

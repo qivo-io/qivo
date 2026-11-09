@@ -481,6 +481,11 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
               Qivo recorded the saved export.
             </p>
           )}
+          {delivery.record === 'refused' && (
+            <p role="alert" data-export-recorded="refused" className="text-danger">
+              The export was saved, but Qivo couldn't record it. {delivery.message}
+            </p>
+          )}
           {delivery.record === 'failed' && (
             <div
               role="alert"

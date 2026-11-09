@@ -555,7 +555,7 @@ describe('starting, joining, downloading and cancelling', () => {
     await act(async () => release())
     await settle()
     // the stand-in refuses to record an archive the route never served
-    expect(container.querySelector('[data-export-recorded="false"]')?.textContent).toContain(
+    expect(container.querySelector('[data-export-recorded="refused"]')?.textContent).toContain(
       "The export was saved, but Qivo couldn't record it.",
     )
   })
@@ -606,6 +606,21 @@ describe('starting, joining, downloading and cancelling', () => {
       "The download didn't finish, so no export was saved. Try again. The desktop app couldn't delete the unfinished file qivo-northstar-2026-11-09.zip in your Downloads folder, so delete it yourself.",
     )
     expect(sent('orgRemovals:recordExport')).toEqual([])
+  })
+
+  it("shows the server's refusal of the record without Try again", async () => {
+    // the stand-in refuses to record an archive the route never served
+    desktop()
+    serve(['collecting'])
+    await mount()
+    await act(async () => server.finish())
+    await settle()
+    const refused = container.querySelector('[data-export-recorded="refused"]')
+    expect(refused?.textContent).toBe(
+      "The export was saved, but Qivo couldn't record it. This export can no longer be recorded. Prepare a new export.",
+    )
+    expect(refused?.querySelector('button')).toBeNull()
+    expect(container.querySelector('[data-export-recorded="false"]')).toBeNull()
   })
 
   it('offers Try again after a saved export whose record failed', async () => {

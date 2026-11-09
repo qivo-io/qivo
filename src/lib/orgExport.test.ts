@@ -416,6 +416,29 @@ describe('the file way', () => {
     expect([guard.hasUnsaved(), updates.isUpdateBlocked()]).toEqual([false, false])
   })
 
+  it("keeps the server's refusal of the record, which no Try again can change", async () => {
+    network.mutation.mockImplementation(async (ref) => {
+      const name = getFunctionName(ref)
+      if (name === 'orgExport:claimDownload') return { url: LINK, expires_at: '' }
+      throw new ConvexError({
+        code: 'rule',
+        message: 'This export can no longer be recorded. Prepare a new export.',
+      })
+    })
+    await save(zipResponse(streamOf(bytes(5)), 5), 5)
+    expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
+      exportId: EXPORT,
+      state: 'saved',
+      file: 'qivo-acme-2026-11-09.zip',
+      record: 'refused',
+      message: 'This export can no longer be recorded. Prepare a new export.',
+    })
+    // a Try again would get the same refusal, so it sends nothing
+    await m.retryExportRecord()
+    expect(records()).toHaveLength(1)
+  })
+
   it('leaves a saved, unrecorded export to Try again, which records and never downloads again', async () => {
     let fail = true
     network.mutation.mockImplementation(async (ref) => {
