@@ -27,15 +27,12 @@ export const loadRoadmap = preloadModule(() => import('../views/Roadmap'))
 export const loadTeamSync = preloadModule(() => import('../views/TeamSync'))
 // The task window's text editor, shown in its place as plain text until it loads.
 export const loadDescEditor = preloadModule(() => import('../components/descEditor'))
-// Settings › General's organization export.
-export const loadOrgExport = preloadModule(() => import('./orgExport'))
 
 /** Every module above that downloads code that `who` can use, most likely
  * to be opened first. The workspace loads them after its first paint
  * (App.tsx). The task editor is for people who can write somewhere (others
- * get it when they open one of their own comments to edit), and the export
- * for admins. */
-export function workspaceModules(who: { editor: boolean; admin: boolean }) {
+ * get it when they open one of their own comments to edit). */
+export function workspaceModules(who: { editor: boolean }) {
   const modules: ModuleLoader<object>[] = [
     loadIssueDetail,
     loadModals,
@@ -48,6 +45,5 @@ export function workspaceModules(who: { editor: boolean; admin: boolean }) {
   ]
   if (who.editor) modules.push(loadDescEditor)
   modules.push(loadSettings)
-  if (who.admin) modules.push(loadOrgExport)
   return modules
 }

@@ -1427,7 +1427,6 @@ function App() {
           editor: P.users.some(
             (u) => P.myProfileIds.includes(u.id) && u.active && u.orgRole !== 'viewer',
           ),
-          admin: P.isAdmin(),
         }),
       ),
     [],

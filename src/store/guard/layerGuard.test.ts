@@ -188,6 +188,11 @@ describe('Convex writes outside the store', () => {
     // these act on their own live queries, not on the snapshot (planner.ts
     // snapshot health), so they do not pause or paint
     'src/panels/OrganizationDeletion.tsx': ['orgRemovals:keep', 'orgRemovals:request'],
+    // the export acts on its own live query and the server's export job,
+    // not on the snapshot: the panel starts, joins and cancels the job, and
+    // the delivery module claims a download and records a confirmed save
+    'src/panels/OrganizationExport.tsx': ['orgExport:cancel', 'orgExport:request'],
+    'src/lib/orgExport.ts': ['orgExport:claimDownload', 'orgRemovals:recordExport'],
     // the desktop alerts' bookkeeping on the caller's own session, which
     // paints nothing and must not wait for a save pause the workspace's
     // trouble set (store/planner.ts startAlerts): the alert client's claims

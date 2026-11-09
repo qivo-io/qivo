@@ -362,6 +362,28 @@ describe('the pause while Qivo cannot save', () => {
     expect(reload).toHaveBeenCalled()
   })
 
+  it("names an organization export's save, not typed text, when it is the only unsent work", async () => {
+    await boot()
+    const { P } = store
+    const { holdUnsaved } = await import('../lib/leaveGuard')
+    const release = holdUnsaved('export')
+    P.signOut()
+    expect(showToast).toHaveBeenLastCalledWith(
+      'An organization export is still being saved. Press Sign out again to sign out and lose it.',
+      'error',
+    )
+    // with typed text beside it, the typed text is what it names
+    const typed = holdUnsaved()
+    vi.advanceTimersByTime(60_000)
+    P.signOut()
+    expect(showToast).toHaveBeenLastCalledWith(
+      'Text you typed is not saved. Press Sign out again to sign out and lose it.',
+      'error',
+    )
+    typed()
+    release()
+  })
+
   it('keeps the person signed in and every note when the server could not sign them out', async () => {
     await boot()
     const { P } = store

@@ -7,6 +7,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { subscribersStandIn } from './store/followerStandIn.setup'
 import { WHOLE } from './store/guard/liveDouble.setup'
 import type { NotificationsStandIn } from './store/notificationsStandIn.setup'
+import { orgExportStandIn } from './store/orgExportStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* A hidden page holds only the reads the register in lib/viewVisibility.ts
@@ -198,6 +199,9 @@ beforeEach(async () => {
     else if (name === 'billing:status') next({ writable: true })
     else if (name === 'orgRemovals:state')
       next({ slug: 'testbed', last_export_at: null, deletion: null })
+    // an export the server is preparing, so the export section shows it
+    else if (name === 'orgExport:status')
+      next(orgExportStandIn({ now: () => Date.now(), states: ['collecting'] }).status())
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'snapshot:threadHistory') next({ events: [], earlier: false, next: null })
     else next(null)
@@ -300,6 +304,9 @@ describe('a hidden page', () => {
   it('holds only the kept reads beside Organization › General', async () => {
     const { OrgGeneralPage } = await import('./panels/settings/OrganizationSettings')
     await mount(() => <OrgGeneralPage setPage={vi.fn()} />)
-    await hideAndShow(['orgRemovals:state', 'orgs:projectCreators'])
+    await hideAndShow(['orgRemovals:state', 'orgs:projectCreators', 'orgExport:status'])
+    expect(document.querySelector('[data-export-state]')?.getAttribute('data-export-state')).toBe(
+      'collecting',
+    )
   })
 })

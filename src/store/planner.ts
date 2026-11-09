@@ -151,7 +151,7 @@ import { createInlineImages } from '../lib/inlineImages'
 import { INPUTS } from '../lib/inputIdle'
 import { groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { avatarColorFor, labelColorFor } from '../lib/labelColors'
-import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
+import { hasUnsaved, holdUnsaved, leaveDeliberately, onlyExportUnsaved } from '../lib/leaveGuard'
 import type { WatchSharing } from '../lib/liveQueries'
 import { type LiveResult, watchLive } from '../lib/liveView'
 import { loadFailureText } from '../lib/loadFailure'
@@ -16696,7 +16696,9 @@ export const PLANNER = {
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
       signOutWarnedAt = Date.now()
       const what = !waiting
-        ? 'Text you typed is not saved'
+        ? onlyExportUnsaved()
+          ? 'An organization export is still being saved'
+          : 'Text you typed is not saved'
         : waiting === 1
           ? '1 change is not saved yet'
           : `${waiting} changes are not saved yet`

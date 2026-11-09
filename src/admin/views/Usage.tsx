@@ -45,8 +45,7 @@ const fmtValue = (column: Column, value: number | null): string =>
   value === null ? '—' : column.bytes ? fmtBytes(value) : value.toLocaleString()
 
 /* Saves `text` as a file. The link is in the page while it is clicked and
-   its URL lives a minute, as some browsers read it after click returns
-   (panels/OrganizationExport.tsx). */
+   its URL lives a minute, as some browsers read it after click returns. */
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
