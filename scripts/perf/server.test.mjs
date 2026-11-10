@@ -3149,7 +3149,7 @@ describe('files on the benchmark page', () => {
       expect(new URL(answer.avatars[p.id].url).searchParams.get('v')).toBe(p.avatar_storage_id)
   })
 
-  it('refuses files:mintUrls past 100 attachments or 1,000 pictures, as the server does', async () => {
+  it('refuses files:mintUrls past 100 attachments or 100 pictures, as the server does', async () => {
     const tooMany = await mint('tasks=20', {
       attachment_ids: Array.from({ length: 101 }, (_, n) => `file-${n}`),
     })
@@ -3158,11 +3158,11 @@ describe('files on the benchmark page', () => {
       message: 'attachment_ids must name at most 100 attachments',
     })
     const pictures = await mint('tasks=20', {
-      profile_ids: Array.from({ length: 1001 }, (_, n) => `person-${n}`),
+      profile_ids: Array.from({ length: 101 }, (_, n) => `person-${n}`),
     })
-    expect(pictures.data?.message).toBe('profile_ids must name at most 1000 profiles')
+    expect(pictures.data?.message).toBe('profile_ids must name at most 100 profiles')
     const atCap = await mint('tasks=20', {
-      profile_ids: Array.from({ length: 1000 }, (_, n) => `person-${n}`),
+      profile_ids: Array.from({ length: 100 }, (_, n) => `person-${n}`),
     })
     expect(atCap).toEqual({ attachments: {}, avatars: {} })
   })

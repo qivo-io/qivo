@@ -39,7 +39,7 @@
  * mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
  * subscribed: exp comes from Date.now(), which is not a reactive dependency —
  * a subscription would pin a stale exp forever. One call names at most 100
- * attachment ids and 1,000 profile ids (MINT_IDS) and is refused whole past
+ * attachment ids and 100 profile ids (MINT_IDS) and is refused whole past
  * either, before its handler reads anything. It reads each task and each
  * project's sight once a call, and the app asks for 100 ids a call. */
 
@@ -362,31 +362,12 @@ export const clearAvatar = authedMutation({
  * refuses the whole call before the handler reads anything, so no call
  * answers part of what it asked.
  *
- * Attachments are BY_IDS_MAX, the app's chunk (src/lib/mintQueue.ts
- * MINT_QUEUE). Every app before it asked for one attachment a call, so the
- * cap refuses none of them. Profiles are 1,000, the design size's people of
- * one organization, since an app before the mint queue asks for every
- * picture its workspace holds in one call. Both stay under Convex's 1,024
+ * Both are BY_IDS_MAX, the chunk the app's one queue asks in
+ * (src/lib/mintQueue.ts MINT_QUEUE). Each stays under Convex's 1,024
  * fields an answer object may hold, which binds on the ids answered.
- *
- * What the handler's body read at the design size in one transaction,
- * one figure raised a case, without the wrapper's membership reads
- * (tests/mintUrls.test.ts logs them):
- * - 1,000 profile ids of an organization of 1,000 people, each with a
- *   picture, the older app's call: 1,000 index ranges, 1,000 documents,
- *   0.33 MiB and 1,000 tokens; 100 of them, the app's chunk, 100 ranges;
- * - 100 images of one task, a user with a team grant: 111 ranges and 109
- *   documents, and 103 ranges as an organization admin;
- * - 100 attachments over the everyday 60 sub-projects, each and its
- *   top-level project shared with 5 teams: 1,760 ranges, 1,640 documents
- *   and 0.35 MiB, the most;
- * - 100 attachments over 30 sub-projects under one project: 500 ranges;
- * - 100 attachments over 100 sub-projects the caller reads: 1,200 ranges;
- * - 100 images of a legacy task stored on a top-level project, whose
- *   navigation walk runs once a call: 111 ranges.
- * Convex allows 4,096 ranges a transaction. Each further id of a task
- * already read adds its attachment's one range. */
-export const MINT_IDS = { attachments: BY_IDS_MAX, profiles: 1_000 }
+ * Design specification row 443 holds the bound, and tests/mintUrls.test.ts
+ * logs what a call reads at the design size, one figure raised a case. */
+export const MINT_IDS = { attachments: BY_IDS_MAX, profiles: BY_IDS_MAX }
 
 /** Who asks files.mintUrls: the orgQuery wrapper's membership reads. */
 type Minter = {
