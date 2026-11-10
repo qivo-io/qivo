@@ -292,9 +292,7 @@ function layOut(offset: () => number) {
   vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
     el === scroller ? ({ overflowY: 'auto' } as CSSStyleDeclaration) : computed(el, pseudo),
   )
-  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
-    this: Element,
-  ) {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
     if (this === scroller) return new DOMRect(0, offset(), 600, 600)
     const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0
     return new DOMRect(0, offset() + index * 100 - scrollTop, 600, 100)
