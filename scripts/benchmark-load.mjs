@@ -48,8 +48,9 @@
 //   Northstar's two, which are shared with every top-level project, and two
 //   new ones, each shared with one sub-project, so no project holds more
 //   than 3 team shares, inside the design size's 5. Each new person is then
-//   made the assignee of --tasks-each open tasks the seed's other people
-//   held where it holds Edit, as an assignee must (under its Northstar
+//   made the assignee of --tasks-each open tasks that neither Nora nor
+//   another added person holds, the seed's other people's or nobody's,
+//   where it holds Edit, as an assignee must (under its Northstar
 //   team's own projects and in its new teams' sub-projects), so it holds
 //   tasks and, from each "Assigned to you" message, Inbox items as an
 //   everyday person does, while the organization's task counts stay as
@@ -59,8 +60,12 @@
 //   login creates each, mirrors Northstar's projects by name with 30 tasks
 //   a sub-project owned by its people, and invites Nora, whose login claims
 //   the seat as a guest, since a login holds one home seat
-//   (convex/identity.ts claimSeatsForLogin). A second run adds only what is
-//   missing.
+//   (convex/identity.ts claimSeatsForLogin). A second run keeps the
+//   people, sessions and organizations people.json holds and adds
+//   Northstar's missing teams, people and assignments; an added
+//   organization whose setup stopped partway, which people.json does not
+//   hold yet, is not resumed, since its projects and tasks are created
+//   once, so start such a run on a fresh backend.
 // - record opens one real tab per --views view in --browser as Nora,
 //   signed in through the app's own sign-in with the seed's fixture
 //   password (browser-demo.mjs signInDemo): the Board of Luma Sensor's
@@ -113,7 +118,9 @@
 //     comments on four other tasks in turn so the rule of 10 comments a
 //     minute from one person on one task refuses none (changes.mjs). The
 //     title, the status and the move are put back and the posted comments
-//     removed after, so a later run reads the same data.
+//     removed after, so a later run reads the same tasks, titles and
+//     statuses, while each run's activity, Inbox items and removed comments
+//     stay.
 //   - reconnect: every client's socket closed at once, and with the hidden
 //     tab one real tab on the recorded Board, hidden as the visibility
 //     stage hid it, whose check passes when it reconnected, became current

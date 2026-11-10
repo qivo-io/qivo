@@ -52,12 +52,14 @@ const ASSIGNABLE = new Set(['backlog', 'todo', 'progress'])
  * (Board rows), so the people setup adds hold tasks and, from each
  * assignment's "Assigned to you" message, Inbox items as an everyday person
  * does. An assignee needs Edit on the task's project (convex/model/issues.ts
- * assertAssigneeRule), which holdPlaces works out. A task is taken only when it is in one of its
- * owner's places, open outside Review, has no subtasks and no parent, and
- * is not `keep`'s (Nora's, whose views the recorded sets show), in id
- * order. A task an owner already holds counts toward its `each`, so a
- * second run adds only what is missing. Answers [task id, owner] pairs and
- * the owners left short.
+ * assertAssigneeRule), which holdPlaces works out. A task is taken only
+ * when it is in one of its owner's places, open outside Review, has no
+ * subtasks and no parent, and is held by neither `keep` (Nora, whose views
+ * the recorded sets show) nor another owner of `places`, so a task of the
+ * seed's other people or of nobody, in id order. A task an owner already
+ * holds counts toward its `each`, so a second run of this plan adds only
+ * the assignments still missing. Answers [task id, owner] pairs and the
+ * owners left short.
  */
 export function everydayAssignments(places, tasks, each, keep) {
   const owners = [...places.keys()]
