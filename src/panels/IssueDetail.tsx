@@ -2833,9 +2833,9 @@ function IssueDetail({
   // its own row. This runs in every browser, as the presses do: WebKit
   // reports CSS scroll anchoring but lost the place when many rows above
   // went, and where the browser's anchoring already kept the row, the shift
-  // is 0. Only a commit that changes the thread's shown rows shifts: any
-  // other moves what is above the rows on purpose, as the description
-  // coming back from its pop-out above the stacked window's thread, and
+  // is 0. Only a commit that changes the thread's shown rows shifts. Any
+  // other commit that moves the row was meant to, as when the description
+  // comes back from its pop-out above the stacked window's thread, so it
   // must not scroll. The row is measured inside its scroller, so a commit
   // that also moves the scroller on screen keeps the rows.
   const placeTop = useRefID<number | null>(null)

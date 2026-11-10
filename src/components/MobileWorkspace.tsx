@@ -63,11 +63,11 @@ export function MobileHeader({
   // New task where the cache says the scope, or a sub-project the phone
   // list's answer names, is writable, and in My view always: the dialog's
   // targets (projectNav.targets) decide. Over the task list of a top-level
-  // project, only once this scope's answer names a sub-project: none while
-  // it loads, and none where it names none, whose note offers New
-  // sub-project instead (NoSubProjectsNote), as the desktop Board offers
-  // no New task there. Right after a scope switch the read still holds the
-  // last scope's answer, which says nothing of this one.
+  // project it waits until this scope's answer names a sub-project, so none
+  // shows while the answer loads, and none where it names none, whose note
+  // offers New sub-project instead (NoSubProjectsNote), as the desktop
+  // Board offers no New task there. Right after a scope switch the read
+  // still holds the last scope's answer, which says nothing of this one.
   const read = P.boardRead(BOARD_SLOTS.phone)
   const asked = read.key === null ? null : (JSON.parse(read.key) as { scope: BoardScope }).scope
   const listed =

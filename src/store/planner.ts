@@ -10778,7 +10778,7 @@ export const PLANNER = {
       (which this toasts), or with a task window open, it runs nothing and
       answers null, so no operation goes as a write of its own (Auto-move,
       its one caller, says why from P.roadmapUndo.disabled). Batches do not
-      nest: a call inside another throws. */
+      nest, and a call inside another throws. */
   batchRoadmapChanges: (change: () => void): Promise<boolean> | null => {
     if (roadmapBatch) throw new Error('P.batchRoadmapChanges ran inside another batch')
     expireRoadmapHistory()
