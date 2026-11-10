@@ -79,9 +79,7 @@ import { LIMITS } from '../../convex/lib/limits'
     The closing review's sweep, with the window's comment rows memoized,
     found no candidate that meets it, so the figure is the rule's floor,
     which the owner decides on. Design specification row 441 holds the
-    budget, and the closing review's report in qivo-internal
-    (evaluations/limits/closing-review-2026-11-09/closing-report.md,
-    "Comment budget sweep") the figures. Tests lower it and restore it. */
+    budget and the rule. Tests lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of

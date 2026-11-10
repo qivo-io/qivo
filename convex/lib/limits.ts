@@ -228,7 +228,7 @@ export const INBOX_PAGE_ROWS = 50
  * docstring states the rule the browser benchmark's thread phase
  * (scripts/benchmark-browser.mjs --thread) checks it by. It is the rule's
  * floor, which the owner decides on. Design specification row 441 holds
- * it, and the closing review's report in qivo-internal the figures. */
+ * it and the rule. */
 export const THREAD_ROWS = 150
 
 /** Days a read inbox message is kept when the person has not chosen. */
