@@ -6856,9 +6856,9 @@ const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
    (LIMITS.restoreBatch, LIMITS.purgeBatch): a restore call spends one
    budget shared by its items, a quarter of a step's
    (convex/model/deletedItems.ts CALL), and leaves the rest of a large item
-   to its steps, so more ids make a call no longer than its budget; the
-   timing of 5 November 2026 restored the widest item family whole in 1.9
-   to 3.0 s on a local backend. Its progress is P.deletedAction, which the
+   to its steps, so more ids make a call no longer than its budget, and a
+   timing on a local backend on 5 November 2026 restored the widest item
+   family whole in a few seconds. Its progress is P.deletedAction, which the
    page shows however often it is left and opened again; `resend`, the
    second send of a deferred item, keeps out of it.
 
