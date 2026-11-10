@@ -32,8 +32,9 @@
 // `marketing-demo.mjs seed --local` seeded Northstar there and
 // `board-scale-seed.mjs --local --tasks 300` gave its 12 sub-projects about
 // the everyday 30 tasks each. people.json holds the planted session ids,
-// which act only with the admin key; it stays in the untracked working
-// folder.
+// which act only with the admin key; setup writes it only to a working
+// folder outside the checkout or one git ignores, so a sandbox adds
+// dev-temp/ to .git/info/exclude first.
 //
 // The parts:
 //
@@ -189,7 +190,7 @@
 import { fork, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
@@ -240,6 +241,7 @@ import {
   tabsIdlePerMinute,
   watchedPerMinute,
 } from './load/report.mjs'
+import { ignoredByGit } from './marketing-demo.mjs'
 
 const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -410,9 +412,25 @@ async function once(step) {
   }
 }
 
+/** Refuses working folder `dir` where git could commit people.json, which
+    holds the planted session ids: a folder inside the checkout that git
+    does not ignore (marketing-demo.mjs ignoredByGit), as in a fresh clone
+    or a sandbox whose dev-temp/ no exclude rule covers. A folder outside
+    the checkout passes. */
+function refuseTrackedDir(dir) {
+  const full = resolve(dir)
+  const within = relative(ROOT, full)
+  const inside = within === '' || (!within.startsWith('..') && !isAbsolute(within))
+  if (inside && !ignoredByGit(ROOT, full))
+    throw new Error(
+      `${dir} is inside the checkout and git does not ignore it, so people.json's session ids could be committed. Add it, or dev-temp/, to .git/info/exclude, or choose a --dir outside the checkout.`,
+    )
+}
+
 /** The setup part: grows Northstar to the everyday organization and writes
     people.json. */
 async function setup(options) {
+  refuseTrackedDir(options.dir)
   const admin = httpClient(options)
   const noraEmail = 'nora@demo.qivo.io'
   const noraLogin = await component(admin, 'adapter:findOne', {
