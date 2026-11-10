@@ -6,6 +6,7 @@
    (copy ID, copy link, move to another sub-project, delete) and close. */
 
 import React, {
+  memo,
   type ReactNode,
   Suspense,
   useContext as useContextID,
@@ -106,6 +107,7 @@ import {
   type TaskRefVM,
   type TaskSectionsVM,
 } from '../store/planner'
+import type { StoreVersion } from '../store/updates'
 import { LabelPickerPopup } from './LabelPicker'
 import {
   ArchiveOrDeleteTaskModal,
@@ -1337,23 +1339,33 @@ function scrollerOf(el: Element): Element {
   return document.scrollingElement ?? document.documentElement
 }
 
-function CommentRow({
+/** One comment of the thread. It renders again only when one of its
+    props changes, so a delivered comment, a page that Show earlier or Show
+    newer brought, or an edit of another comment leaves the other rows
+    alone. Its props are its comment object, which the store keeps while
+    the comment is unchanged (store/stable.ts keepItems), the task's
+    organization, the rights and the edit in place it shows, the store's
+    context (P.contextVersion, for the author's name and picture and the
+    signed-in person's own profiles) and the minute its age is told in
+    (P.fmtAgo). `onEdit` is the window's state setter, which never changes,
+    and takes null when the edit in place closes. */
+const CommentRow = memo(function CommentRow({
   c,
-  it,
+  org,
   canLead,
   locked = false,
   editing,
   onEdit,
-  onDoneEdit,
 }: {
   c: CommentVM
-  it: IssueVM
+  org: string
   canLead: boolean
   /** an archived task's comments, which no one edits or deletes */
   locked?: boolean
   editing: boolean
-  onEdit: (id: string) => void
-  onDoneEdit: () => void
+  onEdit: (id: string | null) => void
+  context: StoreVersion
+  minute: number
 }) {
   const [hover, setHover] = useStateID(false)
   const deletion = useConfirmArm<'delete'>()
@@ -1427,7 +1439,7 @@ function CommentRow({
             <EditorSlot fallback={<Markdown text={c.body} />}>
               <DescEditor
                 issueKey={null}
-                org={it.org}
+                org={org}
                 value={c.body}
                 placeholder="Comment…"
                 ariaLabel="Edit comment"
@@ -1435,7 +1447,7 @@ function CommentRow({
                 comment={{
                   label: 'Save',
                   onCommit: (text, keep) => P.updateComment(c.id, text, keep),
-                  onClose: onDoneEdit,
+                  onClose: () => onEdit(null),
                 }}
               />
             </EditorSlot>
@@ -1448,7 +1460,7 @@ function CommentRow({
       </div>
     </div>
   )
-}
+})
 
 /* `embedded` drops the scrim and the floating card and lets the window fill
    whatever pane it is given — the inbox's right half, where the task IS the
@@ -2641,6 +2653,9 @@ function IssueDetail({
   const gap = spineGap(gapSides.comments, gapSides.events)
   const parts = splitSpine(spine, gap, gapSides, editingComment)
   const shown = [...parts.above, ...parts.below]
+  // the minute the comments' ages are told in, so a render in a later
+  // minute tells them again while the memoized rows skip within one
+  const ageMinute = Math.floor(Date.now() / 60_000)
   const newer = newerRow(
     gap,
     all ? from.start : Number.NEGATIVE_INFINITY,
@@ -2979,12 +2994,13 @@ function IssueDetail({
                 <CommentRow
                   key={s.id}
                   c={s.c}
-                  it={it}
+                  org={it.org}
                   canLead={canLead}
                   locked={archived}
                   editing={editingComment === s.id}
                   onEdit={setEditingComment}
-                  onDoneEdit={() => setEditingComment(null)}
+                  context={P.contextVersion}
+                  minute={ageMinute}
                 />
               ) : (
                 <EventRow key={s.id} e={s.e} />
