@@ -67,11 +67,14 @@ let root: Root
    at all ('hold'), or with `force`'s not ready, refusal or failure. */
 let holdsAnswer: ForcedProjectNav | 'hold' | null = null
 let phone = false
+// whether tasks:board holds its answers back, as one on its way does
+let boardHeld = false
 // the milestone reads App subscribed, by query
 let milestoneReads: string[] = []
 
 beforeEach(() => {
   phone = false
+  boardHeld = false
   holdsAnswer = null
   milestoneReads = []
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -153,8 +156,9 @@ async function app(snap: Snapshot, path = '/app/testbed') {
         navReads.delete(answer)
       }
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
-    else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
-    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
+    else if (name === 'tasks:board') {
+      if (!boardHeld) next(boardStandIn(server, args as BoardArgs))
+    } else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
       next(answerRoadmap(server, name, args))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (isMilestoneRead(name)) {
@@ -456,6 +460,20 @@ describe('New sub-project in a project without one', () => {
       expect(document.querySelector('[data-mobile-new-task]'), role).toBeNull()
       await reload()
     }
+  })
+
+  it("offers New task on a top-level project's phone task list only once its answer names a sub-project", async () => {
+    phone = true
+    boardHeld = true
+    await app(granted('admin'), '/app/testbed/board/p/3')
+    await shows('Loading tasks…')
+    // must fail for a header that offers it while the answer loads
+    expect(document.querySelector('[data-mobile-new-task]')).toBeNull()
+    await reload()
+    // Plan's answer names its sub-project
+    boardHeld = false
+    await app(granted('admin'), '/app/testbed/board/p/2')
+    await vi.waitFor(() => expect(document.querySelector('[data-mobile-new-task]')).not.toBeNull())
   })
 })
 

@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { BoardScope } from '../../convex/lib/board'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { menuTrigger } from '../lib/focusWhenGone'
 import { inboxBadge } from '../lib/inboxBadge'
@@ -61,19 +62,23 @@ export function MobileHeader({
           : info?.name || 'Projects'
   // New task where the cache says the scope, or a sub-project the phone
   // list's answer names, is writable, and in My view always: the dialog's
-  // targets (projectNav.targets) decide. None over the task list of a
-  // top-level project whose answer names no sub-project, whose note
-  // offers New sub-project instead (NoSubProjectsNote), as the desktop
-  // Board offers no New task there.
-  const listed = P.boardRead(BOARD_SLOTS.phone).value
-  const noSubProject =
-    view === 'kanban' && !!info?.isMeta && listed?.state === 'ok' && listed.projects?.length === 0
+  // targets (projectNav.targets) decide. Over the task list of a top-level
+  // project, only once this scope's answer names a sub-project: none while
+  // it loads, and none where it names none, whose note offers New
+  // sub-project instead (NoSubProjectsNote), as the desktop Board offers
+  // no New task there. Right after a scope switch the read still holds the
+  // last scope's answer, which says nothing of this one.
+  const read = P.boardRead(BOARD_SLOTS.phone)
+  const asked = read.key === null ? null : (JSON.parse(read.key) as { scope: BoardScope }).scope
+  const listed =
+    read.value?.state === 'ok' && asked?.kind === 'project' && asked.project_id === info?.id
+      ? read.value
+      : null
+  const waits = view === 'kanban' && !!info?.isMeta && !listed?.projects?.length
   const canCreate =
     !!info &&
-    !noSubProject &&
-    (info.mine ||
-      P.canWrite(info.id) ||
-      (listed?.state === 'ok' && (listed.projects ?? []).some((id) => P.canWrite(id))))
+    !waits &&
+    (info.mine || P.canWrite(info.id) || (listed?.projects ?? []).some((id) => P.canWrite(id)))
   return (
     <header className="mobile-workspace-header">
       <div className="mobile-title-row">
