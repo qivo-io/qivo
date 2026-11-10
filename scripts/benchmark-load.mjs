@@ -113,8 +113,9 @@
 //     removed after, so a later run reads the same data.
 //   - reconnect: every client's socket closed at once, and with the hidden
 //     tab one real tab on the recorded Board, hidden as the visibility
-//     stage hid it, whose check passes when what it subscribes again holds
-//     none of the reads it dropped on hiding and nothing new.
+//     stage hid it, whose check passes when it reconnected, became current
+//     again without a reload, stayed hidden, and what it subscribes again
+//     holds none of the reads it dropped on hiding and nothing new.
 //   - idle: --idle-s seconds with no change.
 //   - busy: the changes again beside --busy-loops spinning processes,
 //     pinned to --busy-cpus, the backend's, with taskset.
@@ -2046,8 +2047,13 @@ async function hide(options, url, browser, signInPage) {
         dropped_on_hiding: dropped,
         resubscribed_view_reads: resubscribedViewReads,
         new_reads: newReads,
+        // a tab that never became current again, reloaded or showed itself
+        // has not shown what a hidden tab subscribes after a reconnect
         passed:
           tracker.connects > connects &&
+          after.settled &&
+          !state.reloaded &&
+          state.visibility === 'hidden' &&
           resubscribedViewReads.length === 0 &&
           newReads.length === 0,
       }
