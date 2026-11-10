@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALERT_WINDOW_MS, LIMITS } from '../convex/lib/limits'
@@ -254,6 +256,33 @@ describe('the load benchmark options', () => {
     for (const dir of ['/tmp/load', '/work/qivo-load', '/work/qivo/../load'])
       expect(() => refuseTrackedDir(root, dir, ignored)).not.toThrow()
     expect(asked).toEqual([])
+  })
+
+  it('refuses a folder in the checkout named through a symlink, and asks git with real paths', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'qivo-load-dir-')))
+    try {
+      const checkout = join(base, 'checkout')
+      mkdirSync(checkout)
+      symlinkSync(checkout, join(base, 'link'))
+      const asked = []
+      // git ignores nothing in this checkout
+      const ignored = (cwd, path) => {
+        asked.push([cwd, path])
+        return false
+      }
+      expect(() => refuseTrackedDir(checkout, join(base, 'link', 'load'), ignored)).toThrow(
+        'git does not ignore it',
+      )
+      expect(() => refuseTrackedDir(join(base, 'link'), join(checkout, 'load'), ignored)).toThrow(
+        'git does not ignore it',
+      )
+      expect(asked).toEqual([
+        [checkout, join(checkout, 'load')],
+        [checkout, join(checkout, 'load')],
+      ])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 
   it("lets the sign-in's Better Auth calls go to loopback only", () => {
