@@ -719,9 +719,13 @@ export async function labelsByRef(
 }
 
 /** Refuses a task update whose add or remove list names more than
- * LIMITS.taskLabelRefs.max labels, duplicates counted. MCP update_task also
- * calls it before its mutation, as a list past Convex's 8,192 array values
- * would fail the mutation's argument check with Convex's own error. */
+ * LIMITS.taskLabelRefs.max labels. MCP update_task also calls it before its
+ * mutation, as a list past Convex's 8,192 array values would fail the
+ * mutation's argument check with Convex's own error. It counts the entries
+ * sent, duplicates included, as the inbox change counts its tasks: only
+ * the lookup knows that a name, another case of it and an id are one label,
+ * and a count of distinct entries would let 8,193 copies of one name reach
+ * that argument check. */
 export function checkLabelRefs(refs: { add: readonly string[]; remove: readonly string[] }) {
   if (Math.max(refs.add.length, refs.remove.length) > LIMITS.taskLabelRefs.max) {
     throw rule(LIMITS.taskLabelRefs.refusal)
