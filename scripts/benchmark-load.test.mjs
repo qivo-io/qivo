@@ -1,4 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { LIMITS } from '../convex/lib/limits'
+import {
+  CHANGE_KINDS,
+  COMMENT_RATE_MAX,
+  COMMENTS_PER_MINUTE,
+  commentTargets,
+  mostInAMinute,
+} from './load/changes.mjs'
 import {
   checkSet,
   compareSets,
@@ -677,5 +685,28 @@ describe('the output', () => {
     ])
     expect(report.sources.functions).toContain('drops entries')
     expect(report.not_run).toEqual({ changes: 'not asked' })
+  })
+})
+
+describe('the changes plan', () => {
+  it("follows the app's comment rule and posts a comment every fourth change", () => {
+    expect(COMMENT_RATE_MAX).toBe(LIMITS.commentRate.max)
+    expect(CHANGE_KINDS).toEqual(['rename', 'move', 'status', 'comment'])
+    expect(COMMENTS_PER_MINUTE).toBe(15)
+  })
+
+  it('spreads the comments so two runs back to back stay under the rule on every task', () => {
+    const tasks = ['t1', 't2', 't3', 't4', 't5', 't6'].map((id) => ({ id }))
+    const targets = commentTargets(tasks)
+    expect(targets.map((task) => task.id)).toEqual(['t1', 't2', 't3', 't4'])
+    expect(2 * mostInAMinute(targets.length)).toBeLessThanOrEqual(COMMENT_RATE_MAX)
+    // one task, as the first tool had it, takes every comment: 15 a minute
+    expect(mostInAMinute(1)).toBeGreaterThan(COMMENT_RATE_MAX)
+  })
+
+  it('refuses a Board with too few other open tasks rather than post comments the rule refuses', () => {
+    expect(() => commentTargets([{ id: 't1' }, { id: 't2' }, { id: 't3' }])).toThrow(
+      'fewer than the 4 the comments need',
+    )
   })
 })

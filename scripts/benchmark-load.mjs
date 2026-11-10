@@ -109,11 +109,13 @@
 //   one's time to current and its set against its person's swapped set.
 // - changes: --changes changes, one a second, as Nora: a rename, a move to
 //   a sibling sub-project and back, a status change and a comment on the
-//   recorded Board's tasks (two open tasks without subtasks), each with
+//   recorded Board's tasks (two open tasks without subtasks, and the
+//   comments on four others in turn, so the rule of 10 comments a minute
+//   from one person on one task refuses none, changes.mjs), each with
 //   the queries that reran and their JavaScript time from the log, and the
 //   bytes re-sent to each client until the next change. The title, the
-//   status and the move are put back and the comments removed after, so
-//   a later run reads the same data.
+//   status and the move are put back and the posted comments removed
+//   after, so a later run reads the same data.
 // - reconnect: every client's socket closed at once; the re-subscriptions,
 //   the JavaScript times, the calls in flight, the closes with their codes
 //   (1013 is an overload) and each client's time to current, from the
@@ -164,6 +166,7 @@ import { fileURLToPath } from 'node:url'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { jsonToConvex } from 'convex/values'
+import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
 import {
   checkSet,
   compareSets,
@@ -1976,10 +1979,9 @@ async function runChanges(options, plan, boardSet, workers, log) {
   )
   if (open.length < 2) throw new Error('the recorded Board shows fewer than 2 open tasks to change')
   const [renamed, moved] = open
-  // the comments go to up to four other tasks in turn, since one person
-  // posts at most 10 a minute on one task (LIMITS.commentRate) and a run
-  // of one change a second posts 15 a minute
-  const commented = open.slice(2, 6).length > 0 ? open.slice(2, 6) : [renamed]
+  // the comments go to other tasks in turn, enough that the comment rule
+  // refuses none (changes.mjs commentTargets)
+  const commented = commentTargets(open.slice(2))
   const home = moved.project_id
   const sibling = plan.projects
     .flatMap((project) =>
@@ -1989,14 +1991,15 @@ async function runChanges(options, plan, boardSet, workers, log) {
   if (!sibling) throw new Error('the Board sub-project has no sibling to move a task to')
   const org = plan.org_id
   const original = { title: renamed.title, status: renamed.status }
-  const kinds = ['rename', 'move', 'status', 'comment']
   let away = false
   let status = original.status
+  let commentsMade = 0
+  // the comments posted, which the cleanup removes
   const comments = []
   const done = []
   const begin = Date.now()
   for (let i = 0; i < options.changes; i++) {
-    const kind = kinds[i % kinds.length]
+    const kind = CHANGE_KINDS[i % CHANGE_KINDS.length]
     const slot = begin + i * 1000
     await sleep(Math.max(0, slot - Date.now()))
     await Promise.all(workers.map((worker) => worker.ask({ type: 'change', id: i }, 'changed')))
@@ -2016,8 +2019,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
       call = ['issues:update', { org_id: org, id: renamed.id, patch: { status } }]
     } else {
       const id = crypto.randomUUID()
-      const target = commented[comments.length % commented.length]
-      comments.push(id)
+      const target = commented[commentsMade++ % commented.length]
       call = [
         'comments:create',
         {
@@ -2031,6 +2033,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
     let error = null
     try {
       await retry(() => writer.mutation(ref(call[0]), call[1]))
+      if (kind === 'comment') comments.push(call[1].id)
     } catch (failure) {
       error = String(failure?.message ?? failure).slice(0, 200)
     }
@@ -2061,6 +2064,11 @@ async function runChanges(options, plan, boardSet, workers, log) {
       moved: moved.id,
       sibling: sibling.id,
       commented: commented.map((task) => task.id),
+    },
+    comments: {
+      made: commentsMade,
+      posted: comments.length,
+      failed: commentsMade - comments.length,
     },
     restored,
     changes: done.map((change, i) => {
