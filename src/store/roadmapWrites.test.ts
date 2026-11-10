@@ -183,7 +183,6 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
         TODAY_WEEK + 2,
       )
     })
-    expect(await moved).toBe(false)
     expect(r.sent()).toEqual([
       {
         name: 'issues:update',
@@ -195,6 +194,7 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
         },
       },
     ])
+    expect(await moved).toBe(false)
   })
 
   it('sends one batch with a shaped task and a task only the dependency answer holds, one layer that stays painted and goes whole on a refusal', async () => {
