@@ -16,8 +16,9 @@ import type { Snapshot } from './plannerFixture.setup'
    expected values, painted on the Roadmap's rows until the answer holds
    them; a task only the dependency answer holds moves from its stored
    dates and paints nothing; a batch is one write and one layer, which a
-   refusal takes away whole; with no visit to record them they go out as
-   ordinary writes. */
+   refusal takes away whole; with no visit to record them a shaped task's
+   dates go out as an ordinary write, and a move of a task only the
+   dependency answer holds goes nowhere. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -141,7 +142,7 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
     expect(r.model('a')?.start).toBe(TODAY_WEEK + 2)
   })
 
-  it("takes a refused write's paint away, drops a group's dates, and sends an ordinary write with no visit", async () => {
+  it("takes a refused write's paint away, drops a group's dates, and with no visit sends a shaped task's dates as an ordinary write and a dependency-only move not at all", async () => {
     const board = await loadBoard(network, tasks)
     const r = await roadmapOf(board)
     const a = r.model('a')
@@ -162,9 +163,27 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
     // with no visit recording, the dates go as an ordinary write, still
     // with the row's dates as expected values
     board.P.roadmapContext(false, false)
+    let moved: Promise<boolean> = Promise.resolve(true)
     await act(async () => {
       void board.P.updateIssue(a.id, { start: TODAY_WEEK + 1, end: TODAY_WEEK + 1 })
+      // Auto-move's move of a task only the dependency answer holds joins
+      // a recording visit's journal or goes nowhere
+      moved = board.P.moveDependencyTask(
+        {
+          id: 'far',
+          org_id: board.snapshot.orgs[0].id,
+          project_id: 'other',
+          num: 4,
+          status: 'todo',
+          start_week: week(0),
+          end_week: week(0),
+          has_subtasks: false,
+        },
+        TODAY_WEEK + 2,
+        TODAY_WEEK + 2,
+      )
     })
+    expect(await moved).toBe(false)
     expect(r.sent()).toEqual([
       {
         name: 'issues:update',

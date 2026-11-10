@@ -9270,12 +9270,14 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
 
 /** Moves task `row`, which only the Roadmap's dependency answer holds, to
     the weeks `start` to `end`, for Auto-move: the same task operation a
-    shown task's move sends, in the open batch, with the row's stored dates
-    as its `expected` values, or an ordinary write where no visit records
-    it. It paints nothing, since no screen shows the task, and the
-    dependency read's next answer, which Convex delivers before the write
-    resolves, holds it. A group's dates come from its subtasks, so it
-    writes none. */
+    shown task's move sends, with the row's stored dates as its `expected`
+    values. It goes only to a recording visit's journal, in Auto-move's
+    open batch (P.batchRoadmapChanges): with no visit to record it, it
+    sends nothing and answers false, so no move goes as an ordinary write.
+    It paints nothing, since no screen
+    shows the task, and the dependency read's next answer, which Convex
+    delivers before the write resolves, holds it. A group's dates come
+    from its subtasks, so it writes none. */
 function moveDependencyTask(row: DependencyRow, start: number, end: number): Promise<boolean> {
   if (row.has_subtasks) return Promise.resolve(true)
   if (refusePausedEdit()) return Promise.resolve(false)
@@ -9287,13 +9289,8 @@ function moveDependencyTask(row: DependencyRow, start: number, end: number): Pro
   if (!Object.keys(wire).length) return Promise.resolve(true)
   const over = overOf('issues', row, Object.keys(wire))
   return (
-    recordRoadmapChange({ kind: 'task', id: row.id, patch: wire }, {}, over) ||
-    send(
-      api.issues.update,
-      { org_id: row.org_id, id: row.id, patch: wire },
-      {},
-      { over, about: { task: row.id } },
-    )
+    recordRoadmapChange({ kind: 'task', id: row.id, patch: wire }, {}, over) ??
+    Promise.resolve(false)
   )
 }
 
@@ -10811,7 +10808,7 @@ export const PLANNER = {
     return saved
   },
   /** Moves a task only the Roadmap's dependency answer holds, for
-      Auto-move (moveDependencyTask). */
+      Auto-move, in a recording visit's journal only (moveDependencyTask). */
   moveDependencyTask,
   undoRoadmap: (all = false) => {
     expireRoadmapHistory()
