@@ -489,6 +489,55 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     ])
   })
 
+  it('keeps the first row on screen where it was when an arrival lets rows above go, where the browser reports scroll anchoring too', async () => {
+    // WebKit answers true here and still lost the place
+    vi.stubGlobal('CSS', {
+      supports: (property: string, value?: string) =>
+        property === 'overflow-anchor' && value === 'auto',
+    })
+    await load()
+    const see = watchRows()
+    await walkBack(2)
+    // jsdom has no layout: each row of the thread is 100 px tall, and the
+    // spine's scroller is the ancestor that scrolls
+    const scroller = document.querySelector<HTMLElement>('[data-spine-scroll]')
+    if (!scroller) throw new Error('missing the scroller')
+    let scrollTop = 9000
+    Object.defineProperties(scroller, {
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value
+        },
+      },
+      scrollHeight: { configurable: true, get: () => 20_000 },
+      clientHeight: { configurable: true, get: () => 600 },
+    })
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+      el === scroller ? ({ overflowY: 'auto' } as CSSStyleDeclaration) : computed(el, pseudo),
+    )
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element,
+    ) {
+      const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0
+      return new DOMRect(0, index * 100 - scrollTop, 600, 100)
+    })
+    // the reader reads #280 and #281 among the live rows
+    const reading = new Set([comment(280).id, comment(281).id])
+    await see((el) => reading.has(el.getAttribute('data-comment') ?? ''))
+    const onScreen = () =>
+      document.querySelector(`[data-comment="${comment(280).id}"]`)?.getBoundingClientRect().top
+    const before = onScreen()
+    const above = thread().indexOf('#280')
+    // #300 arrives past the budget and a row above #280 goes
+    await deliver({ comments: range(251, 301), earlier: true })
+    expect(thread().indexOf('#280')).toBe(above - 1)
+    expect(onScreen()).toBe(before)
+    expect(scrollTop).toBe(9000 - 100)
+  })
+
   it('on a phone takes the place from the feed, while the composer below it always shows', async () => {
     vi.stubGlobal(
       'matchMedia',

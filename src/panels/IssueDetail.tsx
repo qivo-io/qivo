@@ -67,7 +67,6 @@ import { parentBlock, subtaskBlock } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { DONE_WITHOUT_DATES, doneWithoutDates } from '../lib/roadmapVisibility'
 import { buildPath, issueLink, sameTask } from '../lib/router'
-import { SCROLL_ANCHORING } from '../lib/scrollAnchoring'
 import {
   itemUnreadStart,
   mergeSpine,
@@ -2819,18 +2818,15 @@ function IssueDetail({
     return () => P.threadPlace(owner)
   }, [])
   // A comment that arrives past the budget lets go of rows above the screen.
-  // Chromium and Firefox keep the reader's place themselves through CSS
-  // scroll anchoring; where the browser does not, as in Safari, the first
-  // row on screen stays where it was, measured while rendering and shifted
-  // after layout as a press does, except while a press keeps its own row.
+  // The first row on screen stays where it was, measured while rendering
+  // and shifted after layout as a press does, except while a press keeps
+  // its own row. This runs in every browser, as the presses do: WebKit
+  // reports CSS scroll anchoring but lost the place when many rows above
+  // went, and where the browser's anchoring already kept the row, the shift
+  // is 0.
   const placeTop = useRefID<number | null>(null)
   placeTop.current = null
-  if (
-    !SCROLL_ANCHORING &&
-    !earlierFrom.current &&
-    !newerFrom.current &&
-    placeRow.current?.isConnected
-  )
+  if (!earlierFrom.current && !newerFrom.current && placeRow.current?.isConnected)
     placeTop.current = placeRow.current.getBoundingClientRect().top
   useLayoutEffectID(() => {
     const top = placeTop.current
