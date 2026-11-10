@@ -1051,10 +1051,18 @@ function readSets(options, planOrg = { k: 0 }) {
 
 /** One replayed client: a ConvexClient over a socket whose frames feed a
     tracker, acting as `person`, subscribed to `queries`, and leading its
-    alerts with the app's own alert client when `alerts` (appAlerts') is
-    given. `onAnswer` hears each answer. */
+    alerts with the app's own alert client when `alerts` (loadAppAlerts')
+    is given. The alerts start once the root part has answered, as the
+    store starts them at the boot that found a seat
+    (src/store/planner.ts startAlerts). `onAnswer` hears each answer. */
 function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer }) {
-  const tracker = new FrameTracker({ onAnswer })
+  let stopAlerts = null
+  const tracker = new FrameTracker({
+    onAnswer: (udfPath, ...rest) => {
+      if (alerts && stopAlerts === null && udfPath === 'workspace:root') startAlerts()
+      onAnswer(udfPath, ...rest)
+    },
+  })
   const sockets = new Set()
   const Native = globalThis.WebSocket
   class Tracked extends Native {
@@ -1090,17 +1098,19 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
   // a leader's own reads are the alert client's, which subscribes them itself
   for (const query of alerts ? withoutLeaderReads(queries) : queries)
     convex.client.subscribe(query.udfPath, jsonToConvex(query.args))
-  const stopAlerts = alerts
-    ? leadAlerts({
-        convex,
-        connection: () => tracker.connects,
-        app: alerts,
-        name: `qivo-notifications:load:${index}`,
-        onAlert: () => {
-          client.alerts++
-        },
-      })
-    : null
+  const startAlerts = () => {
+    stopAlerts = leadAlerts({
+      convex,
+      connection: () => tracker.connects,
+      app: alerts,
+      name: `qivo-notifications:load:${index}`,
+      onAlert: () => {
+        client.alerts++
+      },
+    })
+  }
+  // a set without the root part, which no recorded tab holds, starts them at once
+  if (alerts && !queries.some((query) => query.udfPath === 'workspace:root')) startAlerts()
   /** Closes every open socket of the client, as a network drop does. */
   client.drop = () => {
     for (const socket of sockets) {
