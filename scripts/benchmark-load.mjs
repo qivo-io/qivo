@@ -154,8 +154,9 @@
 //   from the views' answers (idleShares), and the backend's own jobs per
 //   minute apart, since no session asks for them.
 // - Steal and busy CPU: /proc/stat over the phase; a phase at 10% steal or
-//   more is marked noisy and is no timing. Event loop lag: each process's
-//   monitorEventLoopDelay past its 10 ms resolution.
+//   more is marked noisy and is no timing, and one whose steal could not be
+//   read is marked noisy null, unknown (report.mjs noisyOf). Event loop
+//   lag: each process's monitorEventLoopDelay past its 10 ms resolution.
 // - The pacing trigger, judged against the modelled hosted query limit, not
 //   the local backend's overload: a phase whose clients asked more than
 //   hosted Professional's 256 queries at one moment (report.mjs
@@ -216,6 +217,7 @@ import {
   logEntry,
   mergeCalls,
   mostAtOnce,
+  noisyOf,
   overLine,
   pacingTrigger,
   perSessionMinute,
@@ -1562,8 +1564,6 @@ async function replay(options) {
     })
     if (Array.isArray(figures.changes)) attachResends(figures, options.clients)
     delete figures._changes
-    // a phase in which the hypervisor took a tenth of the CPU or more is no timing
-    figures.noisy = (figures.steal?.steal_pct ?? 0) >= 10
     phases[name] = figures
     say(
       `phase ${name} done: ${Math.round((to - from) / 1000)} s, steal ${figures.steal?.steal_pct ?? '?'}%, slowest JS ${Math.max(0, ...Object.values(figures.functions).map((one) => one.js_ms.max ?? 0))} ms`,
@@ -2166,7 +2166,7 @@ async function tabsPart(options) {
       })),
       ...extra,
     }
-    figures.noisy = (figures.steal?.steal_pct ?? 0) >= 10
+    figures.noisy = noisyOf(figures.steal)
     phases[name] = figures
     return figures
   }

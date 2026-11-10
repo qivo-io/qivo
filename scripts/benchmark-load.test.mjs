@@ -54,6 +54,7 @@ import {
   mergeCalls,
   mergeCounts,
   mostAtOnce,
+  noisyOf,
   overLine,
   pacingTrigger,
   percentile,
@@ -729,6 +730,15 @@ describe('the per-function statistics', () => {
     expect(cpuShare(a, b)).toEqual({ steal_pct: 25, busy_pct: 50, ticks: 400 })
     expect(cpuCounters('intr 5')).toBeNull()
     expect(cpuShare(a, null)).toBeNull()
+  })
+
+  it('marks a phase noisy from 10% steal, and unknown where the steal could not be read', () => {
+    expect(noisyOf({ steal_pct: 9.9 })).toBe(false)
+    expect(noisyOf({ steal_pct: 10 })).toBe(true)
+    expect(noisyOf(null)).toBeNull()
+    // the phase's figures carry it, never false for an unread /proc/stat
+    expect(phaseFigures([], 1, [], { steal: null }).noisy).toBeNull()
+    expect(phaseFigures([], 1, [], { steal: { steal_pct: 12.5 } }).noisy).toBe(true)
   })
 })
 

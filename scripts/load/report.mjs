@@ -256,6 +256,16 @@ export function cpuShare(a, b) {
   }
 }
 
+/** The hypervisor's share of the CPU, in percent, from which a phase is
+    marked noisy and is no timing. */
+export const NOISY_STEAL_PCT = 10
+
+/** Whether a phase whose steal is `steal` (cpuShare's) is noisy: true at
+    NOISY_STEAL_PCT or more, false below it, and null, unknown, where the
+    steal could not be read, so an unmeasured phase never counts as a clean
+    timing. */
+export const noisyOf = (steal) => (steal ? steal.steal_pct >= NOISY_STEAL_PCT : null)
+
 /** One rung's output: what ran, where and when (`rung`), the recorded
     sets' summaries (`recorded`), the replay's match with the tabs
     (`match`), each phase's figures (`phases`), item 9's subscriptions of
@@ -279,7 +289,7 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
       in_flight:
         "The clients' own counts of mutations awaiting their response and queries awaiting their first answer, sampled every 100 ms, summed over the processes' maxima.",
       steal:
-        '/proc/stat over the phase, as the coordinator read it; a phase at 10% steal or more is marked noisy.',
+        '/proc/stat over the phase, as the coordinator read it; a phase at 10% steal or more is marked noisy, and one whose steal could not be read has noisy null, unknown.',
       event_loop_lag:
         "Each process's monitorEventLoopDelay over the phase, past its 10 ms resolution.",
       pacing_trigger:
@@ -352,7 +362,8 @@ export function logCoverage(stats, calls, { writerCalls = {}, readFailures = 0 }
     coverage (logCoverage, with the writer's calls and the log's failed
     reads from `extra.writer_calls` and `extra.log_read_failures`), the
     backend's calls at once, the workers' bytes, calls, closes, calls in
-    flight and event loop lag, and `extra`. */
+    flight and event loop lag, `extra`, and whether `extra.steal` makes
+    the phase noisy (noisyOf). */
 export function phaseFigures(entries, seconds, reports, extra) {
   const stats = functionStats(entries, seconds)
   const calls = mergeCalls(reports.map((report) => report.calls))
@@ -397,6 +408,7 @@ export function phaseFigures(entries, seconds, reports, extra) {
     })),
     _changes: reports.flatMap((report) => report.changes),
     ...extra,
+    noisy: noisyOf(extra.steal),
   }
 }
 
