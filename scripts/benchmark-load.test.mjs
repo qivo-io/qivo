@@ -358,6 +358,27 @@ describe('the frame tracker', () => {
     expect(tracker.closes).toEqual([expect.objectContaining({ code: 1006, reason: 'gone' })])
   })
 
+  it('records when its newest set became current, and forgets it while a newer set waits', () => {
+    let now = 1000
+    const tracker = new FrameTracker({ now: () => now })
+    tracker.sent(add(0, 1, [[0, 'workspace:root', {}]]))
+    expect(tracker.currentSince).toBeNull()
+    now = 1040
+    tracker.received(transition(1, [[0, { orgs: [] }]]))
+    expect(tracker.currentSince).toBe(1040)
+    // a later answer while current keeps the moment it became current
+    now = 1300
+    tracker.received(transition(1, [[0, { orgs: [1] }]]))
+    expect(tracker.currentSince).toBe(1040)
+    // a view's second wave of reads makes it wait again, then current anew
+    now = 1400
+    tracker.sent(add(1, 2, [[1, 'tasks:board', {}]]))
+    expect(tracker.currentSince).toBeNull()
+    now = 1650
+    tracker.received(transition(2, [[1, { rows: [] }]]))
+    expect(tracker.currentSince).toBe(1650)
+  })
+
   it('says whether its set holds an answered query of a function', () => {
     const tracker = new FrameTracker()
     tracker.sent(

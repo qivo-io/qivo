@@ -46,7 +46,17 @@ export class FrameTracker {
     this.framesReceived = 0
     this.bytesReceived = 0
     this.lastFrameAt = null
+    /** When the newest set became current, null while it is not: the
+        moment both parts time to current from, so a tab's time and a
+        replayed client's measure the same moment. */
+    this.currentSince = null
     this.chunks = null
+  }
+
+  /** Keeps `currentSince` with the set's state after a change at `at`. */
+  noteCurrent(at) {
+    if (!this.current) this.currentSince = null
+    else this.currentSince ??= at
   }
 
   /** A frame the client sent, as text. */
@@ -83,6 +93,7 @@ export class FrameTracker {
       else if (change.type === 'Remove') this.queries.delete(num(change.queryId))
     }
     this.sentVersion = num(message.newVersion)
+    this.noteCurrent(at)
   }
 
   /** A frame the server sent, as text. */
@@ -136,6 +147,7 @@ export class FrameTracker {
       this.onAnswer(query.udfPath, query.bytes, query)
     }
     this.ackVersion = num(message.endVersion?.querySet ?? this.ackVersion)
+    this.noteCurrent(at)
   }
 
   /** The socket closed with `code` and `reason`, by the client itself when

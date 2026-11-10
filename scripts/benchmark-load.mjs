@@ -126,7 +126,9 @@
 // - tabs opens --tabs real tabs of Nora at once in one browser profile,
 //   tab i on view i modulo --views at its recorded address, and runs
 //   startup, changes, reconnect and idle over them as the replay runs them
-//   over its clients, so a tab's figures stand beside a replayed client's.
+//   over its clients, so a tab's figures stand beside a replayed client's,
+//   its time to current to the same moment, when its set became current
+//   (frames.mjs FrameTracker currentSince).
 //   It writes <dir>/out/tabs-<tabs>.json unless --output names a file.
 //
 // Where each figure comes from (report.mjs rungReport `sources`):
@@ -1248,20 +1250,21 @@ async function runWorker() {
   }
   /** Waits until every client is current, counting a client only once it
       connected more than `connects(client)` times, then answers each one's
-      time to current from `from` and from its socket's open. */
+      time to current, to the moment its set became current (FrameTracker
+      currentSince), from `from` and from its socket's open. */
   const allCurrent = async (from, connects = () => 0) => {
     const deadline = Date.now() + config.timeoutMs
     const results = new Map()
     while (results.size < clients.length && Date.now() < deadline) {
       for (const client of clients) {
         if (results.has(client.index) || !isCurrent(client, connects(client))) continue
-        const start = from
+        const since = client.tracker.currentSince
         results.set(client.index, {
           index: client.index,
           // the queries the client's newest set holds, sent again after a reconnect
           queries: client.tracker.queries.size,
-          ms: Date.now() - start,
-          from_open_ms: client.openedAt ? Date.now() - client.openedAt : null,
+          ms: since - from,
+          from_open_ms: client.openedAt ? since - client.openedAt : null,
           current: true,
           first_answers: client.tracker.firstAnswers(),
         })
@@ -1859,7 +1862,7 @@ async function loneReconnect(options, recorder, set) {
     const at = Date.now()
     client.drop()
     while (!isCurrent(client, connects) && Date.now() - at < options.timeoutMs) await sleep(10)
-    return isCurrent(client, connects) ? Date.now() - at : null
+    return isCurrent(client, connects) ? client.tracker.currentSince - at : null
   } finally {
     await client.close()
   }
@@ -2079,7 +2082,7 @@ async function hide(options, url, browser, signInPage) {
         reloaded: state.reloaded,
         visibility_after: state.visibility,
         settled: after.settled,
-        ms_to_current: after.ms,
+        ms_to_current: after.settled ? tracker.currentSince - at : null,
         dropped_on_hiding: dropped,
         resubscribed_view_reads: resubscribedViewReads,
         new_reads: newReads,
@@ -2208,7 +2211,11 @@ async function tabsPart(options) {
     return figures
   }
   /** Each tab's time to current from `from`, once it connected more than
-      `connects[i]` times, its queries and its time from its newest socket. */
+      `connects[i]` times, its queries and its time from its newest socket.
+      A real tab subscribes in waves, so a tab counts once it stayed
+      current and quiet for 300 ms, and its time is to the moment its set
+      became current (FrameTracker currentSince), as a replayed client's
+      is. */
   const allTabsCurrent = async (from, connects) => {
     const results = new Map()
     const deadline = from + options.timeoutMs
@@ -2217,14 +2224,13 @@ async function tabsPart(options) {
         if (results.has(tab.index) || !tab.tracker.current) continue
         if (tab.tracker.connects <= connects[tab.index]) continue
         if (Date.now() - (tab.tracker.lastFrameAt ?? from) < 300) continue
+        const since = tab.tracker.currentSince
         results.set(tab.index, {
           index: tab.index,
           view: tab.view,
           queries: tab.tracker.queries.size,
-          ms: (tab.tracker.lastFrameAt ?? Date.now()) - from,
-          from_socket_ms: tab.tracker.openedAt
-            ? (tab.tracker.lastFrameAt ?? Date.now()) - tab.tracker.openedAt
-            : null,
+          ms: since - from,
+          from_socket_ms: tab.tracker.openedAt ? since - tab.tracker.openedAt : null,
           current: true,
         })
       }
@@ -2344,7 +2350,7 @@ async function tabsPart(options) {
       bytes:
         "Each tab's received WebSocket frames from Playwright, pings included: an answer's bytes are its value's JSON length, a tab's bytes every frame's UTF-8 length.",
       time_to_current:
-        'From the phase start (startup) or the close (reconnect) to the last frame of the first moment the tab was current and quiet for 300 ms; from_socket_ms from the tab making its new backend socket.',
+        "From the phase start (startup) or the close (reconnect) to the moment the tab's newest query set became current, counted once it stayed current and quiet for 300 ms, the moment a replayed client's time is to; from_socket_ms from the tab making its new backend socket.",
       steal: '/proc/stat over the phase.',
     },
     phases,
