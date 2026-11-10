@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { LIMITS } from '../convex/lib/limits'
+import { getFunctionName } from 'convex/server'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ALERT_WINDOW_MS, LIMITS } from '../convex/lib/limits'
+import { createNotificationFeed } from '../src/lib/notificationFeed'
+import { startNotificationLeader } from '../src/lib/notificationLeader'
+import { leadAlerts } from './load/alerts.mjs'
 import {
   CHANGE_KINDS,
   COMMENT_RATE_MAX,
@@ -31,6 +35,7 @@ import {
   cpuShare,
   firstAnswerStats,
   functionStats,
+  idleShares,
   logEntry,
   mostAtOnce,
   overLine,
@@ -708,5 +713,168 @@ describe('the changes plan', () => {
     expect(() => commentTargets([{ id: 't1' }, { id: 't2' }, { id: 't3' }])).toThrow(
       'fewer than the 4 the comments need',
     )
+  })
+})
+
+describe("the replayed leader, the app's own alert client", () => {
+  const T0 = 1_800_000_000_000
+  const app = { createNotificationFeed, startNotificationLeader }
+
+  /* A stand-in ConvexClient: beats answer the server time `server.now`
+     every minute, claims grant what they offer, and every watch is kept
+     with its floor, so a test answers the feed and reads what the leader
+     subscribed. */
+  function standIn({ summarizeFirst = false } = {}) {
+    const server = { now: T0, connection: 1 }
+    let covered = !summarizeFirst
+    const calls = []
+    const watches = []
+    const convex = {
+      connectionState: () => ({ isWebSocketConnected: true }),
+      async mutation(fn, args) {
+        const name = getFunctionName(fn)
+        calls.push(name)
+        if (name === 'notifications:beat') return { now: server.now, every_ms: 60_000 }
+        if (name === 'notifications:claimSummary') {
+          covered = true
+          return { state: 'none' }
+        }
+        if (!covered) return { state: 'summarize_first' }
+        return { state: 'granted', keys: args.events.map((event) => event.key), limited: false }
+      },
+      onUpdate(fn, args, answer) {
+        const watch = { name: getFunctionName(fn), args, answer, stopped: false }
+        watches.push(watch)
+        if (watch.name === 'notifications:settings') answer({ delivery: 'recent' })
+        return () => {
+          watch.stopped = true
+        }
+      },
+    }
+    const feeds = () => watches.filter((watch) => watch.name === 'inbox:feed')
+    const floors = () => feeds().map((watch) => watch.args.after - T0)
+    const live = () => feeds().filter((watch) => !watch.stopped)
+    const stop = leadAlerts({ convex, connection: () => server.connection, app, name: 'test' })
+    return { server, calls, watches, floors, live, stop }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('watches the feed again at each beat while no event holds its floor, as a quiet tab does', async () => {
+    const run = standIn()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.calls).toEqual(['notifications:beat'])
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS])
+    // the baseline: an answer with no event, claimed with nothing offered
+    run.live()[0].answer({ events: [], through: T0 - ALERT_WINDOW_MS, more: false })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.calls).toEqual(['notifications:beat', 'notifications:claimAlerts'])
+    run.server.now = T0 + 60_000
+    await vi.advanceTimersByTimeAsync(60_000)
+    // the beat a minute later raised the floor, and the feed is watched again
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS, 60_000 - ALERT_WINDOW_MS])
+    expect(run.live()).toHaveLength(1)
+    run.stop()
+  })
+
+  it('keeps a floor that an event under ten minutes old holds through the next beat', async () => {
+    const run = standIn()
+    await vi.advanceTimersByTimeAsync(0)
+    const at = T0 - 120_000
+    run.live()[0].answer({ events: [{ key: 'm1', at, kind: 'change' }], through: at, more: false })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS, -120_000])
+    run.server.now = T0 + 60_000
+    await vi.advanceTimersByTimeAsync(60_000)
+    // the beat answered, but the floor stays at the event's time
+    expect(run.calls.filter((name) => name === 'notifications:beat')).toHaveLength(2)
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS, -120_000])
+    run.stop()
+  })
+
+  it("moves the floor to the beat's time when another session of the person claimed last", async () => {
+    // a new browser session of a person whose other session moved the
+    // checkpoint, as the closing review's tabs after the record part
+    const run = standIn({ summarizeFirst: true })
+    await vi.advanceTimersByTimeAsync(0)
+    run.live()[0].answer({ events: [], through: T0 - ALERT_WINDOW_MS, more: false })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.calls).toEqual([
+      'notifications:beat',
+      'notifications:claimAlerts',
+      'notifications:beat',
+      'notifications:claimSummary',
+      'notifications:claimAlerts',
+    ])
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS, 0])
+    // so for ten minutes no beat raises it, and the feed is watched no more
+    for (let minute = 1; minute < 10; minute++) {
+      run.server.now = T0 + minute * 60_000
+      await vi.advanceTimersByTimeAsync(60_000)
+    }
+    expect(run.floors()).toEqual([-ALERT_WINDOW_MS, 0])
+    run.server.now = T0 + 11 * 60_000
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(run.floors().at(-1)).toBe(11 * 60_000 - ALERT_WINDOW_MS)
+    run.stop()
+  })
+
+  it('runs the resume order after a reconnect: a beat, the summary, then the feed from that beat', async () => {
+    const run = standIn()
+    await vi.advanceTimersByTimeAsync(0)
+    run.live()[0].answer({ events: [], through: T0 - ALERT_WINDOW_MS, more: false })
+    await vi.advanceTimersByTimeAsync(0)
+    run.server.connection = 2
+    run.server.now = T0 + 10_000
+    vi.setSystemTime(T0 + 10_000)
+    run.calls.length = 0
+    // the first answer on the new connection
+    run.live()[0].answer({ events: [], through: T0 - ALERT_WINDOW_MS, more: false })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.calls).toEqual(['notifications:beat', 'notifications:claimSummary'])
+    expect(run.floors().at(-1)).toBe(10_000)
+    run.stop()
+    expect(run.live()).toHaveLength(0)
+  })
+})
+
+describe("the idle phase's shares", () => {
+  it("splits a leader's beats, claims and own reads from the views' answers", () => {
+    const idle = {
+      answers: {
+        'inbox:feed': { updates: 4, bytes: 200 },
+        'notifications:settings': { updates: 0, bytes: 0 },
+        'tasks:board': { updates: 10, bytes: 5000 },
+      },
+      client_calls: {
+        'notifications:beat': { calls: 4 },
+        'notifications:claimAlerts': { calls: 2 },
+      },
+    }
+    // two leaders of four sessions over two minutes
+    expect(idleShares(idle, { sessions: 4, leaders: 2, seconds: 120 })).toEqual({
+      leader: {
+        sessions: 2,
+        'notifications:beat': 1,
+        'notifications:claimAlerts': 0.5,
+        'notifications:claimSummary': 0,
+        answers: {
+          'inbox:feed': { answers: 1, bytes: 50 },
+          'notifications:settings': { answers: 0, bytes: 0 },
+        },
+      },
+      views: { sessions: 4, answers: 1.25, bytes: 625 },
+    })
+    // no leader: nothing is divided by zero
+    expect(idleShares(idle, { sessions: 4, leaders: 0, seconds: 60 }).leader).toMatchObject({
+      sessions: 0,
+      'notifications:beat': 0,
+    })
   })
 })

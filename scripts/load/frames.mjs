@@ -294,6 +294,14 @@ export function personQueries(set, person, { more = {}, ownOrg = false } = {}) {
     (src/lib/notificationLeader.ts): the Inbox feed and the delivery mode. */
 export const LEADER_READS = ['inbox:feed', 'notifications:settings']
 
+/** The calls only a leading tab makes: its beat, its claims and its
+    summaries (src/lib/notificationFeed.ts). */
+export const LEADER_CALLS = [
+  'notifications:beat',
+  'notifications:claimAlerts',
+  'notifications:claimSummary',
+]
+
 /** `queries` without the leader's reads, as a tab that does not lead holds
     them. */
 export const withoutLeaderReads = (queries) =>

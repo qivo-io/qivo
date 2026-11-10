@@ -3,6 +3,8 @@
 // per function and per client, and the output JSON's shape, kept here so a
 // test can check them without a backend.
 
+import { LEADER_CALLS, LEADER_READS } from './frames.mjs'
+
 /** The output's format name, which a reader checks. */
 export const REPORT_FORMAT = 'qivo-load-rung/1'
 
@@ -160,6 +162,40 @@ export function perSessionMinute(idle, sessions, seconds, own) {
       Object.entries(idle.client_calls).map(([name, done]) => [name, per(done.calls)]),
     ),
     backend_jobs_per_minute: background,
+  }
+}
+
+/** Idle phase `idle`'s answers and calls split into the leaders' share and
+    the views', per session per minute over `seconds`: the `leaders`
+    sessions' beats, claims, summaries and the answers and answer bytes of
+    their own reads, and the other answers and answer bytes over all
+    `sessions`. So a replayed session's idle compares with a real tab's part
+    by part, whether or not it leads. Bytes are the answers' values; the
+    frame bytes, pings included, are the phase's bytes_total. */
+export function idleShares(idle, { sessions, leaders, seconds }) {
+  const minutes = Math.max(seconds, 1e-9) / 60
+  const per = (value, count) => (count > 0 ? Math.round((value / count / minutes) * 100) / 100 : 0)
+  const answers = Object.entries(idle.answers ?? {})
+  const sum = (rows, field) => rows.reduce((all, [, entry]) => all + entry[field], 0)
+  const own = answers.filter(([name]) => LEADER_READS.includes(name))
+  const views = answers.filter(([name]) => !LEADER_READS.includes(name))
+  const calls = (name) => idle.client_calls?.[name]?.calls ?? 0
+  return {
+    leader: {
+      sessions: leaders,
+      ...Object.fromEntries(LEADER_CALLS.map((name) => [name, per(calls(name), leaders)])),
+      answers: Object.fromEntries(
+        own.map(([name, entry]) => [
+          name,
+          { answers: per(entry.updates, leaders), bytes: per(entry.bytes, leaders) },
+        ]),
+      ),
+    },
+    views: {
+      sessions,
+      answers: per(sum(views, 'updates'), sessions),
+      bytes: per(sum(views, 'bytes'), sessions),
+    },
   }
 }
 

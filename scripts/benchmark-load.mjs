@@ -89,12 +89,18 @@
 // the admin key acting as that identity (setAdminAuth with the login as
 // subject and the session as sessionId), so the session wrappers' reads
 // run as in the app (lib/functions.ts), but no JWT is validated or
-// refreshed. A client whose set holds the Inbox feed also leads: it beats
-// at the server's pace (notifications.beat, every_ms), subscribes the feed
-// from ten minutes before its beat, takes its first answer as the
-// baseline, claims each new event (claimAlerts, claimSummary first where
-// asked), and moves the feed's floor to each answer's `through`, as
-// src/lib/notificationFeed.ts does. A client makes none of a boot's one-off
+// refreshed. A client whose set holds the Inbox feed also leads its
+// profile's alerts, with the app's own alert client and leader
+// (src/lib/notificationFeed.ts and notificationLeader.ts, loaded through
+// Vite and wired as a tab wires them, load/alerts.mjs): it beats at the
+// server's pace, watches the feed, claims, raises the feed's floor at each
+// beat once no event under ten minutes old holds it, and runs the resume
+// order after a reconnect. So a leader watches the feed again at each
+// beat, about once a minute, once its floor is ten minutes old, in the app
+// as here; for ten minutes after an Inbox event, or after a summary, which
+// a session makes first when another session of its person claimed last,
+// the floor holds and the feed answers nothing. A client makes none of a
+// boot's one-off
 // writes (identity.claimMySeats, prefs.save), which the sets list under
 // `calls`. The people setup adds own no task and hold no Inbox item, so
 // their Inbox and My view answer less than Nora's. Its phases, each with
@@ -126,8 +132,9 @@
 //   set it subscribes again holds none of the reads it dropped on hiding
 //   and nothing it did not hold while hidden.
 // - idle: --idle-s seconds with no change; server work, bytes and calls
-//   per session per minute, the beats and claims included, and the
-//   answers per minute of each watched client (Nora's tabs).
+//   per session per minute, the beats and claims included, the leaders'
+//   share apart from the views' (report.mjs idleShares), and the answers
+//   per minute of each watched client (Nora's tabs).
 // - busy: the changes again beside --busy-loops processes that spin, each
 //   pinned to --busy-cpus with taskset when given, so the backend's CPUs
 //   are busy while the clients run on others.
@@ -166,6 +173,7 @@ import { fileURLToPath } from 'node:url'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { jsonToConvex } from 'convex/values'
+import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
 import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
 import {
   checkSet,
@@ -182,6 +190,7 @@ import {
   cpuShare,
   firstAnswerStats,
   functionStats,
+  idleShares,
   JS_LINE_MS,
   logEntry,
   mostAtOnce,
@@ -195,12 +204,8 @@ const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 const say = (text) => console.log(`${new Date().toISOString().slice(11, 19)} ${text}`)
 
-/** The floor of the Inbox feed a leader watches, before its last beat's
-    `now` (convex/lib/limits.ts ALERT_WINDOW_MS). */
-const ALERT_WINDOW_MS = 600_000
-/** The clamp the app puts on the server's beat pace (src/lib/notificationLeader.ts
-    NOTIFY_CLIENT's range), wide enough for the server's one minute. */
-const BEAT_MS = { least: 15_000, most: 6 * 3_600_000 }
+/** The checkout's root, which Vite loads the app's modules from. */
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 /** The slug of the organization the local seed makes. */
 const ORG_SLUG = 'northstar-labs'
 /** The everyday names of the teams setup adds, in turn. */
@@ -1005,8 +1010,9 @@ function readSets(options, planOrg = { k: 0 }) {
 
 /** One replayed client: a ConvexClient over a socket whose frames feed a
     tracker, acting as `person`, subscribed to `queries`, and leading its
-    alerts when `lead`. `onAnswer` hears each answer. */
-function replayClient({ url, adminKey, person, queries, lead, index, onAnswer }) {
+    alerts with the app's own alert client when `alerts` (appAlerts') is
+    given. `onAnswer` hears each answer. */
+function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer }) {
   const tracker = new FrameTracker({ onAnswer })
   const sockets = new Set()
   const Native = globalThis.WebSocket
@@ -1039,12 +1045,21 @@ function replayClient({ url, adminKey, person, queries, lead, index, onAnswer })
     logger: false,
   })
   convex.setAdminAuth(adminKey, identityOf(person))
-  const client = { tracker, convex, sockets, person, openedAt: null, leader: null }
-  for (const query of queries) {
-    if (lead && query.udfPath === 'inbox:feed') continue
+  const client = { tracker, convex, sockets, person, openedAt: null, alerts: 0 }
+  // a leader's own reads are the alert client's, which subscribes them itself
+  for (const query of alerts ? withoutLeaderReads(queries) : queries)
     convex.client.subscribe(query.udfPath, jsonToConvex(query.args))
-  }
-  if (lead) client.leader = startLeader(convex, index)
+  const stopAlerts = alerts
+    ? leadAlerts({
+        convex,
+        connection: () => tracker.connects,
+        app: alerts,
+        name: `qivo-notifications:load:${index}`,
+        onAlert: () => {
+          client.alerts++
+        },
+      })
+    : null
   /** Closes every open socket of the client, as a network drop does. */
   client.drop = () => {
     for (const socket of sockets) {
@@ -1053,102 +1068,10 @@ function replayClient({ url, adminKey, person, queries, lead, index, onAnswer })
     }
   }
   client.close = async () => {
-    client.leader?.stop()
+    stopAlerts?.()
     await convex.close()
   }
   return client
-}
-
-/** The delivery leader of one browser profile, as src/lib/notificationFeed.ts
-    and notificationLeader.ts run it while the page can notify: a beat at
-    the server's pace, the feed from ten minutes before the beat, its
-    first answer taken as the baseline, each new event claimed and the
-    feed's floor moved to each answer's `through`. */
-function startLeader(convex, index) {
-  const instance = `load-${index}`
-  let after = null
-  let unwatch = null
-  let baseline = true
-  let baselined = new Set()
-  let lastKeys = new Set()
-  let stopped = false
-  let timer = null
-  let running = Promise.resolve()
-  const beat = async () => {
-    const answer = await convex.mutation(ref('notifications:beat'), {
-      instance,
-      can_notify: true,
-      active: false,
-    })
-    if (after === null || after < answer.now - ALERT_WINDOW_MS) {
-      after = answer.now - ALERT_WINDOW_MS
-      watch()
-    }
-    return answer
-  }
-  const tick = async () => {
-    if (stopped) return
-    let every = 60_000
-    try {
-      every = (await beat()).every_ms
-    } catch {
-      // the next tick beats again, as a failed beat retries
-    }
-    if (!stopped) timer = setTimeout(tick, Math.min(BEAT_MS.most, Math.max(BEAT_MS.least, every)))
-  }
-  const summarize = () => convex.mutation(ref('notifications:claimSummary'), {})
-  const claim = async (events, through) => {
-    let answer = await convex.mutation(ref('notifications:claimAlerts'), { events, through })
-    if (answer.state === 'summarize_first') {
-      await summarize()
-      answer = await convex.mutation(ref('notifications:claimAlerts'), { events, through })
-    } else if (answer.state === 'not_registered') {
-      await beat()
-      answer = await convex.mutation(ref('notifications:claimAlerts'), { events, through })
-    }
-    if (answer.limited) await summarize()
-  }
-  const handle = async (feed) => {
-    if (baseline) {
-      await claim([], feed.through)
-      baseline = false
-      baselined = new Set(feed.events.map((event) => event.key))
-    } else {
-      if (feed.more) await summarize()
-      const offered = feed.events
-        .filter((event) => !lastKeys.has(event.key) && !baselined.has(event.key))
-        .reverse()
-        .slice(0, 50)
-        .map(({ key, at }) => ({ key, at }))
-      if (offered.length > 0) await claim(offered, feed.through)
-    }
-    lastKeys = new Set(feed.events.map((event) => event.key))
-    if (after !== null && feed.through > after) {
-      after = feed.through
-      watch()
-    }
-  }
-  const watch = () => {
-    unwatch?.()
-    const floor = after
-    unwatch = convex.onUpdate(
-      ref('inbox:feed'),
-      { after: floor },
-      (feed) => {
-        if (stopped || floor !== after || !feed || !Array.isArray(feed.events)) return
-        running = running.then(() => handle(feed)).catch(() => {})
-      },
-      () => {},
-    )
-  }
-  void tick()
-  return {
-    stop() {
-      stopped = true
-      if (timer) clearTimeout(timer)
-      unwatch?.()
-    },
-  }
 }
 
 /* ----------------------------------------------------------------- worker */
@@ -1158,6 +1081,8 @@ function startLeader(convex, index) {
     report, stop). */
 async function runWorker() {
   let config = null
+  // the app's alert client, which the clients that lead run
+  let alerts = null
   const clients = []
   const delay = monitorEventLoopDelay({ resolution: 10 })
   delay.enable()
@@ -1296,6 +1221,7 @@ async function runWorker() {
     try {
       if (message.type === 'init') {
         config = message.config
+        alerts = await loadAppAlerts(ROOT)
         process.send({ type: 'ready' })
       } else if (message.type === 'start') {
         mark('startup')
@@ -1304,6 +1230,7 @@ async function runWorker() {
           const client = replayClient({
             ...config,
             ...spec,
+            alerts: spec.lead ? alerts : null,
             onAnswer: onAnswer(spec.index, spec.watch ?? null),
           })
           client.index = spec.index
@@ -1714,6 +1641,11 @@ async function replay(options) {
     const own = new Set(orgSets.flat().flatMap((set) => set.queries.map((query) => query.udfPath)))
     for (const name of Object.keys(idle.client_calls)) own.add(name)
     idle.per_session_minute = perSessionMinute(idle, options.clients, idle.seconds, own)
+    idle.shares = idleShares(idle, {
+      sessions: options.clients,
+      leaders: specs.filter((spec) => spec.lead).length,
+      seconds: idle.seconds,
+    })
     idle.watched_per_minute = watchedPerMinute(idle.watched, idle.seconds)
   }
   const output = rungReport({
@@ -1925,7 +1857,7 @@ async function matchSets(options, plan, sets) {
       adminKey: options.adminKey,
       person: recorder,
       queries: set.queries,
-      lead: false,
+      alerts: null,
       index: 900 + views.length,
       onAnswer: () => {},
     })
