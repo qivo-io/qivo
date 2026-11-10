@@ -435,7 +435,32 @@ async function setup(options) {
     keyOf: (i) => `p${i + 1}`,
   })
   held += grown.created
-  const people = [{ ...nora }, ...made, ...grown.people]
+  // the seed's own people with a login (marketing-demo.mjs PEOPLE, name@demo.qivo.io)
+  // get a planted session too, last, so an organization of --people
+  // profiles has a session for every person in it, its agent aside
+  const seeded = []
+  const known = new Set(made.map((person) => person.key))
+  for (const key of ['leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben']) {
+    if (known.has(key)) continue
+    const login = await component(admin, 'adapter:findOne', {
+      model: 'user',
+      where: [{ field: 'email', value: `${key}@demo.qivo.io` }],
+    })
+    if (!login) continue
+    const person = {
+      key,
+      name: login.name,
+      auth_user_id: login._id,
+      session_id: await sessionOf(admin, login._id),
+    }
+    const own = findSeat(
+      await httpClient(options, person).query(ref('workspace:root'), {}),
+      ORG_SLUG,
+    )
+    if (!own) continue
+    seeded.push({ ...person, profile_id: own.profile_id, org_id: own.org_id })
+  }
+  const people = [{ ...nora }, ...made, ...grown.people, ...seeded]
   mkdirSync(options.dir, { recursive: true })
   const plan = { org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }
   const orgs = [{ k: 0, org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }]
