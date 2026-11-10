@@ -2344,10 +2344,10 @@ more than 100 profile pictures, as it already does for attachments.
 and `appearance.createUpload` require `size`, so the backend refuses an
 upload that declares no size, and no upload ticket or private-demo
 reservation takes up to the organization's or the kind's limit any more. The
-backend no longer reads or writes `attachment_uploads.up_to` or
-`organizations.last_export_at`, which stay in the schema unread, so the
-release changes no stored row. It drops the indexes `profiles.by_org_id` and
-`sync_stamps.by_org_profile`, which no app reads, and a backend rollback
+backend no longer reads or writes `attachment_uploads.up_to`, which stays in
+the schema unread, as `organizations.last_export_at` has since v0.1.162, so
+the release changes no stored row. It drops the indexes `profiles.by_org_id`
+and `sync_stamps.by_org_profile`, which no app reads, and a backend rollback
 builds them again at its deploy. The internal `internal/adminAccessReport`
 is gone, its runs recorded. Two earlier sentences no longer hold, and their
 paragraphs stay as their releases' records. The v0.1.135 paragraph says
