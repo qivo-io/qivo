@@ -920,11 +920,9 @@ async function finishStorageSample(
  * everyday periods. A page it schedules reads its rows and writes nothing
  * besides the scheduled calls, and a page it stops, its heaviest shape,
  * reads each row again for its patch and writes the rows and an audit row
- * each. A one-off convex-test measurement of this build on 2026-11-07, of
- * a full page of 25 periods of 1,000 people each, read 25 documents,
- * about 960 KB, when it scheduled them, and 50 documents, about 1.9 MB,
- * when it stopped them, writing the 25 rows and 25 audit rows, about
- * 970 KB. */
+ * each. A one-off convex-test run of 7 November 2026 found a full page of
+ * periods of 1,000 people each well inside Convex's limits, both when it
+ * schedules them and when it stops them. */
 export const finalizeDue = internalMutation({
   args: { until: v.string(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { until, cursor }): Promise<null> => {

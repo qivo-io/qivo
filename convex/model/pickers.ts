@@ -101,13 +101,12 @@ import {
  * for the walk and NAMED_RESERVE it stays under Convex's 4,096 index
  * ranges, 32,000 documents and 16 MiB. Tests lower it.
  *
- * The largest rules at the design size read about 1,000 documents and
- * 0.2 MiB, the members of a team of 995 sharing the task's sub-project, or
- * about 220 index ranges, a top-level project of 30 live and 40 archived
- * sub-projects whose navigation the rule reads, measured with convex-test
- * on 6 November 2026 (tests/pickers.test.ts "inside Convex's limits").
- * 1,000 ranges, 8,000 documents and 4 MiB hold each of those four times
- * over or more. Past the design size a rule that reads more fails closed
+ * The largest rules at the design size read the members of a team of 995
+ * sharing the task's sub-project, or a top-level project of 30 live and 40
+ * archived sub-projects whose navigation the rule reads
+ * (tests/pickers.test.ts "the pickers inside Convex's limits" logs both),
+ * and 1,000 ranges, 8,000 documents and 4 MiB hold each of those several
+ * times over. Past the design size a rule that reads more fails closed
  * as `over_budget` rather than as Convex's own error.
  */
 export const PICKERS: { rule: ReadCeiling } = {
@@ -386,21 +385,15 @@ async function peopleBatch(
  * Its reads are the gate's, the rule's (a few index ranges for the task's
  * project and its top-level project, for the project of a task above and,
  * when that is a top-level project, for each of its sub-projects, and each
- * sharing team's members) and one document a person walked. Measured with
- * convex-test at the design size on 6 November 2026
- * (tests/pickers.test.ts "inside Convex's limits"), one figure at a time:
- * - among 1,000 people, 995 of them in a team sharing the task's
- *   sub-project at User: a first batch 15 index ranges, 1,033 documents
- *   and 0.19 MiB, and a search that matches nobody, which walks every
- *   admin, user and guest, 15 ranges, 2,006 documents and 0.57 MiB;
- * - among 1,000 people of whom 3 hold Edit by grants, the first batch
- *   walks to the end to find them: 13 ranges, 1,008 documents, 0.39 MiB;
- * - a sub-project shared with five teams under a top-level project shared
- *   with five others: 33 ranges, 235 documents, 0.05 MiB;
- * - a reviewer of a subtask whose parent sits on a top-level project of
- *   30 live and 40 archived sub-projects: 230 ranges, 161 documents,
- *   0.05 MiB.
- * The app reads it once a batch and never subscribes.
+ * sharing team's members) and one document a person walked.
+ * tests/pickers.test.ts ("the pickers inside Convex's limits") logs what a
+ * batch reads at the design size, one figure at a time, among 1,000 people,
+ * 995 of them in a team sharing the task's sub-project, or 3 holding Edit
+ * by grants, where the first batch walks to the end to find them, for a
+ * sub-project shared with five teams under a top-level project shared with
+ * five others, and for a reviewer of a subtask whose parent sits on a
+ * top-level project of 30 live and 40 archived sub-projects. The app reads
+ * it once a batch and never subscribes.
  */
 export async function taskOwnersOf(
   ctx: QueryCtx,
@@ -436,17 +429,14 @@ export async function taskOwnersOf(
  * (profileIndex), since an organization viewer who sees the task receives
  * mentions; agents and switched-off people are read and left out.
  *
- * Measured with convex-test at the design size on 6 November 2026
- * (tests/pickers.test.ts "inside Convex's limits"), one figure at a time:
- * - a search that matches nobody among 1,000 people, which walks every
- *   profile: 13 index ranges, 2,007 documents and 0.57 MiB;
- * - a sub-project shared with five teams under a top-level project shared
- *   with five others: 31 ranges, 234 documents, 0.05 MiB;
- * - a task stored on a top-level project of 30 live and 40 archived
- *   sub-projects, whose navigation the rule reads: 219 ranges, 153
- *   documents, 0.05 MiB, and the gate alone, for a caller who reaches
- *   that project only through its last sub-project and is refused, 145
- *   ranges and 73 documents.
+ * tests/pickers.test.ts ("the pickers inside Convex's limits") logs what a
+ * batch reads at the design size, one figure at a time: a search that
+ * matches nobody among 1,000 people, which walks every profile, a
+ * sub-project shared with five teams under a top-level project shared with
+ * five others, and a task stored on a top-level project of 30 live and 40
+ * archived sub-projects, whose navigation the rule reads, with the gate
+ * alone for a caller who reaches that project only through its last
+ * sub-project and is refused.
  * The app reads it once a batch while the window is open and never
  * subscribes.
  */
@@ -588,15 +578,13 @@ const MENTIONS_CURSOR =
  * to every seat before it was removed, kept as it was. With `through` a batch holds every match up to it and
  * stops past four batches (lib/namedPages.ts listBatch); the app reads
  * without it, once a batch, and never subscribes. A kept row reads
- * nothing more, so a batch costs one document a person walked. Measured
- * with convex-test among 1,000 people on 6 November 2026
- * (tests/mentionSuggestions.test.ts "inside Convex's limits"), without
- * the login's own reads: a first batch without a search, 2 index ranges,
- * 10 documents and under 0.01 MiB; a search that matches nobody, and an
- * email fragment only the last person in name order holds, each walks
- * every profile, 2 ranges, 1,001 documents and 0.42 MiB; a Load more
- * batch near the end, 3 ranges, 199 documents and 0.08 MiB. NAMED_READ's
- * 8,000 documents hold the longest walk eight times over.
+ * nothing more, so a batch costs one document a person walked.
+ * tests/mentionSuggestions.test.ts ("the suggestions inside Convex's
+ * limits") logs what a batch reads among 1,000 people, without the login's
+ * own reads: a first batch without a search, a search that matches nobody
+ * and an email fragment only the last person in name order holds, each of
+ * which walks every profile, and a Load more batch near the end.
+ * NAMED_READ's documents hold the longest walk several times over.
  */
 export async function mentionsOf(
   ctx: QueryCtx,

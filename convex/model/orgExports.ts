@@ -35,12 +35,11 @@ export const PART_RAW_BYTES = 4 * 1024 * 1024
 
 /** The most bytes one archive may hold on the public demo, where any
  * visitor is an admin and up to 500 demos run at once. A seeded demo's
- * archive measured 65,624 bytes (2026-10-29, convex/tests/demoCleanup.test.ts;
- * 65,731 for the Northstar seed on a local backend), so this leaves a
- * visitor about 30 times that for their own work. With one collecting job
- * and one ready archive per organization, a demo holds at most twice this
- * in export parts, which count against no upload budget. The number is
- * lib/limits.ts LIMITS.demoExportSize. */
+ * archive (convex/tests/demoCleanup.test.ts) is a small part of it, so this
+ * leaves a visitor about 30 times that for their own work. With one
+ * collecting job and one ready archive per organization, a demo holds at
+ * most twice this in export parts, which count against no upload budget.
+ * The number is lib/limits.ts LIMITS.demoExportSize. */
 export const DEMO_ARCHIVE_BYTES = LIMITS.demoExportSize.max * MIB
 
 /** The job's limits, a mutable object so tests can lower them

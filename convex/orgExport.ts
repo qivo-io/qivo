@@ -491,11 +491,10 @@ async function deliverableParts(
  * file, CRC and sizes. Null when the link's admin may not download it now,
  * and `missing` when the archive is damaged, which failDelivery then ends.
  * It reads what the finish read, a handful of ranges and one more a data
- * part for its file's lookup. At EXPORT_LIMITS.parts data parts that is
- * 4,007 ranges, 8,007 documents and 1.742 MiB, answering 477 KiB, under
- * Convex's 4,096 ranges (measured with the cap's parts planted, 6 November
- * 2026; convex/tests/orgExportDelivery.test.ts checks the growth a part at
- * a lowered cap). deliveryOf runs it for the route. */
+ * part for its file's lookup. At EXPORT_LIMITS.parts data parts that stays
+ * just under Convex's 4,096 ranges, as a run with the cap's parts planted
+ * found on 6 November 2026; convex/tests/orgExportDelivery.test.ts checks
+ * the growth a part at a lowered cap. deliveryOf runs it for the route. */
 export async function readDelivery(
   ctx: QueryCtx,
   { export_id, minter, exp }: { export_id: string; minter: string; exp: number },

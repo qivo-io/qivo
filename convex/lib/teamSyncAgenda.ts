@@ -106,50 +106,18 @@ import {
  * asks and Done tasks together, each once, lib/limits.ts TEAM_SYNC_TASKS;
  * tests lower it here alone.
  *
- * Measured under convex-test's transaction limits with rows as the app
- * writes them, in ordinary text, data from before the rule of one level, a
- * staff reader in 3 teams and 10 owners holding the scope's tasks unless a
- * case says otherwise (tests/teamSyncAgenda.test.ts, real limits), in
- * ranges, documents and MiB, on 5 November 2026, each case one figure at
- * its design size, or the figures one read takes together at their sum:
- *
- * - A project of 800 open and 200 Done tasks not yet archived, its two
- *   figures at their sum as the read takes both, over 3 sub-projects that
- *   track delay, one in ten open tasks a group and two in ten subtasks, one
- *   in ten in Backlog, every Done task since its walker's floor, at the
- *   everyday link share (5 percent of the open tasks blocked, half by tasks
- *   of 2 everyday projects elsewhere): 2,154, 2,421 and 1.53, 650 rows, 200
- *   Done tasks, 81 parents and every walker's week.
- * - A project of 30 live sub-projects with 20 open tasks each beside its 40
- *   archived ones, which its selection reads together: 1,645, 1,538 and
- *   0.98.
- * - A sub-project of 300 open and 150 Done tasks beside two of 30: 900, 957
- *   and 0.60 for the sub-project, 1,016, 1,031 and 0.65 for its project.
- * - An everyday team, 20 sub-projects of 30 open tasks, read by a member in
- *   3 teams: 1,609, 1,612 and 0.99. The same for a member in 5 teams.
- * - A team that shares 50 live and 150 archived projects, the archived
- *   shares read first, over_ceiling from the counts in 1,352, 1,992 and
- *   0.99, and while the counts are not whole from the read in 1,759, 2,628
- *   and 1.42.
- * - All projects over 200 live top-level projects with 500 live and 1,000
- *   archived sub-projects, the organization's whole figures, for a member
- *   in 3 teams who sees 54 sub-projects across the names, over_ceiling
- *   from the counts in 1,146, 1,688 and 0.95, and while counting from the
- *   read in 1,256, 1,874 and 1.10 over 1,440 open tasks in theirs. An
- *   organization admin in the same teams reads the same, two ranges and
- *   one document more (7 November 2026, after the admin access split).
- * - All projects for an organization admin who reads 200 live
- *   sub-projects through User grants on their 67 top-level projects, of
- *   70, over_ceiling from the counts in 1,246, 1,584 and 0.87, and while
- *   counting from the read in 1,681, 1,933 and 1.08 over 1,410 open tasks
- *   in the first 47 sub-projects by name (7 November 2026).
- * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
- *   1,026, 375 and 0.19, every walker's week.
- * - An everyday team whose 600 rows 200 of its members own, of a roster of
- *   1,000: 3,341, 1,743 and 0.91, the walkers' profiles, memberships and
- *   stamps read in steps (lib/viewReads.ts byIdSteps); 142 of the 200
- *   weeks, as the loads of the last owners in owner id order pass the
- *   verdicts' room, which the agenda's own ranges bound there.
+ * tests/teamSyncAgenda.test.ts ("real limits") logs what each case reads
+ * under convex-test's transaction limits with rows as the app writes them,
+ * in ordinary text and data from before the rule of one level, a staff
+ * reader in 3 teams and 10 owners holding the scope's tasks unless a case
+ * says otherwise, each case one figure at its design size, or the figures
+ * one read takes together at their sum, such as a project's open and Done
+ * tasks. An organization admin in the same teams reads about what the
+ * member reads. In an everyday team whose rows 200 of its members own, of a
+ * roster of 1,000, the walkers' profiles, memberships and stamps are read
+ * in steps (lib/viewReads.ts byIdSteps), and the loads of the last owners
+ * in owner id order pass the verdicts' room, which the agenda's own ranges
+ * bound there, so their weeks answer unavailable.
  *
  * Each task costs about one range for its group check beside its read, a
  * group's parent one more for its facts, each row one for its links and a
@@ -160,21 +128,21 @@ import {
  * in owner id order.
  *
  * The loads' measured size is 3,000 open tasks held by the scope's 10
- * owners across the organization, at which every walker's week is given
- * (2,030 ranges, 3,259 documents and 1.98 MiB). By the owner's rule of 1
- * November 2026 for figures that follow workloads, a walker's week and a
- * row's verdict that needs a load may answer unavailable past it, inside
- * the design size. It is measured for an everyday project of 3 sub-projects
- * of 30 open tasks whose 10 owners hold the organization's open tasks, half
- * of them scheduled, in sub-projects of 30, three to a project (the
- * on-demand cases, QIVO_AGENDA_ORG_OPEN=1). From 3,500 the owners last in
- * owner id order pass the verdicts' room of OWNER_LOADS.call, 2,000 ranges,
- * so their weeks and the verdicts that need them answer unavailable
- * (`loads`, `unknown`): one owner at 3,500, about half at 5,000, in 2,227
- * ranges. By 6,500 each owner's scheduled work is in more than the 200 live
- * projects the owner reader reads for one owner (OWNER_LOADS.projects), and
- * every week and every such verdict answers unavailable, in 445 ranges.
- * Inside the measured size the everyday team reads every walker's load.
+ * owners across the organization, at which every walker's week is given. By
+ * the owner's rule of 1 November 2026 for figures that follow workloads, a
+ * walker's week and a row's verdict that needs a load may answer
+ * unavailable past it, inside the design size. It is measured for an
+ * everyday project of 3 sub-projects of 30 open tasks whose 10 owners hold
+ * the organization's open tasks, half of them scheduled, in sub-projects of
+ * 30, three to a project (the on-demand cases, QIVO_AGENDA_ORG_OPEN=1,
+ * which log what each size reads). From 3,500 the owners last in owner id
+ * order pass the verdicts' room of OWNER_LOADS.call, 2,000 ranges, so their
+ * weeks and the verdicts that need them answer unavailable (`loads`,
+ * `unknown`), one owner at 3,500 and about half at 5,000. By 6,500 each
+ * owner's scheduled work is in more than the 200 live projects the owner
+ * reader reads for one owner (OWNER_LOADS.projects), and every week and
+ * every such verdict answers unavailable. Inside the measured size the
+ * everyday team reads every walker's load.
  *
  * The Done tasks the reading floor loads beyond the page's exact reading
  * point count toward the ceiling, so a meeting whose certain tasks fit and

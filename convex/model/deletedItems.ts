@@ -2935,8 +2935,8 @@ async function writeTask(
  * parent outside it once (outsideParent), reading nothing back after a
  * write. It reads none of the item's deleted_tasks rows, which hold each
  * task's searchable text, so it reads about what a reveal read before they
- * held it, which a timing on a local backend on 5 November 2026 measured
- * at 11.96 MiB for a task with LIMITS.subtasks.max subtasks whose
+ * held it, which a timing on a local backend on 5 November 2026 found
+ * inside Convex's limits for a task with LIMITS.subtasks.max subtasks whose
  * descriptions are at the cap in a three-byte script. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {

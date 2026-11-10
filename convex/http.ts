@@ -527,14 +527,14 @@ type Delivery = {
  * stop the reads, record nothing and release the lease.
  *
  * The reader is the Convex runtime, not the client. On a local backend
- * (precompiled-2026-10-22, 6 November 2026) it pulled an 11 MB body as fast
- * as storage gave it, whatever the client took: a download curl stopped
- * after 18 KB was recorded within a second of its start, its lease ended
- * then, and a file erased three seconds into a download no longer stopped
- * it. So the record says that the backend read the whole archive into the
- * response, not that the client received it, and it leaves
- * organizations.last_export_confirmed_at, which the deletion reminder reads,
- * alone.
+ * (precompiled-2026-10-22, 6 November 2026) it pulled a body of several
+ * megabytes as fast as storage gave it, whatever the client took: a
+ * download curl stopped early was recorded within a second of its start,
+ * its lease ended then, and a file erased a few seconds into a download no
+ * longer stopped it. So the record says that the backend read the whole
+ * archive into the response, not that the client received it, and it leaves
+ * organizations.last_export_confirmed_at, which the deletion reminder
+ * reads, alone.
  * The app records a saved download itself once the desktop app or the
  * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's
