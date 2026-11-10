@@ -1,9 +1,12 @@
+import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALERT_WINDOW_MS, LIMITS } from '../convex/lib/limits'
 import { createNotificationFeed } from '../src/lib/notificationFeed'
 import { startNotificationLeader } from '../src/lib/notificationLeader'
 import { leadAlerts } from './load/alerts.mjs'
+import { busyLoops } from './load/busy.mjs'
 import {
   CHANGE_KINDS,
   COMMENT_RATE_MAX,
@@ -76,7 +79,8 @@ import {
    which client replays what and the check of other organizations' ids,
    the changes' comments, the replayed leader's
    wiring of the app's alert client, the per-function and per-phase
-   figures and the output's shape. */
+   figures and the output's shape, and the busy phase's loops, the one
+   part here that starts processes. */
 
 const KEY = { QIVO_LOCAL_ADMIN_KEY: 'local-admin-key' }
 
@@ -1685,5 +1689,67 @@ describe("a phase's figures", () => {
     expect(changes[0].resent_per_tab.map((tab) => tab.bytes)).toEqual([900, 0])
     expect(resent.bytes_per_tab_per_change.rename[0]).toMatchObject({ count: 2, max: 900 })
     expect(resent.bytes_per_view_per_change.rename.board).toMatchObject({ count: 4, max: 900 })
+  })
+})
+
+describe("the busy phase's loops", () => {
+  /** Whether process `pid` still runs; a zombie, which a sandbox's init
+      may never reap, does not. */
+  const runs = (pid) => {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return false
+    }
+    try {
+      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, 'utf8'))
+    } catch {
+      return true
+    }
+  }
+
+  it('fails where its loops cannot start on the CPUs given, and stops quietly when asked', async () => {
+    const refused = busyLoops(2, '4095')
+    try {
+      await vi.waitFor(() => expect(() => refused.check()).toThrow(/busy loop/), { timeout: 3000 })
+    } finally {
+      refused.stop()
+    }
+    const spinning = busyLoops(1, null)
+    try {
+      await new Promise((done) => setTimeout(done, 300))
+      expect(() => spinning.check()).not.toThrow()
+      expect(runs(spinning.pids[0])).toBe(true)
+    } finally {
+      spinning.stop()
+    }
+    await vi.waitFor(() => expect(runs(spinning.pids[0])).toBe(false), { timeout: 3000 })
+    expect(() => spinning.check()).not.toThrow()
+  })
+
+  it('leaves no loop spinning when its coordinator is killed by a signal', async () => {
+    const busy = new URL('./load/busy.mjs', import.meta.url).href
+    const coordinator = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { busyLoops } from ${JSON.stringify(busy)}; console.log(busyLoops(1, null).pids[0]); setInterval(() => {}, 1000)`,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    )
+    const pid = Number(
+      await new Promise((done) => coordinator.stdout.once('data', (chunk) => done(String(chunk)))),
+    )
+    try {
+      expect(runs(pid)).toBe(true)
+      coordinator.kill('SIGTERM')
+      await vi.waitFor(() => expect(runs(pid)).toBe(false), { timeout: 3000 })
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {}
+      coordinator.kill('SIGKILL')
+    }
   })
 })

@@ -18,7 +18,8 @@
 // plan.mjs the organization setup grows and which client replays what,
 // frames.mjs the Convex sync protocol and the recorded sets, changes.mjs the
 // changes phase's plan, alerts.mjs the app's alert client wired for a
-// replayed leader, and report.mjs the figures.
+// replayed leader, busy.mjs the busy phase's spinning processes, and
+// report.mjs the figures.
 //
 // Only a disposable local backend. --url and --site-url must be loopback
 // origins, the run refuses a CONVEX_DEPLOY_KEY in its environment, and it
@@ -130,7 +131,10 @@
 //     holds none of the reads it dropped on hiding and nothing new.
 //   - idle: --idle-s seconds with no change.
 //   - busy: the changes again beside --busy-loops spinning processes,
-//     pinned to --busy-cpus, the backend's, with taskset.
+//     pinned to --busy-cpus, the backend's, with taskset. A loop that
+//     cannot start, such as on CPUs the machine does not have, or stops
+//     before the phase ends fails the phase, and each loop exits once the
+//     coordinator is gone, however it ended (load/busy.mjs).
 //   A phase that fails, such as on a saturated backend, records why and
 //   the run goes on. The rung goes to --output, else
 //   <dir>/out/rung-<clients>.json.
@@ -192,7 +196,7 @@
 // nothing of hosted Convex's limit (test_bed_saturated). Pin the backend
 // to its own CPUs and the clients to the others (taskset), and start the
 // sandbox without snapshots, whose captures slow the backend.
-import { fork, spawn } from 'node:child_process'
+import { fork } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -202,6 +206,7 @@ import { ConvexClient, ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { jsonToConvex } from 'convex/values'
 import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
+import { busyLoops } from './load/busy.mjs'
 import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
 import {
   checkSet,
@@ -1524,22 +1529,6 @@ function cpuNow() {
 
 /* ----------------------------------------------------------------- replay */
 
-/** The busy loops of the busy phase: `count` processes that spin, each
-    pinned to `cpus` (taskset) when given. Answers a stop. */
-function busyLoops(count, cpus) {
-  const loops = Array.from({ length: count }, () =>
-    cpus
-      ? spawn('taskset', ['-c', cpus, process.execPath, '-e', 'for(;;){}'], { stdio: 'ignore' })
-      : spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
-  )
-  const stop = () => {
-    for (const loop of loops) loop.kill('SIGKILL')
-  }
-  // a run that ends early takes its loops with it
-  process.once('exit', stop)
-  return { pids: loops.map((loop) => loop.pid), stop }
-}
-
 /** The replay part: the phases of `options.phases` against the recorded
     sets, written as one rung. */
 async function replay(options) {
@@ -1696,11 +1685,15 @@ async function replay(options) {
         await timed('busy', async () => {
           const loops = busyLoops(options.busyLoops, options.busyCpus)
           try {
-            // the loops take their CPUs before the first change
+            // the loops take their CPUs before the first change, and a phase
+            // whose loops could not start or stopped early is no busy timing
             await sleep(3000)
+            loops.check()
+            const figures = await changes()
+            loops.check()
             return {
               busy_loops: { count: options.busyLoops, cpus: options.busyCpus, pids: loops.pids },
-              ...(await changes()),
+              ...figures,
             }
           } finally {
             loops.stop()
