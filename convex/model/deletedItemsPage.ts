@@ -1543,10 +1543,12 @@ class Stop extends Error {}
  * expire in 30 days, but a stuck item never does, so no date stands in for
  * a look: an admin's page asks the organization once whether it holds such
  * a row (by_org_assignee with neither field), and anyone else's always says
- * so, as the look also sees rows hidden from them. This probe and `legacy`
- * go once the closing review's read-only count
- * (internal/olderDeletedTasks.ts count) finds no such row on any
- * deployment.
+ * so, as the look also sees rows hidden from them. This probe, `legacy` and
+ * the read-only count (internal/olderDeletedTasks.ts count) go together
+ * once a run of the count finds no such row on any deployment, the demo
+ * included, after the last ready item's purge_after has passed
+ * (qivo-internal later work, "The limits plan's open work at its
+ * retirement").
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
   if (!seat.admin) return true

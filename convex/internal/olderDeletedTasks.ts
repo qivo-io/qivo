@@ -4,9 +4,11 @@
  * assignee_id nor deleted_at, so the page finds its task by number alone
  * and says `legacy` on a search or Assigned to page while one may exist.
  * Items expire 30 days after their delete, but a stuck item never does, so
- * only a look tells when none is left. It exists for the closing review's
- * one run per deployment, and goes with olderRows and `legacy` once that
- * run finds no such row anywhere.
+ * only a look tells when none is left. The count, olderRows and `legacy` go
+ * together once a run of the count finds no such row on any deployment, the
+ * demo included, after the last ready item's purge_after has passed
+ * (qivo-internal later work, "The limits plan's open work at its
+ * retirement").
  *
  * `count` reads one page of organizations (`page_size`, at most
  * PAGE.orgs) and, for each, the rows of deleted_tasks by_org_assignee with

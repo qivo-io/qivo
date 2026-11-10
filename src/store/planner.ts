@@ -10736,7 +10736,9 @@ export const PLANNER = {
       one a store. */
   inlineImages,
   /** What the file URL mints, the pictures and the inline images hold now,
-      for the benchmark page's measurement and the closing review. */
+      as counts and byte totals only, never a URL, a token or a person, for
+      the benchmark page's measurement and the device checks. It stays in
+      production builds, because the device checks read it there. */
   fileStats: () => ({
     mints: {
       running: mintQueue.running(),
