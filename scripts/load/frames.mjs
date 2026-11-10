@@ -261,15 +261,34 @@ export function swapIds(value, ids) {
 
 /** Recorded set `set`'s queries with `person`'s ids in place of the
     recorded person's: its profile, its login, and its organization when
-    `person` names another. */
-export function personQueries(set, person) {
+    `person` names another, and each id of `more` (recorded id to the
+    person's, such as a mirrored organization's projects and teams).
+    With `ownOrg`, a query whose `org_id` names an organization other than
+    the recorded one is left out, since it is the recording login's seat
+    elsewhere, which a person with one seat does not hold. */
+export function personQueries(set, person, { more = {}, ownOrg = false } = {}) {
   const ids = {
+    ...more,
     [set.person.profile_id]: person.profile_id,
     [set.person.auth_user_id]: person.auth_user_id,
     [set.person.org_id]: person.org_id ?? set.person.org_id,
   }
-  return set.queries.map((query) => ({ ...query, args: swapIds(query.args, ids) }))
+  const kept = ownOrg
+    ? set.queries.filter(
+        (query) => typeof query.args.org_id !== 'string' || query.args.org_id === set.person.org_id,
+      )
+    : set.queries
+  return kept.map((query) => ({ ...query, args: swapIds(query.args, ids) }))
 }
+
+/** The reads only a tab that leads its profile's desktop alerts holds
+    (src/lib/notificationLeader.ts): the Inbox feed and the delivery mode. */
+export const LEADER_READS = ['inbox:feed', 'notifications:settings']
+
+/** `queries` without the leader's reads, as a tab that does not lead holds
+    them. */
+export const withoutLeaderReads = (queries) =>
+  queries.filter((query) => !LEADER_READS.includes(query.udfPath))
 
 /** The arguments a client derives from its clock rather than from what it
     shows, by function: the Inbox feed's floor, ten minutes before the

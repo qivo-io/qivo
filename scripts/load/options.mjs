@@ -10,10 +10,18 @@ export const PARTS = ['setup', 'record', 'replay']
     recorded sets and the output use. */
 export const VIEWS = ['board', 'overview', 'roadmap', 'sync', 'inbox', 'mine']
 
-/** The replay part's phases, in the order it runs them. `match` checks the
-    replay against the recorded tabs before any load, and each later phase
-    is timed on its own. */
-export const PHASES = ['match', 'startup', 'changes', 'reconnect', 'idle']
+/** The replay part's phases. `match` checks the replay against the
+    recorded tabs before any load and `startup` starts the clients, so
+    those two always run first; the others run in the order --phases names
+    them, each timed on its own. `busy` is the changes again beside
+    --busy-loops busy loops (pinned to --busy-cpus when given). */
+export const PHASES = ['match', 'startup', 'changes', 'reconnect', 'idle', 'busy']
+
+/** The phases a replay runs when --phases names none, in this order. */
+export const DEFAULT_PHASES = ['match', 'startup', 'changes', 'reconnect', 'idle']
+
+/** A CPU list as taskset takes it, such as 0-7 or 0,2,4-6. */
+const CPU_LIST = /^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$/
 
 /** The browsers the record part drives, by their Playwright names. */
 export const BROWSERS = ['chromium', 'firefox', 'webkit']
@@ -97,6 +105,11 @@ export function loadOptions(argv, env) {
   const processes = whole('processes', option('processes', '2'))
   if (processes > clients)
     throw new OptionsError(`--processes ${processes} is more than --clients ${clients}`)
+  const orgs = whole('orgs', option('orgs', '1'))
+  if (orgs > clients) throw new OptionsError(`--orgs ${orgs} is more than --clients ${clients}`)
+  const busyCpus = option('busy-cpus', null)
+  if (busyCpus !== null && !CPU_LIST.test(busyCpus ?? ''))
+    throw new OptionsError(`--busy-cpus takes a CPU list such as 0-7${given(busyCpus)}`)
   return {
     parts: part === 'all' ? PARTS : [part],
     url: loopback('url', option('url', 'http://127.0.0.1:3236')),
@@ -106,11 +119,16 @@ export function loadOptions(argv, env) {
     output: option('output', null),
     browser,
     views: listOf('views', option('views', VIEWS.join(',')), VIEWS),
-    phases: listOf('phases', option('phases', PHASES.join(',')), PHASES),
+    phases: listOf('phases', option('phases', DEFAULT_PHASES.join(',')), PHASES),
     people: whole('people', option('people', String(EVERYDAY_ORG.people))),
     teams: whole('teams', option('teams', String(EVERYDAY_ORG.teams))),
+    // organizations at everyday size: Northstar and orgs - 1 that setup
+    // makes, each with --people people and --teams teams, Nora a guest there
+    orgs,
     clients,
     processes,
+    busyLoops: whole('busy-loops', option('busy-loops', '8')),
+    busyCpus,
     changes: whole('changes', option('changes', '20')),
     idleSeconds: whole('idle-s', option('idle-s', '120')),
     // the quiet a view or a client holds before it counts as idle
