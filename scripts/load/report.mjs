@@ -92,6 +92,20 @@ export function functionStats(entries, seconds) {
   return { functions, backend_total_ms: tenth(total) }
 }
 
+/** Per function, the spread of the clients' own first-answer times
+    `pairs` ([udfPath, milliseconds], FrameTracker firstAnswers'), the
+    whole set's spread under `all`. */
+export function firstAnswerStats(pairs) {
+  const byFn = new Map()
+  for (const [name, ms] of pairs) byFn.set(name, [...(byFn.get(name) ?? []), ms])
+  return {
+    all: spread(pairs.map(([, ms]) => ms)),
+    functions: Object.fromEntries(
+      [...byFn.entries()].sort().map(([name, ms]) => [name, spread(ms)]),
+    ),
+  }
+}
+
 /** Idle phase `idle` (its functionStats', bytes, answers and client calls)
     per session per minute over `sessions` sessions and `seconds`: the
     bytes and answers the sessions received, and for the functions of

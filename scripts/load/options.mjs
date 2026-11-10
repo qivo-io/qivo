@@ -6,6 +6,10 @@
 /** The parts the benchmark runs, in the order `all` runs them. */
 export const PARTS = ['setup', 'record', 'replay']
 
+/** The parts `all` leaves out: `tabs`, one person's real tabs open at once
+    in --browser, which needs the recorded Board set for its changes. */
+export const OTHER_PARTS = ['tabs']
+
 /** The views the record part opens, one real tab each, by the names the
     recorded sets and the output use. */
 export const VIEWS = ['board', 'overview', 'roadmap', 'sync', 'inbox', 'mine']
@@ -75,9 +79,9 @@ function loopback(name, text) {
     read it, and never printed. */
 export function loadOptions(argv, env) {
   const part = argv[0]
-  if (part !== 'all' && !PARTS.includes(part))
+  if (part !== 'all' && !PARTS.includes(part) && !OTHER_PARTS.includes(part))
     throw new OptionsError(
-      `The first argument is the part, ${[...PARTS, 'all'].join(', ')}${given(part)}`,
+      `The first argument is the part, ${[...PARTS, ...OTHER_PARTS, 'all'].join(', ')}${given(part)}`,
     )
   const option = (name, fallback) => {
     const index = argv.indexOf(`--${name}`)
@@ -111,6 +115,10 @@ export function loadOptions(argv, env) {
     teams: whole('teams', option('teams', String(EVERYDAY_ORG.teams))),
     clients,
     processes,
+    // the tabs part's real tabs, all open at once as one person
+    tabs: whole('tabs', option('tabs', '1')),
+    // the Board view on the whole top-level project rather than one of its sub-projects
+    boardTop: argv.includes('--board-top'),
     changes: whole('changes', option('changes', '20')),
     idleSeconds: whole('idle-s', option('idle-s', '120')),
     // the quiet a view or a client holds before it counts as idle
