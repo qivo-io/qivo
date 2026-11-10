@@ -515,7 +515,12 @@ describe('the per-function statistics', () => {
       js_ms: { count: 2, p50: 10, p99: 600, max: 600 },
       total_ms_sum: 730,
     })
-    expect(stats.functions['issues:update']).toMatchObject({ failed: 1, per_second: 0.5 })
+    expect(stats.functions['issues:update']).toMatchObject({
+      failed: 1,
+      per_second: 0.5,
+      errors: [{ error: 'refused', count: 1 }],
+    })
+    expect(stats.functions['tasks:board'].errors).toEqual([])
     expect(stats.backend_total_ms).toBe(750)
     expect(overLine(stats)).toEqual([{ fn: 'tasks:board', js_ms_max: 600 }])
     expect(overLine(stats, 1000)).toEqual([])
