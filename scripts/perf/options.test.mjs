@@ -5,6 +5,7 @@ import {
   DEFAULT_SIZES,
   OptionsError,
   SIZE_CASE_SHAPE,
+  STATUS_WRITES,
   workspaceParameters,
 } from './options.mjs'
 
@@ -15,10 +16,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** The stand-in's tasks for page parameters `params`, loaded as its worker
-    would be (as scripts/perf/server.test.mjs loads it): its whole, which
-    holds the visible ones, and the hidden program's, which it leaves out. */
-async function standInTasks(params) {
+/** The stand-in for page parameters `params`, loaded as its worker would
+    be (as scripts/perf/server.test.mjs loads it). `tasks()` answers its
+    whole, which holds the visible tasks, and the hidden program's tasks,
+    which the whole leaves out. `create(subproject)` stores the person's
+    own To Do task there as the sample's create phase sends it
+    (issues:create), and `scenario(name)` runs one of the deliveries the
+    benchmark asks of it. */
+async function standIn(params) {
   vi.resetModules()
   const posted = []
   vi.stubGlobal('self', {
@@ -26,9 +31,35 @@ async function standInTasks(params) {
     postMessage: (message) => posted.push(message),
   })
   const { hiddenTasks } = await import('./server.mjs')
-  await self.onmessage({ data: { type: 'query', id: 'q', name: 'snapshot:forMe', args: {} } })
-  const whole = JSON.parse(posted.find((message) => message.type === 'result').text)
-  return { whole, hidden: hiddenTasks }
+  let asked = 0
+  const ask = async (data) => {
+    const id = `ask-${asked++}`
+    await self.onmessage({ data: { ...data, id } })
+    // a read's result names it in `to`, a write's or a scenario's answer in `id`
+    const answer = posted.find((message) => message.to === id || message.id === id)
+    const refusal = answer?.failure ?? answer?.error
+    if (refusal) throw new Error(refusal.message ?? refusal)
+    return answer
+  }
+  return {
+    tasks: async () => {
+      const answer = await ask({ type: 'query', name: 'snapshot:forMe', args: {} })
+      return { whole: JSON.parse(answer.text), hidden: hiddenTasks }
+    },
+    create: (subproject) =>
+      ask({
+        type: 'mutation',
+        name: 'issues:create',
+        args: {
+          id: crypto.randomUUID(),
+          project_id: subproject,
+          title: 'Check the spare sensors on the north bench before the cold week',
+          status: 'todo',
+          priority: 'medium',
+        },
+      }),
+    scenario: (name) => ask({ type: 'scenario', name, args: [] }),
+  }
 }
 
 /* The design size's figures a case of the benchmark can raise, per
@@ -110,27 +141,59 @@ describe('the browser benchmark options', () => {
   })
 })
 
+/** The design-size figures `figures` holds at their design size, after
+    checking that none is past it and that at most one is at it. `where`
+    names the state for a failure. */
+function atDesignSize(figures, where) {
+  for (const [figure, most] of Object.entries(DESIGN))
+    expect(figures[figure], `${figure} ${where}`).toBeLessThanOrEqual(most)
+  const reached = Object.keys(DESIGN).filter((figure) => figures[figure] === DESIGN[figure])
+  expect(reached.length, `figures at their design size ${where}`).toBeLessThanOrEqual(1)
+  return reached
+}
+
 describe("the benchmark's default cases", () => {
   it('runs the default sizes when none are given', () => {
     expect(benchmarkOptions([]).sizes).toEqual(DEFAULT_SIZES)
   })
 
-  it('raise at most one figure to its design size and none past it', async () => {
-    const atDesignSize = []
+  it('raise at most one figure to its design size and none past it, after each phase that adds a task', async () => {
+    const reached = new Set()
     for (const tasks of DEFAULT_SIZES) {
-      const standIn = await standInTasks(`${workspaceParameters(tasks)}${SIZE_CASE_SHAPE}`)
+      const server = await standIn(`${workspaceParameters(tasks)}${SIZE_CASE_SHAPE}`)
+      const fixture = await server.tasks()
       // the hidden program holds tasks too, which the whole leaves out
-      expect(standIn.hidden.length, `hidden tasks at ${tasks} tasks`).toBeGreaterThan(0)
-      const figures = figuresOf(standIn)
-      for (const [figure, most] of Object.entries(DESIGN))
-        expect(figures[figure], `${figure} at ${tasks} tasks`).toBeLessThanOrEqual(most)
-      const reached = Object.keys(DESIGN).filter((figure) => figures[figure] === DESIGN[figure])
-      expect(reached.length, `figures at their design size at ${tasks} tasks`).toBeLessThanOrEqual(
-        1,
+      expect(fixture.hidden.length, `hidden tasks at ${tasks} tasks`).toBeGreaterThan(0)
+      const states = [[`at ${tasks} tasks`, fixture]]
+      // The create phase adds one To Do task to the sub-project of the task
+      // the drag moved, which can be any visible one, and deletes it again
+      // untimed; remoteCreate adds another person's task and deletes it.
+      const subprojects = fixture.whole.projects.filter((p) => p.parent_id).map((p) => p.id)
+      for (const subproject of subprojects) {
+        await server.create(subproject)
+        states.push([`after the create in ${subproject} at ${tasks} tasks`, await server.tasks()])
+        await server.scenario('deliverDelete')
+      }
+      await server.scenario('deliverCreate')
+      states.push([`after remoteCreate at ${tasks} tasks`, await server.tasks()])
+      await server.scenario('deliverDelete')
+      expect(figuresOf(await server.tasks()), `after the deletes at ${tasks} tasks`).toEqual(
+        figuresOf(fixture),
       )
-      atDesignSize.push(...reached)
+      for (const [where, state] of states)
+        for (const figure of atDesignSize(figuresOf(state), where)) reached.add(figure)
     }
-    // the largest default case is the design size's open tasks of a project
-    expect(atDesignSize).toEqual(['openInProject'])
+    // the largest default case's creates hold the design size's open tasks
+    // of a project
+    expect([...reached]).toEqual(['openInProject'])
   }, 30_000)
+
+  it('change a status only from one open status to another', () => {
+    expect(Object.keys(STATUS_WRITES).length).toBeGreaterThan(0)
+    for (const [from, to] of Object.entries(STATUS_WRITES)) {
+      expect(from, `a change of a ${from} task`).not.toBe('done')
+      expect(to, `the change of a ${from} task`).not.toBe('done')
+      expect(to, `the change of a ${from} task`).not.toBe(from)
+    }
+  })
 })

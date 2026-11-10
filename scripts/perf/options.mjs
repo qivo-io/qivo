@@ -10,9 +10,23 @@ export const BROWSERS = ['chromium', 'firefox', 'webkit']
 
 /** The default --sizes, the visible tasks of each case. The stand-in makes
     every sixth task Done (scripts/perf/server.mjs STATUSES), so the first
-    is an everyday project and the second holds the design size's open
-    tasks of one project, with fewer Done than its Done figure. */
-export const DEFAULT_SIZES = [100, 960]
+    is an everyday project and the second holds one open task fewer than
+    the design size's open tasks of one project, with fewer Done than its
+    Done figure. The sample's create of one open task, and another person's
+    create after it, each take that project to the design size and no
+    further, since each is deleted before the next. */
+export const DEFAULT_SIZES = [100, 958]
+
+/** The status the sample's status changes write for a row in each status
+    (benchmark-browser.mjs statusWrites). Each moves an open task to
+    another open status, so no change moves a project's open or Done
+    tasks, and the changes skip a Done row. */
+export const STATUS_WRITES = {
+  backlog: 'progress',
+  todo: 'progress',
+  progress: 'todo',
+  review: 'progress',
+}
 
 /** The stand-in's page parameters of every --sizes case beside its tasks:
     the everyday sub-projects of a project and one hidden sub-project, so

@@ -1,7 +1,7 @@
 // Real production UI/store; synthetic transport isolates CPU/DOM costs from backend variance.
 //
 //   node scripts/benchmark-browser.mjs [--browser chromium|firefox|webkit]
-//     [--sizes 100,960] [--samples 5] [--cpu 4]
+//     [--sizes 100,958] [--samples 5] [--cpu 4]
 //     [--baseline [revision]] [--root checkout] [--output file.json]
 //     [--fixture varied] [--files parameters] [--serve [--host address]]
 //
@@ -28,10 +28,14 @@
 // workspace, in top-level projects of 3 sub-projects each (perf/page.mjs
 // programsFor, perf/options.mjs SIZE_CASE_SHAPE), with one hidden
 // sub-project as full as a visible one. The stand-in makes every sixth
-// task Done, so the default 100 is an everyday project, and 960 is the
-// design size's 800 open tasks of one project with 160 Done, about 267
-// open in each sub-project. Neither raises two figures at once, and
-// neither passes the design size.
+// task Done, so the default 100 is an everyday project, and 958 is 799
+// open tasks of one project with 159 Done, fewer than 300 open in each
+// sub-project. The sample's create of one open task takes that project to
+// the design size's 800 open tasks, and so does another person's create
+// (remoteCreate), each deleted again before the next; its status changes
+// move tasks between open statuses only (perf/options.mjs STATUS_WRITES).
+// Neither case raises two figures at once, and no phase passes the design
+// size (perf/options.test.mjs counts the tasks after each).
 //
 // The page loads a realistic workspace from a stand-in server in a Web Worker
 // (scripts/perf/server.mjs) and pays for every delivery what a real client
@@ -149,6 +153,7 @@ import {
   benchmarkOptions,
   OptionsError,
   SIZE_CASE_SHAPE,
+  STATUS_WRITES,
   workspaceParameters,
 } from './perf/options.mjs'
 import { buildPage, checkoutOf, serve } from './perf/page.mjs'
@@ -706,28 +711,26 @@ async function watchInput(page) {
 }
 
 /** Status changes for the `count` tasks after the first `skip` that view
-    `slot`'s answer brings ('roadmap' or a Board's slot) and that are not
-    groups, each to a status other than the one its row shows: `{ id,
-    status, was }` with the task's handle. The store sends them from the
-    view's row (P.updateIssue, store/planner.ts updateViewTask), as the
-    Board's drop does, since it holds no task to rename. */
+    `slot`'s answer brings ('roadmap' or a Board's slot) and that are
+    neither groups nor Done, each to another open status (STATUS_WRITES,
+    perf/options.mjs), so no change takes a project past its open tasks of
+    the design size: `{ id, status, was }` with the task's handle. The
+    store sends them from the view's row (P.updateIssue, store/planner.ts
+    updateViewTask), as the Board's drop does, since it holds no task to
+    rename. */
 const statusWrites = (page, slot, count, skip = 0) =>
   page.evaluate(
-    ({ slot, count, skip }) => {
+    ({ slot, count, skip, next }) => {
       const P = window.PLANNER
       const read = slot === 'roadmap' ? P.roadmapRead() : P.boardRead(slot)
       const rows = read.value?.state === 'ok' ? read.value.rows : []
       return rows
         .map((row) => P.viewTask(slot, row.id))
-        .filter((it) => it && !it.isGroup)
+        .filter((it) => it && !it.isGroup && Object.hasOwn(next, it.status))
         .slice(skip, skip + count)
-        .map((it) => ({
-          id: it.id,
-          was: it.status,
-          status: it.status === 'progress' ? 'todo' : 'progress',
-        }))
+        .map((it) => ({ id: it.id, was: it.status, status: next[it.status] }))
     },
-    { slot, count, skip },
+    { slot, count, skip, next: STATUS_WRITES },
   )
 
 /** The view switch's `name` button, for a timed phase to click. */
