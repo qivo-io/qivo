@@ -347,7 +347,7 @@ export function credentialsPath(directory, target) {
 /** Whether git ignores `path` in the checkout at `cwd`, so nothing under it
  * can be committed. False when git cannot tell. The caller's GIT_DIR or
  * GIT_WORK_TREE would ask another repository. */
-function ignoredByGit(cwd, path) {
+export function ignoredByGit(cwd, path) {
   const result = spawnSync('git', ['check-ignore', '--quiet', path], {
     cwd,
     stdio: 'ignore',
