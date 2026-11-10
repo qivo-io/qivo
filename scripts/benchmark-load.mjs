@@ -320,10 +320,14 @@ async function retry(step) {
   }
 }
 
-/** Every row of a navigation list (projectNav page or children) as `client`
-    reads it, waiting out not_ready, as scripts/browser-demo.mjs navRows
-    does in a page. */
-async function navRows(client, name, args) {
+/** Every row of paged list `name` with `args` as `client` reads it,
+    following `next` until there is none and waiting out not_ready for up
+    to 30 s, as scripts/browser-demo.mjs navRows does in a page. `ready` is
+    the state of an answered batch: `ok` for the navigation lists
+    (projectNav page and children), `ready` for the settings lists
+    (people.settingsPage, projectSettings.teams). Throws where the list
+    answers another state or stops. */
+async function pagedRows(client, name, args, ready) {
   const rows = []
   const deadline = Date.now() + 30_000
   for (let after; ; ) {
@@ -332,26 +336,8 @@ async function navRows(client, name, args) {
       await sleep(250)
       continue
     }
-    if (batch.state !== 'ok') throw new Error(`${name} answered ${batch.state}`)
-    rows.push(...batch.rows)
+    if (batch.state !== ready) throw new Error(`${name} answered ${batch.state}`)
     if (batch.stopped) throw new Error(`${name} stopped`)
-    if (batch.next === null) return rows
-    after = batch.next
-  }
-}
-
-/** Every row of a settings list (projectSettings teams and the like) as
-    `client` reads it, waiting out not_ready. */
-async function listRows(client, name, args) {
-  const rows = []
-  const deadline = Date.now() + 30_000
-  for (let after; ; ) {
-    const batch = await client.query(ref(name), { ...args, ...(after ? { after } : {}) })
-    if (batch.state === 'not_ready' && Date.now() < deadline) {
-      await sleep(250)
-      continue
-    }
-    if (batch.state !== 'ready' || batch.stopped) throw new Error(`${name} answered ${batch.state}`)
     rows.push(...batch.rows)
     if (!batch.next) return rows
     after = batch.next
@@ -456,14 +442,14 @@ async function setup(options) {
   nora.profile_id = seat.profile_id
   nora.org_id = seat.org_id
   const org = seat.org_id
-  const tops = await navRows(asNora, 'projectNav:page', { org_id: org })
+  const tops = await pagedRows(asNora, 'projectNav:page', { org_id: org }, 'ok')
   const projects = []
   for (const top of tops)
     projects.push({
       id: top.id,
       name: top.name,
       num: top.num,
-      children: (await navRows(asNora, 'projectNav:children', { project_id: top.id })).map(
+      children: (await pagedRows(asNora, 'projectNav:children', { project_id: top.id }, 'ok')).map(
         (child) => ({ id: child.id, name: child.name, num: child.num }),
       ),
     })
@@ -494,25 +480,10 @@ async function setup(options) {
   }
   // the organization's profiles as Settings › Users lists them, agents
   // included, whose ids the replay's check of other organizations' sets reads
-  let held = 0
-  const profileIds = []
-  const deadline = Date.now() + 30_000
-  for (let after; ; ) {
-    const page = await asNora.query(ref('people:settingsPage'), {
-      org_id: org,
-      ...(after ? { after } : {}),
-    })
-    if (page.state === 'not_ready' && Date.now() < deadline) {
-      await sleep(250)
-      continue
-    }
-    if (page.state !== 'ready' || page.stopped)
-      throw new Error('Settings › Users did not list the people')
-    held += page.rows.length
-    profileIds.push(...page.rows.map((row) => row.id))
-    if (!page.next) break
-    after = page.next
-  }
+  const profileIds = (await pagedRows(asNora, 'people:settingsPage', { org_id: org }, 'ready')).map(
+    (row) => row.id,
+  )
+  let held = profileIds.length
   // the people an earlier run planted keep their sessions; person i has id
   // stableId(person:i), and no run goes past --people profiles
   const made = earlier?.people?.slice(1) ?? []
@@ -561,10 +532,12 @@ async function setup(options) {
   // are shared with, at Edit
   const editors = new Map()
   for (const top of projects) {
-    const shares = await listRows(asNora, 'projectSettings:teams', {
-      org_id: org,
-      project_id: top.id,
-    })
+    const shares = await pagedRows(
+      asNora,
+      'projectSettings:teams',
+      { org_id: org, project_id: top.id },
+      'ready',
+    )
     editors.set(
       top.id,
       new Set(shares.filter((share) => share.level !== 'viewer').map((share) => share.id)),
