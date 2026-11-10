@@ -21,8 +21,10 @@
 // Only a disposable local backend. --url and --site-url must be loopback
 // origins, the run refuses a CONVEX_DEPLOY_KEY in its environment, and it
 // reads the local backend's admin key from QIVO_LOCAL_ADMIN_KEY, as the
-// local seeds do, and prints it nowhere. Never point it at a hosted
-// deployment: it plants logins and sessions, adds people, teams and
+// local seeds do, and prints it nowhere. The browser parts sign in only
+// once the app at --site-url syncs with --url, with every request that
+// leaves loopback aborted while they do (signedIn). Never point it at a
+// hosted deployment: it plants logins and sessions, adds people, teams and
 // organizations, reassigns tasks and writes changes and comments. Run it in
 // a Boat sandbox against the backend the sandbox started, after
 // `marketing-demo.mjs seed --local` seeded Northstar there and
@@ -223,6 +225,7 @@ import {
   tabsIdlePerMinute,
   watchedPerMinute,
 } from './load/report.mjs'
+import { isLoopbackOrigin } from './marketing-demo.mjs'
 
 const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -908,12 +911,22 @@ function readPlan(options) {
 /** The WebSocket URL prefix of the local backend's sync socket. */
 const socketPrefix = (options) => options.url.replace(/^http/, 'ws')
 
+/** How long the sign-in page may take to open its sync socket. */
+const SYNC_WAIT_MS = 30_000
+
 /** A Playwright browser of `options.browser` and a context signed in as
-    Nora, with the page it signed in on. A sign-in that fails closes the
-    browser it launched, whose process would otherwise keep the run alive. */
+    Nora, with the page it signed in on. The app connects to the backend
+    its dev server or build was started with, which --url does not set, so
+    before Nora's fixture password is typed the sign-in page must sync with
+    --url (staging-check.mjs syncsWith), and while the sign-in runs every
+    request that leaves loopback is aborted, so neither the password nor a
+    boot write can reach a hosted deployment. A sign-in that fails closes
+    the browser it launched, whose process would otherwise keep the run
+    alive. */
 async function signedIn(options) {
   const playwright = await import('playwright')
   const { loadBrowserDemo, signInDemo } = await import('./browser-demo.mjs')
+  const { syncsWith } = await import('./staging-check.mjs')
   const demo = loadBrowserDemo(`${options.siteUrl}/`, {
     env: {
       ...process.env,
@@ -947,8 +960,24 @@ async function signedIn(options) {
         }
       }
     })
+    // only for the sign-in: a route on every request would slow the timed tabs
+    const offLoopback = (url) => !isLoopbackOrigin(url.origin)
+    await context.route(offLoopback, (route) => route.abort())
     const page = await context.newPage()
+    const sockets = []
+    page.on('websocket', (socket) => sockets.push(socket.url()))
+    await page.goto(`${options.siteUrl}/app/~/projects`, { waitUntil: 'domcontentloaded' })
+    const deadline = Date.now() + SYNC_WAIT_MS
+    while (!syncsWith(sockets, options.url) && Date.now() < deadline) await sleep(100)
+    if (!syncsWith(sockets, options.url)) {
+      // only origins, because a socket's URL can hold a token
+      const opened = [...new Set(sockets.map((url) => new URL(url).origin))]
+      throw new Error(
+        `the app at ${options.siteUrl} does not sync with ${options.url}, the backend --url names; ${opened.length > 0 ? `it opened WebSockets to ${opened.join(', ')}` : 'it opened no WebSocket'}. Start its dev server or build with VITE_CONVEX_URL=${options.url}.`,
+      )
+    }
     await signInDemo(page, demo, 'nora')
+    await context.unroute(offLoopback)
     return { browser, page, notifications }
   } catch (error) {
     await browser.close().catch(() => {})
