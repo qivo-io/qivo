@@ -100,6 +100,22 @@ export function stableId(text) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
 
+/**
+ * The people setup adds to Northstar that this run makes or recovers,
+ * person i having profile id stableId(person:i): from `made`, the added
+ * people people.json holds, up to as many as bring the organization to
+ * `people` profiles, counting among `profileIds` only the profiles that
+ * are not setup's own. A run that stopped after it made profiles but
+ * before it wrote people.json left profiles the file does not hold; they
+ * count as setup's, so this run gives them sessions again rather than
+ * taking them for the seed's. Answers { from, count }.
+ */
+export function peopleToAdd({ profileIds, people, made }) {
+  const own = new Set(Array.from({ length: people }, (_, i) => stableId(`person:${i}`)))
+  const others = profileIds.filter((id) => !own.has(id)).length
+  return { from: made, count: Math.max(0, people - others - made) }
+}
+
 /** The signed-in login's seat in organization `which` (its slug, or a test
     of its row) from the root part's answer: the profile, its organization
     with its slug and the teams the profile is in, found by shape so a

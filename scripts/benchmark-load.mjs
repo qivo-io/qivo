@@ -64,7 +64,9 @@
 //   the seat as a guest, since a login holds one home seat
 //   (convex/identity.ts claimSeatsForLogin). A second run keeps the
 //   people, sessions and organizations people.json holds and adds
-//   Northstar's missing teams, people and assignments; an added
+//   Northstar's missing teams, people and assignments, with new sessions
+//   for the people an interrupted run made that people.json does not hold
+//   (plan.mjs peopleToAdd); an added
 //   organization whose setup stopped partway, which people.json does not
 //   hold yet, is not resumed, since its projects and tasks are created
 //   once, so start such a run on a fresh backend.
@@ -226,6 +228,7 @@ import {
   holdPlaces,
   idsOfOrg,
   orgsOf,
+  peopleToAdd,
   stableId,
   teamsOfPerson,
   viewUrls,
@@ -493,16 +496,20 @@ async function setup(options) {
     (row) => row.id,
   )
   let held = profileIds.length
-  // the people an earlier run planted keep their sessions; person i has id
-  // stableId(person:i), and no run goes past --people profiles
+  // the people an earlier run planted keep their sessions, and those an
+  // interrupted run made that people.json does not hold get new ones
+  // (plan.mjs peopleToAdd); no run goes past --people profiles
   const made = earlier?.people?.slice(1) ?? []
   const added = teams.slice(seat.team_ids.length)
   const grown = await addPeople({
     admin,
     asAdmin: asNora,
     org,
-    count: Math.max(0, options.people - held),
-    from: made.filter((person) => ADDED.test(person.key)).length,
+    ...peopleToAdd({
+      profileIds,
+      people: options.people,
+      made: made.filter((person) => ADDED.test(person.key)).length,
+    }),
     baseTeams: seat.team_ids,
     addedTeams: added,
     idOf: (i) => stableId(`person:${i}`),

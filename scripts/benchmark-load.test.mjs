@@ -43,6 +43,7 @@ import {
   everydayAssignments,
   findSeat,
   holdPlaces,
+  peopleToAdd,
   stableId,
   teamsOfPerson,
   viewUrls,
@@ -1206,6 +1207,22 @@ describe("setup's plan", () => {
     expect(stableId('team:3')).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/,
     )
+  })
+
+  it('recovers the people an interrupted run made that people.json does not hold', () => {
+    const seed = ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben', 'agent']
+    const added = (n) => Array.from({ length: n }, (_, i) => stableId(`person:${i}`))
+    // a fresh organization of 8 grows to 12 with p1 to p4
+    expect(peopleToAdd({ profileIds: seed, people: 12, made: 0 })).toEqual({ from: 0, count: 4 })
+    // a run stopped after it made p1 and p2, before it wrote people.json
+    const stopped = [...seed, ...added(2)]
+    expect(peopleToAdd({ profileIds: stopped, people: 12, made: 0 })).toEqual({ from: 0, count: 4 })
+    // or after it wrote p1 to p3, then made p4
+    const later = [...seed, ...added(4)]
+    expect(peopleToAdd({ profileIds: later, people: 12, made: 3 })).toEqual({ from: 3, count: 1 })
+    expect(peopleToAdd({ profileIds: later, people: 12, made: 4 })).toEqual({ from: 4, count: 0 })
+    // an organization already past --people adds none
+    expect(peopleToAdd({ profileIds: [...seed, 'x', 'y'], people: 9, made: 0 }).count).toBe(0)
   })
 
   it("finds a seat by slug or by its organization's row, with the profile's own teams", () => {
