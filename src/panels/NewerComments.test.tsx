@@ -170,12 +170,15 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-async function open() {
+/* Renders the task window, or renders it again, `above` with a block above
+   it that pushes it down the screen. */
+async function open({ above = false } = {}) {
   const task = { id: P.openTask('task-a', P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(
       <TooltipProvider>
+        {above && <div data-above />}
         <detail.IssueDetail issueId={task.id} onClose={vi.fn()} onOpen={vi.fn()} />
       </TooltipProvider>,
     ),
@@ -266,6 +269,35 @@ function watchRows() {
       ),
     )
   }
+}
+/* jsdom has no layout: lays the spine's scroller out `offset()` px down the
+   screen with each row of the thread 100 px tall inside it, at scrollTop
+   9000, and answers the scroller's scrollTop. */
+function layOut(offset: () => number) {
+  const scroller = document.querySelector<HTMLElement>('[data-spine-scroll]')
+  if (!scroller) throw new Error('missing the scroller')
+  let scrollTop = 9000
+  Object.defineProperties(scroller, {
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value
+      },
+    },
+    scrollHeight: { configurable: true, get: () => 20_000 },
+    clientHeight: { configurable: true, get: () => 600 },
+  })
+  const computed = window.getComputedStyle.bind(window)
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+    el === scroller ? ({ overflowY: 'auto' } as CSSStyleDeclaration) : computed(el, pseudo),
+  )
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this === scroller) return new DOMRect(0, offset(), 600, 600)
+    const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0
+    return new DOMRect(0, offset() + index * 100 - scrollTop, 600, 100)
+  })
+  return () => scrollTop
 }
 function editorOf(label: string) {
   return vi.waitFor(
@@ -487,6 +519,45 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
       '[Show newer comments]',
       ...comments(251, 301),
     ])
+  })
+
+  it('keeps the first row on screen where it was when an arrival lets rows above go, where the browser reports scroll anchoring too', async () => {
+    // WebKit answers true here and still lost the place
+    vi.stubGlobal('CSS', {
+      supports: (property: string, value?: string) =>
+        property === 'overflow-anchor' && value === 'auto',
+    })
+    await load()
+    const see = watchRows()
+    await walkBack(2)
+    const scrollTop = layOut(() => 0)
+    // the reader reads #280 and #281 among the live rows
+    const reading = new Set([comment(280).id, comment(281).id])
+    await see((el) => reading.has(el.getAttribute('data-comment') ?? ''))
+    const onScreen = () =>
+      document.querySelector(`[data-comment="${comment(280).id}"]`)?.getBoundingClientRect().top
+    const before = onScreen()
+    const above = thread().indexOf('#280')
+    // #300 arrives past the budget and a row above #280 goes
+    await deliver({ comments: range(251, 301), earlier: true })
+    expect(thread().indexOf('#280')).toBe(above - 1)
+    expect(onScreen()).toBe(before)
+    expect(scrollTop()).toBe(9000 - 100)
+  })
+
+  it('leaves the thread where it is when the window moves on screen and no row above goes', async () => {
+    await load()
+    const see = watchRows()
+    await walkBack(2)
+    // the block above, as the Inbox pane's opened description, pushes the
+    // scroller and its rows 211 px down together
+    const scrollTop = layOut(() => (document.querySelector('[data-above]') ? 211 : 0))
+    const reading = new Set([comment(280).id, comment(281).id])
+    await see((el) => reading.has(el.getAttribute('data-comment') ?? ''))
+    const rows = thread()
+    await open({ above: true })
+    expect(thread()).toEqual(rows)
+    expect(scrollTop()).toBe(9000)
   })
 
   it('on a phone takes the place from the feed, while the composer below it always shows', async () => {

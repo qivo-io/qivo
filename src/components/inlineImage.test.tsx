@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -118,6 +119,24 @@ describe('description images', () => {
     await moveAll(false)
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector<HTMLElement>('.mdimgbox')?.style.aspectRatio).toBe('640 / 480')
+  })
+
+  it('keeps the placeholder and the image out of scroll anchoring, so the swap moves no scroller', async () => {
+    // jsdom applies no stylesheet, so the rule is read from tokens.css
+    const css = readFileSync(`${process.cwd()}/src/styles/tokens.css`, 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    )
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) => /overflow-anchor:\s*none/.test(body))
+      .map(([, selector]) => selector.trim())
+    const unanchored = (el: Element | null) => !!el && rules.some((s) => el.matches(s))
+    await render(<Markdown text="![board](att:9d0b7c3e-1111-4222-8333-444455556699)" />)
+    expect(unanchored(container.querySelector('.mdimgbox'))).toBe(true)
+    await moveAll(true)
+    expect(unanchored(container.querySelector('img'))).toBe(true)
+    // the reach around them stays a candidate, as it keeps its size
+    expect(unanchored(container.querySelector('.mdimgreach'))).toBe(false)
   })
 
   it('paints no held bytes past their lease before the mint that names them again answers', async () => {
