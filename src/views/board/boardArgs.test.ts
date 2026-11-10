@@ -13,8 +13,8 @@ const NONE: IssueFilters = {
   focus: false,
   search: '',
 }
-const project = { wide: false, mine: false, id: 'sub', proj: { org: 'org' } }
-const MINE = { wide: true, mine: true, id: 'mine', proj: null }
+const project = { mine: false, id: 'sub', proj: { org: 'org' } }
+const MINE = { mine: true, id: 'mine', proj: null }
 const CUTOFF = '2026-07-01T10:00:00.000Z'
 
 /** The arguments a request sends, which must be one. */

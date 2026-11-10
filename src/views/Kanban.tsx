@@ -691,14 +691,12 @@ function KanbanBoard({
     }
   }, [dragId, endDrag])
 
-  // `wide` = the scope that names no project, My view; `mine` is the same
-  // scope, the one that narrows to my own tasks
-  const wide = info.mine
+  // My view, the scope that names no project and narrows to my own tasks
   const mine = info.mine
   // Scopes that hold project groups worth labelling: one project's sub-projects, or,
   // in My view, the projects themselves. A lone sub-project is its own project
   // group, which pools unless assignee grouping is selected.
-  const grouped = wide || info.isMeta
+  const grouped = mine || info.isMeta
   const byAssignee = tweaks.metaViz === 'assignees'
   // the groups and their sub-projects from the answer on screen
   // (useBoardView, store/scopeGroups.ts)
@@ -781,7 +779,7 @@ function KanbanBoard({
   const cardPlace = (it: IssueVM, withOwner: boolean) => P.projectPlace(it.project, withOwner)
   // the board's own header names the group; across all projects that leaves
   // the sub-project still to say
-  const sidePlace = (it: IssueVM) => (wide ? cardPlace(it, false) : null)
+  const sidePlace = (it: IssueVM) => (mine ? cardPlace(it, false) : null)
 
   const minColumnWidth = MIN_COLUMN_W
   // the width a card takes in a lane's cell and in a side-board
@@ -1126,7 +1124,7 @@ function KanbanBoard({
   // every project names none, so ColHeaderRow drops the + rather than
   // opening a dialog with nothing chosen
   const addTo =
-    wide || !P.canWrite(info.id)
+    mine || !P.canWrite(info.id)
       ? null
       : (statusId) => actions.newIssue({ status: statusId, project: defaultProject })
 
@@ -1343,9 +1341,9 @@ function KanbanBoard({
 
   // ---- swimlanes / pooled layout (shared grid) ---------------------------
   // A sub-project heading already names the card's home; a project heading
-  // still owes the sub-project. Pooled and assignee lanes owe both when wide.
+  // still owes the sub-project. Pooled and assignee lanes owe both in My view.
   const lanePlace = (it: IssueVM) =>
-    swimlanes ? (wide ? cardPlace(it, false) : null) : cardPlace(it, wide)
+    swimlanes ? (mine ? cardPlace(it, false) : null) : cardPlace(it, mine)
 
   /* One panel with nothing to head it — the pooled layout, or a scope that IS
      a single sub-project — has no sticky heading to carry its lid. The

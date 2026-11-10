@@ -271,9 +271,7 @@ function Roadmap({
   const onOpenIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const onScope = useLatest(actions.setScope)
   const { visible } = useViewVisibility()
-  // `wide` = the scope that names no project, My view; `mine` is the same
-  // scope, the one that narrows to my own tasks
-  const wide = info.mine
+  // My view, the scope that names no project and narrows to my own tasks
   const mine = info.mine
 
   /* The active "Plan on roadmap" session (spotlight + card + auto-fit); a ref
@@ -483,7 +481,7 @@ function Roadmap({
         : allTracks
   // the track an issue's sub-project rolls up into
   const trackIdOf = (projectId) => {
-    if (!wide) return projectId
+    if (!mine) return projectId
     const m = P.metaOf(projectId)
     return m ? m.id : projectId
   }
@@ -899,7 +897,7 @@ function Roadmap({
     mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
   // whether the flags show at all, which they do neither under the
   // phone's agenda nor on My view's rows while Team fills the panel
-  const markersActive = !showMobileAgenda && !(wide && stripMode === 'max')
+  const markersActive = !showMobileAgenda && !(mine && stripMode === 'max')
   const markers = useRoadmapMilestones(markerScope, w0, w1, markersActive)
   /* Where the flags draw. In a project or sub-project, every flag of the
      read sits in the header and its guide runs through every row. In My
@@ -907,9 +905,9 @@ function Roadmap({
      that track's rows only, so a project's guide never crosses another
      project's rows. A milestone whose project has no track on screen, as
      one a filter pruned, draws nowhere. */
-  const projMilestones: readonly MilestoneVM[] = wide ? [] : markers.view.rows
+  const projMilestones: readonly MilestoneVM[] = mine ? [] : markers.view.rows
   const trackMilestones = new Map<string, MilestoneVM[]>()
-  if (wide) {
+  if (mine) {
     const shown = new Set(tracks.map((tr) => tr.proj.id))
     for (const m of markers.view.rows)
       if (shown.has(m.project))
@@ -1484,7 +1482,7 @@ function Roadmap({
             filters cannot afford the word, the diamond in front already says
             which kind of thing, and the shorter label fits beside the other
             verbs. */}
-          {!wide && P.canAddMilestone(info.id) && (
+          {!mine && P.canAddMilestone(info.id) && (
             <Button
               type="button"
               variant="quiet"
@@ -1942,7 +1940,7 @@ function Roadmap({
     { w0, weekW, end: NW * weekW, maxLanes: flagLanes, view: msView },
   )
   const flagsScroll = flagRows.lanes > flagLanes
-  const msBandH = wide ? 0 : flagBandHeight(Math.min(flagRows.lanes, flagLanes))
+  const msBandH = mine ? 0 : flagBandHeight(Math.min(flagRows.lanes, flagLanes))
   const headH = HEAD_PAD_T + WEEK_BAND_H + msBandH
   // Fit all visible people in the heatmap up to a 620px
   // panel. Leave the actual timeline's header, project/sub-project bands and
@@ -2062,7 +2060,7 @@ function Roadmap({
      in My view that track's own, elsewhere the header's, through every
      row. */
   const milestonesOf = (track: string): readonly MilestoneVM[] =>
-    wide ? (trackMilestones.get(track) ?? []) : projMilestones
+    mine ? (trackMilestones.get(track) ?? []) : projMilestones
   /* What a row's guides read, by track, so a drag of one project's
      milestone renders that track's rows and no other's (a rename changes
      only the track row's flags key, trackFlagsKeyOf). It holds the grid,
@@ -2070,7 +2068,7 @@ function Roadmap({
      milestone's id and the week it is drawn in. */
   const guidesKeys = new Map<string, string>()
   const guidesKeyOf = (track: string) => {
-    const key = wide ? track : ''
+    const key = mine ? track : ''
     let found = guidesKeys.get(key)
     if (found === undefined) {
       found = JSON.stringify([
@@ -2482,7 +2480,7 @@ function Roadmap({
                     )
                   })}
                   {/* a project's or sub-project's flags; My view's sit on rows */}
-                  {!wide && (
+                  {!mine && (
                     <FlagBand
                       width={timelineW}
                       height={msBandH}
@@ -2635,7 +2633,7 @@ function Roadmap({
                         observer={rowObserver}
                         guidesKey={guidesKeyOf(track)}
                         renderGuides={() => guides(track)}
-                        {...(wide && isTrack
+                        {...(mine && isTrack
                           ? {
                               flagsKey: trackFlagsKeyOf(track),
                               renderFlags: () => trackFlags(track),
