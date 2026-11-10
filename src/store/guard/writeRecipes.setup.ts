@@ -90,7 +90,7 @@ export type Recipe = {
     files?: (args?: Record<string, unknown>) => AttachmentsAnswer
   }
   /** For a write on a milestone, which only a milestone read holds
-      (store/milestoneRows.ts) as the projects part sends no milestone, the
+      (store/milestoneRows.ts), as no workspace part sends milestones, the
       read the runner opens (P.watchMilestones), its query as Convex names
       it, and its answer before the write and, given its arguments, as the
       server answers after it. */

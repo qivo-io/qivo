@@ -106,8 +106,9 @@ function mondayIn(weeks: number) {
 
 /** Plan, a top-level project with sub-project Work, milestones Alpha and
     Beta, and `edit`'s changes. I am the organization's admin and lead Plan
-    unless `edit` says otherwise. `inWorkspace` false leaves the milestones out of the
-    projects part, so only the window's read holds them. */
+    unless `edit` says otherwise. `inWorkspace` false also leaves the
+    milestones out of the store's snapshot; only the window's read holds
+    them either way, as no workspace part sends milestones. */
 function fixture(edit: (s: Snapshot) => void = () => {}, inWorkspace = true) {
   snap = plannerFixture()
   const { lead_id: _lead, ...base } = snap.projects[0]

@@ -59,7 +59,7 @@ import {
    starts no store generation.
 
    The whole may hold the server's milestones (`milestones`), which no part
-   sends, as the projects part sends none; the milestone stand-in answers
+   sends; the milestone stand-in answers
    the milestone reads from them (store/milestoneStandIn.setup.ts), and
    the store never receives them otherwise.
 
