@@ -409,6 +409,20 @@ const summarized = (tasks, metrics) => {
   }
 }
 
+/** Console message `message`'s text with the messages of the errors it
+    logs. Firefox writes an Error argument by its name alone, so a refusal's
+    sentence is read from the error itself. */
+async function withErrorMessages(message) {
+  const parts = await Promise.all(
+    message
+      .args()
+      .map((arg) =>
+        arg.evaluate((value) => (value instanceof Error ? value.message : '')).catch(() => ''),
+      ),
+  )
+  return [message.text(), ...parts].join(' ')
+}
+
 /** Opens the benchmark page at `origin` with `tasks` tasks and the extra
     `query`, in Chromium throttled and on the slow network. Its `timed`
     adds the running phase's numbers to `metrics`. Its `cdp` is null in a
@@ -423,12 +437,15 @@ async function openPage(origin, tasks, metrics, query = '') {
     console.error(error.message)
   })
   page.on('console', (message) => {
+    if (message.type() !== 'error') return
     // the refusal the refusalWithTen phase asks for is logged as one
-    const asked = running.phase === 'refusalWithTen' && message.text().includes('no write access')
-    if (message.type() === 'error' && !asked) {
+    const refusing = running.phase === 'refusalWithTen'
+    void (async () => {
+      const text = refusing ? await withErrorMessages(message) : message.text()
+      if (refusing && text.includes('no write access')) return
       errors.push(message.text())
       console.error(message.text())
-    }
+    })()
   })
   // the stand-in's own latency and bandwidth delay its answers in every
   // browser; Chromium also slows the CPU and the page's own requests
