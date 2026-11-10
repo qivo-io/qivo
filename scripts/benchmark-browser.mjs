@@ -6,6 +6,9 @@
 //     [--fixture varied] [--files parameters] [--serve [--host address]]
 //
 // The options are read in scripts/perf/options.mjs, which its test checks.
+// A --cpu below 1 or not a number, and --samples, --sizes or --thread
+// values that are not whole numbers of at least 1, stop the run with a
+// sentence that says so before it builds anything.
 //
 // --browser picks the browser Playwright drives, Chromium by default.
 // Chromium's own figures come from a CDP session, which Firefox and WebKit

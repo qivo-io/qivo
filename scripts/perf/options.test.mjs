@@ -132,6 +132,49 @@ describe('the browser benchmark options', () => {
     expect(() => benchmarkOptions(['--browser', 'webkit', '--cpu', '4'])).toThrow(OptionsError)
   })
 
+  it('refuses a CPU slowdown that is not a number of at least 1, before anything runs', () => {
+    expect(benchmarkOptions(['--cpu', '2.5']).cpu).toBe(2.5)
+    for (const argv of [
+      ['--cpu', 'abc'],
+      ['--cpu', '0'],
+      ['--cpu', '0.5'],
+      ['--cpu', ''],
+      ['--cpu'],
+    ])
+      expect(() => benchmarkOptions(argv), argv.join(' ')).toThrow(OptionsError)
+    expect(() => benchmarkOptions(['--cpu', 'abc'])).toThrow(
+      '--cpu takes a number of at least 1, not abc',
+    )
+    expect(() => benchmarkOptions(['--sizes', '100', '--cpu'])).toThrow(
+      '--cpu takes a number of at least 1, and none followed it',
+    )
+    // a slowdown the other browsers cannot apply
+    expect(() => benchmarkOptions(['--browser', 'firefox', '--cpu', '4'])).toThrow(
+      '--cpu 4 needs Chromium; firefox runs at --cpu 1',
+    )
+  })
+
+  it('refuses samples, sizes and thread figures that are not whole numbers of at least 1', () => {
+    for (const argv of [
+      ['--samples', '0'],
+      ['--samples', '1.5'],
+      ['--samples', '3,4'],
+      ['--samples'],
+      ['--sizes', '100,,958'],
+      ['--sizes', '100,abc'],
+      ['--sizes', '-5'],
+      ['--thread', '0'],
+      ['--thread'],
+      ['--thread', '--phone'],
+    ])
+      expect(() => benchmarkOptions(argv), argv.join(' ')).toThrow(OptionsError)
+    expect(() => benchmarkOptions(['--samples', '0'])).toThrow(
+      '--samples takes a whole number of at least 1, not 0',
+    )
+    expect(benchmarkOptions(['--samples', '1']).samples).toBe(1)
+    expect(benchmarkOptions([]).threadFigures).toBeNull()
+  })
+
   it('takes the sizes, the thread figures and the baseline it is given', () => {
     const options = benchmarkOptions(['--sizes', '300', '--thread', '100,150', '--baseline'])
     expect(options.sizes).toEqual([300])
