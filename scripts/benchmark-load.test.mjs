@@ -1,17 +1,24 @@
+import { spawn } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALERT_WINDOW_MS, LIMITS } from '../convex/lib/limits'
 import { createNotificationFeed } from '../src/lib/notificationFeed'
 import { startNotificationLeader } from '../src/lib/notificationLeader'
 import { leadAlerts } from './load/alerts.mjs'
+import { busyLoops } from './load/busy.mjs'
 import {
   CHANGE_KINDS,
   COMMENT_RATE_MAX,
   COMMENTS_PER_MINUTE,
+  changeWrites,
   commentTargets,
   mostInAMinute,
 } from './load/changes.mjs'
 import {
+  allCurrent,
   checkSet,
   checkSetsDay,
   compareSets,
@@ -24,12 +31,14 @@ import {
   withoutLeaderReads,
 } from './load/frames.mjs'
 import {
+  authCallAllowed,
   EVERYDAY_ORG,
   loadOptions,
   OPTIONS,
   OptionsError,
   PARTS,
   PHASES,
+  refuseTrackedDir,
   usage,
   VIEWS,
 } from './load/options.mjs'
@@ -39,6 +48,7 @@ import {
   everydayAssignments,
   findSeat,
   holdPlaces,
+  peopleToAdd,
   stableId,
   teamsOfPerson,
   viewUrls,
@@ -76,7 +86,8 @@ import {
    which client replays what and the check of other organizations' ids,
    the changes' comments, the replayed leader's
    wiring of the app's alert client, the per-function and per-phase
-   figures and the output's shape. */
+   figures and the output's shape, and the busy phase's loops, the one
+   part here that starts processes. */
 
 const KEY = { QIVO_LOCAL_ADMIN_KEY: 'local-admin-key' }
 
@@ -228,6 +239,67 @@ describe('the load benchmark options', () => {
     )
   })
 
+  it('refuses a working folder in the checkout that git does not ignore, and passes one outside', () => {
+    const root = '/work/qivo'
+    const asked = []
+    // git as a sandbox with dev-temp/ in its exclude rules answers
+    const ignored = (cwd, path) => {
+      asked.push([cwd, path])
+      return path.startsWith(`${root}/dev-temp/`)
+    }
+    expect(() => refuseTrackedDir(root, '/work/qivo/dev-temp/load', ignored)).not.toThrow()
+    expect(asked).toEqual([[root, '/work/qivo/dev-temp/load']])
+    for (const dir of ['/work/qivo/load', '/work/qivo', '/work/qivo/dev-temp/../load'])
+      expect(() => refuseTrackedDir(root, dir, ignored)).toThrow('git does not ignore it')
+    // outside the checkout, a sibling whose name it starts included, git is not asked
+    asked.length = 0
+    for (const dir of ['/tmp/load', '/work/qivo-load', '/work/qivo/../load'])
+      expect(() => refuseTrackedDir(root, dir, ignored)).not.toThrow()
+    expect(asked).toEqual([])
+  })
+
+  it('refuses a folder in the checkout named through a symlink, and asks git with real paths', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'qivo-load-dir-')))
+    try {
+      const checkout = join(base, 'checkout')
+      mkdirSync(checkout)
+      symlinkSync(checkout, join(base, 'link'))
+      const asked = []
+      // git ignores nothing in this checkout
+      const ignored = (cwd, path) => {
+        asked.push([cwd, path])
+        return false
+      }
+      expect(() => refuseTrackedDir(checkout, join(base, 'link', 'load'), ignored)).toThrow(
+        'git does not ignore it',
+      )
+      expect(() => refuseTrackedDir(join(base, 'link'), join(checkout, 'load'), ignored)).toThrow(
+        'git does not ignore it',
+      )
+      expect(asked).toEqual([
+        [checkout, join(checkout, 'load')],
+        [checkout, join(checkout, 'load')],
+      ])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it("lets the sign-in's Better Auth calls go to loopback only", () => {
+    for (const url of [
+      'http://127.0.0.1:3237/api/auth/sign-in/email',
+      'http://localhost:5241/__qivo_http/api/auth/get-session?disableCookieCache=true',
+    ])
+      expect(authCallAllowed(url)).toBe(true)
+    for (const url of [
+      'https://happy-otter-123.convex.site/api/auth/sign-in/email',
+      'http://127.0.0.1.example.com/api/auth/sign-in/email',
+      'http://localhost@example.com/api/auth/sign-in/email',
+      'https://qivo.io/api/auth/sign-in/email',
+    ])
+      expect(authCallAllowed(url)).toBe(false)
+  })
+
   it('answers --help without a key, and its text names every part and option with its parts', () => {
     expect(loadOptions(['--help'], {})).toEqual({ help: true })
     expect(loadOptions(['replay', '-h'], {})).toEqual({ help: true })
@@ -274,6 +346,45 @@ const transition = (version, answers) =>
   })
 
 describe('the frame tracker', () => {
+  it("waits for the clients to be current, counting each reconnected client's queries, current or not", async () => {
+    const reconnected = (names) => {
+      const tracker = new FrameTracker()
+      tracker.sent(JSON.stringify({ type: 'Connect', sessionId: 's', connectionCount: 1 }))
+      tracker.sent(
+        add(
+          0,
+          1,
+          names.map((name, id) => [id, name, {}]),
+        ),
+      )
+      return tracker
+    }
+    const quick = reconnected(['workspace:root', 'tasks:board'])
+    quick.received(
+      transition(1, [
+        [0, {}],
+        [1, {}],
+      ]),
+    )
+    const clients = [
+      { index: 0, tracker: quick, openedAt: null },
+      // sent its three queries again and is still waiting for them
+      { index: 1, tracker: reconnected(['workspace:root', 'tasks:board', 'inbox:summary']) },
+      // never connected again after the drop, so it asked nothing
+      { index: 2, tracker: reconnected(['workspace:root']), before: 1 },
+    ]
+    const rows = await allCurrent(clients, {
+      from: quick.currentSince - 5,
+      timeoutMs: 50,
+      connects: (client) => client.before ?? 0,
+    })
+    expect(rows.map((row) => [row.index, row.current, row.queries, row.ms])).toEqual([
+      [0, true, 2, 5],
+      [1, false, 3, null],
+      [2, false, 0, null],
+    ])
+  })
+
   it('is current only once every query of the newest set version is answered', () => {
     const tracker = new FrameTracker()
     tracker.sent(
@@ -893,6 +1004,41 @@ describe('the changes plan', () => {
       'fewer than the 4 the comments need',
     )
   })
+
+  it('puts back what landed, a move or status change whose return write failed included', () => {
+    const tasks = {
+      org: 'org',
+      renamed: { id: 'r', title: 'Calibrate', status: 'todo' },
+      moved: { id: 'm' },
+      home: 'home',
+      sibling: { id: 'sib' },
+      commented: [{ id: 'c' }],
+    }
+    const writes = changeWrites(tasks)
+    // a rename, a move out, a status change to In progress and a comment land
+    for (const i of [0, 1, 2]) writes.next(i).landed()
+    const comment = writes.next(3)
+    comment.landed()
+    writes.next(4).landed()
+    // the move back, the status change back and the next comment fail
+    expect(writes.next(5).args.project_id).toBe('home')
+    expect(writes.next(6).args.patch).toEqual({ status: 'todo' })
+    writes.next(7)
+    expect(writes.restores()).toEqual([
+      ['issues:update', { org_id: 'org', id: 'r', patch: { title: 'Calibrate' } }],
+      ['issues:update', { org_id: 'org', id: 'r', patch: { status: 'todo' } }],
+      ['issues:move', { org_id: 'org', id: 'm', project_id: 'home' }],
+      ['comments:remove', { org_id: 'org', id: comment.args.id }],
+    ])
+    expect(writes.comments()).toEqual({ made: 2, posted: 1, failed: 1 })
+    // a move that failed going out is tried again, and only the title goes back
+    const refused = changeWrites(tasks)
+    refused.next(1)
+    expect(refused.next(5).args.project_id).toBe('sib')
+    expect(refused.restores()).toEqual([
+      ['issues:update', { org_id: 'org', id: 'r', patch: { title: 'Calibrate' } }],
+    ])
+  })
 })
 
 describe("the replayed leader, the app's own alert client", () => {
@@ -1166,6 +1312,22 @@ describe("setup's plan", () => {
     expect(stableId('team:3')).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/,
     )
+  })
+
+  it('recovers the people an interrupted run made that people.json does not hold', () => {
+    const seed = ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben', 'agent']
+    const added = (n) => Array.from({ length: n }, (_, i) => stableId(`person:${i}`))
+    // a fresh organization of 8 grows to 12 with p1 to p4
+    expect(peopleToAdd({ profileIds: seed, people: 12, made: 0 })).toEqual({ from: 0, count: 4 })
+    // a run stopped after it made p1 and p2, before it wrote people.json
+    const stopped = [...seed, ...added(2)]
+    expect(peopleToAdd({ profileIds: stopped, people: 12, made: 0 })).toEqual({ from: 0, count: 4 })
+    // or after it wrote p1 to p3, then made p4
+    const later = [...seed, ...added(4)]
+    expect(peopleToAdd({ profileIds: later, people: 12, made: 3 })).toEqual({ from: 3, count: 1 })
+    expect(peopleToAdd({ profileIds: later, people: 12, made: 4 })).toEqual({ from: 4, count: 0 })
+    // an organization already past --people adds none
+    expect(peopleToAdd({ profileIds: [...seed, 'x', 'y'], people: 9, made: 0 }).count).toBe(0)
   })
 
   it("finds a seat by slug or by its organization's row, with the profile's own teams", () => {
@@ -1577,6 +1739,39 @@ describe("a phase's figures", () => {
     expect(pacingTrigger({ idle: { log_coverage: { state: 'unknown' } } }).fires).toBeNull()
   })
 
+  it('answers the pacing trigger unknown where a check was not measured or its noise is unknown', () => {
+    const whole = { log_coverage: { state: 'complete' }, closes: {}, noisy: false }
+    const reconnect = { ...whole, slow_clients: 0 }
+    expect(pacingTrigger({ reconnect })).toMatchObject({
+      unmeasured: [],
+      fires: false,
+      fires_outside_noisy_phases: false,
+    })
+    // a reconnect with no lone client's time, as without the match phase, measured nothing
+    expect(pacingTrigger({ reconnect: { ...reconnect, slow_clients: null } })).toMatchObject({
+      unmeasured: ['reconnect'],
+      fires: null,
+      fires_outside_noisy_phases: null,
+    })
+    // a phase that failed or lost a worker, whatever its surviving log covers
+    const failed = { reconnect, busy: { ...whole, failed: 'a busy loop exited (1)' } }
+    expect(pacingTrigger(failed)).toMatchObject({ unmeasured: ['busy'], fires: null })
+    const lost = { reconnect, changes: { ...whole, failed: 'worker exited', workers_lost: [7] } }
+    expect(pacingTrigger(lost).fires_outside_noisy_phases).toBeNull()
+    // a call over the line in a phase whose noise is unknown is no clean timing
+    const slowCall = { ...whole, over_line: [{ fn: 'tasks:board', js_ms_max: 700 }] }
+    expect(pacingTrigger({ reconnect, startup: { ...slowCall, noisy: null } })).toMatchObject({
+      fires: true,
+      fires_outside_noisy_phases: null,
+    })
+    expect(pacingTrigger({ reconnect, startup: slowCall }).fires_outside_noisy_phases).toBe(true)
+    // a slow reconnect counts outside the noisy phases only when its own phase was quiet
+    const slowly = (noisy) => pacingTrigger({ reconnect: { ...reconnect, slow_clients: 1, noisy } })
+    expect(slowly(true)).toMatchObject({ fires: true, fires_outside_noisy_phases: false })
+    expect(slowly(null)).toMatchObject({ fires: true, fires_outside_noisy_phases: null })
+    expect(slowly(false).fires_outside_noisy_phases).toBe(true)
+  })
+
   it('models the queries a phase ran at once on average from its executed queries', () => {
     const changes = {
       seconds: 10,
@@ -1652,5 +1847,67 @@ describe("a phase's figures", () => {
     expect(changes[0].resent_per_tab.map((tab) => tab.bytes)).toEqual([900, 0])
     expect(resent.bytes_per_tab_per_change.rename[0]).toMatchObject({ count: 2, max: 900 })
     expect(resent.bytes_per_view_per_change.rename.board).toMatchObject({ count: 4, max: 900 })
+  })
+})
+
+describe("the busy phase's loops", () => {
+  /** Whether process `pid` still runs; a zombie, which a sandbox's init
+      may never reap, does not. */
+  const runs = (pid) => {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return false
+    }
+    try {
+      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, 'utf8'))
+    } catch {
+      return true
+    }
+  }
+
+  it('fails where its loops cannot start on the CPUs given, and stops quietly when asked', async () => {
+    const refused = busyLoops(2, '4095')
+    try {
+      await vi.waitFor(() => expect(() => refused.check()).toThrow(/busy loop/), { timeout: 3000 })
+    } finally {
+      refused.stop()
+    }
+    const spinning = busyLoops(1, null)
+    try {
+      await new Promise((done) => setTimeout(done, 300))
+      expect(() => spinning.check()).not.toThrow()
+      expect(runs(spinning.pids[0])).toBe(true)
+    } finally {
+      spinning.stop()
+    }
+    await vi.waitFor(() => expect(runs(spinning.pids[0])).toBe(false), { timeout: 3000 })
+    expect(() => spinning.check()).not.toThrow()
+  })
+
+  it('leaves no loop spinning when its coordinator is killed by a signal', async () => {
+    const busy = new URL('./load/busy.mjs', import.meta.url).href
+    const coordinator = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { busyLoops } from ${JSON.stringify(busy)}; console.log(busyLoops(1, null).pids[0]); setInterval(() => {}, 1000)`,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    )
+    const pid = Number(
+      await new Promise((done) => coordinator.stdout.once('data', (chunk) => done(String(chunk)))),
+    )
+    try {
+      expect(runs(pid)).toBe(true)
+      coordinator.kill('SIGTERM')
+      await vi.waitFor(() => expect(runs(pid)).toBe(false), { timeout: 3000 })
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {}
+      coordinator.kill('SIGKILL')
+    }
   })
 })

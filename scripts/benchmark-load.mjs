@@ -14,18 +14,20 @@
 // its default, from the one table the parser reads too (load/options.mjs
 // OPTIONS); an unknown option, or one its part does not read, stops the run
 // before anything starts. The pure parts live in scripts/load/, which
-// scripts/benchmark-load.test.mjs checks: options.mjs the options,
-// plan.mjs the organization setup grows and which client replays what,
+// scripts/benchmark-load.test.mjs checks: options.mjs the options, the
+// working folder's refusal and the sign-in's Better Auth route, plan.mjs the organization setup grows and which client replays what,
 // frames.mjs the Convex sync protocol and the recorded sets, changes.mjs the
 // changes phase's plan, alerts.mjs the app's alert client wired for a
-// replayed leader, and report.mjs the figures.
+// replayed leader, busy.mjs the busy phase's spinning processes, and
+// report.mjs the figures.
 //
 // Only a disposable local backend. --url and --site-url must be loopback
 // origins, the run refuses a CONVEX_DEPLOY_KEY in its environment, and it
 // reads the local backend's admin key from QIVO_LOCAL_ADMIN_KEY, as the
 // local seeds do, and prints it nowhere. The browser parts sign in only
 // once the app at --site-url syncs with --url, with every Better Auth call
-// that leaves loopback aborted while they do (signedIn). Never point it at
+// that leaves loopback aborted while they do (signedIn, options.mjs
+// AUTH_ROUTE). Never point it at
 // a hosted deployment: it plants logins and sessions, adds people, teams and
 // organizations, reassigns tasks and writes changes and comments. Run it in
 // a Boat sandbox against the backend the sandbox started, after
@@ -63,7 +65,9 @@
 //   the seat as a guest, since a login holds one home seat
 //   (convex/identity.ts claimSeatsForLogin). A second run keeps the
 //   people, sessions and organizations people.json holds and adds
-//   Northstar's missing teams, people and assignments; an added
+//   Northstar's missing teams, people and assignments, with new sessions
+//   for the people an interrupted run made that people.json does not hold
+//   (plan.mjs peopleToAdd); an added
 //   organization whose setup stopped partway, which people.json does not
 //   hold yet, is not resumed, since its projects and tasks are created
 //   once, so start such a run on a fresh backend.
@@ -130,7 +134,10 @@
 //     holds none of the reads it dropped on hiding and nothing new.
 //   - idle: --idle-s seconds with no change.
 //   - busy: the changes again beside --busy-loops spinning processes,
-//     pinned to --busy-cpus, the backend's, with taskset.
+//     pinned to --busy-cpus, the backend's, with taskset. A loop that
+//     cannot start, such as on CPUs the machine does not have, or stops
+//     before the phase ends fails the phase, and each loop exits once the
+//     coordinator is gone, however it ended (load/busy.mjs).
 //   A phase that fails, such as on a saturated backend, records why and
 //   the run goes on. The rung goes to --output, else
 //   <dir>/out/rung-<clients>.json.
@@ -178,7 +185,11 @@
 //   JavaScript passes the 0.5 s line, or a client whose time to current
 //   after the reconnect passes ten times the lone client's, each with its
 //   phase. An overload close (1013) is listed as the test bed's saturation
-//   (test_bed_saturated) and fires nothing.
+//   (test_bed_saturated) and fires nothing. A trigger that did not fire is
+//   null, unknown, where a phase's log coverage is incomplete, a phase
+//   failed or lost a worker, or the reconnect had no lone client's time, as
+//   in a replay without the match phase; outside the noisy phases it counts
+//   a timing only from a phase whose noisy is false.
 //
 // The test bed. The local backend runs at most 16 queries and 16
 // mutations at once, Convex's defaults, which nothing here raises. Once a
@@ -188,27 +199,38 @@
 // nothing of hosted Convex's limit (test_bed_saturated). Pin the backend
 // to its own CPUs and the clients to the others (taskset), and start the
 // sandbox without snapshots, whose captures slow the backend.
-import { fork, spawn } from 'node:child_process'
+import { fork } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { jsonToConvex } from 'convex/values'
 import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
-import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
+import { busyLoops } from './load/busy.mjs'
+import { changeWrites, commentTargets } from './load/changes.mjs'
 import {
+  allCurrent,
   checkSet,
   checkSetsDay,
   compareSets,
   FrameTracker,
+  isCurrent,
   recordedSet,
   subscriptionsByOrganization,
   withoutLeaderReads,
 } from './load/frames.mjs'
-import { isLoopbackOrigin, loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
+import {
+  AUTH_ROUTE,
+  authCallAllowed,
+  loadOptions,
+  OptionsError,
+  refuseTrackedDir,
+  usage,
+  VIEWS,
+} from './load/options.mjs'
 import {
   checkSpecs,
   clientSpecs,
@@ -217,6 +239,7 @@ import {
   holdPlaces,
   idsOfOrg,
   orgsOf,
+  peopleToAdd,
   stableId,
   teamsOfPerson,
   viewUrls,
@@ -243,7 +266,6 @@ import {
   tabsIdlePerMinute,
   watchedPerMinute,
 } from './load/report.mjs'
-import { ignoredByGit } from './marketing-demo.mjs'
 
 const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -400,25 +422,11 @@ async function once(step) {
   }
 }
 
-/** Refuses working folder `dir` where git could commit people.json, which
-    holds the planted session ids: a folder inside the checkout that git
-    does not ignore (marketing-demo.mjs ignoredByGit), as in a fresh clone
-    or a sandbox whose dev-temp/ no exclude rule covers. A folder outside
-    the checkout passes. */
-function refuseTrackedDir(dir) {
-  const full = resolve(dir)
-  const within = relative(ROOT, full)
-  const inside = within === '' || (!within.startsWith('..') && !isAbsolute(within))
-  if (inside && !ignoredByGit(ROOT, full))
-    throw new Error(
-      `${dir} is inside the checkout and git does not ignore it, so people.json's session ids could be committed. Add it, or dev-temp/, to .git/info/exclude, or choose a --dir outside the checkout.`,
-    )
-}
-
 /** The setup part: grows Northstar to the everyday organization and writes
-    people.json. */
+    people.json, refusing a working folder git could commit
+    (options.mjs refuseTrackedDir). */
 async function setup(options) {
-  refuseTrackedDir(options.dir)
+  refuseTrackedDir(ROOT, options.dir)
   const admin = httpClient(options)
   const noraEmail = 'nora@demo.qivo.io'
   const noraLogin = await component(admin, 'adapter:findOne', {
@@ -484,16 +492,20 @@ async function setup(options) {
     (row) => row.id,
   )
   let held = profileIds.length
-  // the people an earlier run planted keep their sessions; person i has id
-  // stableId(person:i), and no run goes past --people profiles
+  // the people an earlier run planted keep their sessions, and those an
+  // interrupted run made that people.json does not hold get new ones
+  // (plan.mjs peopleToAdd); no run goes past --people profiles
   const made = earlier?.people?.slice(1) ?? []
   const added = teams.slice(seat.team_ids.length)
   const grown = await addPeople({
     admin,
     asAdmin: asNora,
     org,
-    count: Math.max(0, options.people - held),
-    from: made.filter((person) => ADDED.test(person.key)).length,
+    ...peopleToAdd({
+      profileIds,
+      people: options.people,
+      made: made.filter((person) => ADDED.test(person.key)).length,
+    }),
     baseTeams: seat.team_ids,
     addedTeams: added,
     idOf: (i) => stableId(`person:${i}`),
@@ -968,14 +980,10 @@ async function signedIn(options) {
         }
       }
     })
-    // the app's Better Auth calls (src/lib/authSession.ts, VITE_CONVEX_SITE_URL's
-    // /api/auth), which carry the password, go nowhere but loopback while the
-    // sign-in runs. A glob, which the browser matches itself, stops only those
-    // calls in this process; a function would stop every request of the page
-    // here, which a busy replay's event loop slowed past the sign-in's wait.
-    const auth = '**/api/auth/**'
-    await context.route(auth, (route) =>
-      isLoopbackOrigin(new URL(route.request().url()).origin) ? route.continue() : route.abort(),
+    // the app's Better Auth calls, which carry the password, go nowhere but
+    // loopback while the sign-in runs (options.mjs AUTH_ROUTE)
+    await context.route(AUTH_ROUTE, (route) =>
+      authCallAllowed(route.request().url()) ? route.continue() : route.abort(),
     )
     const page = await context.newPage()
     const sockets = []
@@ -992,7 +1000,7 @@ async function signedIn(options) {
     }
     await signInDemo(page, demo, 'nora')
     // the timed tabs' own token calls pass unrouted
-    await context.unroute(auth)
+    await context.unroute(AUTH_ROUTE)
     // every part opens its own tabs in the signed-in context
     await page.close()
     return { browser, context, notifications }
@@ -1189,17 +1197,6 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
   return client
 }
 
-/** Whether replayed `client` is current: connected more than `connects`
-    times and every query of its newest set answered, and for a leader its
-    Inbox feed answered too, since a leader watches the feed only after its
-    first beat answers, as a tab does, and after a reconnect only after its
-    resume order. The replay's clients and the lone reconnect read it
-    alike. */
-const isCurrent = (client, connects) =>
-  client.tracker.connects > connects &&
-  client.tracker.current &&
-  (!client.lead || client.tracker.holds('inbox:feed'))
-
 /** The p50, p99 and maximum of event loop delay histogram `delay`
     (monitorEventLoopDelay's, at 10 ms resolution) as milliseconds past
     that resolution, to a hundredth: the lag beyond the sampler's own
@@ -1260,39 +1257,6 @@ async function runWorker() {
       slot.queries.set(udfPath, query)
       figures.changes.set(change, slot)
     }
-  }
-  /** Waits until every client is current, counting a client only once it
-      connected more than `connects(client)` times, then answers each one's
-      time to current, to the moment its set became current (FrameTracker
-      currentSince), from `from` and from its socket's open. */
-  const allCurrent = async (from, connects = () => 0) => {
-    const deadline = Date.now() + config.timeoutMs
-    const results = new Map()
-    while (results.size < clients.length && Date.now() < deadline) {
-      for (const client of clients) {
-        if (results.has(client.index) || !isCurrent(client, connects(client))) continue
-        const since = client.tracker.currentSince
-        results.set(client.index, {
-          index: client.index,
-          // the queries the client's newest set holds, sent again after a reconnect
-          queries: client.tracker.queries.size,
-          ms: since - from,
-          from_open_ms: client.openedAt ? since - client.openedAt : null,
-          current: true,
-          first_answers: client.tracker.firstAnswers(),
-        })
-      }
-      await sleep(20)
-    }
-    return clients.map(
-      (client) =>
-        results.get(client.index) ?? {
-          index: client.index,
-          ms: null,
-          from_open_ms: null,
-          current: false,
-        },
-    )
   }
   const report = () => {
     // the server's or the network's closes by code, and the benchmark's own drops
@@ -1367,7 +1331,7 @@ async function runWorker() {
           client.lead = spec.lead
           clients.push(client)
         }
-        const results = await allCurrent(from)
+        const results = await allCurrent(clients, { from, timeoutMs: config.timeoutMs })
         process.send({
           type: 'started',
           results: results.map((result) => {
@@ -1385,7 +1349,11 @@ async function runWorker() {
         const at = Date.now()
         const before = new Map(clients.map((client) => [client, client.tracker.connects]))
         for (const client of clients) client.drop()
-        const results = await allCurrent(at, (client) => before.get(client))
+        const results = await allCurrent(clients, {
+          from: at,
+          timeoutMs: config.timeoutMs,
+          connects: (client) => before.get(client),
+        })
         process.send({ type: 'reconnected', results })
       } else if (message.type === 'report') {
         process.send({ type: 'report', report: report() })
@@ -1519,22 +1487,6 @@ function cpuNow() {
 }
 
 /* ----------------------------------------------------------------- replay */
-
-/** The busy loops of the busy phase: `count` processes that spin, each
-    pinned to `cpus` (taskset) when given. Answers a stop. */
-function busyLoops(count, cpus) {
-  const loops = Array.from({ length: count }, () =>
-    cpus
-      ? spawn('taskset', ['-c', cpus, process.execPath, '-e', 'for(;;){}'], { stdio: 'ignore' })
-      : spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
-  )
-  const stop = () => {
-    for (const loop of loops) loop.kill('SIGKILL')
-  }
-  // a run that ends early takes its loops with it
-  process.once('exit', stop)
-  return { pids: loops.map((loop) => loop.pid), stop }
-}
 
 /** The replay part: the phases of `options.phases` against the recorded
     sets, written as one rung. */
@@ -1692,11 +1644,15 @@ async function replay(options) {
         await timed('busy', async () => {
           const loops = busyLoops(options.busyLoops, options.busyCpus)
           try {
-            // the loops take their CPUs before the first change
+            // the loops take their CPUs before the first change, and a phase
+            // whose loops could not start or stopped early is no busy timing
             await sleep(3000)
+            loops.check()
+            const figures = await changes()
+            loops.check()
             return {
               busy_loops: { count: options.busyLoops, cpus: options.busyCpus, pids: loops.pids },
-              ...(await changes()),
+              ...figures,
             }
           } finally {
             loops.stop()
@@ -1919,8 +1875,9 @@ async function loneReconnect(options, recorder, set) {
 
 /** The changes phase: `options.changes` changes as Nora, one a second, on
     the recorded Board's tasks, in turn a rename, a move to a sibling
-    sub-project (and back the next time), a status change and a comment.
-    Answers each change with the log's reruns and the clients' re-sends. */
+    sub-project (and back the next time), a status change and a comment
+    (changes.mjs changeWrites), then what landed put back. Answers each
+    change with the log's reruns and the clients' re-sends. */
 async function runChanges(options, plan, boardSet, workers, log) {
   if (!boardSet) throw new Error('the changes phase needs the recorded Board set')
   const nora = plan.people[0]
@@ -1940,16 +1897,10 @@ async function runChanges(options, plan, boardSet, workers, log) {
   // the comments go to other tasks in turn, enough that the comment rule
   // refuses none (changes.mjs commentTargets)
   const commented = commentTargets(open.filter((task) => task !== renamed && task !== moved))
-  const original = { title: renamed.title, status: renamed.status }
-  let away = false
-  let status = original.status
-  let commentsMade = 0
-  // the comments posted, which the cleanup removes
-  const comments = []
+  const writes = changeWrites({ org, renamed, moved, home, sibling, commented })
   const done = []
   const begin = Date.now()
   for (let i = 0; i < options.changes; i++) {
-    const kind = CHANGE_KINDS[i % CHANGE_KINDS.length]
     const slot = begin + i * 1000
     await sleep(Math.max(0, slot - Date.now()))
     // a worker that failed leaves its clients' re-sends out (the phase's
@@ -1958,62 +1909,28 @@ async function runChanges(options, plan, boardSet, workers, log) {
       workers.map((worker) => worker.ask({ type: 'change', id: i }, 'changed')),
     )
     const at = Date.now()
-    let call
-    if (kind === 'rename')
-      call = [
-        'issues:update',
-        { org_id: org, id: renamed.id, patch: { title: `${original.title} (${i})`.slice(0, 200) } },
-      ]
-    else if (kind === 'move') {
-      call = ['issues:move', { org_id: org, id: moved.id, project_id: away ? home : sibling.id }]
-      away = !away
-    } else if (kind === 'status') {
-      // between two open statuses, so no project's open or Done count moves
-      status = status === 'progress' ? 'todo' : 'progress'
-      call = ['issues:update', { org_id: org, id: renamed.id, patch: { status } }]
-    } else {
-      const id = crypto.randomUUID()
-      const target = commented[commentsMade++ % commented.length]
-      call = [
-        'comments:create',
-        {
-          org_id: org,
-          id,
-          issue_id: target.id,
-          body: 'Checked the readings against the bench log; the drift stays inside the calibration window.',
-        },
-      ]
-    }
+    const change = writes.next(i)
     let error = null
     try {
-      await retry(() => writer.mutation(ref(call[0]), call[1]))
-      if (kind === 'comment') comments.push(call[1].id)
+      await retry(() => writer.mutation(ref(change.fn), change.args))
+      change.landed()
     } catch (failure) {
       error = String(failure?.message ?? failure).slice(0, 200)
     }
-    done.push({ id: i, kind, fn: call[0], at, client_ms: Date.now() - at, error })
+    done.push({ id: i, kind: change.kind, fn: change.fn, at, client_ms: Date.now() - at, error })
   }
   await sleep(1500)
   // what the clients receive from here on is no change's
   await Promise.allSettled(
     workers.map((worker) => worker.ask({ type: 'change', id: null }, 'changed')),
   )
-  // the rename, the status and the move are put back
+  // the rename, the status and the move are put back, the comments removed
   const restored = []
-  const restore = (name, args) =>
-    retry(() => writer.mutation(ref(name), args)).then(
+  for (const [name, args] of writes.restores())
+    await retry(() => writer.mutation(ref(name), args)).then(
       () => restored.push(name),
       (error) => restored.push(`${name} failed: ${String(error?.message ?? error).slice(0, 120)}`),
     )
-  await restore('issues:update', { org_id: org, id: renamed.id, patch: { title: original.title } })
-  if (status !== original.status)
-    await restore('issues:update', {
-      org_id: org,
-      id: renamed.id,
-      patch: { status: original.status },
-    })
-  if (away) await restore('issues:move', { org_id: org, id: moved.id, project_id: home })
-  for (const id of comments) await restore('comments:remove', { org_id: org, id })
   // the writer's calls that succeeded, each run once at least, which the
   // phase's log coverage counts beside the clients' own
   const writerCalls = {}
@@ -2030,11 +1947,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
       sibling: sibling.id,
       commented: commented.map((task) => task.id),
     },
-    comments: {
-      made: commentsMade,
-      posted: comments.length,
-      failed: commentsMade - comments.length,
-    },
+    comments: writes.comments(),
     restored,
     changes: done.map((change, i) => {
       const until = done[i + 1]?.at ?? change.at + 1000

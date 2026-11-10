@@ -3,7 +3,8 @@
 // set they name, each query's last answer and its bytes, and whether the
 // client is current. The record part feeds it a real tab's frames from
 // Playwright and the replay part a Node client's frames from its socket,
-// so both measure the same way. Also the recorded set's format, what
+// so both measure the same way. Also the replay's wait until its clients
+// are current (allCurrent), the recorded set's format, what
 // another person replays of it and the comparison of a replay with a tab.
 //
 // A frame is the JSON text Convex sends (convex/browser's protocol): the
@@ -214,6 +215,50 @@ export class FrameTracker {
       })),
     )
   }
+}
+
+/** Whether replayed `client` ({ tracker, lead }) is current: connected
+    more than `connects` times and every query of its newest set answered,
+    and for a leader its Inbox feed answered too, since a leader watches
+    the feed only after its first beat answers, as a tab does, and after a
+    reconnect only after its resume order. The replay's clients and the
+    lone reconnect read it alike. */
+export const isCurrent = (client, connects) =>
+  client.tracker.connects > connects &&
+  client.tracker.current &&
+  (!client.lead || client.tracker.holds('inbox:feed'))
+
+/**
+ * Waits up to `timeoutMs` until every one of replayed `clients` ({ index,
+ * tracker, lead, openedAt }) is current, counting a client only once it
+ * connected more than `connects(client)` times, then answers a row for
+ * each: the queries its newest set holds once it connected again, which a
+ * reconnect sends again whether or not the client becomes current, and for
+ * a client that became current its time to current, to the moment its set
+ * became current (FrameTracker currentSince), from `from` and from its
+ * socket's open, and its queries' first answers.
+ */
+export async function allCurrent(clients, { from, timeoutMs, connects = () => 0 }) {
+  const row = (client, current) => {
+    const since = client.tracker.currentSince
+    return {
+      index: client.index,
+      queries: client.tracker.connects > connects(client) ? client.tracker.queries.size : 0,
+      ms: current ? since - from : null,
+      from_open_ms: current && client.openedAt ? since - client.openedAt : null,
+      current,
+      ...(current ? { first_answers: client.tracker.firstAnswers() } : {}),
+    }
+  }
+  const deadline = Date.now() + timeoutMs
+  const results = new Map()
+  while (results.size < clients.length && Date.now() < deadline) {
+    for (const client of clients)
+      if (!results.has(client.index) && isCurrent(client, connects(client)))
+        results.set(client.index, row(client, true))
+    await new Promise((done) => setTimeout(done, 20))
+  }
+  return clients.map((client) => results.get(client.index) ?? row(client, false))
 }
 
 /** JSON text of `value` with object keys sorted, so two equal values give

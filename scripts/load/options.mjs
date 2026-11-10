@@ -3,9 +3,12 @@
 // without a backend or a browser. One table (OPTIONS) holds every option
 // with the parts that read it, and both the parser and the help text
 // (usage) come from it. The benchmark's header says what each part
-// measures.
+// measures. Also the refusal of a working folder git could commit and the
+// sign-in's loopback-only Better Auth route.
 
-import { isLoopbackOrigin } from '../marketing-demo.mjs'
+import { existsSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { ignoredByGit, isLoopbackOrigin } from '../marketing-demo.mjs'
 
 /** The parts, what each does, and the parts `all` runs in turn. */
 export const PARTS = {
@@ -387,3 +390,40 @@ export function loadOptions(argv, env) {
   options.adminKey = key
   return options
 }
+
+/** The real path of absolute `path`, whose last parts may not exist yet. */
+const realPath = (path) =>
+  existsSync(path) ? realpathSync(path) : join(realPath(dirname(path)), basename(path))
+
+/**
+ * Refuses working folder `dir` where git could commit people.json, which
+ * holds the planted session ids: a folder inside checkout `root` that git
+ * does not ignore (`ignored`, marketing-demo.mjs ignoredByGit), as in a
+ * fresh clone or a sandbox whose dev-temp/ no exclude rule covers. Both
+ * are compared by their real paths, so a symlink to the checkout does not
+ * hide a folder inside it. A folder outside the checkout passes without
+ * asking git. Throws an Error.
+ */
+export function refuseTrackedDir(root, dir, ignored = ignoredByGit) {
+  const checkout = realPath(root)
+  const full = realPath(resolve(dir))
+  const within = relative(checkout, full)
+  const inside = within === '' || (!within.startsWith('..') && !isAbsolute(within))
+  if (inside && !ignored(checkout, full))
+    throw new Error(
+      `${dir} is inside the checkout and git does not ignore it, so people.json's session ids could be committed. Add it, or dev-temp/, to .git/info/exclude, or choose a --dir outside the checkout.`,
+    )
+}
+
+/** The app's Better Auth calls (src/lib/authSession.ts,
+    VITE_CONVEX_SITE_URL's /api/auth), which carry the password, as the
+    Playwright glob the browser parts' sign-in routes. A glob, which the
+    browser matches itself, stops only those calls in this process; a
+    function would stop every request of the page here, which a busy
+    replay's event loop slowed past the sign-in's wait. */
+export const AUTH_ROUTE = '**/api/auth/**'
+
+/** Whether the sign-in lets the Better Auth call to `url` go on: only to
+    a loopback origin, so neither the password nor a boot write can reach
+    a hosted deployment. */
+export const authCallAllowed = (url) => isLoopbackOrigin(new URL(url).origin)
