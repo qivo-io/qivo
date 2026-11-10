@@ -1536,3 +1536,31 @@ describe('the wrapper rule', () => {
     }
   })
 })
+
+/* ------------------------------------------- stored fields the schema keeps */
+
+/* Fields stored rows may still hold that nothing reads or writes any more.
+ * Each stays in schema.ts, which says why, because Convex refuses a deploy
+ * whose schema drops a field stored rows hold and clearing it would be a
+ * write on every hosted deployment. */
+const UNREAD_FIELDS = ['last_export_at']
+
+describe('the stored fields the schema keeps unread', () => {
+  const names = (source: string, field: string) => new RegExp(`\\b${field}\\b`).test(source)
+
+  it('positive control: schema.ts still declares each of them', () => {
+    const schema = sources['../schema.ts']
+    expect(schema).toBeDefined()
+    for (const field of UNREAD_FIELDS) expect(names(schema, field), field).toBe(true)
+  })
+
+  it('are named by no module but schema.ts', () => {
+    const named: string[] = []
+    for (const [path, source] of Object.entries(sources)) {
+      if (path === '../schema.ts') continue
+      for (const field of UNREAD_FIELDS)
+        if (names(source, field)) named.push(`${path.replace(/^\.\.\//, '')} names ${field}`)
+    }
+    expect(named).toEqual([])
+  })
+})

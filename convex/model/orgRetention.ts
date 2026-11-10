@@ -15,11 +15,9 @@
  * export within EXPORT_FRESH_DAYS before the service ended
  * (organizations.last_export_confirmed_at), which orgRemovals.ts
  * recordExport sets once the desktop app or a browser confirmed the saved
- * archive. The older last_export_at does not count, since the browser
- * export of earlier releases set it when a download started. An export
- * job's archive does not count by itself, whether only prepared or served by
- * the /exports/ route, because the backend cannot know that the client
- * received it. */
+ * archive. An export job's archive does not count by itself, whether only
+ * prepared or served by the /exports/ route, because the backend cannot
+ * know that the client received it. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'

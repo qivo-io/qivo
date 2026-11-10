@@ -1239,10 +1239,12 @@ export default defineSchema({
     // itself, so this only decides whether to remind admins. The settings
     // pages, Billing and the deletion reminder read it alone.
     last_export_confirmed_at: v.optional(v.string()),
-    // The last export before last_export_confirmed_at existed. Until the
-    // release after v0.1.161 the browser export set it when its download
-    // started, so a value may record a download that never finished.
-    // Nothing writes or reads it any more, and later work removes it.
+    // The last export before last_export_confirmed_at existed, which the
+    // browser export of v0.1.161 and earlier set when its download started.
+    // Nothing reads or writes it (tests/manifest.test.ts pins that). It
+    // stays in the schema because Convex refuses a deploy whose schema
+    // drops a field stored rows still hold, and clearing it would be a
+    // write on every hosted deployment.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1476,10 +1478,7 @@ export default defineSchema({
     since: v.optional(v.string()),
   })
     .index('by_profile', ['profile_id'])
-    .index('by_org', ['org_id'])
-    // read only by the tests' published whole since the workspace's people
-    // part went
-    .index('by_org_profile', ['org_id', 'profile_id']),
+    .index('by_org', ['org_id']),
 
   teams: defineTable({
     id: v.string(),
@@ -1583,8 +1582,6 @@ export default defineSchema({
     // the organization's people in name order, all of them or one role
     .index('by_org_name', ['org_id', 'name_key', 'id'])
     .index('by_org_role_name', ['org_id', 'org_role', 'name_key', 'id'])
-    // read by nothing since the workspace's people part went
-    .index('by_org_id', ['org_id', 'id'])
     .index('by_auth', ['auth_user_id'])
     .index('by_email', ['email']) // cross-org claim scan (identity.ts)
     .index('by_org_email', ['org_id', 'email'])
