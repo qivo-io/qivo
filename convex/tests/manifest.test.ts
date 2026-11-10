@@ -1539,8 +1539,9 @@ describe('the wrapper rule', () => {
 
 /* Fields stored rows may still hold that nothing reads or writes any more.
  * Each stays in schema.ts, which says why, because Convex refuses a deploy
- * whose schema drops a field stored rows hold and clearing it would be a
- * write on every hosted deployment. */
+ * whose schema drops a field stored rows hold. Clearing last_export_at
+ * would be a write on every hosted deployment, and up_to goes with its
+ * ticket, which the hourly reapUploadTickets deletes once it expires. */
 const UNREAD_FIELDS = ['last_export_at', 'up_to']
 
 describe('the stored fields the schema keeps unread', () => {

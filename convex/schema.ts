@@ -2086,10 +2086,12 @@ export default defineSchema({
     // Set on tickets of v0.1.162 and earlier whose upload declared no size,
     // when size_bytes was the most the URL took. Nothing reads or writes it
     // (tests/manifest.test.ts pins that), since every upload declares its
-    // size, and the file must have exactly size_bytes. It stays in the
-    // schema because Convex refuses a deploy whose schema drops a field
-    // stored rows still hold, and clearing it would be a write on every
-    // hosted deployment.
+    // size, and the file must have exactly size_bytes. A ticket that still
+    // holds it goes when it attaches, or within about an hour of its expiry
+    // when files.ts reapUploadTickets deletes it, so it needs no clearing
+    // write. It stays in the schema until a read-only check shows that no
+    // stored ticket holds it, because Convex refuses a deploy whose schema
+    // drops a field stored rows still hold.
     up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
