@@ -28,7 +28,8 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    itself once a project is shared again. Startup's own cases are in
    startupSelection.test.tsx. Team sync, which covers the home organization
    only, asks about that organization's projects. The phone's Roadmap gives the desktop's note for
-   every scope with nothing to schedule. A project's Roadmap keeps its
+   every scope with nothing to schedule, and its task list the desktop
+   Board's for a project without sub-projects. A project's Roadmap keeps its
    timeline with the milestones of its window behind the note, and the
    phone's agenda lists the scope's milestones under it, as the Overview
    does under its own note; My view's flags sit on its rows, so it shows
@@ -66,11 +67,14 @@ let root: Root
    at all ('hold'), or with `force`'s not ready, refusal or failure. */
 let holdsAnswer: ForcedProjectNav | 'hold' | null = null
 let phone = false
+// whether tasks:board holds its answers back, as one on its way does
+let boardHeld = false
 // the milestone reads App subscribed, by query
 let milestoneReads: string[] = []
 
 beforeEach(() => {
   phone = false
+  boardHeld = false
   holdsAnswer = null
   milestoneReads = []
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -152,8 +156,9 @@ async function app(snap: Snapshot, path = '/app/testbed') {
         navReads.delete(answer)
       }
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
-    else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
-    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
+    else if (name === 'tasks:board') {
+      if (!boardHeld) next(boardStandIn(server, args as BoardArgs))
+    } else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
       next(answerRoadmap(server, name, args))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (isMilestoneRead(name)) {
@@ -438,6 +443,38 @@ describe('New sub-project in a project without one', () => {
         await reload()
       }
     })
+
+  it("says it on the phone's task list as the desktop Board does, never to create a task", async () => {
+    phone = true
+    for (const [role, offered] of [
+      ['admin', true],
+      ['user', false],
+    ] as const) {
+      await app(granted(role), '/app/testbed/board/p/3')
+      await shows('Tasks live in sub-projects.')
+      expect(document.body.textContent).toContain('No sub-projects yet')
+      expect(document.body.textContent).not.toContain('No tasks here')
+      expect(document.body.textContent).not.toContain('Create a task to get started.')
+      expect(button('New sub-project') !== undefined, role).toBe(offered)
+      // the header offers no New task beside it, as the desktop Board does not
+      expect(document.querySelector('[data-mobile-new-task]'), role).toBeNull()
+      await reload()
+    }
+  })
+
+  it("offers New task on a top-level project's phone task list only once its answer names a sub-project", async () => {
+    phone = true
+    boardHeld = true
+    await app(granted('admin'), '/app/testbed/board/p/3')
+    await shows('Loading tasks…')
+    // must fail for a header that offers it while the answer loads
+    expect(document.querySelector('[data-mobile-new-task]')).toBeNull()
+    await reload()
+    // Plan's answer names its sub-project
+    boardHeld = false
+    await app(granted('admin'), '/app/testbed/board/p/2')
+    await vi.waitFor(() => expect(document.querySelector('[data-mobile-new-task]')).not.toBeNull())
+  })
 })
 
 /** `snap` with a milestone `name` on `project` a week from now, inside the

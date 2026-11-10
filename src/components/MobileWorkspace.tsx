@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { BoardScope } from '../../convex/lib/board'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { menuTrigger } from '../lib/focusWhenGone'
 import { inboxBadge } from '../lib/inboxBadge'
@@ -12,8 +13,13 @@ import { useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
 import { usePlannerVersion } from '../store/usePlannerVersion'
-import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
-import { BOARD_SLOTS, type BoardView, useBoardView } from '../views/board/useBoardView'
+import { BoardFrame, BoardNote, IncompleteNote, NoSubProjectsNote } from '../views/board/BoardNote'
+import {
+  BOARD_SLOTS,
+  type BoardView,
+  holdsNoSubProject,
+  useBoardView,
+} from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
 import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusDot } from './qivo'
 import { Button } from './ui/button'
@@ -56,13 +62,23 @@ export function MobileHeader({
           : info?.name || 'Projects'
   // New task where the cache says the scope, or a sub-project the phone
   // list's answer names, is writable, and in My view always: the dialog's
-  // targets (projectNav.targets) decide
-  const listed = P.boardRead(BOARD_SLOTS.phone).value
+  // targets (projectNav.targets) decide. Over the task list of a top-level
+  // project it waits until this scope's answer names a sub-project, so none
+  // shows while the answer loads, and none where it names none, whose note
+  // offers New sub-project instead (NoSubProjectsNote), as the desktop
+  // Board offers no New task there. Right after a scope switch the read
+  // still holds the last scope's answer, which says nothing of this one.
+  const read = P.boardRead(BOARD_SLOTS.phone)
+  const asked = read.key === null ? null : (JSON.parse(read.key) as { scope: BoardScope }).scope
+  const listed =
+    read.value?.state === 'ok' && asked?.kind === 'project' && asked.project_id === info?.id
+      ? read.value
+      : null
+  const waits = view === 'kanban' && !!info?.isMeta && !listed?.projects?.length
   const canCreate =
     !!info &&
-    (info.mine ||
-      P.canWrite(info.id) ||
-      (listed?.state === 'ok' && (listed.projects ?? []).some((id) => P.canWrite(id))))
+    !waits &&
+    (info.mine || P.canWrite(info.id) || (listed?.projects ?? []).some((id) => P.canWrite(id)))
   return (
     <header className="mobile-workspace-header">
       <div className="mobile-title-row">
@@ -425,6 +441,13 @@ function MobileTaskBoard({
   // server confirms (useHolds), asked only while its empty note could show
   const noProjects =
     useHolds(info.mine && count === 0 && view.shows && !waiting && view.empty()) === 'none'
+  // a top-level project whose answer names no sub-project, which says so in
+  // place of the sections, as the desktop Board does
+  const noSubProjects = view.shows && holdsNoSubProject(view, info)
+  // the empty note, none while tasks the answer names are missing, which
+  // IncompleteNote says
+  const empty =
+    count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && !noSubProjects
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -596,8 +619,8 @@ function MobileTaskBoard({
       {!view.shows && !noProjects && (
         <BoardNote view={view} info={info} actions={actions} variant="phone" />
       )}
-      {/* none while tasks the answer names are missing: the note says so */}
-      {count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && (
+      {noSubProjects && <NoSubProjectsNote info={info} actions={actions} variant="phone" />}
+      {empty && (
         <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
           <h2 data-empty-state-title>{waiting ? 'Loading tasks…' : 'No tasks here'}</h2>

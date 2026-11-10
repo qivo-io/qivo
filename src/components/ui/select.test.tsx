@@ -88,3 +88,47 @@ describe('a select in a kept page', () => {
     await vi.waitFor(() => expect([...listed].sort()).toEqual(['all', 'one', 'two']))
   })
 })
+
+describe('a native select in a browser with the customizable select', () => {
+  it('has its label only wider than 760px, where the stylesheet makes it customizable', async () => {
+    // the browser has base-select; the window starts phone width
+    vi.stubGlobal('CSS', { supports: (property: string) => property === 'appearance' })
+    const wide = { matches: false, change: () => {} }
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return wide.matches
+        },
+        addEventListener: (_: string, change: () => void) => {
+          wide.change = change
+        },
+        removeEventListener: vi.fn(),
+      })),
+    )
+    vi.resetModules()
+    const { NativeSelect, NativeSelectOption } = await import('./native-select')
+    const { TooltipProvider: Provider } = await import('./tooltip')
+    await act(async () =>
+      root.render(
+        <Provider>
+          <NativeSelect aria-label="Task status" defaultValue="todo">
+            <NativeSelectOption value="all">All statuses</NativeSelectOption>
+            <NativeSelectOption value="todo">To Do</NativeSelectOption>
+          </NativeSelect>
+        </Provider>,
+      ),
+    )
+    const label = () => container.querySelector('select > button[data-select-label]')
+    // a classic select, which WebKit paints empty around a label button
+    expect(label()).toBeNull()
+    // wider than 760px it gets the label, and loses it again on the phone
+    wide.matches = true
+    await act(async () => wide.change())
+    expect(label()?.querySelector('selectedcontent')).not.toBeNull()
+    wide.matches = false
+    await act(async () => wide.change())
+    expect(label()).toBeNull()
+    expect(container.querySelector('select')?.options).toHaveLength(2)
+  })
+})

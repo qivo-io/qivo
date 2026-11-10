@@ -30,7 +30,7 @@ import type {
 } from '../../../convex/model/projectNavReads'
 import { fmtTime } from '../../lib/dates'
 import { limitSentence } from '../../lib/fieldLimits'
-import { usePagedList } from '../../lib/pagedList'
+import { byNameOrder, usePagedList } from '../../lib/pagedList'
 import { parseSyncScope } from '../../lib/teamSync'
 import { P } from '../../store/planner'
 import type { SyncMeeting } from './useSyncMeeting'
@@ -156,11 +156,11 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
     const ids = scope.kind === 'all' ? answer.top_projects : answer.sub_projects
     // each project the cache names is a choice; one it leaves out is gone
     // and offered no more; one it could not read says so with Retry, and
-    // only one it still reads keeps the loading line
-    const named = ids.flatMap((id) => {
-      const p = P.project(id)
-      return p ? [projectChoice(p)] : []
-    })
+    // only one it still reads keeps the loading line. Sub-projects come in
+    // the sidebar's order, as projectNav.children lists them for a fresh
+    // meeting.
+    const known = ids.flatMap((id) => P.project(id) ?? [])
+    const named = (scope.kind === 'all' ? known : known.sort(byNameOrder)).map(projectChoice)
     const unnamed = ids.filter((id) => !P.project(id)).map((id) => P.projectState(id))
     const loading = unnamed.includes('loading')
     const failed = unnamed.some((state) => state === 'failed' || state === 'unchecked')

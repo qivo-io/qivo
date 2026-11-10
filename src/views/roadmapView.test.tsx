@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, useLayoutEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
@@ -342,6 +343,41 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(choices.sort()).toEqual([board.snapshot.projects[0].id, 'two'].sort())
   })
 
+  it("lists the ceiling note's sub-projects in the sidebar's order, by name and then id", async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // One takes Two's name, so the id decides between them, and Apple's
+        // name sorts first while its id sorts last
+        snap.projects[0].name = 'Two'
+        snap.projects.push({
+          ...snap.projects[0],
+          id: 'zz-apple',
+          key: 'APL',
+          num: 4,
+          name: 'Apple',
+        })
+      },
+      { scope: 'plan' },
+    )
+    const one = board.snapshot.projects[0].id
+    // the tracks in neither the name order nor the id order
+    board.server.roadmap.edit = (name, answer) =>
+      name === 'tasks:roadmap' && (answer as RoadmapAnswer).state === 'over_ceiling'
+        ? { ...(answer as RoadmapAnswer), projects: ['two', one, 'zz-apple'] }
+        : answer
+    board.server.roadmap.force = ['over_ceiling']
+    await renderRoadmap(board)
+    await board.answer()
+    const choices = [...document.querySelectorAll<HTMLElement>('[data-roadmap-choice]')].map(
+      (el) => el.dataset.roadmapChoice,
+    )
+    // must fail for the track order, the id order and localeCompare, which
+    // keeps the two Twos in the track order
+    expect(choices).toEqual(['zz-apple', one, 'two'])
+  })
+
   it('narrows one sub-project by filters or Search, and says the read failed with Try again', async () => {
     const board = await loadBoard(network, plan, { scope: 'two' })
     const palette = vi.fn()
@@ -481,6 +517,8 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       },
       { scope: 'plan' },
     )
+    // a recording visit, as App opens one on the Roadmap
+    board.P.roadmapContext(true, false)
     await renderRoadmap(board)
     const arrows = () => document.querySelectorAll('svg[aria-hidden="true"] g').length
     expect(arrows()).toBe(1)
@@ -566,6 +604,74 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector<HTMLButtonElement>('[data-auto-correct]')?.disabled).toBe(true)
   })
 
+  it('says Auto-move moved its tasks only once the save answers, and is off while undo history is cleared', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { start_week: week(0), end_week: week(0) })
+        snap.links.push({
+          id: 'link-1',
+          source_id: 'one-1',
+          target_id: 'two-1',
+          type: 'blocks',
+          pair_key: 'one-1:two-1',
+          created_at: '2026-09-01T08:00:00.000Z',
+        })
+      },
+      { scope: 'plan' },
+    )
+    const saves: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = []
+    const sent: string[] = []
+    network.mutation.mockImplementation((ref) => {
+      const name = getFunctionName(ref)
+      // the task writes, not the view's preference saves
+      if (name !== 'prefs:save') sent.push(name)
+      return name === 'roadmap:change'
+        ? new Promise((resolve, reject) => saves.push({ resolve, reject }))
+        : new Promise(() => {})
+    })
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board)
+    const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
+    const toasts = () => vi.mocked(window.showToast).mock.calls.map(([text]) => String(text))
+    const moved = () => toasts().filter((text) => text.startsWith('Moved'))
+    // the visit's 24 hours end before the press: nothing is sent, the
+    // store says so, and the button then says why and how to get it back
+    const now = Date.now()
+    const later = vi.spyOn(Date, 'now').mockReturnValue(now + 24 * 60 * 60 * 1000 + 1)
+    await act(async () => move()?.click())
+    // must fail for a fallback that sends each move as its own write
+    expect(sent).toEqual([])
+    expect(moved()).toEqual([])
+    expect(toasts()).toEqual([
+      'Roadmap undo history expired. Leave Roadmap and return to start a new history.',
+    ])
+    expect(move()?.disabled).toBe(true)
+    expect(move()?.dataset.autoMove).toBe('no_history')
+    later.mockRestore()
+    // a new visit takes it again; a refused save claims no move
+    await act(async () => {
+      board.P.roadmapContext(false, false)
+      board.P.roadmapContext(true, false)
+    })
+    expect(move()?.disabled).toBe(false)
+    await act(async () => move()?.click())
+    expect(sent).toEqual(['roadmap:change'])
+    // must fail for a toast sent with the write
+    expect(moved()).toEqual([])
+    await act(async () => saves[0].reject(new ConvexError({ code: 'rule', message: 'too many' })))
+    await vi.waitFor(() => expect(move()?.disabled).toBe(false))
+    expect(moved()).toEqual([])
+    // the store's toast says what refused it
+    expect(toasts().at(-1)).toMatch(/too many/i)
+    await act(async () => move()?.click())
+    expect(saves).toHaveLength(2)
+    expect(moved()).toEqual([])
+    await act(async () => saves[1].resolve({ count: 1 }))
+    expect(moved()).toEqual(['Moved 1 task after their blockers'])
+  })
+
   it('says Auto-move waits, by name, while a write is on its way', async () => {
     const board = await loadBoard(
       network,
@@ -583,6 +689,8 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       },
       { scope: 'plan' },
     )
+    // a recording visit, as App opens one on the Roadmap
+    board.P.roadmapContext(true, false)
     await renderRoadmap(board)
     const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
     expect(move()?.disabled).toBe(false)
@@ -620,6 +728,8 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
         ? { ...a, auto_move: { ...a.auto_move, editable_projects: [one] } }
         : answer
     }
+    // a recording visit, as App opens one on the Roadmap
+    board.P.roadmapContext(true, false)
     await renderRoadmap(board)
     const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
     // two-1 starts before its blocker ends, in Two, so nothing moves

@@ -135,6 +135,7 @@ import {
 import {
   assertLabelCreator,
   assertLabelManager,
+  checkLabelRefs,
   createLabelCore,
   findLabel,
   LABEL_FIELDS,
@@ -830,7 +831,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_task',
       title: 'Update task',
       description:
-        `Patch fields on a task in a project you can write to. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and \`status\`, \`start_week\` and \`end_week\` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null \`assignee_id\` must name an active Qivo user with effective Edit or Lead permission on the task's project; use \`list_project_users\` and select a row with \`assignable: true\`. \`archived: true/false\` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents, and a subtask whose parent already has ${LIMITS.subtasks.max} active subtasks comes back without it); \`archive_reason\` with \`archived: true\` posts the reason as a comment, so the comment limits of add_comment apply to it, and a refused reason archives nothing. \`reviewer_id\` follows the same rule as \`assignee_id\` (a row with \`assignable: true\`); null clears it; a task with subtasks takes no reviewer. \`project\` and \`sub_project\` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (\`parent\` null, or a task in that project). \`parent\` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. \`add_labels\` and \`remove_labels\` take label ids or names. A task that enters \`review\`, created there or moved there, gets its project's review time as \`remaining_hours\` (${DEFAULT_REVIEW_HOURS} hours unless the project sets another) unless the same call sends a non-null \`remaining_hours\`; leaving \`review\` keeps whatever is left. ` +
+        `Patch fields on a task in a project you can write to. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and \`status\`, \`start_week\` and \`end_week\` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null \`assignee_id\` must name an active Qivo user with effective Edit or Lead permission on the task's project; use \`list_project_users\` and select a row with \`assignable: true\`. \`archived: true/false\` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents, and a subtask whose parent already has ${LIMITS.subtasks.max} active subtasks comes back without it); \`archive_reason\` with \`archived: true\` posts the reason as a comment, so the comment limits of add_comment apply to it, and a refused reason archives nothing. \`reviewer_id\` follows the same rule as \`assignee_id\` (a row with \`assignable: true\`); null clears it; a task with subtasks takes no reviewer. \`project\` and \`sub_project\` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (\`parent\` null, or a task in that project). \`parent\` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. \`add_labels\` and \`remove_labels\` take label ids or names, at most ${LIMITS.taskLabelRefs.max} in each. A task that enters \`review\`, created there or moved there, gets its project's review time as \`remaining_hours\` (${DEFAULT_REVIEW_HOURS} hours unless the project sets another) unless the same call sends a non-null \`remaining_hours\`; leaving \`review\` keeps whatever is left. ` +
         EXPECTED_SENTENCE +
         ' Its keys are the fields as get_task reads them: `parent_id` with `has_hidden_parent` for `parent`, and `project_id` for a move.',
       inputSchema: {
@@ -928,10 +929,12 @@ export const TOOLS: McpTool[] = [
           add_labels: {
             type: 'array',
             items: { type: 'string' },
+            maxItems: LIMITS.taskLabelRefs.max,
           },
           remove_labels: {
             type: 'array',
             items: { type: 'string' },
+            maxItems: LIMITS.taskLabelRefs.max,
           },
           expected: expectedSchema(TASK_FIELDS),
         },
@@ -939,7 +942,12 @@ export const TOOLS: McpTool[] = [
       },
     },
     run: (r, { callerId, access, args }) => {
-      const { expected, ...rest } = args as { expected?: unknown }
+      const { expected, ...rest } = args as {
+        expected?: unknown
+        add_labels?: string[]
+        remove_labels?: string[]
+      }
+      checkLabelRefs({ add: rest.add_labels ?? [], remove: rest.remove_labels ?? [] })
       return r.runMutation(internal.machine.mcp.updateIssue, {
         callerId,
         access,

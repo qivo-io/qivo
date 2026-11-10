@@ -2,17 +2,21 @@
    cannot show a selection's tasks (useBoardView): the narrowing message of
    a selection past the Board's limits,
    a Board that is not available or did not load, a text filter past its
-   limit and a wait too large to show tasks during. Each is an empty state
-   (components/ViewNote.tsx), where focus goes once a task window closes
+   limit, a wait too large to show tasks during and a top-level project
+   without sub-projects. Each is an empty state (components/ViewNote.tsx,
+   or components/qivo EmptyState for the desktop's note of a project
+   without sub-projects), where focus goes once a task window closes
    over it (lib/taskFocus.ts). The filter row stays usable beside every
    one. */
 
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../../convex/lib/limits'
+import { EmptyState } from '../../components/qivo'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
-import type { ScopeInfo } from '../../store/planner'
+import { byNameOrder } from '../../lib/pagedList'
+import { P, type ScopeInfo } from '../../store/planner'
 import type { BoardVariant } from './boardArgs'
 import type { BoardView } from './useBoardView'
 
@@ -42,11 +46,11 @@ export function BoardNote({
           : 'Narrow your filters, such as Focus, Priority, Stale or the text filter, or open a project.',
       }
     if (info.isMeta) {
-      // the answer's sub-projects the project cache names, in the Board's
-      // lane order (useBoardView groups)
+      // the answer's sub-projects the project cache names, in the sidebar's
+      // order, as the Roadmap's and Team sync's notes list them
       return {
         hint: 'Choose a sub-project or narrow your filters.',
-        projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])),
+        projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])).sort(byNameOrder),
       }
     }
     return { hint: 'Narrow your filters.' }
@@ -138,6 +142,43 @@ export function BoardNote({
     default:
       return null
   }
+}
+
+/** What the Board says in place of its columns or its phone sections for a
+    top-level project without sub-projects (useBoardView.ts
+    holdsNoSubProject), with New
+    sub-project for whoever manages the project. */
+export function NoSubProjectsNote({
+  info,
+  actions,
+  variant,
+}: {
+  info: ScopeInfo
+  actions: Actions
+  variant: BoardVariant
+}) {
+  const label = P.canManageOwnProjectAccess(info.id) ? 'New sub-project' : undefined
+  const onAction = () => actions.newProject({ parent: info.id })
+  if (variant === 'phone')
+    return (
+      <ViewNote
+        hooks="board"
+        phone
+        icon="layers"
+        title="No sub-projects yet"
+        hint="Tasks live in sub-projects."
+        action={label ? { label, onClick: onAction } : undefined}
+      />
+    )
+  return (
+    <EmptyState
+      icon="layers"
+      title="No sub-projects yet"
+      hint="Tasks live in sub-projects."
+      actionLabel={label}
+      onAction={onAction}
+    />
+  )
 }
 
 /** The note a Board shows above its tasks while its row source did not

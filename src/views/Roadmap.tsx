@@ -150,6 +150,12 @@ type PendingRequest = RoadmapRequest & { kind: 'plan' | 'reveal' }
 /* No request of either kind. */
 const NO_REQUESTS = { plan: null, reveal: null }
 
+/** Why Auto-move is off once the visit's undo history is cleared, which
+    takes its moves as one step (P.batchRoadmapChanges), and how to get it
+    back, as Undo says (components/RoadmapUndo.tsx). */
+const AUTO_MOVE_NO_HISTORY =
+  'Auto-move is unavailable while undo history is cleared. Leave Roadmap and return to use it again.'
+
 /** The Roadmap's own root, which names its state and its milestone flags'
     for drives, tests and the benchmark (data-roadmap-root,
     data-roadmap-state, data-roadmap-milestones) and is busy while it waits
@@ -1392,10 +1398,13 @@ function Roadmap({
      this Roadmap's tasks, here or in other projects, with the dates on
      screen for each task the Roadmap shows, so the count
      follows a saved drag at once. It moves nothing from part of its inputs:
-     while they load, did not fit or failed, the button says why. It also
-     waits while a write is on its way (P.roadmapUndo.busy), a Roadmap
-     write or any other, so a press never sends expected values a pending
-     write has made stale. Above the early returns, as hooks. */
+     while they load, did not fit or failed, the button says why. It saves
+     only as one batch of the visit's undo history (P.batchRoadmapChanges),
+     so once that history is cleared (P.roadmapUndo.disabled) it says to
+     leave the Roadmap and return. It also waits while a write is on its
+     way (P.roadmapUndo.busy), a Roadmap write or any other, so a press
+     never sends expected values a pending write has made stale. Above the
+     early returns, as hooks. */
   const autoMoveInputs = view.deps.autoMove.state === 'ok' ? view.deps.autoMove.inputs : null
   const viewsNow = P.updates.views.getSnapshot()
   const partTasks = useMemoR(
@@ -1422,9 +1431,13 @@ function Roadmap({
   )
   const autoMoveBlock =
     autoMoveUnavailable(view.deps) ??
-    (P.roadmapUndo.busy && pendingMoves.length > 0
-      ? 'Auto-move waits until your changes, here or elsewhere, are saved.'
-      : null)
+    (pendingMoves.length === 0
+      ? null
+      : P.roadmapUndo.disabled
+        ? AUTO_MOVE_NO_HISTORY
+        : P.roadmapUndo.busy
+          ? 'Auto-move waits until your changes, here or elsewhere, are saved.'
+          : null)
   const moves = autoMoveBlock ? [] : pendingMoves
   const autoMoveSays = autoMoveBlock ?? autoMoveTitle(moves.length)
   // the line beside the toolbar that says why no dependency arrow shows
@@ -1432,7 +1445,10 @@ function Roadmap({
   const autoArrange = () => {
     if (!moves.length || !partTasks || P.refusePausedEdit()) return
     const rowOf = new Map(partTasks.map((t) => [t.id, t.row]))
-    P.batchRoadmapChanges(() => {
+    const count = moves.length
+    // null only past the 24-hour expiry, which the store toasts, as the
+    // button is off without a recording visit and behind a task window
+    const saved = P.batchRoadmapChanges(() => {
       for (const m of moves) {
         // a task the Roadmap shows moves as its bar does; one only the
         // dependency answer holds moves from its stored dates
@@ -1444,9 +1460,11 @@ function Roadmap({
         }
       }
     })
-    window.showToast?.(
-      `Moved ${moves.length} task${moves.length > 1 ? 's' : ''} after their blockers`,
-    )
+    // once the server accepted the batch; a refusal is the store's toast,
+    // and every task keeps its dates
+    void saved?.then((ok) => {
+      if (ok) window.showToast?.(`Moved ${count} task${count > 1 ? 's' : ''} after their blockers`)
+    })
   }
 
   // Keep controls available in empty states so filters can be cleared. Pass
@@ -1513,9 +1531,11 @@ function Roadmap({
             data-auto-move={
               autoMoveUnavailable(view.deps)
                 ? view.deps.autoMove.state
-                : autoMoveBlock
-                  ? 'waiting'
-                  : undefined
+                : autoMoveBlock === AUTO_MOVE_NO_HISTORY
+                  ? 'no_history'
+                  : autoMoveBlock
+                    ? 'waiting'
+                    : undefined
             }
             onClick={() => autoArrange()}
             disabled={moves.length === 0}

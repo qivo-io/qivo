@@ -420,6 +420,7 @@ into the range.
 | Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
 | User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
 | Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
+| Labels one task update adds or removes | 20 labels in each list | add_labels and remove_labels must each name at most 20 labels, the most a task can have. Name fewer labels. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -1831,7 +1832,10 @@ removing one it does not have, changes nothing. An unknown label is a `400`
 at most 20 labels. `remove_labels` applies before `add_labels`, so one PATCH
 can swap labels on a full task, and a label past 20 is a `400` (`this task
 already has 20 labels, the most a task can have. Remove one first.`) that
-changes nothing.
+changes nothing. Each list names at most 20 labels, a name sent twice
+counted twice, and a longer one is a `400` (`add_labels and remove_labels
+must each name at most 20 labels, the most a task can have. Name fewer
+labels.`) before any label is looked up.
 
 **Order.** One PATCH may combine all of this. It applies the move first,
 then the parent, then the other fields with the archive toggle, then the

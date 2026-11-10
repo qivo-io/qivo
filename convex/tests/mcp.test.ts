@@ -137,8 +137,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'ef1adce45aa90fa050a74a50244401c42016bfdf742b11e0d41ed5dc716aebed'
-const SHA_TOOLS_MODERN = 'e4cd1f2b0d12b450f93f4a45c0d30ca7504f5e30e02eafc13ff2340fa025a5b5'
+const SHA_TOOLS_LEGACY = '003c10dfbe1aab118ede84794f5460c43037bb22d2e1269e603561e8f5fede19'
+const SHA_TOOLS_MODERN = 'f8d73f60e5f31a6a670d0371d7431183f0d6986d325c091972af682d3f0d5d9f'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -2411,5 +2411,41 @@ describe('write tools', () => {
       tasks: [ref],
       has_more: false,
     })
+  })
+
+  test('update_task over the transport refuses a label list past its limit with the sentence, also past 8,192 entries', async () => {
+    const fx = await machineOrg()
+    await mintKey(fx.t, fx.agent, QVA)
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const call = async (args: Record<string, unknown>) => {
+      const response = await post(
+        fx.t,
+        QVA,
+        legacyBody('tools/call', { name: 'update_task', arguments: args, _meta: env() }, 62),
+        {
+          'MCP-Protocol-Version': '2026-07-28',
+          'Mcp-Method': 'tools/call',
+          'Mcp-Name': 'update_task',
+        },
+      )
+      expect(response.status).toBe(200)
+      return JSON.parse(await bodyOf(response)).result as {
+        content: { text: string }[]
+        isError?: boolean
+      }
+    }
+    const ref = `QN-${task.num}`
+    // past Convex's 8,192 values an array fails the mutation's argument
+    // check, so the tool refuses it before the mutation
+    for (const n of [LIMITS.taskLabelRefs.max + 1, 8_193]) {
+      for (const field of ['add_labels', 'remove_labels']) {
+        const refused = await call({ ref, [field]: Array(n).fill('Missing') })
+        expect(refused.isError).toBe(true)
+        expect(refused.content[0].text).toBe(LIMITS.taskLabelRefs.refusal)
+      }
+    }
+    // must fail for a bound below the limit: that many refs reach the lookup
+    const atLimit = await call({ ref, add_labels: Array(LIMITS.taskLabelRefs.max).fill('Missing') })
+    expect(atLimit.content[0].text).toBe('label "Missing" not found')
   })
 })

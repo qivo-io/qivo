@@ -563,7 +563,7 @@ describe('roadmap undo through the client store', () => {
     await settled()
     expect(alone).toBe(false)
     let batched: Promise<boolean>[] = []
-    P.batchRoadmapChanges(() => {
+    const whole = P.batchRoadmapChanges(() => {
       batched = [
         P.updateIssue(first.id, moved(first, 1)),
         P.updateIssue(second.id, moved(second, 2)),
@@ -572,6 +572,39 @@ describe('roadmap undo through the client store', () => {
     expect(requests).toHaveLength(2)
     latest().resolve({ count: 1 })
     expect(await Promise.all(batched)).toEqual([true, true])
+    expect(await whole).toBe(true)
+  })
+
+  it('refuses a batch inside another rather than answer it never', () => {
+    expect(() => P.batchRoadmapChanges(() => void P.batchRoadmapChanges(() => {}))).toThrow(
+      'P.batchRoadmapChanges ran inside another batch',
+    )
+    expect(requests).toHaveLength(0)
+  })
+
+  it('sends no batch without a recording visit, also when the 24 hours end at the press', async () => {
+    const [first, second] = [task(), shaped(P, snap.issues[1].id)]
+    const both = () =>
+      P.batchRoadmapChanges(() => {
+        P.updateIssue(first.id, moved(first, 1))
+        P.updateIssue(second.id, moved(second, 2))
+      })
+    // must fail for a fallback that sends each move as its own write
+    P.roadmapContext(true, true)
+    expect(both()).toBeNull()
+    expect(requests).toHaveLength(0)
+    P.roadmapContext(true, false)
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 24 * 60 * 60 * 1000 + 1)
+    expect(both()).toBeNull()
+    expect(requests).toHaveLength(0)
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'Roadmap undo history expired. Leave Roadmap and return to start a new history.',
+      'info',
+    )
+    expect(task()).toMatchObject({ start: first.start, end: first.end })
+    // once cleared, it stays so for the visit
+    expect(both()).toBeNull()
+    expect(requests).toHaveLength(0)
   })
 
   it('groups a planning action into one step and waits for all saves before undo or revert all', async () => {

@@ -1079,8 +1079,9 @@ async function mintCredential(scheme) {
     part, her seats and organizations, and from the tables (tableRows),
     through a client of the local admin key itself since a system table
     answers no person the admin acts as, her organizations' live projects,
-    neither archived nor under an archived parent, their active tasks, the
-    unmarked label rows of those tasks and the unmarked links between them.
+    neither archived nor under an archived parent, their active tasks with
+    their text (withDescriptions), the unmarked label rows of those tasks
+    and the unmarked links between them.
     No part sends a task, so the tables are where a seed run finds what an
     earlier run made. */
 async function seedSnapshot(client, target) {
@@ -1095,8 +1096,9 @@ async function seedSnapshot(client, target) {
   const projects = rows.filter(
     (p) => !p.archived_at && !(p.parent_id && byId.get(p.parent_id)?.archived_at),
   )
-  const issues = (await tableRows(admin, 'issues')).filter(
-    (task) => orgs.has(task.org_id) && !task.archived_at,
+  const issues = await withDescriptions(
+    admin,
+    (await tableRows(admin, 'issues')).filter((task) => orgs.has(task.org_id) && !task.archived_at),
   )
   const active = new Set(issues.map((task) => task.id))
   const issueLabels = (await tableRows(admin, 'issue_labels')).filter(
@@ -1500,21 +1502,26 @@ async function deletedTasksOf(client, org) {
 }
 
 /** The archived tasks of organization `org`, which the workspace leaves
-    out, read as the Convex CLI reads a table, each with its text: its
-    description row's, as the app reads it, or issues.description for a
-    task without one. Descriptions release 3 stops writing
-    issues.description, so the rows hold the seed's marks then. */
+    out, read as the Convex CLI reads a table, each with its text
+    (withDescriptions). */
 export async function archivedTasksOf(client, org) {
-  const archived = (await tableRows(client, 'issues')).filter(
-    (row) => row.org_id === org && row.archived_at,
+  return withDescriptions(
+    client,
+    (await tableRows(client, 'issues')).filter((row) => row.org_id === org && row.archived_at),
   )
-  if (!archived.length) return archived
+}
+
+/** The issues rows `tasks`, each with its text: its description row's, as
+    the app reads it, or issues.description for a task without one, read
+    through the local admin `client`. No writer sets issues.description, so
+    the description rows hold the seed's marks. */
+async function withDescriptions(client, tasks) {
+  if (!tasks.length) return tasks
+  const ids = new Set(tasks.map((task) => task.id))
   const texts = new Map()
   for (const row of await tableRows(client, 'issue_descriptions'))
-    if (row.org_id === org && !texts.has(row.issue_id)) texts.set(row.issue_id, row.description)
-  return archived.map((row) =>
-    texts.has(row.id) ? { ...row, description: texts.get(row.id) } : row,
-  )
+    if (ids.has(row.issue_id) && !texts.has(row.issue_id)) texts.set(row.issue_id, row.description)
+  return tasks.map((row) => (texts.has(row.id) ? { ...row, description: texts.get(row.id) } : row))
 }
 
 /** The work still to do for `tasks` seeded ones, given the `present` ones
