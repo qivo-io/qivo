@@ -10777,14 +10777,10 @@ export const PLANNER = {
       after an undo conflict, a task content write or the 24-hour expiry
       (which this toasts), or with a task window open, it runs nothing and
       answers null, so no operation goes as a write of its own (Auto-move,
-      its one caller, says why from P.roadmapUndo.disabled). A batch run
-      inside another joins it. */
+      its one caller, says why from P.roadmapUndo.disabled). Batches do not
+      nest: a call inside another throws. */
   batchRoadmapChanges: (change: () => void): Promise<boolean> | null => {
-    const outer = roadmapBatch
-    if (outer) {
-      change()
-      return new Promise((resolve) => outer.saved.push(resolve))
-    }
+    if (roadmapBatch) throw new Error('P.batchRoadmapChanges ran inside another batch')
     expireRoadmapHistory()
     if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
     const batch: NonNullable<typeof roadmapBatch> = {
