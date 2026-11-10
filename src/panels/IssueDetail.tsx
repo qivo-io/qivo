@@ -2783,7 +2783,8 @@ function IssueDetail({
   // first and last rows stay.
   const placeOwner = useRefID({})
   const placeRow = useRefID<Element | null>(null)
-  const spineKey = `${shown.map((row) => row.id).join(' ')}:${newer}`
+  const shownIds = shown.map((row) => row.id).join(' ')
+  const spineKey = `${shownIds}:${newer}`
   useEffectID(() => {
     const owner = placeOwner.current
     const scroller = actScrollRef.current
@@ -2832,16 +2833,26 @@ function IssueDetail({
   // its own row. This runs in every browser, as the presses do: WebKit
   // reports CSS scroll anchoring but lost the place when many rows above
   // went, and where the browser's anchoring already kept the row, the shift
-  // is 0. The row is measured inside its scroller, since every render runs
-  // this and one that only moves the scroller on screen keeps the rows.
+  // is 0. Only a commit that changes the thread's shown rows shifts: any
+  // other moves what is above the rows on purpose, as the description
+  // coming back from its pop-out above the stacked window's thread, and
+  // must not scroll. The row is measured inside its scroller, so a commit
+  // that also moves the scroller on screen keeps the rows.
   const placeTop = useRefID<number | null>(null)
+  const placeRows = useRefID('')
   placeTop.current = null
-  if (!earlierFrom.current && !newerFrom.current && placeRow.current?.isConnected)
+  if (
+    shownIds !== placeRows.current &&
+    !earlierFrom.current &&
+    !newerFrom.current &&
+    placeRow.current?.isConnected
+  )
     placeTop.current = topInScroller(placeRow.current)
   useLayoutEffectID(() => {
     const top = placeTop.current
     const row = placeRow.current
     placeTop.current = null
+    placeRows.current = shownIds
     if (top === null || !row?.isConnected) return
     const shift = topInScroller(row) - top
     if (shift !== 0) scrollerOf(row).scrollTop += shift
