@@ -29,12 +29,14 @@ import {
   withoutLeaderReads,
 } from './load/frames.mjs'
 import {
+  authCallAllowed,
   EVERYDAY_ORG,
   loadOptions,
   OPTIONS,
   OptionsError,
   PARTS,
   PHASES,
+  refuseTrackedDir,
   usage,
   VIEWS,
 } from './load/options.mjs'
@@ -233,6 +235,40 @@ describe('the load benchmark options', () => {
     expect(loadOptions(['all'], { ...KEY, QIVO_ENVIRONMENT: 'development' }).adminKey).toBe(
       'local-admin-key',
     )
+  })
+
+  it('refuses a working folder in the checkout that git does not ignore, and passes one outside', () => {
+    const root = '/work/qivo'
+    const asked = []
+    // git as a sandbox with dev-temp/ in its exclude rules answers
+    const ignored = (cwd, path) => {
+      asked.push([cwd, path])
+      return path.startsWith(`${root}/dev-temp/`)
+    }
+    expect(() => refuseTrackedDir(root, '/work/qivo/dev-temp/load', ignored)).not.toThrow()
+    expect(asked).toEqual([[root, '/work/qivo/dev-temp/load']])
+    for (const dir of ['/work/qivo/load', '/work/qivo', '/work/qivo/dev-temp/../load'])
+      expect(() => refuseTrackedDir(root, dir, ignored)).toThrow('git does not ignore it')
+    // outside the checkout, a sibling whose name it starts included, git is not asked
+    asked.length = 0
+    for (const dir of ['/tmp/load', '/work/qivo-load', '/work/qivo/../load'])
+      expect(() => refuseTrackedDir(root, dir, ignored)).not.toThrow()
+    expect(asked).toEqual([])
+  })
+
+  it("lets the sign-in's Better Auth calls go to loopback only", () => {
+    for (const url of [
+      'http://127.0.0.1:3237/api/auth/sign-in/email',
+      'http://localhost:5241/__qivo_http/api/auth/get-session?disableCookieCache=true',
+    ])
+      expect(authCallAllowed(url)).toBe(true)
+    for (const url of [
+      'https://happy-otter-123.convex.site/api/auth/sign-in/email',
+      'http://127.0.0.1.example.com/api/auth/sign-in/email',
+      'http://localhost@example.com/api/auth/sign-in/email',
+      'https://qivo.io/api/auth/sign-in/email',
+    ])
+      expect(authCallAllowed(url)).toBe(false)
   })
 
   it('answers --help without a key, and its text names every part and option with its parts', () => {

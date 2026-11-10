@@ -14,8 +14,8 @@
 // its default, from the one table the parser reads too (load/options.mjs
 // OPTIONS); an unknown option, or one its part does not read, stops the run
 // before anything starts. The pure parts live in scripts/load/, which
-// scripts/benchmark-load.test.mjs checks: options.mjs the options,
-// plan.mjs the organization setup grows and which client replays what,
+// scripts/benchmark-load.test.mjs checks: options.mjs the options, the
+// working folder's refusal and the sign-in's Better Auth route, plan.mjs the organization setup grows and which client replays what,
 // frames.mjs the Convex sync protocol and the recorded sets, changes.mjs the
 // changes phase's plan, alerts.mjs the app's alert client wired for a
 // replayed leader, busy.mjs the busy phase's spinning processes, and
@@ -26,7 +26,8 @@
 // reads the local backend's admin key from QIVO_LOCAL_ADMIN_KEY, as the
 // local seeds do, and prints it nowhere. The browser parts sign in only
 // once the app at --site-url syncs with --url, with every Better Auth call
-// that leaves loopback aborted while they do (signedIn). Never point it at
+// that leaves loopback aborted while they do (signedIn, options.mjs
+// AUTH_ROUTE). Never point it at
 // a hosted deployment: it plants logins and sessions, adds people, teams and
 // organizations, reassigns tasks and writes changes and comments. Run it in
 // a Boat sandbox against the backend the sandbox started, after
@@ -201,7 +202,7 @@
 import { fork } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
@@ -221,7 +222,15 @@ import {
   subscriptionsByOrganization,
   withoutLeaderReads,
 } from './load/frames.mjs'
-import { isLoopbackOrigin, loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
+import {
+  AUTH_ROUTE,
+  authCallAllowed,
+  loadOptions,
+  OptionsError,
+  refuseTrackedDir,
+  usage,
+  VIEWS,
+} from './load/options.mjs'
 import {
   checkSpecs,
   clientSpecs,
@@ -257,7 +266,6 @@ import {
   tabsIdlePerMinute,
   watchedPerMinute,
 } from './load/report.mjs'
-import { ignoredByGit } from './marketing-demo.mjs'
 
 const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -414,25 +422,11 @@ async function once(step) {
   }
 }
 
-/** Refuses working folder `dir` where git could commit people.json, which
-    holds the planted session ids: a folder inside the checkout that git
-    does not ignore (marketing-demo.mjs ignoredByGit), as in a fresh clone
-    or a sandbox whose dev-temp/ no exclude rule covers. A folder outside
-    the checkout passes. */
-function refuseTrackedDir(dir) {
-  const full = resolve(dir)
-  const within = relative(ROOT, full)
-  const inside = within === '' || (!within.startsWith('..') && !isAbsolute(within))
-  if (inside && !ignoredByGit(ROOT, full))
-    throw new Error(
-      `${dir} is inside the checkout and git does not ignore it, so people.json's session ids could be committed. Add it, or dev-temp/, to .git/info/exclude, or choose a --dir outside the checkout.`,
-    )
-}
-
 /** The setup part: grows Northstar to the everyday organization and writes
-    people.json. */
+    people.json, refusing a working folder git could commit
+    (options.mjs refuseTrackedDir). */
 async function setup(options) {
-  refuseTrackedDir(options.dir)
+  refuseTrackedDir(ROOT, options.dir)
   const admin = httpClient(options)
   const noraEmail = 'nora@demo.qivo.io'
   const noraLogin = await component(admin, 'adapter:findOne', {
@@ -986,14 +980,10 @@ async function signedIn(options) {
         }
       }
     })
-    // the app's Better Auth calls (src/lib/authSession.ts, VITE_CONVEX_SITE_URL's
-    // /api/auth), which carry the password, go nowhere but loopback while the
-    // sign-in runs. A glob, which the browser matches itself, stops only those
-    // calls in this process; a function would stop every request of the page
-    // here, which a busy replay's event loop slowed past the sign-in's wait.
-    const auth = '**/api/auth/**'
-    await context.route(auth, (route) =>
-      isLoopbackOrigin(new URL(route.request().url()).origin) ? route.continue() : route.abort(),
+    // the app's Better Auth calls, which carry the password, go nowhere but
+    // loopback while the sign-in runs (options.mjs AUTH_ROUTE)
+    await context.route(AUTH_ROUTE, (route) =>
+      authCallAllowed(route.request().url()) ? route.continue() : route.abort(),
     )
     const page = await context.newPage()
     const sockets = []
@@ -1010,7 +1000,7 @@ async function signedIn(options) {
     }
     await signInDemo(page, demo, 'nora')
     // the timed tabs' own token calls pass unrouted
-    await context.unroute(auth)
+    await context.unroute(AUTH_ROUTE)
     // every part opens its own tabs in the signed-in context
     await page.close()
     return { browser, context, notifications }
