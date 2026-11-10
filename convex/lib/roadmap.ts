@@ -213,9 +213,9 @@ export const ROADMAP = {
  * The owner chose on 1 November 2026 that a figure that depends on the day
  * or on workloads may answer unavailable past a measured size inside the
  * design size. Auto-move is a scheduling calculation over other tasks'
- * dates, and the limits plan asks to make such a calculation explicitly
- * unavailable rather than derive it from incomplete inputs (Roadmap
- * loading, Workload and scheduling loading), so its inputs answer
+ * dates, and design-spec §9.2 asks to make such a calculation explicitly
+ * unavailable rather than derive it from incomplete inputs, so its inputs
+ * answer
  * over_budget past the size above, an agent decision of 5 November 2026
  * that borrows choice 1's measured and documented size. The design size has
  * no link figure, so the measured size uses the perf seed's share. */

@@ -2025,9 +2025,9 @@ open daily period.
 
 Switching daily storage billing on is the owner's decision, never a stage's.
 First ship the docs change above. Then accept one daily period in the Polar
-sandbox, its storage charge sent between about an hour and two days before
-the period's end and landing on that period's closing invoice, as the
-limits plan requires before daily billing is enabled. Then, with the
+sandbox, its storage charge sent between about an hour and two days before the
+period's end and landing on that period's closing invoice, as design
+specification row 445 requires before daily billing is enabled. Then, with the
 owner's approval, set the variable on production:
 
 ```sh

@@ -110,13 +110,13 @@ export function usageHints(
 export const STORAGE_LIST = { most: 2000 }
 
 /** The most rows Billing's API calls by account gathers with Load more, 80
-    batches; past it, a search narrows the list. A bucket's accounts are at
-    most the 1,000 people and agents the design size allows, with the
-    removed accounts whose calls still count, so every account inside it is
-    reachable without searching. The limits plan bounds Billing's lists
-    together: with Storage by project and the two name lists the page holds
-    at most 8,000 rows, about 1 MB, and drops them when Billing is left.
-    Tests lower it. */
+    batches; past it, a search narrows the list. A bucket's accounts are at most
+    the 1,000 people and agents the design size allows, with the removed
+    accounts whose calls still count, so every account inside it is reachable
+    without searching. Design specification row 431 bounds Billing's lists
+    together: with Storage by project and the two name lists the page holds at
+    most 8,000 rows, about 1 MB, and drops them when Billing is left. Tests
+    lower it. */
 export const ACCOUNT_LIST = { most: 2000 }
 
 /** The most names each of Billing's Who counts toward your bill and Who

@@ -425,7 +425,7 @@ const LOADING_SECTION: SectionVM<never> = {
 }
 
 /* An archived group's Progress and Remaining: its answer holds none of its
-   subtasks, so both are unknown (the limits plan's item 2). */
+   subtasks, so both are unknown (design-spec §9.2). */
 const UNKNOWN_TOTALS: ReturnType<typeof groupTotals> = {
   progress: { state: 'unknown', partial: false },
   remaining: { state: 'unknown' },

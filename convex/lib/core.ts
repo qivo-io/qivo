@@ -1853,19 +1853,19 @@ export const relatedTooMany = (noun: string): string =>
 
 /** The most rows of one related list a read takes whole before it refuses
  * the list (relatedTooMany): twice the stored limits of links, followers,
- * attachments and an active task's subtasks (LIMITS, 100 each), room for
- * data stored before those limits, as lib/taskWindow.ts TASK_WINDOW's rows
- * hold. Both link ranges count against one bound, as model/links.ts
- * linksFullAt counts them. Such a read takes the whole set to answer one
- * page, every link's other task and every follower's profile included, the
- * plan's documented exception to reading in order, which the stored limits
- * bound. Measured on 6 November 2026 in convex/tests/taskRelated.test.ts
- * ("at the design size"), each call whole: a list call at limit 200 on a
- * task at the four per-task limits reads at most 117 ranges, 208 documents
- * and 0.08 MB (the links, each other task read by id; the followers 110
- * ranges and 205 documents), and a links page whose 100 other tasks sit in
- * 100 sub-projects the caller reads by grant 406 ranges, 568 documents and
- * 0.16 MB. Tests lower it. */
+ * attachments and an active task's subtasks (LIMITS, 100 each), room for data
+ * stored before those limits, as lib/taskWindow.ts TASK_WINDOW's rows hold.
+ * Both link ranges count against one bound, as model/links.ts linksFullAt
+ * counts them. Such a read takes the whole set to answer one page, every link's
+ * other task and every follower's profile included, the documented exception to
+ * reading in order (design specification row 432), which the stored limits
+ * bound. Measured on 6 November 2026 in convex/tests/taskRelated.test.ts ("at
+ * the design size"), each call whole: a list call at limit 200 on a task at the
+ * four per-task limits reads at most 117 ranges, 208 documents and 0.08 MB (the
+ * links, each other task read by id; the followers 110 ranges and 205
+ * documents), and a links page whose 100 other tasks sit in 100 sub-projects
+ * the caller reads by grant 406 ranges, 568 documents and 0.16 MB. Tests lower
+ * it. */
 export const RELATED_READ = { rows: 200 }
 
 /** What one page of an archived task's subtasks reads past the call's

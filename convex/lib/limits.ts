@@ -445,17 +445,17 @@ export const LIMITS = {
   },
   // The upload tickets one person in an organization holds at once over the
   // app, REST and MCP together (model/attachments.ts openUploadTicket), so
-  // pending upload work stays bounded apart from billing (limits plan, item
-  // 13, owner 24 October 2026). A ticket counts from its start until an
+  // pending upload work stays bounded apart from billing (the owner's choice of
+  // 24 October 2026, design-spec §9.2). A ticket counts from its start until an
   // attach or confirm spends it or its hour ends, whether or not bytes were
   // sent. The app sends one file at a time from each task window and each
-  // description editor, and the REST and MCP docs ask for a few uploads at
-  // a time, so 20 leaves room for several windows and an agent. Within an
-  // hour of a ticket's end files.ts reapUploadTickets erases its file
-  // unless something names it, so one person holds at most about 40
-  // unattached files, 20 live and 20 waiting for that cleanup. Without it
-  // the weekly sweep alone would let one person keep about 3,380 such files
-  // at once at 20 MiB each. The private demo makes no tickets.
+  // description editor, and the REST and MCP docs ask for a few uploads at a
+  // time, so 20 leaves room for several windows and an agent. Within an hour of
+  // a ticket's end files.ts reapUploadTickets erases its file unless something
+  // names it, so one person holds at most about 40 unattached files, 20 live
+  // and 20 waiting for that cleanup. Without it the weekly sweep alone would
+  // let one person keep about 3,380 such files at once at 20 MiB each. The
+  // private demo makes no tickets.
   uploadsInProgress: {
     label: 'Uploads in progress',
     group: 'files',

@@ -1,6 +1,6 @@
 /* The one gate that pauses a view's live reads while the tab or the desktop
-   window is hidden, and the register of how the app suspends them (the
-   limits plan's "Hidden tabs and minimized windows" and Item 10). It
+   window is hidden, and the register of how the app suspends them
+   (design-spec §9.2, "Hidden tabs and minimized windows"). It
    follows document.visibilityState, not focus. A window people can see
    keeps updating while another one has focus, side by side or on another
    monitor, and a minimized or hidden one pauses.

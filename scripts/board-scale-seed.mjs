@@ -390,7 +390,7 @@ const LABEL_TOPICS = [
   'Release notes',
 ]
 /* The most live sub-projects --files puts under one project, the design
-   size's figure for one project (docs/limits-plan.md in the private
+   size's figure for one project (design-spec §9.1 in the private
    companion). */
 const SUBS_PER_PROJECT = 30
 /* The most live top-level projects --projects makes Northstar hold, the

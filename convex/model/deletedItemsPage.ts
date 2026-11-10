@@ -1546,9 +1546,8 @@ class Stop extends Error {}
  * so, as the look also sees rows hidden from them. This probe, `legacy` and
  * the read-only count (internal/olderDeletedTasks.ts count) go together
  * once a run of the count finds no such row on any deployment, the demo
- * included, after the last ready item's purge_after has passed
- * (qivo-internal later work, "The limits plan's open work at its
- * retirement").
+ * included, after the last ready item's purge_after has passed (the
+ * later-work entry on olderRows of 9 November 2026 in qivo-internal).
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
   if (!seat.admin) return true
