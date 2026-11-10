@@ -193,6 +193,10 @@ would mean moving one of them. Cycles remain unresolved with red arrows, so you 
 those links. When the selection's dependency chains are too long to read at
 once, Auto-move is unavailable and says so, and the arrows still show. It
 also waits until your changes, on the Roadmap or elsewhere, are saved.
+Auto-move saves its moves as one undo step, so while this visit's undo
+history is cleared it is unavailable too: leave Roadmap and return to use
+it again. It says how many tasks it moved once they are saved, and if the
+save is refused it says why and no task moves.
 
 ## Refresh remaining hours before you plan
 

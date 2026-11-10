@@ -195,12 +195,12 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
     }
     network.mutation.mockClear()
     // the write waits
-    await act(async () =>
-      board.P.batchRoadmapChanges(() => {
+    await act(async () => {
+      void board.P.batchRoadmapChanges(() => {
         void board.P.updateIssue(a.id, { start: TODAY_WEEK + 1, end: TODAY_WEEK + 1 })
         void board.P.moveDependencyTask(farRow, TODAY_WEEK + 2, TODAY_WEEK + 2)
-      }),
-    )
+      })
+    })
     const sent = r.sent()
     expect(sent).toHaveLength(1)
     const [write] = sent
