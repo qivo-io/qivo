@@ -662,7 +662,12 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       name: 'files.uploadUrl',
       ref: () => otherIssue.id,
       call: (ref) =>
-        as(t, f.admin).mutation(api.files.uploadUrl, { org_id: f.org.id, issue_id: ref }),
+        as(t, f.admin).mutation(api.files.uploadUrl, {
+          org_id: f.org.id,
+          issue_id: ref,
+          size: 8,
+          name: 'spec.pdf',
+        }),
       answer: { code: 'not_found', message: 'task not found' },
     },
     {
@@ -1226,7 +1231,12 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
       /^no write access to this project$/,
     )
     await expectRefusal(
-      as(t, f.guest).mutation(api.files.uploadUrl, { org_id: f.org.id, issue_id: hiddenIssue.id }),
+      as(t, f.guest).mutation(api.files.uploadUrl, {
+        org_id: f.org.id,
+        issue_id: hiddenIssue.id,
+        size: 8,
+        name: 'spec.pdf',
+      }),
       'forbidden',
       /^no write access to this project$/,
     )

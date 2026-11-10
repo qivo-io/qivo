@@ -2083,10 +2083,13 @@ export default defineSchema({
     name: v.string(),
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
-    // true when size_bytes is not a declared size but the most the upload
-    // URL takes, the organization's per-file limit, for an app loaded before
-    // uploads declared their size (files.ts uploadUrl). Absent, the file
-    // must have exactly size_bytes.
+    // Set on tickets of v0.1.162 and earlier whose upload declared no size,
+    // when size_bytes was the most the URL took. Nothing reads or writes it
+    // (tests/manifest.test.ts pins that), since every upload declares its
+    // size, and the file must have exactly size_bytes. It stays in the
+    // schema because Convex refuses a deploy whose schema drops a field
+    // stored rows still hold, and clearing it would be a write on every
+    // hosted deployment.
     up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that

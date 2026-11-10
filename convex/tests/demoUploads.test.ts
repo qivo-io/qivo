@@ -112,6 +112,8 @@ describe('private demo upload boundaries', () => {
     const url = await caller.mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
       issue_id: issue.id,
+      size: 3,
+      name: 'test.png',
     })
     expect(url).toContain('/demo-uploads/')
     const response = await receive(t, url)
@@ -152,6 +154,8 @@ describe('private demo upload boundaries', () => {
     const url = await caller.mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
       issue_id: issue.id,
+      size: 3,
+      name: 'test.png',
     })
     const response = await receive(t, url)
     const { storageId } = JSON.parse(await response.text()) as { storageId: Id<'_storage'> }
@@ -170,6 +174,8 @@ describe('private demo upload boundaries', () => {
     const lateUrl = await caller.mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
       issue_id: issue.id,
+      size: 3,
+      name: 'test.png',
     })
     let lateId: Id<'_storage'> | undefined
     const late = await receive(t, lateUrl, async (sid) => {
@@ -190,11 +196,17 @@ describe('private demo upload boundaries', () => {
           org_id: fx.org.id,
           issue_id: issue.id,
           size: DEMO_STORAGE_BYTES / 5,
+          name: 'test.png',
         }),
       ),
     )
     await expectRefusal(
-      caller.mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id, size: 1 }),
+      caller.mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 1,
+        name: 'test.png',
+      }),
       'rule',
       /at most 5 MiB of files in total, and none of it is free/,
     )

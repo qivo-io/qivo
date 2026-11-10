@@ -2127,7 +2127,12 @@ async function seedFiles(plan, { client, org, target, log }) {
   for (const fields of plan.projects) await call('projects:create', fields, `"${fields.name}"`)
   for (const fields of plan.tasks) await call('issues:create', fields, `"${fields.title}"`)
   for (const file of plan.files) {
-    const url = await call('files:uploadUrl', { org_id: org, issue_id: file.issue_id }, file.name)
+    // the file's text is ASCII, so its length is its size in bytes
+    const url = await call(
+      'files:uploadUrl',
+      { org_id: org, issue_id: file.issue_id, size: file.bytes, name: file.name },
+      file.name,
+    )
     if (!isLoopbackOrigin(new URL(url).origin))
       throw new DemoCliError(`files:uploadUrl answered a URL off this machine for ${file.name}.`)
     const res = await fetch(url, {

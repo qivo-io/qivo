@@ -267,7 +267,10 @@ describe('current storage', () => {
       profile_id: f.user.id,
       storage_id: await storeBlob(t, 2048, 'image/png'),
     })
-    const ticket = await as(t, f.user).mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await as(t, f.user).mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: 4096,
+    })
     await t.mutation(internal.appearance.finalizeUpload, {
       ticket_id: ticket.ticket_id,
       minter: f.user.auth_user_id as string,

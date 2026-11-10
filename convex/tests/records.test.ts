@@ -33,13 +33,7 @@ import { nameKey } from '../lib/nameKey'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
-import {
-  MEDIA_TYPE_TOO_LONG,
-  readExactly,
-  readUpTo,
-  UPLOAD_TOO_SLOW,
-  uploadReadMs,
-} from '../machine/uploads'
+import { MEDIA_TYPE_TOO_LONG, readExactly, UPLOAD_TOO_SLOW, uploadReadMs } from '../machine/uploads'
 import {
   UPLOAD_CLAIM_MS,
   UPLOAD_NOT_SENT,
@@ -950,13 +944,12 @@ describe('the REST upload', () => {
     expect(released).toBe(true)
   })
 
-  it('reads a body for 5 minutes and a second per 32 KiB declared, at most 8, and an up_to ticket for its most', async () => {
+  it('reads a body for 5 minutes and a second per 32 KiB declared, at most 8', async () => {
     expect(uploadReadMs(2048)).toBe(5 * 60_000 + 63)
     expect(uploadReadMs(5 * MiB)).toBe(5 * 60_000 + 160_000)
     expect(uploadReadMs(20 * MiB)).toBe(8 * 60_000)
-    // a body that sends nothing more, declared at 20 MiB or for an up_to
-    // ticket that takes 20 MiB, is still read once a small file's time has
-    // passed, and refused at 8
+    // a body that sends nothing more, declared at 20 MiB, is still read once
+    // a small file's time has passed, and refused at 8
     const stalled = () =>
       ({
         headers: { get: () => null },
@@ -979,12 +972,10 @@ describe('the REST upload', () => {
           )
           .finally(() => settled.push(path))
       const declared = outcome('declared', readExactly(stalled(), 20 * MiB))
-      const upTo = outcome('up_to', readUpTo(stalled(), 20 * MiB))
       await vi.advanceTimersByTimeAsync(uploadReadMs(2048))
       expect(settled).toEqual([])
       await vi.advanceTimersByTimeAsync(8 * 60_000 - uploadReadMs(2048))
       expect(await declared).toBe(UPLOAD_TOO_SLOW)
-      expect(await upTo).toBe(UPLOAD_TOO_SLOW)
     } finally {
       vi.useRealTimers()
     }

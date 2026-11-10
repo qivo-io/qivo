@@ -132,20 +132,18 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
  * (attachments) or the set_avatar right (avatars). An attachment or
  * description image goes on an upload ticket, as REST and MCP uploads do
  * (model/attachments.ts openUploadTicket). Its URL stores one file of the
- * declared size, or up to the organization's limit for an app that sends no
- * size, and only the caller's attach of that file to that task takes it. On
- * the demo the upload reserves room in the demo's budget instead
- * (model/demoUploads.ts). A picture outside the demo still gets
+ * declared size, and only the caller's attach of that file to that task
+ * takes it. On the demo the upload reserves room in the demo's budget
+ * instead (model/demoUploads.ts). A picture outside the demo still gets
  * generateUploadUrl, a blank cheque for one POST of any size, which can
  * park bytes without a picture until reapOrphans erases them. */
 
 export const uploadUrl = orgMutation({
   args: {
     issue_id: v.string(),
-    // the file's size in bytes and its name, which an app loaded before this
-    // release does not send
-    size: v.optional(v.number()),
-    name: v.optional(v.string()),
+    // the file's size in bytes and its name
+    size: v.number(),
+    name: v.string(),
   },
   handler: async (ctx, { issue_id, size, name }) => {
     const issue = await myIssue(ctx, issue_id)
@@ -153,8 +151,8 @@ export const uploadUrl = orgMutation({
     // a full task is refused before any bytes are sent
     await assertAttachmentRoom(ctx, issue.id)
     // the attach names the file; this only refuses a name it would refuse
-    const fileName = name === undefined ? '' : cleanAttachmentName(name)
-    if (size !== undefined) uploadSize(size)
+    const fileName = cleanAttachmentName(name)
+    uploadSize(size)
     if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, size)
     const { uploadUrl } = await openUploadTicket(ctx, {
       me: ctx.me,
@@ -186,12 +184,12 @@ async function avatarTarget(ctx: AuthedCtx, profileId: string): Promise<Doc<'pro
 }
 
 export const avatarUploadUrl = authedMutation({
-  // the picture's size in bytes, which an app loaded before this release
-  // does not send. Outside the demo files.setAvatar checks the stored size.
-  args: { profile_id: v.string(), size: v.optional(v.number()) },
+  // the picture's size in bytes. Outside the demo files.setAvatar checks
+  // the stored size.
+  args: { profile_id: v.string(), size: v.number() },
   handler: async (ctx, { profile_id, size }) => {
     await avatarTarget(ctx, profile_id)
-    if (size !== undefined) uploadSize(size)
+    uploadSize(size)
     if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, size)
     return await ctx.storage.generateUploadUrl()
   },
@@ -945,7 +943,7 @@ async function demoUploadUrl(
   authId: string,
   kind: 'attachment' | 'avatar',
   targetId: string,
-  size: number | undefined,
+  size: number,
 ) {
   const requested = await demoFileExpiry(ctx, authId, Math.floor(Date.now() / 1000) + 600)
   const ticket = await reserveDemoUpload(ctx, {

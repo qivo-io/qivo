@@ -153,7 +153,7 @@ apiAccess:summary query public {"type":"object","value":{"period":{"fieldType":{
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:cancelUpload mutation public {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:clearForDeletedLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
-appearance:createUpload mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
+appearance:createUpload mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":false}}}
 appearance:dailyImage query public {"type":"object","value":{"date":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:discardUpload mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 appearance:finalizeUpload mutation internal {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"width":{"fieldType":{"type":"number"},"optional":false},"height":{"fieldType":{"type":"number"},"optional":false}}}
@@ -256,7 +256,7 @@ demoUploads:finish mutation internal {"type":"object","value":{"id":{"fieldType"
 demoUploads:sweep mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"number"},"optional":true}}}
 demoVisitor:record mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"browser":{"fieldType":{"type":"string"},"optional":false},"os":{"fieldType":{"type":"string"},"optional":false}}}
 files:attach mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"mime":{"fieldType":{"type":"string"},"optional":true},"inline":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-files:avatarUploadUrl mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
+files:avatarUploadUrl mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":false}}}
 files:cancelDemoUpload mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 files:clearAvatar mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
 files:eraseHeldFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
@@ -270,7 +270,7 @@ files:reapUploadTickets mutation internal {"type":"object","value":{"now":{"fiel
 files:removeAttachment mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 files:restoreWitness mutation internal {"type":"object","value":{}}
 files:setAvatar mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
-files:uploadUrl mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true},"name":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+files:uploadUrl mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 identity:acceptInvitation mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
@@ -1543,7 +1543,7 @@ describe('the wrapper rule', () => {
  * Each stays in schema.ts, which says why, because Convex refuses a deploy
  * whose schema drops a field stored rows hold and clearing it would be a
  * write on every hosted deployment. */
-const UNREAD_FIELDS = ['last_export_at']
+const UNREAD_FIELDS = ['last_export_at', 'up_to']
 
 describe('the stored fields the schema keeps unread', () => {
   const names = (source: string, field: string) => new RegExp(`\\b${field}\\b`).test(source)

@@ -870,10 +870,17 @@ describe('the attachment, link and label limits', () => {
     await as(fx.t, fx.admin).mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
       issue_id: issue.id,
+      size: 8,
+      name: 'scan.pdf',
     })
     await plantAttachments(fx, issue, 1)
     await refused(
-      as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
+      as(fx.t, fx.admin).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 8,
+        name: 'scan.pdf',
+      }),
       'rule',
       LIMITS.attachments.refusal,
     )
@@ -990,7 +997,12 @@ describe('the attachment, link and label limits', () => {
     await saveDescription(fx, issue, shown)
     const files = await plantFiles(fx, issue, LIMITS.attachments.max - 1)
     const upload = () =>
-      as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id })
+      as(fx.t, fx.admin).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 8,
+        name: 'scan.pdf',
+      })
     await refused(upload(), 'rule', LIMITS.attachments.refusal)
     // the save that takes the image out frees its place at once
     await saveDescription(fx, issue, 'Wiring')
