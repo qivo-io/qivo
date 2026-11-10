@@ -2338,6 +2338,29 @@ release the archive downloads but its record is refused, and the app shows
 no confirmed save, so the deletion reminder still goes out. The release
 needs no backfill and no release step.
 
+From the release after v0.1.162, `files.mintUrls` refuses a call that names
+more than 100 profile pictures, as it already does for attachments.
+`files.uploadUrl` requires `size` and `name`, and `files.avatarUploadUrl`
+and `appearance.createUpload` require `size`, so the backend refuses an
+upload that declares no size, and no upload ticket or private-demo
+reservation takes up to the organization's or the kind's limit any more. The
+backend no longer reads or writes `attachment_uploads.up_to` or
+`organizations.last_export_at`, which stay in the schema unread, so the
+release changes no stored row. It drops the indexes `profiles.by_org_id` and
+`sync_stamps.by_org_profile`, which no app reads, and a backend rollback
+builds them again at its deploy. The internal `internal/adminAccessReport`
+is gone, its runs recorded. Two earlier sentences no longer hold, and their
+paragraphs stay as their releases' records. The v0.1.135 paragraph says
+"Returning the app alone is safe, because an app loaded before that release
+calls `files.uploadUrl` without a size", and the v0.1.156 paragraph says
+that an app loaded before that release asks for every picture its workspace
+holds in one call. This backend refuses both calls. Every app from v0.1.157
+sends a size, a name and at most 100 ids a call, and the app floor that
+"Rollback and hotfixes" names is later than that, so the release sets no new
+floor in either direction. Returning the backend alone to v0.1.162 is safe,
+because the app reads nothing these changes removed. The release needs no
+backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
