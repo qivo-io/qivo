@@ -105,6 +105,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
 | User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
 | Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
+| Labels one task update adds or removes | 20 labels in each list | add_labels and remove_labels must each name at most 20 labels, the most a task can have. Name fewer labels. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |

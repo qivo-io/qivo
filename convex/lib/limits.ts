@@ -898,6 +898,18 @@ export const LIMITS = {
     MACHINE,
     'machine',
   ),
+  // A task holds at most LIMITS.labels.max labels, so neither list of a task
+  // update needs more. The bound refuses a long list before its labels are
+  // looked up, two index reads each (model/labels.ts labelChanges).
+  taskLabelRefs: {
+    label: 'Labels one task update adds or removes',
+    group: 'machine',
+    max: 20,
+    unit: 'labels in each list',
+    refusal:
+      'add_labels and remove_labels must each name at most 20 labels, the most a task can have. Name fewer labels.',
+    on: MACHINE,
+  },
   inboxTasks: {
     label: 'Tasks per inbox change',
     group: 'machine',

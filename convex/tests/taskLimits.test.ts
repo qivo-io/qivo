@@ -1358,6 +1358,13 @@ describe('the attachment, link and label limits', () => {
         body: JSON.stringify(body),
       })
     await refused(patch({ add_labels: [labels[LIMITS.labels.max]] }), 'rule', LIMITS.labels.refusal)
+    // a list past the limit is refused before its labels are looked up, the
+    // same as over MCP (mcp.test.ts)
+    await refused(
+      patch({ remove_labels: Array(LIMITS.taskLabelRefs.max + 1).fill('Missing') }),
+      'rule',
+      LIMITS.taskLabelRefs.refusal,
+    )
     await refused(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
