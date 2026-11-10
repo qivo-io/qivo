@@ -1577,7 +1577,10 @@ const tasks = Array.from({ length: count }, (_, n) =>
     ? variedTask(n)
     : taskRow(n, id('4', n), projects[Math.floor(n / 10) % projects.length], parentOf(n)),
 )
-const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
+/** The hidden program's tasks, which the workspace's whole leaves out.
+    scripts/perf/options.test.mjs counts them toward the design size's
+    figures, as the organization holds them. */
+export const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
   taskRow(
     count + h,
     id('5', h),

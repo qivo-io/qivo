@@ -15,18 +15,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** The stand-in's whole for page parameters `params`, loaded as its worker
-    would be (as scripts/perf/server.test.mjs loads it). */
-async function standInWhole(params) {
+/** The stand-in's tasks for page parameters `params`, loaded as its worker
+    would be (as scripts/perf/server.test.mjs loads it): its whole, which
+    holds the visible ones, and the hidden program's, which it leaves out. */
+async function standInTasks(params) {
   vi.resetModules()
   const posted = []
   vi.stubGlobal('self', {
     name: `latency=0&mbps=100000&${params}`,
     postMessage: (message) => posted.push(message),
   })
-  await import('./server.mjs')
+  const { hiddenTasks } = await import('./server.mjs')
   await self.onmessage({ data: { type: 'query', id: 'q', name: 'snapshot:forMe', args: {} } })
-  return JSON.parse(posted.find((message) => message.type === 'result').text)
+  const whole = JSON.parse(posted.find((message) => message.type === 'result').text)
+  return { whole, hidden: hiddenTasks }
 }
 
 /* The design size's figures a case of the benchmark can raise, per
@@ -41,10 +43,12 @@ const DESIGN = {
   doneInOrg: 5_000,
 }
 
-/** Each design-size figure of the stand-in's whole `whole`: the largest
-    count any one project, sub-project or the organization holds. Tasks
-    whose sub-project the whole does not list are the hidden program's. */
-function figuresOf(whole) {
+/** Each design-size figure of the stand-in's tasks: the largest count any
+    one project, sub-project or the organization holds, over the visible
+    tasks of `whole` and the hidden program's `hidden`. The whole lists only
+    the visible projects, so a sub-project it does not list is one of the
+    hidden program's. */
+function figuresOf({ whole, hidden }) {
   const parentOf = new Map(whole.projects.map((p) => [p.id, p.parent_id ?? null]))
   const project = (subprojectId) => parentOf.get(subprojectId) ?? 'hidden'
   const count = (rows, key) => {
@@ -52,10 +56,11 @@ function figuresOf(whole) {
     for (const row of rows) counts.set(key(row), (counts.get(key(row)) ?? 0) + 1)
     return Math.max(0, ...counts.values())
   }
-  const open = whole.issues.filter((row) => row.status !== 'done')
-  const done = whole.issues.filter((row) => row.status === 'done')
+  const tasks = [...whole.issues, ...hidden]
+  const open = tasks.filter((row) => row.status !== 'done')
+  const done = tasks.filter((row) => row.status === 'done')
   const subprojects = new Map()
-  for (const row of whole.issues) {
+  for (const row of tasks) {
     const holder = project(row.project_id)
     subprojects.set(holder, new Set([...(subprojects.get(holder) ?? []), row.project_id]))
   }
@@ -113,9 +118,10 @@ describe("the benchmark's default cases", () => {
   it('raise at most one figure to its design size and none past it', async () => {
     const atDesignSize = []
     for (const tasks of DEFAULT_SIZES) {
-      const figures = figuresOf(
-        await standInWhole(`${workspaceParameters(tasks)}${SIZE_CASE_SHAPE}`),
-      )
+      const standIn = await standInTasks(`${workspaceParameters(tasks)}${SIZE_CASE_SHAPE}`)
+      // the hidden program holds tasks too, which the whole leaves out
+      expect(standIn.hidden.length, `hidden tasks at ${tasks} tasks`).toBeGreaterThan(0)
+      const figures = figuresOf(standIn)
       for (const [figure, most] of Object.entries(DESIGN))
         expect(figures[figure], `${figure} at ${tasks} tasks`).toBeLessThanOrEqual(most)
       const reached = Object.keys(DESIGN).filter((figure) => figures[figure] === DESIGN[figure])
