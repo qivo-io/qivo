@@ -175,6 +175,11 @@ describe('the load benchmark options', () => {
     [['record', '--url', 'https://happy-otter-123.convex.cloud'], 'loopback origin'],
     [['record', '--url', 'http://10.0.0.5:3236'], 'loopback origin'],
     [['record', '--site-url', 'https://qivo.io'], 'loopback origin'],
+    // lookalikes a pattern without its end, or without a port check, would let through
+    [['record', '--url', 'http://localhost.example.com:3236'], 'loopback origin'],
+    [['record', '--url', 'http://127.0.0.1:3236@happy-otter-123.convex.cloud'], 'loopback origin'],
+    [['record', '--url', 'http://127.0.0.1:99999'], 'loopback origin'],
+    [['record', '--site-url', 'http://localhost:5241/app'], 'loopback origin'],
     [['record', '--browser', 'edge'], '--browser takes chromium, firefox, webkit'],
     [['record', '--views', 'board,calendar'], '--views takes a comma list'],
     [['replay', '--phases', ''], '--phases takes a comma list'],
@@ -196,11 +201,28 @@ describe('the load benchmark options', () => {
     expect(() => loadOptions(argv, KEY)).toThrow(message)
   })
 
-  it('refuses a deploy key and a missing admin key before anything runs', () => {
+  it('refuses a deploy key, a hosted environment and a missing or hosted-shaped admin key before anything runs', () => {
     expect(() => loadOptions(['all'], { ...KEY, CONVEX_DEPLOY_KEY: 'prod:abc' })).toThrow(
       'CONVEX_DEPLOY_KEY is set',
     )
     expect(() => loadOptions(['all'], {})).toThrow('QIVO_LOCAL_ADMIN_KEY')
+    for (const key of ['prod:happy-otter-123|secret', 'dev:x|y', 'preview:a', 'project:b', 'a b'])
+      expect(() => loadOptions(['all'], { QIVO_LOCAL_ADMIN_KEY: key })).toThrow(
+        'not a deploy key or another hosted key',
+      )
+    for (const env of [
+      { QIVO_ENVIRONMENT: 'staging' },
+      { QIVO_ENVIRONMENT: 'production' },
+      { QIVO_ENVIRONMENT: 'demo' },
+      { APP_MODE: 'demo' },
+    ])
+      expect(() => loadOptions(['all'], { ...KEY, ...env })).toThrow(
+        'refuses a staging, production or demo environment',
+      )
+    // a local backend's own key in a development environment runs
+    expect(loadOptions(['all'], { ...KEY, QIVO_ENVIRONMENT: 'development' }).adminKey).toBe(
+      'local-admin-key',
+    )
   })
 
   it('answers --help without a key, and its text names every part and option with its parts', () => {

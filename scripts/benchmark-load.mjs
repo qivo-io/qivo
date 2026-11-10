@@ -193,7 +193,7 @@ import {
   subscriptionsByOrganization,
   withoutLeaderReads,
 } from './load/frames.mjs'
-import { loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
+import { isLoopbackOrigin, loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
 import {
   checkSpecs,
   clientSpecs,
@@ -226,7 +226,6 @@ import {
   tabsIdlePerMinute,
   watchedPerMinute,
 } from './load/report.mjs'
-import { isLoopbackOrigin } from './marketing-demo.mjs'
 
 const ref = makeFunctionReference
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))

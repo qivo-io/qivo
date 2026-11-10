@@ -5,6 +5,8 @@
 // (usage) come from it. The benchmark's header says what each part
 // measures.
 
+import { isLoopbackOrigin } from '../marketing-demo.mjs'
+
 /** The parts, what each does, and the parts `all` runs in turn. */
 export const PARTS = {
   setup: 'grows Northstar to the everyday organization; writes <dir>/people.json',
@@ -39,9 +41,17 @@ export const PHASES = {
 /** The browsers the record part drives, by their Playwright names. */
 export const BROWSERS = ['chromium', 'firefox', 'webkit']
 
-/** A loopback HTTP origin, the only kind the benchmark talks to, as the
-    local seeds accept it (scripts/marketing-demo.mjs LOOPBACK_ORIGIN). */
-export const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/
+/** Whether a value is a loopback HTTP origin with a valid port, the only
+    kind the benchmark talks to, as the local seeds accept it. */
+export { isLoopbackOrigin }
+
+/** The environments a local benchmark refuses to run in, as the local
+    seeds refuse them (scripts/marketing-demo.mjs resolveLocal). */
+const HOSTED_ENVIRONMENTS = ['staging', 'production', 'demo']
+
+/** A deploy key's or another hosted key's prefix, which a local backend's
+    admin key never has (scripts/marketing-demo.mjs resolveLocal). */
+const HOSTED_KEY = /^(prod|dev|preview|project):/
 
 /** A CPU list as taskset takes it, such as 0-7 or 0,2,4-6. */
 const CPU_LIST = /^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$/
@@ -298,7 +308,7 @@ function parsed(name, spec, text) {
   }
   if (spec.takes === 'origin') {
     const origin = text?.replace(/\/$/, '')
-    if (origin === undefined || !LOOPBACK_ORIGIN.test(origin))
+    if (origin === undefined || !isLoopbackOrigin(origin))
       refuse(
         'a loopback origin such as http://127.0.0.1:3236; the benchmark runs only against a disposable local backend',
       )
@@ -319,7 +329,8 @@ function parsed(name, spec, text) {
  * anything runs, for an unknown part, an option the part does not read, a
  * value an option does not take, a backend or app address that is not
  * loopback, more processes or organizations than clients, a phase the part
- * does not run, a deploy key in the environment and a missing admin key.
+ * does not run, a deploy key in the environment, a staging, production or
+ * demo environment, and a missing admin key or one shaped as a deploy key.
  * The admin key is read from QIVO_LOCAL_ADMIN_KEY, as the local seeds read
  * it, and never printed.
  */
@@ -363,8 +374,16 @@ export function loadOptions(argv, env) {
     throw new OptionsError(
       'CONVEX_DEPLOY_KEY is set. The benchmark runs only against a disposable local backend; unset it.',
     )
-  if (!env.QIVO_LOCAL_ADMIN_KEY)
-    throw new OptionsError("QIVO_LOCAL_ADMIN_KEY must hold the local backend's admin key.")
-  options.adminKey = env.QIVO_LOCAL_ADMIN_KEY
+  if (HOSTED_ENVIRONMENTS.includes(env.QIVO_ENVIRONMENT) || env.APP_MODE === 'demo')
+    throw new OptionsError(
+      'The benchmark refuses a staging, production or demo environment (QIVO_ENVIRONMENT, APP_MODE).',
+    )
+  const key = env.QIVO_LOCAL_ADMIN_KEY
+  if (!key) throw new OptionsError("QIVO_LOCAL_ADMIN_KEY must hold the local backend's admin key.")
+  if (HOSTED_KEY.test(key) || !/^\S+$/.test(key))
+    throw new OptionsError(
+      "QIVO_LOCAL_ADMIN_KEY must be a local backend's admin key, not a deploy key or another hosted key.",
+    )
+  options.adminKey = key
   return options
 }
