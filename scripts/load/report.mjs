@@ -297,7 +297,7 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
       event_loop_lag:
         "Each process's monitorEventLoopDelay over the phase, past its 10 ms resolution.",
       pacing_trigger:
-        "A model, not a hosted measurement: a phase whose clients asked more than hosted Professional's 256 queries at one moment (every subscription at startup, the re-subscriptions at the reconnect, the answers one change re-sent), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's. The local backend's overload closes (1013) are its own saturation, listed as test_bed_saturated, and fire nothing.",
+        "A model, not a hosted measurement: a phase whose clients asked more than hosted Professional's 256 queries at one moment (every subscription at startup, the re-subscriptions at the reconnect, the answers one change re-sent), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's. The local backend's overload closes (1013) are its own saturation, listed as test_bed_saturated, and fire nothing. A trigger that did not fire is null, unknown, where a phase's log coverage is incomplete (log_incomplete) or a phase failed, lost a worker or had no lone client's time to compare with (unmeasured); fires_outside_noisy_phases counts timings only from phases with noisy false.",
     },
     recorded,
     match,
@@ -528,9 +528,14 @@ export function hostedModel(phases) {
  * ten times the lone client's, each with what showed it. The local
  * backend's overload closes (1013) are the test bed's saturation, listed
  * by phase under `test_bed_saturated`, and fire nothing, since they say
- * nothing of hosted Convex's limit. Where a phase's log coverage is not
- * `complete` (`log_incomplete`), a trigger that did not fire answers null,
- * unknown, since the calls the log missed may have passed the line.
+ * nothing of hosted Convex's limit. A trigger that did not fire answers
+ * null, unknown, where a check could not be made: a phase whose log
+ * coverage is not `complete` (`log_incomplete`), since the calls the log
+ * missed may have passed the line, and a phase that failed or lost a
+ * worker, or a reconnect with no lone client's time to compare with, as
+ * without the match phase (`unmeasured`). `fires_outside_noisy_phases`
+ * counts a timing only from a phase whose `noisy` is false, and answers
+ * null where the one that fired comes from a phase whose noise is unknown.
  */
 export function pacingTrigger(phases) {
   const saturated = Object.entries(phases).filter(
@@ -541,13 +546,23 @@ export function pacingTrigger(phases) {
     (figures.over_line ?? []).map((entry) => ({ phase: name, noisy: figures.noisy, ...entry })),
   )
   const slow = phases.reconnect?.slow_clients ?? null
+  const slowFires = (slow ?? 0) > 0
   const model = hostedModel(phases)
   const past = model.past_slots.length > 0
   // a log that may have missed calls cannot show that none passed the line
   const incomplete = Object.entries(phases)
     .filter(([, figures]) => figures.log_coverage?.state !== 'complete')
     .map(([name]) => name)
-  const unless = (fires) => (fires ? true : incomplete.length > 0 ? null : false)
+  const unmeasured = Object.entries(phases)
+    .filter(
+      ([name, figures]) =>
+        figures.failed || figures.workers_lost || (name === 'reconnect' && slow === null),
+    )
+    .map(([name]) => name)
+  const unless = (fires, unknown = false) =>
+    fires ? true : unknown || incomplete.length > 0 || unmeasured.length > 0 ? null : false
+  const quiet = (noisy) => noisy === false
+  const noiseUnknown = (noisy) => typeof noisy !== 'boolean'
   return {
     line_ms: JS_LINE_MS,
     hosted_query_slots: HOSTED_QUERY_SLOTS,
@@ -560,9 +575,14 @@ export function pacingTrigger(phases) {
       overload_closes: figures.closes['1013'],
     })),
     log_incomplete: incomplete,
-    fires: unless(past || over.length > 0 || (slow ?? 0) > 0),
+    unmeasured,
+    fires: unless(past || over.length > 0 || slowFires),
     fires_outside_noisy_phases: unless(
-      past || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
+      past ||
+        over.some((entry) => quiet(entry.noisy)) ||
+        (slowFires && quiet(phases.reconnect.noisy)),
+      over.some((entry) => noiseUnknown(entry.noisy)) ||
+        (slowFires && noiseUnknown(phases.reconnect.noisy)),
     ),
   }
 }

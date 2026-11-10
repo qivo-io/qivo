@@ -178,7 +178,11 @@
 //   JavaScript passes the 0.5 s line, or a client whose time to current
 //   after the reconnect passes ten times the lone client's, each with its
 //   phase. An overload close (1013) is listed as the test bed's saturation
-//   (test_bed_saturated) and fires nothing.
+//   (test_bed_saturated) and fires nothing. A trigger that did not fire is
+//   null, unknown, where a phase's log coverage is incomplete, a phase
+//   failed or lost a worker, or the reconnect had no lone client's time, as
+//   in a replay without the match phase; outside the noisy phases it counts
+//   a timing only from a phase whose noisy is false.
 //
 // The test bed. The local backend runs at most 16 queries and 16
 // mutations at once, Convex's defaults, which nothing here raises. Once a

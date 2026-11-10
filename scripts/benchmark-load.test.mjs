@@ -1577,6 +1577,39 @@ describe("a phase's figures", () => {
     expect(pacingTrigger({ idle: { log_coverage: { state: 'unknown' } } }).fires).toBeNull()
   })
 
+  it('answers the pacing trigger unknown where a check was not measured or its noise is unknown', () => {
+    const whole = { log_coverage: { state: 'complete' }, closes: {}, noisy: false }
+    const reconnect = { ...whole, slow_clients: 0 }
+    expect(pacingTrigger({ reconnect })).toMatchObject({
+      unmeasured: [],
+      fires: false,
+      fires_outside_noisy_phases: false,
+    })
+    // a reconnect with no lone client's time, as without the match phase, measured nothing
+    expect(pacingTrigger({ reconnect: { ...reconnect, slow_clients: null } })).toMatchObject({
+      unmeasured: ['reconnect'],
+      fires: null,
+      fires_outside_noisy_phases: null,
+    })
+    // a phase that failed or lost a worker, whatever its surviving log covers
+    const failed = { reconnect, busy: { ...whole, failed: 'a busy loop exited (1)' } }
+    expect(pacingTrigger(failed)).toMatchObject({ unmeasured: ['busy'], fires: null })
+    const lost = { reconnect, changes: { ...whole, failed: 'worker exited', workers_lost: [7] } }
+    expect(pacingTrigger(lost).fires_outside_noisy_phases).toBeNull()
+    // a call over the line in a phase whose noise is unknown is no clean timing
+    const slowCall = { ...whole, over_line: [{ fn: 'tasks:board', js_ms_max: 700 }] }
+    expect(pacingTrigger({ reconnect, startup: { ...slowCall, noisy: null } })).toMatchObject({
+      fires: true,
+      fires_outside_noisy_phases: null,
+    })
+    expect(pacingTrigger({ reconnect, startup: slowCall }).fires_outside_noisy_phases).toBe(true)
+    // a slow reconnect counts outside the noisy phases only when its own phase was quiet
+    const slowly = (noisy) => pacingTrigger({ reconnect: { ...reconnect, slow_clients: 1, noisy } })
+    expect(slowly(true)).toMatchObject({ fires: true, fires_outside_noisy_phases: false })
+    expect(slowly(null)).toMatchObject({ fires: true, fires_outside_noisy_phases: null })
+    expect(slowly(false).fires_outside_noisy_phases).toBe(true)
+  })
+
   it('models the queries a phase ran at once on average from its executed queries', () => {
     const changes = {
       seconds: 10,
