@@ -20,8 +20,9 @@
 // bandwidth delay every answer in all three browsers alike
 // (scripts/perf/server.mjs latency and mbps). --cpu is the CPU slowdown, 4
 // in Chromium by default for Chromium's own figures. Firefox and WebKit run
-// at 1 and refuse another, so a run at --cpu 1 in each of the three is the
-// condition that compares them.
+// at 1 and refuse another. At --cpu 1 Chromium does not shape its page's
+// own requests either (report.shapedRequests), so a run at --cpu 1 in each
+// of the three is the condition that compares them.
 //
 // Each --sizes case puts that many visible tasks in the stand-in's
 // workspace, in top-level projects of 3 sub-projects each (perf/page.mjs
@@ -185,6 +186,10 @@ const {
    style times of every phase and the heap after a collection come from it,
    so the other browsers' output names them as skipped (report.skipped). */
 const devtools = browserName === 'chromium'
+/* Whether Chromium also shapes the page's own requests, its assets and
+   files, to --latency and --mbps. Only a slowed run does, since at --cpu 1
+   the run is the condition the three browsers share. */
+const shapesRequests = devtools && cpu !== 1
 /* The --baseline commit, resolved before anything is made, so a revision
    that is not usable stops here with nothing to clean up. */
 let baseline = null
@@ -357,6 +362,7 @@ const report = {
   root,
   browser: browserName,
   cpu,
+  shapedRequests: shapesRequests,
   latency,
   bandwidthMbps: bandwidth,
   samples,
@@ -448,11 +454,14 @@ async function openPage(origin, tasks, metrics, query = '') {
     })()
   })
   // the stand-in's own latency and bandwidth delay its answers in every
-  // browser; Chromium also slows the CPU and the page's own requests
+  // browser; Chromium also slows the CPU and, past --cpu 1, the page's own
+  // requests
   const cdp = devtools ? await context.newCDPSession(page) : null
   if (cdp) {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu })
     await cdp.send('Performance.enable')
+  }
+  if (cdp && shapesRequests) {
     await cdp.send('Network.enable')
     await cdp.send('Network.emulateNetworkConditions', {
       offline: false,
