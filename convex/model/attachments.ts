@@ -35,14 +35,15 @@
  * the write gate and the task's room first, as files.ts uploadUrl does for
  * the app. The client sends the bytes to the URL, whose receiver
  * (machine/uploads.ts) stores exactly the declared number of bytes once per
- * ticket (beginTicketUpload, finishTicketUpload). The file then attaches only for that caller and task before the ticket
- * expires, through completeUpload. files.ts attach finds the ticket by its
- * file, and confirmAttachmentUpload, on either machine surface, by its id.
- * Convex's own upload URLs are not used for task files, because one of them
- * stores any number of files of any size until it expires. A person holds
- * at most LIMITS.uploadsInProgress unexpired tickets in an organization, and
- * within an hour of a ticket's expiry files.ts reapUploadTickets erases the
- * file it holds unless something names it, and deletes it.
+ * ticket (beginTicketUpload, finishTicketUpload). The file then attaches
+ * only for that caller and task before the ticket expires, through
+ * completeUpload. files.ts attach finds the ticket by its file, and
+ * confirmAttachmentUpload, on either machine surface, by its id. Convex's
+ * own upload URLs are not used for task files, because one of them stores
+ * any number of files of any size until it expires. A person holds at most
+ * LIMITS.uploadsInProgress unexpired tickets in an organization, and within
+ * an hour of a ticket's expiry files.ts reapUploadTickets erases the file
+ * it holds unless something names it, and deletes it.
  *
  * Downloads go through the /files gateway with a 10-minute token minted for
  * the reader (lib/fileTokens.ts), which the gateway re-checks on every fetch.
@@ -273,13 +274,13 @@ type OpenedUpload = { ticket: Doc<'attachment_uploads'>; uploadUrl: string }
  * checked the write gate and the task's room. Refuses a size over the
  * organization's limit with that limit's `rule`, and then a start while
  * `me` holds LIMITS.uploadsInProgress unexpired tickets, on any surface,
- * with that limit's. `name` and `content_type` are what a REST or MCP confirm attaches the file as; the
- * app's attach names the file itself. `nowMs` is the request's clock.
- * Reads at most LIMITS.uploadsInProgress live tickets and up to
- * EXPIRED_TICKETS_PER_UPLOAD of the caller's expired ones, and deletes
- * those that hold no file. An expired ticket that holds a file stays for
- * files.ts reapUploadTickets, which erases the file with it, since nothing
- * else finds such a file before the weekly orphan sweep.
+ * with that limit's. `name` and `content_type` are what a REST or MCP
+ * confirm attaches the file as; the app's attach names the file itself.
+ * `nowMs` is the request's clock. Reads at most LIMITS.uploadsInProgress
+ * live tickets and up to EXPIRED_TICKETS_PER_UPLOAD of the caller's expired
+ * ones, and deletes those that hold no file. An expired ticket that holds a
+ * file stays for files.ts reapUploadTickets, which erases the file with it,
+ * since nothing else finds such a file before the weekly orphan sweep.
  */
 export async function openUploadTicket(
   ctx: MutationCtx,
@@ -389,10 +390,10 @@ async function liveTicket(
 
 /**
  * Claims the upload URL of ticket `ticketId` for the POST `attempt`, and
- * answers the number of bytes the POST must carry. A ticket that is unknown, expired or not `minter`'s is
- * refused, and so is one that holds a file or that another POST claimed
- * less than UPLOAD_CLAIM_MS ago, so a URL stores at most one file however
- * often it is sent to.
+ * answers the number of bytes the POST must carry. A ticket that is
+ * unknown, expired or not `minter`'s is refused, and so is one that holds a
+ * file or that another POST claimed less than UPLOAD_CLAIM_MS ago, so a URL
+ * stores at most one file however often it is sent to.
  */
 export async function beginTicketUpload(
   ctx: MutationCtx,
@@ -523,10 +524,10 @@ async function committedUpload(
  * again answers only the attachment its own first try made, never another
  * upload of the caller's. Every other such case is `missing`. `storageId`
  * must be the file its upload URL stored (finishTicketUpload), so a ticket
- * cannot claim or delete any other file. The attachment is `row`, through attachFileCore
- * with every one of its checks, the ticket's declared size enforced, and
- * `provenance` signing the activity row. A completed
- * ticket is spent, and so is one whose file was deleted for exceeding the
+ * cannot claim or delete any other file. The attachment is `row`, through
+ * attachFileCore with every one of its checks, the ticket's declared size
+ * enforced, and `provenance` signing the activity row. A completed ticket
+ * is spent, and so is one whose file was deleted for exceeding the
  * organization's limit, which for a declared size happens only when the
  * organization lowered its limit after the upload started. Any other
  * refusal leaves the ticket for another try.

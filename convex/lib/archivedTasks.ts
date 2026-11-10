@@ -818,35 +818,36 @@ export async function archivedTasksPage<Row>(
  * specification row 381). */
 export const ARCHIVED_PAGE_ROWS = 25
 
-/** How far a page expands its scope before its read budget starts: at
- * most `ids` distinct project ids (issues.archivedPage refuses more), and at
- * most `subProjects` sub-projects merged side by side, those of named top-level
- * projects and, for All projects, those the caller reaches, each checked for
- * the caller once, beside the top-level projects above them, which count toward
- * no bound but `rows`. To find them it reads the project_reach rows of the
- * caller's seat and of at most `teams` of their teams, and at most `rows` such
- * rows and sub-project rows in all, skipped and repeated ones included. A
- * family has no cap on sub-projects (the owner's choice of 24 October 2026,
- * design-spec §9.2), so past those bounds a page answers that the scope is too
- * wide, for every caller, an organization admin included (ArchiveScope). REST
- * and MCP archived lists of more than `subProjects` projects answer the same.
- * At the design size `subProjects` is the 200 live sub-projects one person can
- * read, so such a person's All projects merges side by side, one page, whether
- * their grants and team shares are on those sub-projects or on the top-level
- * projects above them. A task row without its text is at most lib/limits.ts
+/** How far a page expands its scope before its read budget starts: at most
+ * `ids` distinct project ids (issues.archivedPage refuses more), and at
+ * most `subProjects` sub-projects merged side by side, those of named
+ * top-level projects and, for All projects, those the caller reaches, each
+ * checked for the caller once, beside the top-level projects above them,
+ * which count toward no bound but `rows`. To find them it reads the
+ * project_reach rows of the caller's seat and of at most `teams` of their
+ * teams, and at most `rows` such rows and sub-project rows in all, skipped
+ * and repeated ones included. A family has no cap on sub-projects (the
+ * owner's choice of 24 October 2026, design-spec §9.2), so past those
+ * bounds a page answers that the scope is too wide, for every caller, an
+ * organization admin included (ArchiveScope). REST and MCP archived lists
+ * of more than `subProjects` projects answer the same. At the design size
+ * `subProjects` is the 200 live sub-projects one person can read, so such a
+ * person's All projects merges side by side, one page, whether their grants
+ * and team shares are on those sub-projects or on the top-level projects
+ * above them. A task row without its text is at most lib/limits.ts
  * TASK_ROW_MAX_BYTES, so 200 heads read about 400 KB of a page's bytes
  * (ARCHIVE_PAGE.bytes), and the 267 heads of 200 sub-projects found through
- * their 67 top-level projects, merged with those top-level projects, about 530
- * KB. With the copy of its text a rollback to the second release writes, at the
- * description cap in a three-byte script, a row is about 61 KB, and the heads
- * of about 130 such projects fill those bytes (convex/tests/archived.test.ts
- * reaches that stop with ordinary texts and the page's bytes lowered); 200
- * keeps ordinary scopes whole and leaves the rest to that budget. `rows` counts
- * rows by number only, and a read takes one row past it before it stops
- * (counted): each is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,001 of
- * them are at most about 6.2 MB, about 4.9 MB at the largest project row the
- * caps allow, which the page's budget then sees in its metrics. Tests lower
- * them. */
+ * their 67 top-level projects, merged with those top-level projects, about
+ * 530 KB. With the copy of its text a rollback to the second release
+ * writes, at the description cap in a three-byte script, a row is about
+ * 61 KB, and the heads of about 130 such projects fill those bytes
+ * (convex/tests/archived.test.ts reaches that stop with ordinary texts and
+ * the page's bytes lowered); 200 keeps ordinary scopes whole and leaves the
+ * rest to that budget. `rows` counts rows by number only, and a read takes
+ * one row past it before it stops (counted): each is at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES, so 1,001 of them are at most about 6.2 MB, about
+ * 4.9 MB at the largest project row the caps allow, which the page's budget
+ * then sees in its metrics. Tests lower them. */
 export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200, teams: 64, rows: 1000 }
 
 /* What readScope answers for a scope it may not merge side by side. */

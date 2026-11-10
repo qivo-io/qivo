@@ -37,12 +37,12 @@ import { NOTIFY } from './notificationSessions'
  * after it found activity, never a summary it could not confirm or whose
  * records it could not complete.
  *
- * The slowest case at the design size is the project figure behind a
- * hint: the unread items after the checkpoint about a project the seat no
- * longer sees, each one index entry passed without reading its task, which
- * `items` holds with room. tests/notifications.test.ts ("inside Convex's
- * limits") logs what that case and the everyday ones read, and the closing
- * review's report in qivo-internal
+ * The slowest case at the design size is the project figure behind a hint,
+ * the unread items after the checkpoint about a project the seat no longer
+ * sees, each one index entry passed without reading its task, which `items`
+ * holds with room. tests/notifications.test.ts ("inside Convex's limits")
+ * logs what that case and the everyday ones read, and the closing review's
+ * report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox
  * feed and notification calls") holds the figures. Tests lower these. */
 export const CATCH_UP = { items: 2_000, batch: 16, room: 0.5 }
@@ -308,14 +308,14 @@ export async function missedActivity(
  * CATCH_UP does. Past either it answers `more`, never a shorter list as
  * whole.
  *
- * The slowest case at the design size is CATCH_UP's, the project figure behind
- * a hint: the unread items after the floor about a project the seat no longer
- * sees, each one index entry passed without reading its task, which `items`
- * holds with room. tests/inboxFeed.test.ts ("inside Convex's limits") logs what
- * that case and the everyday ones read, and the closing review's report in
- * qivo-internal
- * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox feed
- * and notification calls") holds the figures. Tests lower these. */
+ * The slowest case at the design size is CATCH_UP's, the project figure
+ * behind a hint, the unread items after the floor about a project the seat
+ * no longer sees, each one index entry passed without reading its task,
+ * which `items` holds with room. tests/inboxFeed.test.ts ("inside Convex's
+ * limits") logs what that case and the everyday ones read, and the closing
+ * review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox
+ * feed and notification calls") holds the figures. Tests lower these. */
 export const FEED = { events: 50, items: 2_000, batch: 16, room: 0.5 }
 
 /** One event of the feed: a new unread message, or a snooze return. */

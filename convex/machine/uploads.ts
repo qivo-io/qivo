@@ -6,12 +6,12 @@
  * that URL, it stores at most one file: a POST claims the ticket under its
  * own id (beginTicketUpload), and every other POST is refused before its
  * file is read. The receiver reads exactly the declared number of bytes,
- * within a time that grows with that size (uploadReadMs), stores them and records
- * the file on the ticket (finishTicketUpload), which the
- * app's attach or the confirm call then must name. A POST that fails
- * stores nothing and frees the URL for another try (abandonTicketUpload).
- * One that cannot, because its runtime stopped or the cleanup kept failing,
- * holds the URL for UPLOAD_CLAIM_MS at most.
+ * within a time that grows with that size (uploadReadMs), stores them and
+ * records the file on the ticket (finishTicketUpload), which the app's
+ * attach or the confirm call then must name. A POST that fails stores
+ * nothing and frees the URL for another try (abandonTicketUpload). One that
+ * cannot, because its runtime stopped or the cleanup kept failing, holds
+ * the URL for UPLOAD_CLAIM_MS at most.
  *
  * POSTs sent to one URL at once all write its ticket, so each of these
  * mutations runs through conflictRetrying like a REST write, and a conflict
@@ -60,10 +60,11 @@ const READ_BYTES_PER_SECOND = 32 * 1024
  * so a POST still storing its file keeps the URL. */
 const READ_CAP_MS = 8 * 60 * 1000
 
-/** How long the receiver reads the body of an upload that declared
- * `bytes` before it refuses it with UPLOAD_TOO_SLOW: 5 minutes, plus a second for every
- * 32 KiB, at most 8 minutes. A 20 MiB file, the largest an organization
- * allows, gets 8 minutes, so it needs about 44 KB/s or more. */
+/** How long the receiver reads the body of an upload that declared `bytes`
+ * before it refuses it with UPLOAD_TOO_SLOW: 5 minutes, plus a second for
+ * every 32 KiB, at most 8 minutes. A 20 MiB file, the largest an
+ * organization allows, gets 8 minutes, so it needs about 44 KB/s or
+ * more. */
 export function uploadReadMs(bytes: number): number {
   return Math.min(READ_CAP_MS, READ_FLOOR_MS + Math.ceil((bytes * 1000) / READ_BYTES_PER_SECOND))
 }

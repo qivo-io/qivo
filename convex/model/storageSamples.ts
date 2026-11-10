@@ -199,24 +199,24 @@ function ceilAverage(values: readonly number[]): number {
 }
 
 /** The average of a daily period's `days` (periodDays) from `readings`, the
- * organization's actual samples of those days by day, by the owner's rules of
- * 25 October 2026 (design-spec §9.3). A day with its own reading is measured, a
- * reading of 0 bytes included. A day without one takes the first later actual
- * reading, of a later day of the period or `later`, the organization's first
- * sample after the period's last day, and records its day in `from`;
- * consecutive missing days take the same one, each counted once in the average.
- * Without `final` a day with no later reading stays unresolved and out of the
- * average, never 0, an earlier reading or an average of the others. With
- * `final`, at the cutoff, such a day takes the most recent actual reading
- * before it, a measured day of the period or `earlier`, the organization's
- * latest sample before the period's first day, which can be an earlier
- * period's. No source is ever another estimate. With `final` every day
- * resolves, or none when the organization has no reading in, after or before
- * the period. The average is rounded up to a whole byte with integer
- * arithmetic. That changes no block, since the allowance A is a whole number of
- * bytes (model/billing.ts validatePlan keeps its settings whole) and GB is one
- * too, so for any average y, ceil(max(0, ceil(y) - A) / GB) equals ceil(max(0,
- * y - A) / GB). */
+ * organization's actual samples of those days by day, by the owner's rules
+ * of 25 October 2026 (design-spec §9.3). A day with its own reading is
+ * measured, a reading of 0 bytes included. A day without one takes the
+ * first later actual reading, of a later day of the period or `later`, the
+ * organization's first sample after the period's last day, and records its
+ * day in `from`; consecutive missing days take the same one, each counted
+ * once in the average. Without `final` a day with no later reading stays
+ * unresolved and out of the average, never 0, an earlier reading or an
+ * average of the others. With `final`, at the cutoff, such a day takes the
+ * most recent actual reading before it, a measured day of the period or
+ * `earlier`, the organization's latest sample before the period's first
+ * day, which can be an earlier period's. No source is ever another
+ * estimate. With `final` every day resolves, or none when the organization
+ * has no reading in, after or before the period. The average is rounded up
+ * to a whole byte with integer arithmetic. That changes no block, since the
+ * allowance A is a whole number of bytes (model/billing.ts validatePlan
+ * keeps its settings whole) and GB is one too, so for any average y,
+ * ceil(max(0, ceil(y) - A) / GB) equals ceil(max(0, y - A) / GB). */
 export function periodAverage(
   days: readonly string[],
   readings: ReadonlyMap<string, number>,

@@ -170,10 +170,11 @@ async function insertReservation(
  * number of bytes (a bad request otherwise) within the kind's per-file
  * limit, and it must fit in the free space, DEMO_STORAGE_BYTES less what
  * the demo's live rows store or reserve. The row is then `declared`, and
- * the receiver stores at most that many bytes. It refuses with a `rule` at DEMO_UPLOAD_ROWS files, when nothing is free and
- * when a declared size does not fit, and never deletes a file to make room.
- * Reads one range of at most DEMO_UPLOAD_ROWS + 1 rows under 1 KB each and
- * one stored file for each stored row, inside Convex's limits.
+ * the receiver stores at most that many bytes. It refuses with a `rule` at
+ * DEMO_UPLOAD_ROWS files, when nothing is free and when a declared size
+ * does not fit, and never deletes a file to make room. Reads one range of
+ * at most DEMO_UPLOAD_ROWS + 1 rows under 1 KB each and one stored file for
+ * each stored row, inside Convex's limits.
  */
 export async function reserveDemoUpload(
   ctx: MutationCtx,

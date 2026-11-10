@@ -1565,13 +1565,12 @@ export function pageEnd(
 /**
  * Load more as a list's end scrolls into view, as expanded lists load more
  * names as the person scrolls (the owner's choice of 24 October 2026,
- * design-spec §9.3). The answer is a
- * ref for a marker after the list's last row: while it is in view and
- * `armed`, which a page sets while Load more may read (its end is `more`
- * and no read is on its way), `more` runs, also again once a batch has
- * landed with the marker still in view. Where IntersectionObserver is
- * absent nothing runs, and the page's Load more button reads instead, as it
- * does for the keyboard.
+ * design-spec §9.3). The answer is a ref for a marker after the list's last
+ * row: while it is in view and `armed`, which a page sets while Load more
+ * may read (its end is `more` and no read is on its way), `more` runs, also
+ * again once a batch has landed with the marker still in view. Where
+ * IntersectionObserver is absent nothing runs, and the page's Load more
+ * button reads instead, as it does for the keyboard.
  */
 export function useMoreOnScroll(
   more: () => void,
