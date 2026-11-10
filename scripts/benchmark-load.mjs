@@ -922,7 +922,7 @@ const socketPrefix = (options) => options.url.replace(/^http/, 'ws')
 const SYNC_WAIT_MS = 30_000
 
 /** A Playwright browser of `options.browser` and a context signed in as
-    Nora, with the page it signed in on. The app connects to the backend
+    Nora, the page it signed in on closed. The app connects to the backend
     its dev server or build was started with, which --url does not set, so
     before Nora's fixture password is typed the sign-in page must sync with
     --url (staging-check.mjs syncsWith), and while the sign-in runs every
@@ -985,7 +985,9 @@ async function signedIn(options) {
     }
     await signInDemo(page, demo, 'nora')
     await context.unroute(offLoopback)
-    return { browser, page, notifications }
+    // every part opens its own tabs in the signed-in context
+    await page.close()
+    return { browser, context, notifications }
   } catch (error) {
     await browser.close().catch(() => {})
     throw error
@@ -1029,9 +1031,7 @@ async function settle(tracker, quietMs, timeoutMs, from = Date.now()) {
     <dir>/sets/<view>.json. */
 async function record(options) {
   const plan = readPlan(options)
-  const { browser, page: signInPage, notifications } = await signedIn(options)
-  const context = signInPage.context()
-  await signInPage.close()
+  const { browser, context, notifications } = await signedIn(options)
   const summaries = []
   try {
     // Northstar's sets in <dir>/sets, each other organization's, recorded
@@ -2118,85 +2118,81 @@ async function movableTask(writer, plan, tasks) {
   )
 }
 
-/** One real tab of the Board at `url` in the browser, hidden, whose
-    socket the reconnect phase closes: `reconnect()` closes it and answers
-    the check. */
+/** One real tab of the Board at `url` in the browser, opened, settled and
+    then hidden, whose socket the reconnect phase closes: `reconnect()`
+    closes it and answers the check, and `close()` closes the browser,
+    which a tab that fails to open closes itself. */
 async function hiddenTab(options, url) {
-  const { browser, page: signInPage } = await signedIn(options)
+  const { browser, context } = await signedIn(options)
   try {
-    return await hide(options, url, browser, signInPage)
+    const page = await context.newPage()
+    const tracker = trackPage(page, options)
+    await page.goto(`${options.siteUrl}${url}`, { waitUntil: 'domcontentloaded' })
+    const visible = await settle(tracker, options.quietMs, options.timeoutMs)
+    const shown = tracker.set().map((query) => query.udfPath)
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await sleep(options.quietMs)
+    await settle(tracker, options.quietMs, options.timeoutMs)
+    const whileHidden = tracker.set().map((query) => query.udfPath)
+    return {
+      async reconnect() {
+        const connects = tracker.connects
+        const at = Date.now()
+        await page.evaluate((prefix) => {
+          // a mark that a reload of the page would lose
+          window.__loadMark = true
+          // the backend's socket only: the dev server's own socket reloads the page when it drops
+          for (const socket of window.__loadSockets)
+            if (socket.url.startsWith(prefix) && socket.readyState <= 1) socket.close()
+        }, socketPrefix(options))
+        while (tracker.connects === connects && Date.now() - at < options.timeoutMs) await sleep(20)
+        const after = await settle(tracker, options.quietMs, options.timeoutMs, at)
+        const again = tracker.set().map((query) => query.udfPath)
+        const state = await page.evaluate(() => ({
+          reloaded: window.__loadMark !== true,
+          visibility: document.visibilityState,
+        }))
+        const dropped = shown.filter((name) => !whileHidden.includes(name))
+        const resubscribedViewReads = again.filter((name) => dropped.includes(name))
+        const newReads = again.filter((name) => !whileHidden.includes(name))
+        return {
+          view: 'board',
+          browser: options.browser,
+          visible_settled: visible.settled,
+          visible: shown,
+          hidden: whileHidden,
+          after_reconnect: again,
+          reconnected: tracker.connects > connects,
+          reloaded: state.reloaded,
+          visibility_after: state.visibility,
+          settled: after.settled,
+          ms_to_current: after.settled ? tracker.currentSince - at : null,
+          dropped_on_hiding: dropped,
+          resubscribed_view_reads: resubscribedViewReads,
+          new_reads: newReads,
+          // a tab that never became current again, reloaded or showed itself
+          // has not shown what a hidden tab subscribes after a reconnect
+          passed:
+            tracker.connects > connects &&
+            after.settled &&
+            !state.reloaded &&
+            state.visibility === 'hidden' &&
+            resubscribedViewReads.length === 0 &&
+            newReads.length === 0,
+        }
+      },
+      close: () => browser.close(),
+    }
   } catch (error) {
     await browser.close().catch(() => {})
     throw error
-  }
-}
-
-/** hiddenTab's Board tab at `url` in `browser`, opened after `signInPage`
-    signed in, then hidden. */
-async function hide(options, url, browser, signInPage) {
-  const context = signInPage.context()
-  await signInPage.close()
-  const page = await context.newPage()
-  const tracker = trackPage(page, options)
-  await page.goto(`${options.siteUrl}${url}`, { waitUntil: 'domcontentloaded' })
-  const visible = await settle(tracker, options.quietMs, options.timeoutMs)
-  const shown = tracker.set().map((query) => query.udfPath)
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
-    document.dispatchEvent(new Event('visibilitychange'))
-  })
-  await sleep(options.quietMs)
-  await settle(tracker, options.quietMs, options.timeoutMs)
-  const whileHidden = tracker.set().map((query) => query.udfPath)
-  return {
-    async reconnect() {
-      const connects = tracker.connects
-      const at = Date.now()
-      await page.evaluate((prefix) => {
-        // a mark that a reload of the page would lose
-        window.__loadMark = true
-        // the backend's socket only: the dev server's own socket reloads the page when it drops
-        for (const socket of window.__loadSockets)
-          if (socket.url.startsWith(prefix) && socket.readyState <= 1) socket.close()
-      }, socketPrefix(options))
-      while (tracker.connects === connects && Date.now() - at < options.timeoutMs) await sleep(20)
-      const after = await settle(tracker, options.quietMs, options.timeoutMs, at)
-      const again = tracker.set().map((query) => query.udfPath)
-      const state = await page.evaluate(() => ({
-        reloaded: window.__loadMark !== true,
-        visibility: document.visibilityState,
-      }))
-      const dropped = shown.filter((name) => !whileHidden.includes(name))
-      const resubscribedViewReads = again.filter((name) => dropped.includes(name))
-      const newReads = again.filter((name) => !whileHidden.includes(name))
-      return {
-        view: 'board',
-        browser: options.browser,
-        visible_settled: visible.settled,
-        visible: shown,
-        hidden: whileHidden,
-        after_reconnect: again,
-        reconnected: tracker.connects > connects,
-        reloaded: state.reloaded,
-        visibility_after: state.visibility,
-        settled: after.settled,
-        ms_to_current: after.settled ? tracker.currentSince - at : null,
-        dropped_on_hiding: dropped,
-        resubscribed_view_reads: resubscribedViewReads,
-        new_reads: newReads,
-        // a tab that never became current again, reloaded or showed itself
-        // has not shown what a hidden tab subscribes after a reconnect
-        passed:
-          tracker.connects > connects &&
-          after.settled &&
-          !state.reloaded &&
-          state.visibility === 'hidden' &&
-          resubscribedViewReads.length === 0 &&
-          newReads.length === 0,
-      }
-    },
-    close: () => browser.close(),
   }
 }
 
@@ -2222,9 +2218,7 @@ async function tabsPart(options) {
   const missing = options.views.filter((view) => !urls[view])
   if (missing.length > 0)
     throw new Error(`no recorded set of ${missing.join(', ')}; record those views first`)
-  const { browser, page: signInPage, notifications } = await signedIn(options)
-  const context = signInPage.context()
-  await signInPage.close()
+  const { browser, context, notifications } = await signedIn(options)
   const log = followLog(options)
   await sleep(1000)
   let change = null
