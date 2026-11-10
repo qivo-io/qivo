@@ -316,47 +316,28 @@ export async function archivedTasksAfter(
  * each, may read the whole page, as the scope has no other read
  * (archivedTasksAfter). Tests lower these.
  *
- * Measured on 3 November 2026 in convex/tests/archivedTaskPagesScale.test.ts
+ * convex/tests/archivedTaskPagesScale.test.ts ("archived pages at the
+ * design size") logs what a REST or MCP page and the reads before it read
  * under convex-test's transaction limits, at the design size with ordinary
- * text, one figure raised a case. Before a REST or MCP page, a member reads
- * 13 ranges, 2,084 documents and 0.92 MiB, nearly all of it the catalogue
- * of 2,000 projects and sub-projects, live and archived, that every caller
- * reads whole (a guest 6 ranges, an admin with one grant 9, each about
- * 0.92 MiB), and with a one-sentence description on every project 1.11
- * MiB, which leaves
- * the request's room 0.11 MiB short of `bytes` for the page. A roster of
- * 1,000 reads 0.29 MiB and 200 readable sub-projects 0.15 MiB. A member's
- * page of 200 rows over a project whose three sub-projects hold 70
- * archived tasks each reads 604 ranges, 603 documents and 0.28 MiB past
- * those reads, an admin's with that grant the same, and a guest's at most
- * one range and one document fewer (remeasured on 7 November 2026, after
- * the admin access split). With `tasks` lowered to 150, a search page that
- * stops there reads 193 ranges, 322 documents and 0.18 MiB, and one that matches
- * none 155, 303 and 0.17 MiB. That is at most about 1.3 ranges, 2.2
- * documents and 1.2 KB a task looked at, which puts a search that looks at
- * all 1,000 at about 1,300 ranges, 2,200 documents and 1.2 MiB, inside the
- * page's budget. Every page ended at `limit` or at `tasks`, with the same
- * rows, cursor, ranges and documents with and without the descriptions, so
- * the REST and MCP lists keep reading inside the request's room rather
- * than refusing like the active lists (activeTaskPage.ts
- * TASK_LIST_UNREADABLE). Inside the design size the room moves no page
- * stop, and a refusal could give no advice that works, because the reads
- * before the page do not depend on the project named (coordinator,
- * 2026-11-03).
+ * text, one figure raised a case. Nearly all of the reads before a page are
+ * the catalogue of projects and sub-projects, live and archived, that every
+ * caller reads whole, and with a one-sentence description on every project
+ * they leave the request's room short of `bytes` for the page. A search
+ * page reads in proportion to the tasks it looks at, so one that looks at
+ * all of `tasks` stays inside the page's budget. Every page ended at
+ * `limit` or at `tasks`, with the same rows, cursor, ranges and documents
+ * with and without the descriptions, so the REST and MCP lists keep reading
+ * inside the request's room rather than refusing like the active lists
+ * (activeTaskPage.ts TASK_LIST_UNREADABLE). Inside the design size the room
+ * moves no page stop, and a refusal could give no advice that works,
+ * because the reads before the page do not depend on the project named
+ * (coordinator, 2026-11-03).
  *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin
- * who reads 200 live sub-projects through grants gets one All projects page
- * of 25 rows, merged side by side and not too wide. Counted for the whole
- * call with its sign-in, it reads 824 ranges, 951 documents and 0.29 MiB in
- * 35 to 54 ms of JavaScript quiet and at most 107 ms busy, and costs the
- * same as a standard user's with those grants. REST's archived list takes
- * one project. Run as its internal query, without the HTTP route's token
- * check, over a top-level project whose 3 sub-projects hold 70 archived
- * tasks each it answers 200 rows in 620 ranges, 1,108 documents and
- * 0.45 MiB (45 to 77 ms quiet, at most 161 ms busy), and over one of those
- * sub-projects 70 rows in 226, 715 and 0.26, for the admin and the standard
- * user alike. */
+ * An organization admin who reads the 200 live sub-projects one person can
+ * read through grants gets one All projects page, merged side by side and
+ * not too wide, at the cost of a standard user's with those grants. REST's
+ * archived list takes one project, and reads the same for an admin and a
+ * standard user. */
 export const ARCHIVE_PAGE = {
   tasks: 1000,
   ranges: 1500,
@@ -613,14 +594,14 @@ export const profileNamesIn = (
 
 /** How many of the organization's labels a search reads at once. When the
  * organization has at most `scan` labels, a search reads them all in one
- * range and reads a task's labels only when one of them holds a piece of the
- * search. Past it, items 5 and 12b of the limits plan set no cap on labels,
- * so it reads instead the labels of each task whose own fields, text and
- * assignee did not match, by id. A label stores a name of at most 40
- * characters, its lowercase copy, a color and two ids, so labels at the
- * longest names read 301 bytes each, measured, and 1,000 of them one range
- * and about 300 KB (convex/tests/archived.test.ts). The scan reads one label
- * more to tell whether that was all. Tests lower it. */
+ * range and reads a task's labels only when one of them holds a piece of
+ * the search. Past it, as labels have no cap (the owner's choice of 24
+ * October 2026, design-spec §9.2), it reads instead the labels of each task
+ * whose own fields, text and assignee did not match, by id. A label stores
+ * a name of at most 40 characters, its lowercase copy, a color and two ids,
+ * so 1,000 labels at the longest names read one range and under 300 KiB
+ * (convex/tests/archived.test.ts pins both). The scan reads one label more
+ * to tell whether that was all. Tests lower it. */
 export const ARCHIVE_LABELS = { scan: 1000 }
 
 /** The organization's labels whose lowercased name holds one of `pieces`,
@@ -833,41 +814,40 @@ export async function archivedTasksPage<Row>(
  * page of the app (issues.archivedPage) */
 
 /** The most rows one page of the app's Archived tasks answers, and how
- * many when the call names no limit: the 25 a page shows (limits plan,
- * "Archived task browsing and search"). */
+ * many when the call names no limit: the 25 a page shows (design
+ * specification row 381). */
 export const ARCHIVED_PAGE_ROWS = 25
 
-/** How far a page expands its scope before its read budget starts: at
- * most `ids` distinct project ids (issues.archivedPage refuses more), and at
+/** How far a page expands its scope before its read budget starts: at most
+ * `ids` distinct project ids (issues.archivedPage refuses more), and at
  * most `subProjects` sub-projects merged side by side, those of named
- * top-level projects and, for All projects, those the caller reaches,
- * each checked for the caller once, beside the top-level projects above
- * them, which count toward no bound but `rows`. To find them it reads the
+ * top-level projects and, for All projects, those the caller reaches, each
+ * checked for the caller once, beside the top-level projects above them,
+ * which count toward no bound but `rows`. To find them it reads the
  * project_reach rows of the caller's seat and of at most `teams` of their
  * teams, and at most `rows` such rows and sub-project rows in all, skipped
- * and repeated ones included. A family has no cap on sub-projects (limits
- * plan, item 4), so past those bounds a page answers that the scope is too
- * wide, for every caller, an organization admin included (ArchiveScope).
- * REST and MCP archived lists of more than `subProjects` projects answer
- * the same. At the design size `subProjects` is the 200 live sub-projects
- * one person can read, so such a person's All projects merges side by
- * side, one page, whether their grants and team shares are on those
- * sub-projects or on the top-level projects above them. A task
- * row without its text is at most lib/limits.ts TASK_ROW_MAX_BYTES, so 200
- * heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes), and the
- * 267 heads of 200 sub-projects found through their 67 top-level projects,
- * merged with those top-level projects, about 530 KB. With the copy of its
- * text a rollback to the second release writes, at the
- * description cap in a three-byte script, a row is about 61 KB, and the
- * heads of about 130 such projects fill those bytes
+ * and repeated ones included. A family has no cap on sub-projects (the
+ * owner's choice of 24 October 2026, design-spec §9.2), so past those
+ * bounds a page answers that the scope is too wide, for every caller, an
+ * organization admin included (ArchiveScope). REST and MCP archived lists
+ * of more than `subProjects` projects answer the same. At the design size
+ * `subProjects` is the 200 live sub-projects one person can read, so such a
+ * person's All projects merges side by side, one page, whether their grants
+ * and team shares are on those sub-projects or on the top-level projects
+ * above them. A task row without its text is at most lib/limits.ts
+ * TASK_ROW_MAX_BYTES, so 200 heads read about 400 KB of a page's bytes
+ * (ARCHIVE_PAGE.bytes), and the 267 heads of 200 sub-projects found through
+ * their 67 top-level projects, merged with those top-level projects, about
+ * 530 KB. With the copy of its text a rollback to the second release
+ * writes, at the description cap in a three-byte script, a row is about
+ * 61 KB, and the heads of about 130 such projects fill those bytes
  * (convex/tests/archived.test.ts reaches that stop with ordinary texts and
  * the page's bytes lowered); 200 keeps ordinary scopes whole and leaves the
- * rest to that budget. `rows` counts rows by number
- * only, and a read takes one row past it before it stops (counted): each
- * is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,001 of them are at
- * most about 6.2 MB, about 4.9 MB at the largest project row the caps
- * allow, which the page's budget then sees in its metrics. Tests lower
- * them. */
+ * rest to that budget. `rows` counts rows by number only, and a read takes
+ * one row past it before it stops (counted): each is at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES, so 1,001 of them are at most about 6.2 MB, about
+ * 4.9 MB at the largest project row the caps allow, which the page's budget
+ * then sees in its metrics. Tests lower them. */
 export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200, teams: 64, rows: 1000 }
 
 /* What readScope answers for a scope it may not merge side by side. */

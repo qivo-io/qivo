@@ -8,7 +8,7 @@
    runDeletedItems). Nothing here sorts, filters or counts entries; types
    come from deletedItems.page, roles, people, purgeSummary and item, so
    the page follows the server's projection
-   (convex/model/deletedItemsPage.ts, deletedItemsList.ts and
+   (convex/model/deletedItemsPage.ts, deletedItemsRows.ts and
    deletedItemsChoices.ts). It imports nothing from the store. */
 
 import type { FunctionReturnType } from 'convex/server'

@@ -64,29 +64,22 @@ import { LIMITS } from '../../convex/lib/limits'
     the changes of one write that the live page starts among, and it never
     splits an instant. So under All the store can hold about 200 rows after
     one press, and the rows it held plus both pages after a Show newer
-    press made while Show earlier still loads, past the figure of 150,
-    until the next release. A row at an instant only the other kind's live
+    press made while Show earlier still loads, past the budget, until the
+    next release. A row at an instant only the other kind's live
     rows hold is held apart within the count, so it never stops a release.
     A comment open in an editor is held besides, outside the count, until
     its editor closes or a page holds it again.
 
-    Measured on 6 November 2026 with the browser benchmark's thread phase
-    (scripts/benchmark-browser.mjs --thread: 4 times CPU slowdown, 100 ms
-    latency, 8 Mbps, Chromium at 1440 by 1000, 5 samples on one Boat
-    sandbox at a load of 1.0 to 1.3), each case one figure raised: Comments
-    on a task with 1,000 comments, All on one with 30 comments and 1,000
-    changes. The median longest frame after a Show earlier press made at the
-    figure, Comments and All, was 333 and 393 ms at 100 rows, 400 and 310 at
-    150, 416 and 355 at 200, 481 and 372 at 300, 694 and 448 at 500 and 921
-    and 695 at 1,000; after a delivered comment 307 and 394, 291 and 273,
-    335 and 306, 386 and 326, 611 and 454, and 916 and 609. No candidate
-    keeps either under the 100 ms the coordinator's rule asks for, since
-    about 250 ms of each frame is the window's repaint whatever the rows,
-    so the figure is the rule's floor of 150, which the owner decides on.
-    With the budget built, at 150 the medians were 525 and 470 ms after
-    Show earlier, 389 and 422 after a comment and 530 and 520 after Show
-    newer, and the store held 150 rows after each. Tests lower it and
-    restore it. */
+    The figure follows the coordinator's rule for it, checked with the
+    browser benchmark's thread phase (scripts/benchmark-browser.mjs
+    --thread), each case one figure raised: the largest candidate whose
+    median longest frame after a delivered comment and after a Show earlier
+    press stays under 100 ms under Comments and under All, and never less
+    than 150, which holds the live window, the live page and one more page.
+    The closing review's sweep, with the window's comment rows memoized,
+    found no candidate that meets it, so the figure is the rule's floor,
+    which the owner decides on. Design specification row 441 holds the
+    budget and the rule. Tests lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of

@@ -37,19 +37,14 @@ import { NOTIFY } from './notificationSessions'
  * after it found activity, never a summary it could not confirm or whose
  * records it could not complete.
  *
- * The slowest case at the design size is the project figure behind a
- * hint: 1,000 unread items after the checkpoint (800 open and 200 Done
- * tasks of one project, one range) about a project the seat no longer
- * sees, each one index entry passed without reading its task. 2,000 holds
- * it with room. Measured in tests/notifications.test.ts "inside Convex's
- * limits", that case reads 1,012 documents in 17 ranges, 448 KiB, and
- * answers whole (`none`); the everyday Inbox, 60 groups over 3
- * sub-projects with 10 new, and 300 groups of one sub-project, all new,
- * each answer `summary` after 15 documents in 16 ranges, and the same 300
- * groups all before the checkpoint answer `none` after 8 documents in 9
- * ranges. convex-test's counts leave out the nested Better Auth session
- * lookup of claimSummary's wrapper, so a real backend reads two documents
- * more a call (NOTIFY's docstring says the same). Tests lower these. */
+ * The slowest case at the design size is the project figure behind a hint,
+ * the unread items after the checkpoint about a project the seat no longer
+ * sees, each one index entry passed without reading its task, which `items`
+ * holds with room. tests/notifications.test.ts ("inside Convex's limits")
+ * logs what that case and the everyday ones read, and the closing review's
+ * report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox
+ * feed and notification calls") holds the figures. Tests lower these. */
 export const CATCH_UP = { items: 2_000, batch: 16, room: 0.5 }
 
 /** One item's newest unread event, with its key as the feed names it (a
@@ -314,22 +309,13 @@ export async function missedActivity(
  * whole.
  *
  * The slowest case at the design size is CATCH_UP's, the project figure
- * behind a hint: 1,000 unread items after the floor (800 open and 200 Done
- * tasks of one project, one range) about a project the seat no longer
- * sees, each one index entry passed without reading its task. 2,000 holds
- * it with room. Measured in tests/inboxFeed.test.ts "inside Convex's
- * limits", that case reads 1,006 documents in 12 ranges, 447 KiB, and
- * answers whole with no event. The everyday Inbox, 60 groups over 3
- * sub-projects with 10 new, answers its 10 events whole after 38 documents
- * in 33 ranges, 14 KiB; one sub-project's 300 groups, all new, answer 50
- * events and `more` after 157 documents in 109 ranges, 61 KiB, and the same
- * 300 before the floor answer none after 2 documents in 4 ranges; one
- * task's 50 unread messages and its wake answer 50 events and `more` after
- * 58 documents in 11 ranges; 200 sub-projects the person reads, at most 3
- * under each of 67 granted projects, with a new group each from 50 actors,
- * answer 50 events and `more` after 320 documents in 289 ranges, 105 KiB;
- * and 10 new items beside 1,000 other people's 10,000 read exactly what
- * they read alone, 36 documents in 29 ranges. Tests lower these. */
+ * behind a hint, the unread items after the floor about a project the seat
+ * no longer sees, each one index entry passed without reading its task,
+ * which `items` holds with room. tests/inboxFeed.test.ts ("inside Convex's
+ * limits") logs what that case and the everyday ones read, and the closing
+ * review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox
+ * feed and notification calls") holds the figures. Tests lower these. */
 export const FEED = { events: 50, items: 2_000, batch: 16, room: 0.5 }
 
 /** One event of the feed: a new unread message, or a snooze return. */

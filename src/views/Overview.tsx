@@ -283,11 +283,11 @@ function OvStatusLegend({
 
 /* The two task lists show the server's batches. A row renders again only
    when its task object, its marker, the store's context (P.contextVersion,
-   for the names it reads) or `wide` changes, and mounts no tooltip roots
-   until a mouse points at it or keyboard focus reaches it. */
+   for the names it reads) or `mine` (My view) changes, and mounts no
+   tooltip roots until a mouse points at it or keyboard focus reaches it. */
 type OvRowProps = {
   it: IssueVM
-  wide: boolean
+  mine: boolean
   context: StoreVersion
   onOpen: (id: string) => void
 }
@@ -322,12 +322,12 @@ const hoverOff = (e: MouseEvent<HTMLElement>) => {
 /** Where a row's task lives: the sub-project alone inside one project, the
     owning project too in My view, where every project is on screen at
     once. */
-function OvRowPlace({ it, wide }: { it: IssueVM; wide: boolean }) {
-  const place = P.projectPlace(it.project, wide)
+function OvRowPlace({ it, mine }: { it: IssueVM; mine: boolean }) {
+  const place = P.projectPlace(it.project, mine)
   if (!place) return null
   return (
     <HoverTooltip content={P.placeLabel(place)}>
-      <span tabIndex={-1} className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}>
+      <span tabIndex={-1} className={cn('truncate', mine ? 'max-w-[190px]' : 'max-w-[120px]')}>
         <ProjectName {...place} />
       </span>
     </HoverTooltip>
@@ -337,7 +337,7 @@ function OvRowPlace({ it, wide }: { it: IssueVM; wide: boolean }) {
 /* these rows no longer carry the board's delay edge, only a plain border:
    every row in an "Overdue & at risk" section is at risk by definition, so the
    edge was restating the heading above it rather than adding anything */
-const OvPausedRow = memo(function OvPausedRow({ it, wide, onOpen }: OvRowProps) {
+const OvPausedRow = memo(function OvPausedRow({ it, mine, onOpen }: OvRowProps) {
   return (
     <OvRowFrame>
       <Button
@@ -355,7 +355,7 @@ const OvPausedRow = memo(function OvPausedRow({ it, wide, onOpen }: OvRowProps) 
         <span className="min-w-0 flex-1">
           <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
           <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
-            <OvRowPlace it={it} wide={wide} />
+            <OvRowPlace it={it} mine={mine} />
           </span>
         </span>
         {it.owner && <Avatar id={it.owner} size={28} />}
@@ -382,7 +382,7 @@ const sameRisk = (a: AtRisk['risk'], b: AtRisk['risk']) =>
    its due date in a project that tracks delay, or a candidate whose risk
    the server could not judge, which may not be late */
 const OvAtRiskRow = memo(
-  function OvAtRiskRow({ it, wide, onOpen, risk, due, day }: OvRowProps & AtRisk) {
+  function OvAtRiskRow({ it, mine, onOpen, risk, due, day }: OvRowProps & AtRisk) {
     // never less than a day: the answer judged it overdue on `day`
     const days = Math.max(
       1,
@@ -426,7 +426,7 @@ const OvAtRiskRow = memo(
               >
                 {P.fmtISO(due)}, {marker}
               </span>
-              <OvRowPlace it={it} wide={wide} />
+              <OvRowPlace it={it} mine={mine} />
             </span>
           </span>
           {it.owner && <Avatar id={it.owner} size={28} />}
@@ -436,7 +436,7 @@ const OvAtRiskRow = memo(
   },
   (a, b) =>
     a.it === b.it &&
-    a.wide === b.wide &&
+    a.mine === b.mine &&
     a.context === b.context &&
     a.onOpen === b.onOpen &&
     a.due === b.due &&
@@ -526,14 +526,14 @@ function BatchNote({
 function OvList({
   kind,
   list,
-  wide,
+  mine,
   day,
   emptyText,
   onOpen,
 }: {
   kind: ListKind
   list: ListView
-  wide: boolean
+  mine: boolean
   /** the day the At-risk list's answers were judged on */
   day: string
   emptyText: string
@@ -575,7 +575,7 @@ function OvList({
           <OvPausedRow
             key={row.id}
             it={it}
-            wide={wide}
+            mine={mine}
             context={P.contextVersion}
             onOpen={onOpen}
           />,
@@ -588,7 +588,7 @@ function OvList({
         <OvAtRiskRow
           key={row.id}
           it={it}
-          wide={wide}
+          mine={mine}
           context={P.contextVersion}
           onOpen={onOpen}
           risk={risk}
@@ -1171,15 +1171,14 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       ),
       project,
     )
-  // `wide` = the scope that names no project, My view; `mine` is the same
-  // scope, the one that narrows to my own tasks. The Overview renders
-  // no filter row, so it takes no `filters`: the scope's own `only` predicate
-  // is the whole narrowing, and nothing invisible can be left switched on.
-  const wide = info.mine
+  // My view, the scope that names no project and narrows to my own tasks.
+  // The Overview renders no filter row, so it takes no `filters`. The
+  // scope's own `only` predicate is the whole narrowing, and nothing
+  // invisible can be left switched on.
   const mine = info.mine
   // "grouped" scopes get the health table, a lone sub-project gets the
   // status distribution: one project's sub-projects, or My view's projects
-  const grouped = wide || info.isMeta
+  const grouped = mine || info.isMeta
   const read = useOverviewRead(
     info,
     grouped ? { sort: sort.key, dir: sort.dir, search: rested } : null,
@@ -1436,7 +1435,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               </div>
 
               {grouped ? (
-                <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
+                <OvSection title={mine ? 'Project health' : 'Sub-project health'}>
                   <OvHealthTable
                     view={health}
                     mine={mine}
@@ -1483,7 +1482,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 <OvList
                   kind="attention"
                   list={lists.attention}
-                  wide={wide}
+                  mine={mine}
                   day={day}
                   emptyText="No deadlines are overdue or at risk."
                   onOpen={openIssue}
@@ -1502,7 +1501,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 <OvList
                   kind="paused"
                   list={lists.paused}
-                  wide={wide}
+                  mine={mine}
                   day={day}
                   emptyText="Nothing is paused right now."
                   onOpen={openIssue}
@@ -1516,7 +1515,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           <OvSection
             title="Milestones"
             action={
-              wide || !P.canAddMilestone(info.id) ? null : (
+              mine || !P.canAddMilestone(info.id) ? null : (
                 <Button
                   type="button"
                   variant="ghost"
@@ -1536,7 +1535,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               rootRef={milestonesRoot}
               ms={ms}
               mine={mine}
-              canAdd={!wide && P.canAddMilestone(info.id)}
+              canAdd={!mine && P.canAddMilestone(info.id)}
               onEdit={editMilestone}
             />
           </OvSection>

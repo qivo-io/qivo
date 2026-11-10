@@ -5,9 +5,9 @@
    so an image someone is looking at overtakes the roster's pictures. The
    server refuses a call past its own caps (convex/files.ts MINT_IDS), which
    these chunks stay under. A call that fails for any reason but a refusal
-   is asked again once as two halves before its ids answer failed, since a
-   backend from before the cap reads each image's project on its own and
-   can pass its read limit on a call of 100 (docs/deployment.md). While the page is hidden no call starts
+   is asked again once as two halves before its ids answer failed, so a
+   failure that one part of a call causes leaves the other half's ids
+   answered. While the page is hidden no call starts
    (pause); the calls on their way finish, and the waiting requests go once
    it shows. A waiting request the store no longer wants when its call is
    about to go (`wanted`) answers `dropped` and stays out of the call. The

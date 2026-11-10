@@ -6856,9 +6856,9 @@ const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
    (LIMITS.restoreBatch, LIMITS.purgeBatch): a restore call spends one
    budget shared by its items, a quarter of a step's
    (convex/model/deletedItems.ts CALL), and leaves the rest of a large item
-   to its steps, so more ids make a call no longer than its budget; the
-   timing of 5 November 2026 restored the widest item family whole in 1.9
-   to 3.0 s on a local backend. Its progress is P.deletedAction, which the
+   to its steps, so more ids make a call no longer than its budget, and a
+   timing on a local backend on 5 November 2026 restored the widest item
+   family whole in a few seconds. Its progress is P.deletedAction, which the
    page shows however often it is left and opened again; `resend`, the
    second send of a deferred item, keeps out of it.
 
@@ -10736,7 +10736,9 @@ export const PLANNER = {
       one a store. */
   inlineImages,
   /** What the file URL mints, the pictures and the inline images hold now,
-      for the benchmark page's measurement and the closing review. */
+      as counts and byte totals only, never a URL, a token or a person, for
+      the benchmark page's measurement and the device checks. It stays in
+      production builds, because the device checks read it there. */
   fileStats: () => ({
     mints: {
       running: mintQueue.running(),
@@ -11856,6 +11858,9 @@ export const PLANNER = {
       homeRow()?.project_creators,
     )
   },
+  /** How long ago epoch milliseconds `ts` was, as the task window tells a
+      comment's or a change's age: just now, then rounded minutes, hours
+      or days. */
   fmtAgo: (ts: number) => {
     const m = Math.round((Date.now() - ts) / 60000)
     if (m < 1) return 'just now'

@@ -197,7 +197,7 @@ try {
         scope: requestedScopes,
       }),
     }),
-    200,
+    201,
     'Client registration',
   )
   clientId = registration.client_id

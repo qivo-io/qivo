@@ -139,7 +139,10 @@ async function uploadBackground(
 describe('demo upload independent review regressions', () => {
   it('rejects a concurrent background URL replay without abandoning the first receiver', async () => {
     const { t, caller } = await setup()
-    const ticket = await caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: jpeg().length,
+    })
     let replayStatus: number | undefined
     const first = await uploadBackground(t, ticket.upload_url, async () => {
       replayStatus = (await uploadBackground(t, ticket.upload_url)).status
@@ -157,7 +160,10 @@ describe('demo upload independent review regressions', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0)
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const { t, caller } = await setup()
-    const ticket = await caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: jpeg().length,
+    })
     const busy = await uploadBackground(t, ticket.upload_url, undefined, CONFLICT_RETRIES + 1)
     expect(busy.status).toBe(503)
     expect(busy.headers.get('Retry-After')).toBeNull()
@@ -181,11 +187,13 @@ describe('demo upload independent review regressions', () => {
     for (let i = 0; i < 10; i++) {
       const ticket = await caller.mutation(api.appearance.createUpload, {
         name: 'Changed my mind.jpg',
+        size: jpeg().length,
       })
       await caller.mutation(api.appearance.cancelUpload, { ticket_id: ticket.ticket_id })
     }
     const ticket = await caller.mutation(api.appearance.createUpload, {
       name: 'Actually upload.jpg',
+      size: jpeg().length,
     })
     expect(ticket.upload_url).toContain('/background-uploads/')
     expect(await t.run((ctx) => ctx.db.query('demo_uploads').collect())).toHaveLength(1)

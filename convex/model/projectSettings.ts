@@ -221,42 +221,11 @@ async function treeOf(
  * accessOf's accessible, from the same reads, which asks nothing more of a
  * top-level project than its level did.
  *
- * A timing of projectSettings.get and projects.create on 7 November 2026 on
- * a local backend (8 vCPU, one call at a time), in one quiet session and
- * one beside 8 busy loops, with the organization's reach rows complete,
- * gave these figures for the whole call with its sign-in. On a top-level
- * project of 30 live and 40 archived sub-projects that an organization
- * admin reaches in none, projectSettings.get reads 13 ranges, 27 documents
- * and 0.01 MiB in 9 to 17 ms of JavaScript in both sessions and answers ok
- * by management with level null. A standard user with the same rows reads
- * 12 and 26 and gets unavailable, and the project's lead reads 5 and 3. The
- * gate reads the same for the admin and the standard user, and the admin's
- * one more range and document is the lead's profile that an ok answer
- * reads. On an everyday project the admin's read costs the same as the
- * standard user's, 9 ranges and 6 documents each (level user).
- * projects.create of a sub-project under the first project reads 18 ranges,
- * 83 documents and 0.03 MiB for the admin, who manages the parent and reads
- * no level, and 17 and 84 for the lead. The standard user, who neither
- * manages nor sees the parent, is refused after projectLevel's walk, in a
- * call of 149 ranges and 73 documents. Every call stayed at or under 60 ms
- * of JavaScript in the busy session, except one of the lead's creates at
- * 178 ms.
- *
- * A timing of projectSettings.get on 8 November 2026 at 8e501d53 on a
- * local backend on Boat (8 vCPU, one call at a time), in one quiet session
- * and one beside 8 busy loops, with the organization's reach rows
- * complete, gave these figures for the whole call with its sign-in.
- * projectSettings.get by number reads what it reads by id, call for call.
- * On a top-level project of 30 live and 40 archived sub-projects that an
- * organization admin reaches in none, the admin reads 13 ranges, 27
- * documents and 0.01 MiB and gets ok by management with level null, in 11
- * to 30 ms of JavaScript quiet and at most 73 ms busy. A standard user with
- * the same rows reads 12 and 26 and gets unavailable (at most 81 ms busy).
- * A member who sees it only for navigation through one sub-project shared
- * with one of their 3 teams reads 17 and 32 and gets level viewer (at most
- * 69 ms quiet, 100 ms busy), and an admin in the same teams reads the
- * same. The same member shape in 5 teams on an everyday project reads 19
- * and 49 (at most 43 ms quiet, 109 ms busy).
+ * The gate reads the same for an organization admin and a standard user
+ * with the same rows, and projectSettings.get by number reads what it reads
+ * by id, call for call. The closing review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Projects
+ * part removal") holds the timed figures.
  */
 export async function settingsGate(
   ctx: QueryCtx,
@@ -446,16 +415,12 @@ const wholeNumber = (n: number | undefined): n is number =>
  * caller's level and management right and the lead's profile, never a
  * task.
  *
- * Timed on 8 November 2026 at 8e501d53 on a local backend on Boat (8 vCPU,
- * one call at a time), in one quiet session and one beside 8 busy loops,
- * for the whole call with its sign-in. The `{ org_id, num }` form reads
- * what the `{ id }` form reads for every caller timed, call for call
- * (settingsGate has the design-size cases). A member in 3 teams on an
- * everyday project and an admin with the same rows each read 9 ranges, 6
- * documents and 0.002 MiB in 11 to 30 ms of JavaScript quiet and at most
- * 57 ms busy. A free number reads 4 ranges and 1 document, the sign-in's
- * reads plus one by_org_num range, and answers unavailable in at most 50
- * ms of JavaScript in either session.
+ * The `{ org_id, num }` form reads what the `{ id }` form reads, call for
+ * call, and a free number reads the sign-in's reads and one by_org_num
+ * range and answers unavailable. The closing review's report in
+ * qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md,
+ * "Projects part removal") holds the timed figures.
  */
 export async function projectSettingsOf(
   ctx: QueryCtx,

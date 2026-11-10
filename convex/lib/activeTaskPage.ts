@@ -69,29 +69,16 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * size only, is refused with TASK_LIST_UNREADABLE. Tests lower these
  * and set them back with structuredClone.
  *
- * Measured on 2 November 2026 in convex/tests/activeTaskPagesScale.test.ts
- * under convex-test's transaction limits, at the design size with ordinary
- * text, one figure raised a case, and on 7 November 2026 for the cases the
- * admin access split changed. Before the page, a member reads 11 ranges,
- * 2,027 documents and 0.91 MiB of a catalogue of 2,000 projects and
- * sub-projects, live and archived. A member's page of 200 rows over 60
- * sub-projects in that catalogue reads 1,556 ranges, 3,383 documents and
- * 1.74 MiB in all, an organization admin in the member's teams the same
- * page in 1,559 ranges, and the admin's search that matches none reads the
- * 60 sub-projects to their end with no rows (481 ranges, 2,856 documents,
- * 1.36 MiB). A member's page of 200 rows reads 1,779 ranges over 200
- * sub-projects, where a search that matches none ends in 1,346, a page of
- * a family of 30 sub-projects 1,364, the page of the lead of 20
- * sub-projects in an organization of 1,000 people 1,360, and a member's
- * page 1,495 in 5 teams, 1,491 where each project is shared with 5 teams
- * and 1,512 where a team shares 50 live and 150 archived projects. A staff
- * page whose 200 rows have 25 owners of about 100 open tasks in four
- * sub-projects each judges 53 rows' delays within the delays' share and
- * answers 91 unavailable; an owner past the owner reader's bounds answers
+ * convex/tests/activeTaskPagesScale.test.ts ("active pages at the design
+ * size") logs what a page and the reads before it read under convex-test's
+ * transaction limits, at the design size with ordinary text, one figure
+ * raised a case. On a staff page whose rows have many owners of much open
+ * work, the delays of several owners fit the delays' share and the rest
+ * answer unavailable, and an owner past the owner reader's bounds answers
  * unavailable at once. That a row of a person with very much open work says
  * unavailable on every page, while the task's own read judges it, is the
- * agreed rule for figures that depend on people's workloads (limits plan,
- * "Design size", owner, 2026-11-01). */
+ * agreed rule for figures that depend on people's workloads (the owner's
+ * choice of 1 November 2026, design-spec §9.1). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,

@@ -238,8 +238,8 @@ const PLACE_LINE = 8 + 17.4
    in Chromium. Layout comes out 2% narrower than these sums, so they are
    scaled by TITLE_GLYPH_SCALE; a character past ASCII takes
    TITLE_GLYPH_OTHER_PX. On the 10,000-task local Northstar this predicts
-   94% of titles' lines exactly in Swimlanes and 98% in Side-by-side boards,
-   where a flat 8px a character got 69% and 80%. */
+   far more titles' line counts exactly than a flat 8px a character did,
+   in Swimlanes and in Side-by-side boards. */
 const TITLE_GLYPH_PX = [
   3, 4, 6, 10, 9, 11, 11, 3, 6, 6, 6, 8, 4, 7, 4, 6, 9, 5, 8, 8, 9, 8, 9, 8, 8, 9, 4, 4, 8, 8, 8, 8,
   12, 10, 9, 10, 11, 9, 8, 11, 10, 4, 6, 10, 8, 13, 10, 11, 9, 11, 9, 9, 9, 10, 10, 15, 10, 10, 9,

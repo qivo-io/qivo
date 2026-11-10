@@ -52,12 +52,11 @@ import { allWordsMatcher } from '../lib/search'
  * characters, its scopes and a few ISO times, under 2 KB, and each kept
  * row reads its seat and its organization once a call, each well under 1
  * KB, so a search that matches only the oldest of a few hundred
- * connections reads each of them once in one index range. Measured in
- * convex/tests/personalCredentialLists.test.ts ("reads everyday
- * batches"), the reader alone, a first batch over 26 approved connections
- * interleaved with 26 deleted ones read 53 documents, 4 index ranges and
- * about 31 KB, as the call's metrics count them. Past the share the batch answers
- * `stopped` and Load more goes on. Tests lower it. */
+ * connections reads each of them once in one index range.
+ * convex/tests/personalCredentialLists.test.ts ("reads everyday batches")
+ * logs what the reader alone reads for a first batch over 26 approved
+ * connections interleaved with 26 deleted ones. Past the share the batch
+ * answers `stopped` and Load more goes on. Tests lower it. */
 export const CONNECTED_APPS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
 
 /** The list's name, which seals its cursors (lib/namedPages.ts namedCursor). */

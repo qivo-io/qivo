@@ -14,8 +14,8 @@ import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { sightOf, TRASH_BUDGET } from '../model/deletedItems'
-import type { DeletedRow } from '../model/deletedItemsList'
 import { DELETED_PAGE, type DeletedPage, type PageSpend, pageFor } from '../model/deletedItemsPage'
+import type { DeletedRow } from '../model/deletedItemsRows'
 import { estimateDocumentBytes } from '../model/demoMetrics'
 import {
   as,
@@ -86,7 +86,7 @@ const patch = (
 const page = (t: T, who: Doc<'profiles'>, args: PageArgs = {}): Promise<DeletedPage> =>
   as(t, who).query(api.deletedItems.page, args)
 /** Every stored item's row for `who`'s login as deletedItems.item answers
- * it (model/deletedItemsList.ts rowFor), the row the page builds each entry
+ * it (model/deletedItemsRows.ts rowFor), the row the page builds each entry
  * with, without those the login does not see. */
 async function listed(t: T, who: Doc<'profiles'>): Promise<DeletedRow[]> {
   const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())

@@ -69,16 +69,16 @@ const rowEstimate = () => ROW_ESTIMATE_PX
 const pendingRows = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
 
 /** One task of the phone's task schedule. It renders again only when its
-    task object, the store's context (P.contextVersion) or `wide` changes,
-    and mounts no tooltip roots until a mouse points at it or keyboard
-    focus reaches it, so touch phones never mount them. */
+    task object, the store's context (P.contextVersion) or `mine` (My view)
+    changes, and mounts no tooltip roots until a mouse points at it or
+    keyboard focus reaches it, so touch phones never mount them. */
 const MobileRoadmapRow = memo(function MobileRoadmapRow({
   task: it,
-  wide,
+  mine,
   onOpen,
 }: {
   task: IssueVM
-  wide: boolean
+  mine: boolean
   context: StoreVersion
   onOpen: (id: string) => void
 }) {
@@ -87,7 +87,7 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
   const project = P.project(it.project)
   const meta = P.metaOf(it.project)
   const context =
-    wide && meta && meta.id !== project?.id
+    mine && meta && meta.id !== project?.id
       ? `${P.projectLabel(meta)}, ${project ? P.projectLabel(project) : ''}`
       : project && P.projectLabel(project)
   return (
@@ -190,7 +190,7 @@ export function MobileRoadmap({
     <MobileRoadmapRow
       key={it.id}
       task={it}
-      wide={info.mine}
+      mine={info.mine}
       context={P.contextVersion}
       onOpen={openIssue}
     />

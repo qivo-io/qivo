@@ -3,7 +3,7 @@
  * each part newest first, with the type, deleter, search and assignee
  * filters applied before the page is cut, and a sealed next_cursor that
  * continues after its last entry. The app reads it from the release after
- * v0.1.148, and it builds its rows with model/deletedItemsList.ts rowOf,
+ * v0.1.148, and it builds its rows with model/deletedItemsRows.ts rowOf,
  * the row deletedItems.item answers, so it shows nothing of an item that
  * the item's row would not show the same caller.
  *
@@ -111,7 +111,7 @@ import {
   rowOf,
   spending,
   spent,
-} from './deletedItemsList'
+} from './deletedItemsRows'
 
 type Item = Doc<'deleted_items'>
 type Task = Doc<'deleted_tasks'>
@@ -183,74 +183,23 @@ type Profile = Doc<'profiles'>
  * `call`, `build`, `find` and `gather` whole rather than change their
  * fields.
  *
- * Measured on 8 November 2026 in convex-test at the design size with
- * ordinary text, one figure raised a case
- * (tests/deletedItemsPageReads.test.ts), with the page's ranges as it
- * counts them, `call` and `build` together, each search result a range,
- * and its documents and bytes as convex-test counts them. Every case
- * answered whole. No search source reads rows stored before v0.1.122, so
- * each search query's allowance is its own. The rows of each page's
- * entries (`build`) read one range and no document, as judging the items
- * had read what the rows show. A project item of 30 live and 40 archived
- * sub-projects with 800 open tasks: an admin who reads none of it searches
- * for a word every task holds in its 256 results, 274 ranges, 345
- * documents and 0.24 MiB in all, and the page says `matches` with no
- * entry; its lead's search 157 ranges and 0.17 MiB. A sub-project item of
- * 300 tasks: an admin's search 277 ranges and 0.21 MiB, a member's 368
- * ranges and 0.27 MiB, an admin's assignee page 20 ranges and 44
- * documents, a lead's scan 24 and 42. A lead of 234 top-level projects
- * with 200 live and 500 archived sub-projects under them: a browse's
- * first page opens 236 ranges for the project entries and 935 for the
- * task entries, and reads 1,178 ranges, 1,030 documents and 0.41 MiB for
- * its 25 entries, the next page 942 ranges and 0.40 MiB; its search, past
- * `searches`, reads the organization in one query, 644 ranges and 0.65
- * MiB. A member who leads the same 700 sub-projects one by one: a browse's
- * first page reads 1,410 ranges, 1,146 documents and 0.53 MiB, the next
- * page 1,408 ranges and 0.51 MiB, an assignee page 1,434 ranges and 0.55
- * MiB, and the search, past `searches`, 410 ranges and 0.69 MiB. The
- * sight of a seat beside the catalogue of 2,000 projects reads 2,010
- * documents and 0.70 MiB, beside 1,000 people 1,011 and 0.32 MiB, and for
- * a person whose team shares 50 live and 150 archived sub-projects, three
- * a top-level project, 483 and 0.13 MiB.
+ * tests/deletedItemsPageReads.test.ts logs what each case reads under
+ * convex-test at the design size with ordinary text, one figure raised a
+ * case, with the page's ranges as it counts them, `call` and `build`
+ * together, each search result a range, and its documents and bytes as
+ * convex-test counts them. Every case answered whole. No search source
+ * reads rows stored before v0.1.122, so each search query's allowance is
+ * its own. The rows of each page's entries (`build`) read one range and no
+ * document, as judging the items had read what the rows show. An admin's
+ * search over a project item they read none of answers `matches` with no
+ * entry, and a search past `searches` reads the organization in one query.
  *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin's
- * page, which judges task items by the admin's own levels, cost about what
- * a standard user's with the same rows cost, plus the items only an admin
- * lists. Counted for the whole call with its sign-in, a browse beside the
- * catalogue of 2,000 projects, with 25 task items the admin cannot read,
- * reads 19 ranges, 2,044 documents and 0.87 MiB with 25 hidden rows (the
- * standard user's 18, 2,019 and 0.85, with no items), and a search 67,
- * 2,069 and 0.89 (the standard user's 42, 2,044 and 0.87), in 32 to 74 ms
- * of JavaScript quiet and at most 149 ms busy. The admin's browse took
- * 583 ms once in a further quiet session that had storage stalls and 965 ms
- * once in a further busy session. A project item of 30 live and 40 archived
- * sub-projects, for an admin in 3 teams, reads 23, 100 and 0.06 to browse
- * and 279, 357 and 0.25 to search, which answers no entries with missing
- * `matches`, in at most 30 ms quiet. An everyday project item, for an admin
- * in 5 teams, reads 29, 43 and 0.01 to browse and 121, 134 and 0.08 to
- * search, with 25 entries, in at most 30 ms quiet and 54 ms busy.
- *
- * Timed on 8 November 2026 at 8e501d53 on a local backend on Boat (8 vCPU,
- * one call at a time), in one quiet session and one beside 8 busy loops,
- * with the search_title index of deleted_tasks gone, counted for the whole
- * call with its sign-in. Every search page says missing `matches`. On the
- * project item of 30 live and 40 archived sub-projects with 800 open tasks,
- * its lead's search reads 281 ranges, 358 documents and 0.26 MiB for 25
- * entries, and an admin who reads none of it reads 279, 355 and 0.25 for
- * none, in 35 to 66 ms of JavaScript quiet and at most 122 ms busy. On a
- * sub-project item of 300 tasks, its lead reads 284, 544 and 0.41 and an
- * admin with a User grant on its parent 283, 289 and 0.21, in at most 81 ms
- * quiet and 93 ms busy. A member who leads 200 live and 500 archived
- * sub-projects one by one, searching past `searches`, reads 419, 1,356 and
- * 0.76 in 76 to 113 ms of JavaScript quiet and 134 to 161 ms busy, with a
- * total of 245 to 340 ms quiet and 524 to 611 ms busy. An everyday project
- * item of 90 tasks, its lead's search and an admin's, reads 115 ranges, 240
- * to 244 documents and 0.12 MiB in at most 60 ms quiet and 109 ms busy. The
- * admins' searches and the member's come within 10 ranges of the
- * convex-test counts above. The two leads' searches do not, against the
- * project item lead's 157 ranges and the sub-project item member's 368
- * there, and the timing did not find why.
+ * An organization admin's page, which judges task items by the admin's own
+ * levels, costs about what a standard user's with the same rows costs, plus
+ * the items only an admin lists. A timing on a local backend on 8 November
+ * 2026 found the admins' and the member's searches reading about what
+ * convex-test counts, and the two leads' searches reading more ranges, for
+ * a reason it did not find.
  */
 export const DELETED_PAGE = {
   rows: 25,
@@ -549,10 +498,10 @@ const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean
 
 /** Whether `item` passes the deleter filters for `seat`. With `someone`,
  * its deleter line says Someone, since no profile that passes the
- * reference predicate deleted it, as deletedItemsList.ts deleterOf
+ * reference predicate deleted it, as deletedItemsRows.ts deleterOf
  * decides. With `deletedBy`, the person it names deleted it while their
  * profile is the one that deleted, and with `via` it was deleted the way
- * `via` names, as the seat may know it (deletedItemsList.ts howOf) or by
+ * `via` names, as the seat may know it (deletedItemsRows.ts howOf) or by
  * that way's table for a bare table, since a row shows the kind of
  * credential to every viewer. A `table:id` the seat may not know matches
  * nothing. */
@@ -1543,10 +1492,11 @@ class Stop extends Error {}
  * expire in 30 days, but a stuck item never does, so no date stands in for
  * a look: an admin's page asks the organization once whether it holds such
  * a row (by_org_assignee with neither field), and anyone else's always says
- * so, as the look also sees rows hidden from them. This probe and `legacy`
- * go once the closing review's read-only count
- * (internal/olderDeletedTasks.ts count) finds no such row on any
- * deployment.
+ * so, as the look also sees rows hidden from them. This probe, `legacy` and
+ * the read-only count (internal/olderDeletedTasks.ts count) go together
+ * once a run of the count finds no such row on any deployment, the demo
+ * included, after the last ready item's purge_after has passed (the
+ * later-work entry on olderRows of 9 November 2026 in qivo-internal).
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
   if (!seat.admin) return true
@@ -1734,7 +1684,7 @@ const notThisPath = () => badRequest('cursor must be the next_cursor of an earli
 /** The page `run` gathered: its entries with their hits, each item's row
  * once, and the cursor and notes. The rows spend `build`, checked before
  * each row and inside a redacted row's search for the task it shows
- * (deletedItemsList.ts rowOf). Once it runs out the page ends before the
+ * (deletedItemsRows.ts rowOf). Once it runs out the page ends before the
  * entry whose row it could not build, with next_cursor at the entry
  * before. When that is the page's first entry, whose row alone needs more
  * than `build`, the page goes past it with `reads`, rather than answer the

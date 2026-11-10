@@ -5,14 +5,13 @@
  * it needs no credential, like the Convex upload URL it replaces. Unlike
  * that URL, it stores at most one file: a POST claims the ticket under its
  * own id (beginTicketUpload), and every other POST is refused before its
- * file is read. The receiver reads exactly the declared number of bytes, or
- * for an `up_to` ticket at most the organization's per-file limit, within
- * a time that grows with that size (uploadReadMs), stores them and records
- * the file on the ticket (finishTicketUpload), which the
- * app's attach or the confirm call then must name. A POST that fails
- * stores nothing and frees the URL for another try (abandonTicketUpload).
- * One that cannot, because its runtime stopped or the cleanup kept failing,
- * holds the URL for UPLOAD_CLAIM_MS at most.
+ * file is read. The receiver reads exactly the declared number of bytes,
+ * within a time that grows with that size (uploadReadMs), stores them and
+ * records the file on the ticket (finishTicketUpload), which the app's
+ * attach or the confirm call then must name. A POST that fails stores
+ * nothing and frees the URL for another try (abandonTicketUpload). One that
+ * cannot, because its runtime stopped or the cleanup kept failing, holds
+ * the URL for UPLOAD_CLAIM_MS at most.
  *
  * POSTs sent to one URL at once all write its ticket, so each of these
  * mutations runs through conflictRetrying like a REST write, and a conflict
@@ -21,9 +20,8 @@
  * It answers like a Convex upload URL, `{"storageId": "…"}` with any
  * origin allowed, so clients built for one keep working. A refusal is
  * `{"error": message}` with 404 for an unknown, expired or forged URL, 409
- * for a used one, 400 for a body that is not the declared size or is longer
- * than an `up_to` ticket takes, and 503 with Retry-After for a write
- * conflict. */
+ * for a used one, 400 for a body that is not the declared size, and 503
+ * with Retry-After for a write conflict. */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -38,7 +36,6 @@ import {
   abandonTicketUpload,
   beginTicketUpload,
   finishTicketUpload,
-  UPLOAD_OVER_URL,
   UPLOAD_TICKET_MISSING,
   UPLOAD_URL_USED,
   uploadSizeWrong,
@@ -63,11 +60,11 @@ const READ_BYTES_PER_SECOND = 32 * 1024
  * so a POST still storing its file keeps the URL. */
 const READ_CAP_MS = 8 * 60 * 1000
 
-/** How long the receiver reads the body of an upload that declared
- * `bytes`, or of an `up_to` ticket that takes at most `bytes`, before it
- * refuses it with UPLOAD_TOO_SLOW: 5 minutes, plus a second for every
- * 32 KiB, at most 8 minutes. A 20 MiB file, the largest an organization
- * allows, gets 8 minutes, so it needs about 44 KB/s or more. */
+/** How long the receiver reads the body of an upload that declared `bytes`
+ * before it refuses it with UPLOAD_TOO_SLOW: 5 minutes, plus a second for
+ * every 32 KiB, at most 8 minutes. A 20 MiB file, the largest an
+ * organization allows, gets 8 minutes, so it needs about 44 KB/s or
+ * more. */
 export function uploadReadMs(bytes: number): number {
   return Math.min(READ_CAP_MS, READ_FLOOR_MS + Math.ceil((bytes * 1000) / READ_BYTES_PER_SECOND))
 }
@@ -166,24 +163,6 @@ export async function readExactly(
   return read.outcome === 'missing' && size === 0 ? new Uint8Array(0) : null
 }
 
-/** The request body when it holds at most `max` bytes, for an `up_to`
- * ticket. A Content-Length over `max` is refused before anything is read,
- * and a body sent without one stops being read once it passes `max`, both
- * with UPLOAD_OVER_URL. A missing body is an empty file. It refuses a body
- * still arriving after `readMs`, by default the time `max` gets
- * (uploadReadMs), and stops that one's upload. */
-export async function readUpTo(
-  request: Request,
-  max: number,
-  readMs = uploadReadMs(max),
-): Promise<Uint8Array> {
-  const read = await readLimitedBody(request, max, readMs)
-  if (read.outcome === 'read') return read.bytes
-  if (read.outcome === 'too_slow') throw badRequest(UPLOAD_TOO_SLOW)
-  if (read.outcome === 'too_large') throw badRequest(UPLOAD_OVER_URL)
-  return new Uint8Array(0)
-}
-
 /* POST /attachment-uploads/{ticket}?e=&m=&t= stores the ticket's file. */
 const receive = answerAfterBody(async (ctx, request) => {
   const url = new URL(request.url)
@@ -212,13 +191,13 @@ const receive = answerAfterBody(async (ctx, request) => {
   let storageId: Id<'_storage'> | undefined
   let claimed = false
   try {
-    const { size, upTo } = await runMutation(internal.machine.uploads.begin, {
+    const size = await runMutation(internal.machine.uploads.begin, {
       ticket,
       minter,
       attempt,
     })
     claimed = true
-    const bytes = upTo ? await readUpTo(request, size) : await readExactly(request, size)
+    const bytes = await readExactly(request, size)
     if (bytes === null) throw badRequest(uploadSizeWrong(size))
     storageId = await ctx.storage.store(new Blob([bytes], { type }))
     const kept = await runMutation(internal.machine.uploads.finish, {

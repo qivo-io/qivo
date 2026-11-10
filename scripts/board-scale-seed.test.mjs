@@ -1573,6 +1573,12 @@ describe('board-scale-seed --files', () => {
     expect(fake.calls[0][1]).toMatchObject({ parent_id: 'cloud', name: 'Café pilot photos' })
     expect(posted.map((p) => p.size)).toEqual([seededFileBytes(0), seededFileBytes(2)])
     expect(posted[0]).toMatchObject({ type: 'text/csv' })
+    // each upload declares the size it posts and the file's name
+    const uploads = fake.calls.filter(([name]) => name === 'files:uploadUrl').map(([, f]) => f)
+    expect(uploads.map((f) => f.size)).toEqual(posted.map((p) => p.size))
+    expect(uploads.map((f) => f.name)).toEqual(
+      fake.calls.filter(([name]) => name === 'files:attach').map(([, f]) => f.name),
+    )
     expect(fake.calls[4][1]).toMatchObject({
       id: fileSeedId('file', 0),
       issue_id: fileSeedId('task', 0),

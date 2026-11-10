@@ -53,12 +53,11 @@ import { storageTotalsOf } from './storageTotals'
  * 1,500 such rows (500 live and 1,000 archived sub-projects, summed
  * because one read covers both), about 0.43 MB in at most three index
  * ranges, and a kept row adds at most two lookups, so even a search that
- * matches only the smallest row answers in one call. Measured in
- * convex/tests/billingStorage.test.ts ("reads at the design size"), the
- * reader alone without the caller's seat check, a first batch whose 25
- * rows are all in Deleted items read 52 documents, 52 index ranges and
- * about 25 KB, and a search that matches only the smallest of the 1,500
- * rows read 1,501 documents, 4 index ranges and about 431 KB. Past the share
+ * matches only the smallest row answers in one call.
+ * convex/tests/billingStorage.test.ts ("reads at the design size") logs
+ * what the reader alone reads, without the caller's seat check, for a
+ * first batch whose 25 rows are all in Deleted items and for a search that
+ * matches only the smallest of the 1,500 rows. Past the share
  * the batch answers `stopped` and Load more goes on. Tests lower it. */
 export const STORAGE_PROJECTS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
 

@@ -33,7 +33,7 @@ import {
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
 import { dependentRanges, namesProfile, newMemo, orgReadOnly, seesItem } from './deletedItems'
-import { type Reads, spending, spent } from './deletedItemsList'
+import { type Reads, spending, spent } from './deletedItemsRows'
 import { type IdTie, nameKeysReady, profileIndex } from './nameKeys'
 import { type PersonRow, personRow } from './projectSettings'
 
@@ -132,12 +132,10 @@ export const PEOPLE_BATCH = 25
  * hundred bytes each with ordinary text, so `candidates` stops a batch
  * first and `read` only one over unusually large rows. Past either, the
  * batch answers what it found with a cursor, marked as stopped early.
- * Measured on 5 November 2026 in convex-test in an organization of 1,000
- * people with ordinary names (tests/deletedItemsChoices.test.ts, "reads at
- * the design size") without the login's own reads, the first batch without
- * a search reads 2 index ranges, 27 documents and 0.01 MiB, and a search
- * whose only matches sit last in name order reads to `candidates`, 2
- * ranges, 402 documents and 0.14 MiB a batch, and answers them in its third
+ * tests/deletedItemsChoices.test.ts ("reads at the design size") logs what
+ * a batch reads in an organization of 1,000 people with ordinary names,
+ * without the login's own reads. A search whose only matches sit last in
+ * name order reads to `candidates` a batch and answers them in its third
  * batch. A mutable object, so tests can lower it; replace `read` whole
  * rather than change its fields.
  */
@@ -261,12 +259,11 @@ function upTo<Row>(
  * documents, estimated bytes and index ranges it reads, each read of a
  * range being one. A project item of 71 projects opens 4 ranges a project,
  * one a kind and purgeable state (model/deletedItems.ts dependentRanges),
- * 284 ranges, and each sub-project item it finds 4 more. Measured on 5
- * November 2026 in convex-test (tests/deletedItemsChoices.test.ts, "reads
- * at the design size"), a project item that stores 30 live and 40 archived
- * sub-projects, with a task item in each live one and three earlier
- * sub-project items each with one task item, counts its 36 items exactly
- * in 297 index ranges, 37 documents and 0.04 MiB with the item's own read.
+ * 284 ranges, and each sub-project item it finds 4 more.
+ * tests/deletedItemsChoices.test.ts ("reads at the design size") logs what
+ * a project item that stores 30 live and 40 archived sub-projects reads,
+ * with a task item in each live one and three earlier sub-project items
+ * each with one task item, and the summary counts its 36 items exactly.
  * Past any bound it answers the count so far with `exact: false`. A
  * subscription query reruns when a dependent changes state or is added,
  * inside the same bounds. A mutable object, so tests can lower it.

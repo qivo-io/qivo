@@ -184,49 +184,22 @@ import { taskFields } from './workspaceParts'
  * OWN_READS). A request that cannot hold `reads` after the reads before
  * the batch answers `over_budget`.
  *
- * Measured on 5 November 2026 in convex/tests/relationPickerScale.test.ts
- * under convex-test's transaction limits, at the design size with ordinary
- * text, one figure raised a case, in what the whole request read. Every
- * first batch answered whole within these budgets.
+ * convex/tests/relationPickerScale.test.ts ("relation picker reads at the
+ * design size") logs what the whole request reads under convex-test's
+ * transaction limits, at the design size with ordinary text, one figure
+ * raised a case, and every first batch answered whole within these budgets.
+ * The Parent picker's own count holds room for its 25 checks at their worst
+ * case.
  *
- * - In a family at everyday values a full batch reads at most 41 ranges,
- *   39 documents and 0.02 MiB, while the Parent picker's own count holds
- *   4.9 MiB of its 8 for its 25 checks at their worst case. A rare word
- *   reads the family to its end in 20 ranges and 99 documents, and after
- *   Search all your projects the member's 57 other sub-projects in 101
- *   ranges, 1,829 documents and 0.81 MiB.
- * - A rare word reads a project of 800 open tasks whole in 34 ranges, 884
- *   documents and 0.4 MiB, a sub-project of 300 in 24 ranges and 373
- *   documents, a project of 30 live and 40 archived sub-projects of 20
- *   tasks each in 102 ranges, 677 documents and 0.3 MiB (a full batch 98
- *   ranges), and a project with 200 Done tasks in 25 ranges.
- * - A full batch reads at most 41 ranges for a member in 5 teams, as at
- *   everyday values, and 45 where the family is shared with 5 teams, and a
- *   rare word in all your projects 105 ranges and 1,833 documents in each.
- * - With the catalogue at its sum, 2,000 projects live and archived, a
- *   rare word in all your projects reads 101 ranges, 2,170 documents and
- *   1 MiB for a member of 60 sub-projects, the catalogue's 2,000 documents
- *   included, and 103 ranges, 2,172 documents and 1 MiB for an
- *   organization admin in the member's teams, whose batches hold the
- *   member's rows (7 November 2026, after the admin access split).
- * - One batch at its full `scan` for the lead of every project, over 167
- *   sub-projects of about 30 tasks, reads 242 ranges, 5,642 documents and
- *   3.82 MiB, and stops at `scan` with its own count at 3.72 MiB.
- * - Search all your projects reads 288 ranges, 1,407 documents and 0.85
- *   MiB for a member who reads 200 sub-projects, and 131 ranges, 1,099
- *   documents and 0.58 MiB for one whose team shares 50 live and 150
- *   archived projects.
- *
- * Inside the design size the batch at its full `scan`, whose caller reads
- * 167 sub-projects, reads the most documents and bytes of these cases, and
- * a member's Search all your projects over 200 sub-projects the most
- * ranges. The Boat
+ * Inside the design size the batch at its full `scan` for the lead of every
+ * project reads the most documents and bytes of those cases, and a member's
+ * Search all your projects over 200 sub-projects the most ranges. The Boat
  * timing of its slowest calls (owner, 31 October 2026) took that batch and
- * a member's rare word over the project of 800 open tasks, as those cases
- * build them, beside a rare word over the catalogue's 700 live projects
- * for an organization admin, who then read every project, which no caller
- * inside the design size reads since the admin access split. If the
- * slowest call's JavaScript passes 0.5 s, lower `scan`.
+ * a member's rare word over a project of 800 open tasks, as those cases
+ * build them, beside a rare word over the catalogue's 700 live projects for
+ * an organization admin, who then read every project, which no caller
+ * inside the design size reads since the admin access split. If the slowest
+ * call's JavaScript passes 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,

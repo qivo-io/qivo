@@ -224,11 +224,11 @@ export const ALERT_WINDOW_MS = 600_000
 export const INBOX_PAGE_ROWS = 50
 
 /** The most comments and changes the task window keeps loaded for the open
- * task (threadRows), measured in the browser benchmark's thread phase
- * (scripts/benchmark-browser.mjs --thread) on 6 November 2026: no candidate
- * from 100 to 1,000 kept the longest frame after a press or a delivered
- * comment under 100 ms, so it is the rule's floor of 150, which the owner
- * decides on (src/lib/threadBudget.ts THREAD_KEEP has the medians). */
+ * task (threadRows), held by src/lib/threadBudget.ts THREAD_KEEP, whose
+ * docstring states the rule the browser benchmark's thread phase
+ * (scripts/benchmark-browser.mjs --thread) checks it by. It is the rule's
+ * floor, which the owner decides on. Design specification row 441 holds
+ * it and the rule. */
 export const THREAD_ROWS = 150
 
 /** Days a read inbox message is kept when the person has not chosen. */
@@ -445,17 +445,17 @@ export const LIMITS = {
   },
   // The upload tickets one person in an organization holds at once over the
   // app, REST and MCP together (model/attachments.ts openUploadTicket), so
-  // pending upload work stays bounded apart from billing (limits plan, item
-  // 13, owner 24 October 2026). A ticket counts from its start until an
+  // pending upload work stays bounded apart from billing (the owner's choice of
+  // 24 October 2026, design-spec §9.2). A ticket counts from its start until an
   // attach or confirm spends it or its hour ends, whether or not bytes were
   // sent. The app sends one file at a time from each task window and each
-  // description editor, and the REST and MCP docs ask for a few uploads at
-  // a time, so 20 leaves room for several windows and an agent. Within an
-  // hour of a ticket's end files.ts reapUploadTickets erases its file
-  // unless something names it, so one person holds at most about 40
-  // unattached files, 20 live and 20 waiting for that cleanup. Without it
-  // the weekly sweep alone would let one person keep about 3,380 such files
-  // at once at 20 MiB each. The private demo makes no tickets.
+  // description editor, and the REST and MCP docs ask for a few uploads at a
+  // time, so 20 leaves room for several windows and an agent. Within an hour of
+  // a ticket's end files.ts reapUploadTickets erases its file unless something
+  // names it, so one person holds at most about 40 unattached files, 20 live
+  // and 20 waiting for that cleanup. Without it the weekly sweep alone would
+  // let one person keep about 3,380 such files at once at 20 MiB each. The
+  // private demo makes no tickets.
   uploadsInProgress: {
     label: 'Uploads in progress',
     group: 'files',

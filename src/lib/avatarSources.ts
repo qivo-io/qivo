@@ -29,27 +29,14 @@ const LOAD_TIMEOUT = 15_000
       keeps the lease it was minted with and starts by itself once room
       frees.
     The store asks only for the caller's own pictures and those its open
-    pages, pickers and views name (`named`, store/planner.ts). Measured on
-    the benchmark page (scripts/perf, people=1000&pictures=1 at 1440 by
-    1000, each picture a 20 KB PNG answered after 150 ms, 7 November 2026),
-    against the store that asked for every picture of its roster. The
-    caller's own picture is minted at boot in a call of its own:
-    - The Board of 100 tasks, whose people include the caller: 2 mint
-      calls of 100 people in all, 100 downloads, 2.0 MB kept, 13.3 MiB of
-      JS heap, the first 25 pictures 1.5 s after the page opened; before,
-      10 mint calls, 1,000 downloads, 20.2 MB, 14.6 MiB and 6.7 s.
-    - Settings › Users' first page, without the caller: 2 mint calls of the
-      caller and the page's 25 people, 26 downloads, 0.5 MB kept, 15.3 MiB,
-      the 25 pictures after 1.3 s; before, 10 mint calls, 1,000 downloads,
-      20.2 MB, 16.4 MiB and 0.9 s, because that store minted from boot,
-      before the page's rows arrived.
-    - Leaving that page while each picture took 1.5 s: of the 22 people
-      only it showed, the 5 downloads already running finished and no other
-      was minted or downloaded until the page opened again.
-    - With keptBytes lowered to 600 KB, after Settings › Users kept 17
-      pictures, the caller's among them, the Board took their room for 14
-      of its own and showed 14 pictures among its 84 people; before, it
-      downloaded none and showed 2. */
+    pages, pickers and views name (`named`, store/planner.ts), where the
+    store before it asked for every picture of its roster from boot. The
+    caller's own picture is minted at boot in a call of its own. When a page
+    closes, the downloads of its pictures already running finish, and no
+    other picture only it showed is minted or downloaded until the page
+    opens again. scripts/benchmark-browser.mjs records the picture
+    downloads, the most in flight at once and their bytes with
+    `--files people=1000&pictures=1`. */
 export const AVATAR_SOURCES = {
   downloads: 6,
   pictureBytes: 256 * 1024,

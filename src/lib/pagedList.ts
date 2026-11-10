@@ -1465,8 +1465,7 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
 /**
  * A list the server answers a page at a time, one page on screen, which
  * Next and Previous replace, as Settings › Projects, Archived projects and
- * Settings › Users read theirs (the limits plan's "Settings project list",
- * "Archived project list loading" and "Settings user list loading"). It
+ * Settings › Users read theirs (design specification rows 423 and 433). It
  * reads on the live engine's rules (the module header), with these of its
  * own:
  *
@@ -1564,14 +1563,14 @@ export function pageEnd(
 }
 
 /**
- * Load more as a list's end scrolls into view, as the limits plan's
- * expanded lists load more names as the person scrolls. The answer is a
- * ref for a marker after the list's last row: while it is in view and
- * `armed`, which a page sets while Load more may read (its end is `more`
- * and no read is on its way), `more` runs, also again once a batch has
- * landed with the marker still in view. Where IntersectionObserver is
- * absent nothing runs, and the page's Load more button reads instead, as it
- * does for the keyboard.
+ * Load more as a list's end scrolls into view, as expanded lists load more
+ * names as the person scrolls (the owner's choice of 24 October 2026,
+ * design-spec §9.3). The answer is a ref for a marker after the list's last
+ * row: while it is in view and `armed`, which a page sets while Load more
+ * may read (its end is `more` and no read is on its way), `more` runs, also
+ * again once a batch has landed with the marker still in view. Where
+ * IntersectionObserver is absent nothing runs, and the page's Load more
+ * button reads instead, as it does for the keyboard.
  */
 export function useMoreOnScroll(
   more: () => void,

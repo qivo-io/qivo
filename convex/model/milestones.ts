@@ -1125,54 +1125,26 @@ export async function milestoneProjects(
  * documents keep under 32,000. The step's 3,000 ranges and the read's
  * 2,000 pass 4,096 together, so the read takes at most what the step
  * leaves, which is at least 1,096 ranges less those of the sign-in and
- * seats, and a read whose projects' first days do not fit there is
- * refused. The first batch of each 200-project case below took 400
- * ranges.
+ * seats, and a read whose projects' first days do not fit there is refused.
  *
- * Measured on 7 November 2026 under convex-test's transaction limits with
- * rows as the app writes them (tests/milestoneMine.test.ts, design size),
- * the finding alone in ranges, documents, MiB and decision MiB, and the
- * whole request with a first batch of 10 rows and its `past` probe in
- * ranges, documents and MiB:
- *
- * - One open task of the caller in each of 200 top-level projects of one
- *   sub-project each, 150 through the shares of the caller's three teams,
- *   50 a team, and 50 through a grant on the top-level project (the 200
- *   top-level projects and the 200 sub-projects one person can read at
- *   their sum), one upcoming milestone each. The finding takes 579, 860,
- *   0.31 and 2.5, the request 981, 1,062 and 0.35.
- * - The same 200 projects where the caller's access comes through a grant
- *   on each sub-project alone, so every top-level project shows only for
- *   navigation. The finding takes 1,245, 1,566, 0.47 and 2.67, the request
- *   1,647, 1,768 and 0.51. The check of named projects alone would read
- *   1,434 ranges more for these 200 projects, more than the half of the
- *   2,851 left that it may take (scopeCeiling), so a `mine` read does not
- *   ask it.
- * - The same shape with 2 or 3 sub-projects archived beside each live one,
- *   each by a grant and with one of the caller's open tasks, which
- *   archiving leaves in place (the 200 live and 500 archived sub-projects
- *   one person can read at their sum). The finding takes 2,254, 4,087, 1.2
- *   and 3.41, the request 2,664, 4,297 and 1.25. At every other view's
- *   charges the finding would decide at 6.74 MiB in 1,753 ranges.
- * - The same 200 live sub-projects, one under each top-level project,
- *   beside 500 archived ones 3 under each of 167 top-level projects
- *   archived whole (2 under the last), each by a grant and with one of the
- *   caller's open tasks (the 200 live and 500 archived sub-projects one
- *   person can read at their sum). The finding takes 2,588, 3,921, 1.15 and
- *   3.36, the request 3,012, 4,145 and 1.2. At every other view's charges
- *   the finding would decide at 6.63 MiB in 1,753 ranges. The 2,500 ranges
- *   this share held before refused it.
- * - 20 top-level projects the caller holds a grant on, each with 3 live
- *   sub-projects of 30 open tasks, 7 of them the caller's, beside 500
- *   archived sub-projects that keep 7 of the caller's open tasks each, 3
- *   under each of 167 top-level projects archived whole (2 under the last)
- *   that the caller holds a grant on (500 archived sub-projects one person
- *   can read). The finding takes 1,360, 5,205, 2.13 and 2.57, the request
- *   1,448, 5,273 and 2.15. At every other view's charges the finding would
- *   decide at 10.56 MiB.
- * - 300 open and 150 Done tasks of the caller in one sub-project (open and
- *   Done at their sum). The finding takes 100, 466, 0.27 and 0.29, the
- *   request 103, 478 and 0.28.
+ * convex/tests/milestoneMine.test.ts ("a mine read at the design size")
+ * logs what the finding alone and the whole request, with a first batch of
+ * 10 rows and its `past` probe, read under convex-test's transaction
+ * limits, with rows as the app writes them, one figure at its design size a
+ * case or the figures one read takes together at their sum. Its cases are
+ * 200 top-level projects of one sub-project each, reached through team
+ * shares and grants on the top-level projects or through grants on each
+ * sub-project alone, the same with 2 or 3 archived sub-projects beside each
+ * live one or with 500 archived sub-projects under top-level projects
+ * archived whole, 20 top-level projects beside those 500, and 300 open and
+ * 150 Done tasks in one sub-project, and each answers inside this share.
+ * Where the access comes through grants on each sub-project alone, the
+ * check of named projects would read more than the half of what is left
+ * that it may take (scopeCeiling), so a `mine` read does not ask it. At
+ * every other view's fixed charges the archived cases would pass `bytes`,
+ * which is why readable archived rows count at their real sizes, and the
+ * 2,500 ranges this share held before refused the case of 500 archived
+ * sub-projects under top-level projects archived whole.
  *
  * Tests lower these. */
 export const MILESTONE_MINE: ReadCeiling = {

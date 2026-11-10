@@ -170,13 +170,11 @@ async function insertReservation(
  * number of bytes (a bad request otherwise) within the kind's per-file
  * limit, and it must fit in the free space, DEMO_STORAGE_BYTES less what
  * the demo's live rows store or reserve. The row is then `declared`, and
- * the receiver stores at most that many bytes. Without `size`, as from an
- * app loaded before uploads declared one, it reserves the kind's limit or
- * the free space, whichever is smaller, so a small file still fits. It
- * refuses with a `rule` at DEMO_UPLOAD_ROWS files, when nothing is free and
- * when a declared size does not fit, and never deletes a file to make room.
- * Reads one range of at most DEMO_UPLOAD_ROWS + 1 rows under 1 KB each and
- * one stored file for each stored row, inside Convex's limits.
+ * the receiver stores at most that many bytes. It refuses with a `rule` at
+ * DEMO_UPLOAD_ROWS files, when nothing is free and when a declared size
+ * does not fit, and never deletes a file to make room. Reads one range of
+ * at most DEMO_UPLOAD_ROWS + 1 rows under 1 KB each and one stored file for
+ * each stored row, inside Convex's limits.
  */
 export async function reserveDemoUpload(
   ctx: MutationCtx,
@@ -184,25 +182,24 @@ export async function reserveDemoUpload(
     authId: string
     kind: UploadKind
     targetId: string
-    size?: number
+    size: number
     id?: string
     expiresAt?: number
   },
 ): Promise<DemoReservation> {
   const receipt = await requireActiveDemo(ctx, args.authId)
   const { max, tooLarge } = KINDS[args.kind]
-  const size = args.size === undefined ? undefined : uploadSize(args.size)
-  if (size !== undefined && size > max) throw rule(tooLarge)
+  const bytes = uploadSize(args.size)
+  if (bytes > max) throw rule(tooLarge)
   const { reserved, count } = await demoLedger(ctx, receipt.id)
   if (count >= DEMO_UPLOAD_ROWS) throw rule(DEMO_FILES_FULL)
   const free = Math.max(0, DEMO_STORAGE_BYTES - reserved)
-  const bytes = size ?? Math.min(max, free)
   if (free === 0 || bytes > free) throw rule(demoStorageFull(free))
   return await insertReservation(ctx, {
     ...args,
     receipt,
     bytes,
-    declared: size !== undefined,
+    declared: true,
   })
 }
 
@@ -285,15 +282,11 @@ export async function retrySkippedPreview(ctx: MutationCtx, now: number): Promis
   return false
 }
 
-/** The receivers' refusal of a body longer than reservation `row`: the
- * declared-size sentence for a declared size, the budget's for a sizeless
- * reservation the free space bounded, and otherwise the kind's per-file
- * sentence. */
+/** The receivers' refusal of a body longer than reservation `row`. A
+ * declared size answers the declared-size sentence, and a preview, which
+ * reserves what the free space allows, the budget's. */
 export function demoBodyRefusal(row: Doc<'demo_uploads'>): string {
-  if (row.declared) return DEMO_BODY_TOO_LONG
-  if (row.kind === 'preview') return demoStorageFull(row.reserved_bytes)
-  const { max, tooLarge } = KINDS[row.kind]
-  return row.reserved_bytes < max ? demoStorageFull(row.reserved_bytes) : tooLarge
+  return row.declared ? DEMO_BODY_TOO_LONG : demoStorageFull(row.reserved_bytes)
 }
 
 /** What a receiver reads of reservation `row` once it began: the most bytes

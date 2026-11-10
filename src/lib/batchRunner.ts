@@ -1,5 +1,5 @@
 /* The one runner for an app action that sends several calls one after
-   another (the limits plan's "Large actions and client-driven batches").
+   another (design-spec §9.2, "Large app actions").
    The Inbox's Mark all as read and Remove all read (store/planner.ts
    bulkInboxAction) and Deleted items' Restore and Delete now
    (store/planner.ts runDeletedItems) run on it. A new app action that
@@ -61,7 +61,7 @@
     most this many writes of large actions in flight in all. */
 export const LANES_AT_ONCE = 2
 
-/** What every keep-open notice ends with (limits plan, "Large actions"). */
+/** What every keep-open notice ends with (design-spec §9.2). */
 export const KEEP_OPEN =
   'Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.'
 

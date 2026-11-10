@@ -77,8 +77,8 @@ describe('local demo preview proxy', () => {
    * redirect) and GHSA-q3jh-wrc6-jgq8 (CVE-2026-111756, cross-origin
    * credential stripping bypassed). Its proxy sends a route's requests
    * through that copy only when the route sets followRedirects, so no route
-   * may set it until a Vite release bundles follow-redirects 1.16.1 or
-   * later. */
+   * may set it until a Vite release bundles follow-redirects 1.16.2 or
+   * later, the release that also patches GHSA-mrwp-f3q8-3g9p. */
   it('never lets a proxy route follow redirects', async () => {
     const checkout = resolve(import.meta.dirname, '..')
     for (const file of ['vite.config.ts', 'scripts/demo-proxy.mjs'])

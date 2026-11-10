@@ -4,7 +4,7 @@
    from the workspace's tasks. The server applies ordinary access, the
    picker's scope, the write's own rules and the search, and answers the
    next 25 tasks of its order, with Load more for the next batch. The rules
-   are the other pickers' (the limits plan's picker sections, by the
+   are the other pickers' (design specification row 413, by the
    coordinator's decision of 4 November 2026):
 
    - A typed search rests for SEARCH_DELAY_MS and starts a list with one

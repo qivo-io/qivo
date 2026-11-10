@@ -1,7 +1,7 @@
 /* Deleted items: who sees and restores what, through the public functions
  * (design 6, 5.3, 9). deletedItems.item reads every seat of the login and
  * projects one item for the seat in its organization, the row the page
- * builds each entry with (model/deletedItemsList.ts rowFor), so these cases
+ * builds each entry with (model/deletedItemsRows.ts rowFor), so these cases
  * read every stored item's row through it, and the page
  * (deletedItems.page) where they search or filter; restore and purge answer
  * per item behind the same fence; projects.removalSummary feeds the Archive
@@ -21,8 +21,8 @@ import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
-import type { DeletedRow } from '../model/deletedItemsList'
 import { type PageArgs, pageFor } from '../model/deletedItemsPage'
+import type { DeletedRow } from '../model/deletedItemsRows'
 import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,

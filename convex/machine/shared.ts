@@ -94,7 +94,7 @@ export const MCP_PROVENANCE = 'via MCP'
  * their tokens, while the activity row reaches other members too. A delete
  * records its credential in Deleted items as well, where a personal token's
  * name shows only to organization admins and to the person who deleted
- * (model/deletedItemsList.ts). The name is written as plain text
+ * (model/deletedItemsRows.ts). The name is written as plain text
  * (model/activity.ts plainText), as an activity diff's free text is, so it
  * cannot add a status or reviewer clause that the app's feed reader finds
  * (src/lib/teamSync.ts). */

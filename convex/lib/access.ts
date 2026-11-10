@@ -340,9 +340,8 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * caps the read can take up to about 2.3 times `bytes` (U+3307, whose name
  * key is six katakana, stores 1,905 bytes for 819 JSON characters), about
  * 1.2 MiB, which the margins that count it hold: lib/mainSearch.ts
- * SEARCH_RESERVE's extra 2 MiB, the shared reads in lib/taskWindow.ts
- * TASK_WINDOW and internal/adminAccessReport.ts ROOM. Past any other bound
- * the question refuses.
+ * SEARCH_RESERVE's extra 2 MiB and the shared reads in lib/taskWindow.ts
+ * TASK_WINDOW. Past any other bound the question refuses.
  *
  * What one instance reads, at these values, in index ranges and documents
  * as Convex counts them. Rows of the person's own (grants, memberships,
@@ -1931,14 +1930,13 @@ async function sameOrgTeamMembers(
  * costs one range and a document a share.
  *
  * So a led project or a grant costs a document, and a membership a document
- * and two ranges (its team and its team's shares). As measured on 28
- * October 2026, past the design size, a person with 2,000 viewer grants and
- * no proof reads 2,000 rows, about 350 KB in three ranges, and gets false,
- * and one more grant gets null from `rows`; memberships reach the 1,500
- * ranges first, after about 750, and a team's shares the 6,000 documents.
- * convex/tests/labelReads.test.ts now reaches `rows` and `ranges` with
- * those lowered. The task label picker runs the check and then a walk of
- * NAMED_READ (lib/namedPages.ts), so the two read at most 1,500 + 2,000
+ * and two ranges (its team and its team's shares). Past the design size, a
+ * person with 2,000 viewer grants and no proof reads 2,000 rows and gets
+ * false, and one more grant gets null from `rows`; memberships reach the
+ * 1,500 ranges first, after about 750, and a team's shares the 6,000
+ * documents. convex/tests/labelReads.test.ts reaches `rows` and `ranges`
+ * with those lowered. The task label picker runs the check and then a walk
+ * of NAMED_READ (lib/namedPages.ts), so the two read at most 1,500 + 2,000
  * ranges, 6,000 + 8,000 documents and 4 + 4 MiB, inside Convex's 4,096
  * ranges, 32,000 documents and 16 MiB with room for the call's other reads
  * and NAMED_RESERVE. Tests lower these. */

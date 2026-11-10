@@ -1964,6 +1964,7 @@ describe('what never counts', () => {
       })
       const ticket = await as(t, f.user).mutation(api.appearance.createUpload, {
         name: 'Lake.jpg',
+        size: 4096,
       })
       const background = await storeBlob(t, 4096, 'image/jpeg')
       await t.mutation(internal.appearance.finalizeUpload, {

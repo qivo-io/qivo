@@ -27,8 +27,8 @@ export const MINE_MILESTONES_HINT = 'Open a project to see its milestones.'
     view cannot do. */
 export const MINE_TOO_MANY = `Your work spans more than ${grouped(LIMITS.milestoneProjects.max)} projects, so their milestones are not listed here. ${MINE_MILESTONES_HINT}`
 
-/** One milestone of the Overview's list: the diamond, the project in a wide
-    scope, the name, the relative week and the date. The next milestone is
+/** One milestone of the Overview's list: the diamond, the project in My
+    view, the name, the relative week and the date. The next milestone is
     emphasised; a past one is dimmed, as the window's are. */
 export function OvMilestoneRow({
   m,

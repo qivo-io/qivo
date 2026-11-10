@@ -16,20 +16,18 @@ import { ALERT_WINDOW_MS } from '../lib/limits'
 /** The bounds of notification delivery. Tests lower them and restore them
  * with structuredClone.
  *
- * A beat reads the session in its token and its login (one nested call),
- * the session row and the account row, and the session rows up to the
- * target when it enters while another session moved the checkpoint, and
- * writes the session row, and the account row once a handoff
- * (notifications.ts beat). A claim in the
- * default mode reads the account row, the session rows up to the first
- * live one and one record range a new event, and writes a record a grant
- * and the account row. Every call reads only the caller's login's rows.
- * Measured in tests/notifications.test.ts "inside Convex's limits", which
- * counts the call's own reads without the nested session lookup, a beat
- * reads 4 ranges and 5 documents and writes 1, a claim of 50 new events
- * with 3 sessions and a checkpoint reads 55 ranges and 6 documents and
- * writes 51, and beside 1,000 other people's sessions and 10,000 records a
- * beat and a claim of 10 events read exactly what they read without them. */
+ * A beat reads the session in its token and its login (one nested call), the
+ * session row and the account row, and the session rows up to the target when
+ * it enters while another session moved the checkpoint, and writes the session
+ * row, and the account row once a handoff (notifications.ts beat). A claim in
+ * the default mode reads the account row, the session rows up to the first live
+ * one and one record range a new event, and writes a record a grant and the
+ * account row. Every call reads only the caller's login's rows, so a beat and a
+ * claim read the same beside other people's sessions and records as without
+ * them (tests/notifications.test.ts, "inside Convex's limits"). The closing
+ * review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox feed
+ * and notification calls") holds the figures. */
 export const NOTIFY = {
   /** How often a session that can notify beats while the login's mode is
    * 'recent', the only time liveness picks a target. A hidden browser tab

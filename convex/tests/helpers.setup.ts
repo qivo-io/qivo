@@ -1361,7 +1361,7 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
         (
           await ctx.db
             .query('sync_stamps')
-            .withIndex('by_org_profile', (q) => q.eq('org_id', org_id))
+            .withIndex('by_org', (q) => q.eq('org_id', org_id))
             .collect()
         ).map((row) => [row.profile_id, row]),
       )

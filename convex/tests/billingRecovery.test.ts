@@ -482,7 +482,7 @@ describe('billing recovery', () => {
     const admin = as(t, f.admin)
     const storageId = await t.run((ctx) => ctx.storage.store(new Blob([]) as never))
     await expectRefusal(
-      admin.mutation(api.files.avatarUploadUrl, { profile_id: f.agent.id }),
+      admin.mutation(api.files.avatarUploadUrl, { profile_id: f.agent.id, size: 2048 }),
       'forbidden',
       /read-only/,
     )

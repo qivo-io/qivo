@@ -2,7 +2,7 @@
  *
  * A restore writes the stored rows back while what they name is still
  * absent, then reveals the item in one transaction. These tests restore
- * through the model entry the public restore calls (deletedItemsList.test.ts
+ * through the model entry the public restore calls (deletedItemsRows.test.ts
  * covers its visibility fence), read both the live tables and the trash,
  * and drive the steps one at a time on fake timers, with lowered budgets so
  * that many-step paths run on small data. */

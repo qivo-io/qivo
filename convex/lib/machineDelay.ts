@@ -348,27 +348,27 @@ const shareRoom =
 export type PageDelayRow = { issue: Doc<'issues'>; project: Doc<'projects'>; group: boolean }
 
 /**
- * Verdicts for the rows of one page of an active task list (lib/activeTaskPage.ts),
- * for `me`, judged as taskForecaster judges a single read, from the same
- * owner reader (lib/ownerLoads.ts ownerLoadReader). It reads the owners'
- * loads before the rows are built, once the page's rows are fixed, so the
- * loads never move where a page stops. Of `rows`, in page order, only those
- * whose owner's load can change the verdict need one, and the rows of one
- * owner share one read. The owners are read one after another within
+ * Verdicts for the rows of one page of an active task list
+ * (lib/activeTaskPage.ts), for `me`, judged as taskForecaster judges a single
+ * read, from the same owner reader (lib/ownerLoads.ts ownerLoadReader). It
+ * reads the owners' loads before the rows are built, once the page's rows are
+ * fixed, so the loads never move where a page stops. Of `rows`, in page order,
+ * only those whose owner's load can change the verdict need one, and the rows
+ * of one owner share one read. The owners are read one after another within
  * `share` (shareRoom), which counts every read the owner reader makes,
  * `access`'s own reads of the caller's grants, memberships and team shares
- * included. Staff get every owner the share holds, as planning.ownerLoads
- * gives them. A guest or an organization Viewer gets one owner a page, the
- * first that needs a load, because the share is spent on an owner's open
- * tasks before the reader knows which of them the caller can see, so where
- * the next owner stopped fitting would tell how much hidden work the first
- * holds (planning.ts ownerLoads). `profiles` is the organization's roster by
- * id. A row whose owner was not read, whose load was unavailable, or whose
- * access check a bound stopped is UNAVAILABLE_DELAY, also on a passed due
- * date, as a single read is. So the rows of a person with very much open
- * work can say unavailable on every page while the single read judges them,
- * which is the agreed rule for figures that depend on people's workloads
- * (limits plan, "Design size", owner, 2026-11-01).
+ * included. Staff get every owner the share holds, as planning.ownerLoads gives
+ * them. A guest or an organization Viewer gets one owner a page, the first that
+ * needs a load, because the share is spent on an owner's open tasks before the
+ * reader knows which of them the caller can see, so where the next owner
+ * stopped fitting would tell how much hidden work the first holds (planning.ts
+ * ownerLoads). `profiles` is the organization's roster by id. A row whose owner
+ * was not read, whose load was unavailable, or whose access check a bound
+ * stopped is UNAVAILABLE_DELAY, also on a passed due date, as a single read is.
+ * So the rows of a person with very much open work can say unavailable on every
+ * page while the single read judges them, which is the agreed rule for figures
+ * that depend on people's workloads (the owner's choice of 1 November 2026,
+ * design-spec §9.1).
  */
 export async function pageForecaster(
   ctx: QueryCtx,

@@ -567,8 +567,11 @@ export default defineSchema({
     storage_id: v.optional(v.id('_storage')),
     // true when reserved_bytes is the size the app declared for the file,
     // so the receiver refuses a longer body as one its upload did not
-    // declare; absent for a reservation an app without sizes asked for, and
-    // for a preview. Only the demo writes it.
+    // declare. Absent for a preview, and for an attachment, picture or
+    // background row that v0.1.162 or an earlier release reserved for an
+    // app that sent no size, whose wait for its file ended with its upload
+    // ticket, minutes after it was made. demoBodyRefusal treats every row
+    // without it as a preview. Only the demo writes it.
     declared: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
@@ -1239,10 +1242,12 @@ export default defineSchema({
     // itself, so this only decides whether to remind admins. The settings
     // pages, Billing and the deletion reminder read it alone.
     last_export_confirmed_at: v.optional(v.string()),
-    // The last export before last_export_confirmed_at existed. Until the
-    // release after v0.1.161 the browser export set it when its download
-    // started, so a value may record a download that never finished.
-    // Nothing writes or reads it any more, and later work removes it.
+    // The last export before last_export_confirmed_at existed, which the
+    // browser export of v0.1.161 and earlier set when its download started.
+    // Nothing reads or writes it (tests/manifest.test.ts pins that). It
+    // stays in the schema because Convex refuses a deploy whose schema
+    // drops a field stored rows still hold, and clearing it would be a
+    // write on every hosted deployment.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1476,10 +1481,7 @@ export default defineSchema({
     since: v.optional(v.string()),
   })
     .index('by_profile', ['profile_id'])
-    .index('by_org', ['org_id'])
-    // read only by the tests' published whole since the workspace's people
-    // part went
-    .index('by_org_profile', ['org_id', 'profile_id']),
+    .index('by_org', ['org_id']),
 
   teams: defineTable({
     id: v.string(),
@@ -1583,8 +1585,6 @@ export default defineSchema({
     // the organization's people in name order, all of them or one role
     .index('by_org_name', ['org_id', 'name_key', 'id'])
     .index('by_org_role_name', ['org_id', 'org_role', 'name_key', 'id'])
-    // read by nothing since the workspace's people part went
-    .index('by_org_id', ['org_id', 'id'])
     .index('by_auth', ['auth_user_id'])
     .index('by_email', ['email']) // cross-org claim scan (identity.ts)
     .index('by_org_email', ['org_id', 'email'])
@@ -2086,10 +2086,15 @@ export default defineSchema({
     name: v.string(),
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
-    // true when size_bytes is not a declared size but the most the upload
-    // URL takes, the organization's per-file limit, for an app loaded before
-    // uploads declared their size (files.ts uploadUrl). Absent, the file
-    // must have exactly size_bytes.
+    // Set on tickets of v0.1.162 and earlier whose upload declared no size,
+    // when size_bytes was the most the URL took. Nothing reads or writes it
+    // (tests/manifest.test.ts pins that), since every upload declares its
+    // size, and the file must have exactly size_bytes. A ticket that still
+    // holds it goes when it attaches, or within about an hour of its expiry
+    // when files.ts reapUploadTickets deletes it, so it needs no clearing
+    // write. It stays in the schema until a read-only check shows that no
+    // stored ticket holds it, because Convex refuses a deploy whose schema
+    // drops a field stored rows still hold.
     up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
@@ -3125,8 +3130,8 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     // a seat's tokens, for the cascade, an organization's deletion, the demo
-    // cleanup, the admin access report, the operator's retirement of legacy
-    // fixtures (internal/operator.ts) and the contract tests' credential
+    // cleanup, the operator's retirement of legacy fixtures
+    // (internal/operator.ts) and the contract tests' credential
     // activation and sweeps (machine/testing.ts profileCredentials)
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['token_hash'])

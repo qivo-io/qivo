@@ -111,10 +111,10 @@ export const save = authedMutation({
 })
 
 export const createUpload = authedMutation({
-  // the image's size in bytes, which an app loaded before this release does
-  // not send. Only the demo reserves it; elsewhere background_uploads keeps
-  // a person to five tickets and the receiver reads at most 8 MiB.
-  args: { name: v.string(), size: v.optional(v.number()) },
+  // the image's size in bytes. Only the demo reserves it; elsewhere
+  // background_uploads keeps a person to five tickets and the receiver
+  // reads at most 8 MiB.
+  args: { name: v.string(), size: v.number() },
   handler: async (
     ctx,
     { name, size },
@@ -133,7 +133,7 @@ export const createUpload = authedMutation({
       else active++
     }
     if (active >= 5) throw rule('finish or cancel an existing image upload before starting another')
-    if (size !== undefined) uploadSize(size)
+    uploadSize(size)
     const settings = await ensureSettings(ctx, ctx.authUserId)
     const id = crypto.randomUUID()
     const exp = await demoFileExpiry(

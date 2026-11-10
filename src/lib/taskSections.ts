@@ -5,7 +5,7 @@
    store. An answer is the server's word as of its delivery.
 
    Group totals (groupTotals), the window's Progress and the Σ of Remaining,
-   use a complete list or say they are unknown (the limits plan's item 2).
+   use a complete list or say they are unknown (design-spec §9.2).
    A list is complete only when its answer says so. */
 
 /** -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order,

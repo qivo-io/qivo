@@ -424,19 +424,16 @@ async function workloadPosition(text: string, scope: readonly string[]): Promise
  * open-task ranges, a project row and an access question for each live
  * project no one before them on the page named, and a subtask range for
  * each scheduled task left, so about 6 ranges a person without planned
- * work. Measured in convex/tests/workloadPages.test.ts ("at the design
- * size", 52 weeks each): 1,000 people with everyday work take 5 pages of
- * 200 at limit 200, the heaviest 1,272 ranges, 471 documents and 0.2 MB;
- * 50 people who hold the organization's 10,000 open tasks, 200 each over
- * seven sub-projects, take 6 pages at limit 50 (on demand,
- * QIVO_WORKLOAD_ORG_OPEN=1), each ended by the call's 2,000 ranges after
- * 9 or 10 people, the heaviest 1,999 ranges, 2,119 documents and 1.2 MB,
- * which the normal suite's 15 such people read too; for a caller who reads
- * the 200 sub-projects the people work in, through the shares of 3 teams,
- * 57 people take 2 pages, the heaviest 1,124 ranges, 934 documents and
- * 0.4 MB; and for a caller in 5 teams 107 people take one page of 1,106
- * ranges, 640 documents and 0.3 MB. Past `call` come the caller's own rows, as lib/ownerLoads.ts
- * OWNER_LOADS states them, so a page stays inside Convex's limits.
+ * work. convex/tests/workloadPages.test.ts ("at the design size", 52 weeks
+ * each) logs what the pages read for 1,000 people with everyday work at
+ * limit 200; for 50 people who hold the organization's 10,000 open tasks,
+ * 200 each over seven sub-projects, at limit 50 (on demand,
+ * QIVO_WORKLOAD_ORG_OPEN=1), whose pages the call's ranges end after a few
+ * people each, as they end the normal suite's 15 such people's; for a
+ * caller who reads the 200 sub-projects the people work in, through the
+ * shares of 3 teams; and for a caller in 5 teams. Past `call` come the
+ * caller's own rows, as lib/ownerLoads.ts OWNER_LOADS states them, so a
+ * page stays inside Convex's limits.
  */
 export async function workloadPage(
   ctx: QueryCtx,

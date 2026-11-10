@@ -17,7 +17,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import { UPLOAD_TICKET_PAGE } from '../files'
 import { attachmentFileUrl, mintFileToken, verifyFileToken } from '../lib/fileTokens'
 import { attachmentTooLarge, LIMITS } from '../lib/limits'
-import { UPLOAD_NOT_STARTED, UPLOAD_OVER_URL, UPLOAD_SIZE_SHAPE } from '../model/attachments'
+import { UPLOAD_NOT_STARTED, UPLOAD_SIZE_SHAPE } from '../model/attachments'
 import {
   activityFor,
   allMessages,
@@ -137,22 +137,58 @@ const setup = async () => {
 describe('files.uploadUrl', () => {
   it('mints for a member, refuses a viewer, hides foreign issues', async () => {
     const { t, fx, issue } = await setup()
+    const file = { size: 8, name: 'spec.pdf' }
     const url = await as(t, fx.user).mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
       issue_id: issue.id,
+      ...file,
     })
     expect(url).toMatch(/^https:\/\/test\.convex\.site\/attachment-uploads\//)
     await expectRefusal(
-      as(t, fx.viewer).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
+      as(t, fx.viewer).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        ...file,
+      }),
       'forbidden',
     )
     await expectRefusal(
       as(t, fx.otherAdmin).mutation(api.files.uploadUrl, {
         org_id: fx.otherOrg.id,
         issue_id: issue.id,
+        ...file,
       }),
       'not_found',
     )
+  })
+
+  it('refuses a call without a size or without a name by its validator, before the handler runs', async () => {
+    const { t, fx, issue } = await setup()
+    for (const args of [{ name: 'spec.pdf' }, { size: 8 }, {}])
+      await expect(
+        as(t, fx.user).mutation(api.files.uploadUrl, {
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          ...args,
+        } as never),
+        JSON.stringify(args),
+      ).rejects.toThrowError(/Validator error/)
+    expect(await t.run((ctx) => ctx.db.query('attachment_uploads').collect())).toEqual([])
+  })
+})
+
+describe('files.avatarUploadUrl', () => {
+  it('refuses a call without a size by its validator, and answers a URL for a declared one', async () => {
+    const { t, fx } = await setup()
+    await expect(
+      as(t, fx.user).mutation(api.files.avatarUploadUrl, { profile_id: fx.user.id } as never),
+    ).rejects.toThrowError(/Validator error/)
+    expect(
+      await as(t, fx.user).mutation(api.files.avatarUploadUrl, {
+        profile_id: fx.user.id,
+        size: 2048,
+      }),
+    ).toMatch(/^https?:\/\//)
   })
 })
 
@@ -190,7 +226,7 @@ describe('app uploads on tickets', () => {
     by: Doc<'profiles'>,
     issue: Doc<'issues'>,
     bytes: number,
-    args: { size?: number; name?: string } = { size: bytes, name: 'spec.pdf' },
+    args: { size: number; name: string } = { size: bytes, name: 'spec.pdf' },
   ) {
     const url = await as(t, by).mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
@@ -235,7 +271,6 @@ describe('app uploads on tickets', () => {
         name: 'spec.pdf',
         size_bytes: 64,
       })
-      expect(ticket.up_to).toBeUndefined()
       expect((await postTo(t, url, new Uint8Array(63))).status).toBe(400)
       const res = await postTo(t, url, new Uint8Array(64))
       expect(res.status).toBe(200)
@@ -246,32 +281,6 @@ describe('app uploads on tickets', () => {
       expect(out.attachment).toMatchObject({ size_bytes: 64, inline, uploaded_by: fx.user.id })
       expect(await ticketRows(t)).toEqual([])
     }
-  })
-
-  it('takes a smaller body without a size, as an app loaded before this release sends, up to the organization limit', async () => {
-    const { t, fx, issue } = await setup()
-    await setOrgCap(t, fx, 1)
-    const sid = await uploaded(t, fx, fx.user, issue, 10, {})
-    const [ticket] = await ticketRows(t)
-    expect(ticket).toMatchObject({ up_to: true, size_bytes: 1 * MiB, name: '' })
-    const out = await attach(t, fx, fx.user, issue, sid)
-    if (!('attachment' in out)) throw new Error('the attach was refused')
-    expect(out.attachment.size_bytes).toBe(10)
-    // a longer body, declared or sent without a length, stores nothing
-    const sent: Record<string, string>[] = [
-      { 'Content-Type': 'application/pdf', 'Content-Length': String(MiB + 1) },
-      { 'Content-Type': 'application/pdf' },
-    ]
-    for (const headers of sent) {
-      const url = await as(t, fx.user).mutation(api.files.uploadUrl, {
-        org_id: fx.org.id,
-        issue_id: issue.id,
-      })
-      const res = await postTo(t, url, new Uint8Array(MiB + 1), headers)
-      expect(res).toEqual({ status: 400, json: { error: UPLOAD_OVER_URL } })
-    }
-    expect(await storageExists(t, sid)).toBe(true)
-    expect((await t.run((ctx) => ctx.db.system.query('_storage').collect())).length).toBe(1)
   })
 
   it('refuses a file no live ticket of the caller for the task stored, with one sentence', async () => {
@@ -344,6 +353,8 @@ describe('app uploads on tickets', () => {
       as(t, fx.user).mutation(api.files.uploadUrl, {
         org_id: fx.org.id,
         issue_id: issue.id,
+        size: 8,
+        name: 'spec.pdf',
         ...args,
       })
     const over = await expectRefusal(start({ size: MiB + 1 }), 'rule')
@@ -393,6 +404,7 @@ describe('app uploads on tickets', () => {
         org_id: fx.org.id,
         issue_id: issue.id,
         size: 1,
+        name: 'a.pdf',
       }),
       'forbidden',
     )

@@ -694,7 +694,7 @@
 // as the server does (convex/lib/taskWindow.ts taskByRef): a uuid in any
 // case, or a number bare or as QN-12 in the organization asked only.
 // So is files:mintUrls (mintFiles), with the server's caps of 100
-// attachments and 1,000 pictures a call: it answers https URLs on
+// attachments and 100 pictures a call: it answers https URLs on
 // perf.invalid for the files and pictures the workspace holds, each with
 // the picture's storage version as `v` as the gateway's are, which a page
 // scripts/benchmark-browser.mjs opens with --files serves itself with the
@@ -1577,7 +1577,10 @@ const tasks = Array.from({ length: count }, (_, n) =>
     ? variedTask(n)
     : taskRow(n, id('4', n), projects[Math.floor(n / 10) % projects.length], parentOf(n)),
 )
-const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
+/** The hidden program's tasks, which the workspace's whole leaves out.
+    scripts/perf/options.test.mjs counts them toward the design size's
+    figures, as the organization holds them. */
+export const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
   taskRow(
     count + h,
     id('5', h),
@@ -2136,7 +2139,7 @@ const windowAnswered = new Set()
     sent for it. */
 const NO_ANSWER = Symbol('no answer')
 /** The most ids one files:mintUrls call names (convex/files.ts MINT_IDS). */
-const MINT_IDS = { attachments: 100, profiles: 1000 }
+const MINT_IDS = { attachments: 100, profiles: 100 }
 /** files:mintUrls for `args`: a lease on perf.invalid for each file and
     picture the workspace holds, the others left out as the server leaves
     them out, refused whole past MINT_IDS as the server refuses it. A big

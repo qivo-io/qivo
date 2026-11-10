@@ -1,7 +1,7 @@
 /* Deleted items, the Settings page every role has (design 6), and its
  * background work. model/deletedItems.ts holds the rules: how deleting
  * moves a task or a project into the trash, who sees and restores what, the
- * step machine, restoring and purging. model/deletedItemsList.ts projects
+ * step machine, restoring and purging. model/deletedItemsRows.ts projects
  * the rows, model/deletedItemsPage.ts reads the page, and
  * model/deletedItemsChoices.ts what the page shows beside its entries.
  *
@@ -69,8 +69,8 @@ import {
   purgeSummaryOf,
   rolesFor,
 } from './model/deletedItemsChoices'
-import { rowFor } from './model/deletedItemsList'
 import { type DeletedPage, pageFor } from './model/deletedItemsPage'
+import { rowFor } from './model/deletedItemsRows'
 
 /* The items `ids` names that `me` can see, once each, and the other ids,
  * which answer not_found whether they are unknown, in another organization

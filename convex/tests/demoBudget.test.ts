@@ -1,8 +1,7 @@
 /* The private demo's shared 5 MiB (model/demoUploads.ts), with reservations of
  * the declared size against the kind's per-file limit and the free space,
- * sizeless calls from an app loaded before sizes were declared, the
- * receivers' bound and the refusals, which say how much is free and delete
- * nothing. Each case plants the files it needs through the app's own upload
+ * the receivers' bound and the refusals, which say how much is free and
+ * delete nothing. Each case plants the files it needs through the app's own upload
  * path, apart from the fail-safe cases, which plant ledger rows. */
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -211,11 +210,12 @@ const ledger = (t: T) =>
 const files = (t: T) =>
   t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
 
-const reserve = (d: Demo, size?: number, issue = d.issue) =>
+const reserve = (d: Demo, size: number, issue = d.issue) =>
   d.caller.mutation(api.files.uploadUrl, {
     org_id: d.fx.org.id,
     issue_id: issue.id,
-    ...(size === undefined ? {} : { size }),
+    size,
+    name: 'notes.bin',
   })
 
 describe('the private demo shares 5 MiB', () => {
@@ -306,27 +306,20 @@ describe('the private demo shares 5 MiB', () => {
     await reserve(d, 3.5 * MiB)
   })
 
-  it('reserves the per-file limit or the free space for a call without a size', async () => {
+  it('refuses an upload, a picture or a background that declares no size, by its validator, and reserves nothing', async () => {
     const d = await setup()
-    // an app loaded before uploads declared their size
-    await reserve(d)
-    expect(await ledger(d.t)).toEqual({ bytes: 5 * MiB, rows: 1 })
-    vi.setSystemTime(Date.now() + 10 * 60_000)
-    await attachFile(d, 1 * MiB)
-    const url = await reserve(d)
-    expect(await ledger(d.t)).toEqual({ bytes: 5 * MiB, rows: 2 })
-    expect((await post(d.t, url, new Uint8Array(3 * MiB))).status).toBe(200)
-    // one small file still fits beside the others, up to the free space
-    const avatar = await d.caller.mutation(api.files.avatarUploadUrl, { profile_id: d.admin.id })
-    const longer = await post(d.t, avatar, new Uint8Array(1 * MiB + 1))
-    expect(longer.status).toBe(400)
-    expect(await longer.json()).toEqual({ error: demoStorageFull(1 * MiB) })
-    expect(await ledger(d.t)).toEqual({ bytes: 4 * MiB, rows: 2 })
-    expect(await files(d.t)).toBe(2)
-    const fits = await d.caller.mutation(api.files.avatarUploadUrl, { profile_id: d.admin.id })
-    expect((await post(d.t, fits, new Uint8Array(1 * MiB))).status).toBe(200)
-    const refusal = await expectRefusal(reserve(d), 'rule')
-    expect(refusal.data.message).toBe(demoStorageFull(0))
+    for (const call of [
+      d.caller.mutation(api.files.uploadUrl, {
+        org_id: d.fx.org.id,
+        issue_id: d.issue.id,
+        name: 'notes.bin',
+      } as never),
+      d.caller.mutation(api.files.avatarUploadUrl, { profile_id: d.admin.id } as never),
+      d.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' } as never),
+    ])
+      await expect(call).rejects.toThrowError(/Validator error/)
+    expect(await ledger(d.t)).toEqual({ bytes: 0, rows: 0 })
+    expect(await d.t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
   })
 
   it('admits nothing while it holds more than 5 MiB, and deletes nothing', async () => {
@@ -354,7 +347,6 @@ describe('the private demo shares 5 MiB', () => {
     const before = { ledger: await ledger(d.t), files: await files(d.t) }
     const refusal = await expectRefusal(reserve(d, 1), 'rule')
     expect(refusal.data.message).toBe(demoStorageFull(0))
-    await expectRefusal(reserve(d), 'rule')
     expect({ ledger: await ledger(d.t), files: await files(d.t) }).toEqual(before)
     for (const id of stored) expect(await d.t.run((ctx) => ctx.db.system.get(id))).not.toBeNull()
   })

@@ -16,8 +16,8 @@ const ROW: IssueFilters = {
   focus: false,
   search: '',
 }
-const project = { wide: false, mine: false, id: 'plan', proj: { org: 'org-1' } }
-const mine = { wide: true, mine: true, id: 'mine', proj: null }
+const project = { mine: false, id: 'plan', proj: { org: 'org-1' } }
+const mine = { mine: true, id: 'mine', proj: null }
 const win = { w0: TODAY_WEEK - 2, w1: TODAY_WEEK + 6 }
 
 /** The arguments of a request that asks. */

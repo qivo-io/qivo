@@ -90,24 +90,18 @@ export type NorthstarStep =
   | { kind: 'archive' }
   | { kind: 'counts' }
 
-/** The tasks and the comments one step writes at most. Measured on the
- * dataset, a task step of 15 wrote at most 93 documents and a comment step
- * of 15 read at most 268 and wrote at most 57, each with at most 224 index
- * ranges; the whole work in one transaction wrote about 1,400 documents
- * and took up to 2 s on a loaded machine. Comment counts
- * (model/commentLimits.ts) and the notices' inbox items
- * (model/inboxItems.ts), a range, a document read and a write for each
- * item a step touches, add to every step, so a step holds 12 tasks or 13
- * comments. Each seeded task and project also reads and writes its
- * used_ids row (lib/db.ts insertUsed), and a Northstar step's check of the
- * ids it writes reads that row once more (internal/marketingDemo.ts
- * assertReserved), two ranges and a write a task. In convex-test a
- * marketing call of one task step now uses at most 197 ranges, reads 143
- * documents and writes 135, one of a comment step at most 260 ranges, 293
- * documents read and 87 written, and a part of the reserved-id check at
- * most 243 ranges. convex/tests/marketingDemo.test.ts holds every call to
- * 300 index ranges, 350 documents read and 150 written, so a step is a
- * small part of Convex's 1 s mutation limit. */
+/** The tasks and the comments one step writes at most. The whole work in
+ * one transaction passes Convex's 1 s mutation limit on a loaded machine,
+ * so it runs in steps. Comment counts (model/commentLimits.ts) and the
+ * notices' inbox items (model/inboxItems.ts), a range, a document read and
+ * a write for each item a step touches, add to every step, so a step holds
+ * 12 tasks or 13 comments. Each seeded task and project also reads and
+ * writes its used_ids row (lib/db.ts insertUsed), and a Northstar step's
+ * check of the ids it writes reads that row once more
+ * (internal/marketingDemo.ts assertReserved), two ranges and a write a
+ * task. convex/tests/marketingDemo.test.ts holds every call to 300 index
+ * ranges, 350 documents read and 150 written, so a step is a small part of
+ * Convex's 1 s mutation limit. */
 export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */
@@ -759,30 +753,24 @@ async function writeStep(
  * Each call stays inside a third of Convex's limits for one mutation:
  * 1,365 index ranges, 10,666 documents read, 5,333 written, 5.3 MiB read
  * or written, and 333 ms of the function's own JavaScript (the limit does
- * not count database operations). In convex-test a call of five read at
- * most 513 ranges and 724 documents and wrote at most 441. Comment counts
- * (model/commentLimits.ts) and the notices' inbox items
- * (model/inboxItems.ts), kept once per call, take the work to seven calls.
- * The Overview's counts of every task as it is then, made and stamped in
- * one transaction once every task is written (model/overviewCounts.ts
- * countWhole), take an eighth, which in convex-test read 163 ranges and
- * 221 documents and wrote 195.
+ * not count database operations). Comment counts (model/commentLimits.ts)
+ * and the notices' inbox items (model/inboxItems.ts), kept once per call,
+ * take the work to seven calls. The Overview's counts of every task as it
+ * is then, made and stamped in one transaction once every task is written
+ * (model/overviewCounts.ts countWhole), take an eighth.
  * The used_ids row each seeded task and project reads and writes (lib/db.ts
  * insertUsed) adds a range and a write to each, 51 to the first call and 54
- * to the second, which write the projects and tasks, so each call reads at
- * most 577 ranges and 825 documents and writes at most 586. The hosted
- * demo's steps at v0.1.86, summed for each call (the worst of three
- * starts, less 48 ms for each step past the first), put a call's
- * JavaScript at 48 ms plus
- * 0.38 to 0.45 ms per index range. Per document read it spreads from 0.26
- * to 0.45 ms, as the first calls write more for each document they read,
- * so the documents alone cannot bound it. convex/tests/demo.test.ts then
- * holds every call to 630 ranges, within 48 + 0.45 x 630 = 332 ms, and to
- * 900 documents read and 650 written, so that a call at those caps reads
- * at most 1.4 documents and writes at most 1.0 a range, inside the 0.9 to
- * 1.5 and 0.4 to 1.4 of the calls those costs come from. A call with fewer
- * ranges stays inside 332 ms too, as a document past those costs about
- * 0.13 ms read and 0.06 ms written (the slopes over the hosted steps). */
+ * to the second, which write the projects and tasks.
+ * convex/tests/demo.test.ts runs every call under limits of 630 index
+ * ranges, 900 documents read and 650 written, beside a third of Convex's
+ * bytes. convex-test keeps no time limit, so the range cap stands in for
+ * the 333 ms: the hosted demo's steps at v0.1.86, summed for each call,
+ * gave a call's JavaScript a fixed part and a part for each index range
+ * that keep a call of 630 ranges inside 333 ms. Their part for each
+ * document read spread too widely to bound the time by documents alone, so
+ * the document caps keep a call's documents for each range inside what the
+ * calls those costs come from read and wrote, and a call with fewer ranges
+ * stays inside 333 ms too. */
 export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4, 1]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past

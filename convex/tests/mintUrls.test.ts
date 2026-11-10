@@ -4,8 +4,7 @@
  * calls answer.
  *
  * The design-size cases run the handler's body in one transaction under
- * Convex's real limits and print what it read, the figures MINT_IDS'
- * docstring quotes. Each raises one figure and keeps the others at
+ * Convex's real limits and print what it read. Each raises one figure and keeps the others at
  * everyday values (a person in 3 teams, 20 sub-projects a team, 3
  * sub-projects a project): the people of one organization, the 100 images
  * of one task (the existing per-task limit), the teams a project is shared
@@ -231,7 +230,7 @@ async function spread(t: T, projects: Doc<'projects'>[], n: number, sid: Id<'_st
 }
 
 describe('files.mintUrls caps', () => {
-  it('refuses more than 100 attachment ids or 1,000 profile ids whole, naming the array, before the handler reads anything', async () => {
+  it('refuses more than 100 attachment ids or 100 profile ids whole, naming the array, before the handler reads anything', async () => {
     const t = newT({ transactionLimits: true })
     const fx = await withReadingAdmin(t)
     const tooMany = { attachment_ids: Array.from({ length: 101 }, uuid) }
@@ -241,9 +240,16 @@ describe('files.mintUrls caps', () => {
     await expect(
       as(t, fx.user).query(api.files.mintUrls, {
         org_id: fx.org.id,
-        profile_ids: Array.from({ length: 1001 }, uuid),
+        profile_ids: Array.from({ length: 101 }, uuid),
       }),
-    ).rejects.toThrow('profile_ids must name at most 1000 profiles')
+    ).rejects.toThrow('profile_ids must name at most 100 profiles')
+    // 100 of them, the app's chunk, are taken
+    expect(
+      await as(t, fx.user).query(api.files.mintUrls, {
+        org_id: fx.org.id,
+        profile_ids: Array.from({ length: 100 }, uuid),
+      }),
+    ).toEqual({ attachments: {}, avatars: {} })
     // a repeated id counts as sent, since the cap is on the array
     await expect(
       as(t, fx.user).query(api.files.mintUrls, {
@@ -258,7 +264,7 @@ describe('files.mintUrls caps', () => {
       }),
     ).rejects.toThrow('attachment_ids must name at most 100 attachments')
     // the refused body read nothing at all
-    for (const args of [tooMany, { profile_ids: Array.from({ length: 1001 }, uuid) }]) {
+    for (const args of [tooMany, { profile_ids: Array.from({ length: 101 }, uuid) }]) {
       const read = await t.run(async (ctx) => {
         await expect(mintFileUrls(ctx, minter(fx.user), args)).rejects.toThrow('must name at most')
         const m = await ctx.meta.getTransactionMetrics()
@@ -285,8 +291,8 @@ describe('files.mintUrls caps', () => {
       attachments: {},
       avatars: {},
     })
-    // lowered caps stand in for 100 and 1,000, so no case holds two
-    // figures at their design size
+    // lowered caps stand in for 100 of each, so no case holds two figures
+    // at their design size
     MINT_IDS.attachments = 3
     MINT_IDS.profiles = 4
     const people = [fx.admin, fx.user, fx.viewer, fx.guest].map((p) => p.id)
@@ -456,7 +462,7 @@ describe('files.mintUrls reads shared within a call', () => {
 })
 
 describe('files.mintUrls reads at the design size', () => {
-  it('reads 1,000 profile ids of an organization of 1,000 people, each with a picture, the older app’s call', async () => {
+  it('answers 100 profile ids of an organization of 1,000 people, each with a picture, whole', async () => {
     const t = newT({ transactionLimits: true })
     const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
@@ -483,10 +489,9 @@ describe('files.mintUrls reads at the design size', () => {
       }
       return out
     })
-    const f = await measure(t, fx.user, { profile_ids: ids })
-    record('1,000 profile ids', f)
-    expect(f.answered).toBe(1000)
-    const chunk = await measure(t, fx.user, { profile_ids: ids.slice(0, 100) })
+    // the call's ids from across the organization, not only its first rows
+    const asked = ids.filter((_, i) => i % 10 === 0)
+    const chunk = await measure(t, fx.user, { profile_ids: asked })
     record('100 profile ids, the app’s chunk', chunk)
     expect(chunk.answered).toBe(100)
   })

@@ -118,50 +118,36 @@ import { inboxScope, unreadChange } from './inboxReads'
  * figure with a group on each of its tasks, open and Done tasks not yet
  * archived at their sum since one page reads both, or the item cap alone,
  * and assume an everyday Inbox of 60 groups over 3 sub-projects, a little
- * over one page. What one call reads, measured in
- * convex/tests/inboxPage.test.ts ("reads at the design size") in index
- * ranges and documents as Convex counts them, with the default bounds, for
- * a reader in 3 teams:
- * - the everyday Inbox: a browse 227 ranges and 237 documents for 50 rows;
- *   a search that matches nothing 207 ranges and 259 documents, one page;
- * - one sub-project's 450 groups, 300 of open tasks and 150 of Done ones:
- *   261 ranges and 258 documents newest first or Unread only, 271 and 268
- *   oldest first, with 50 actors on the page; a kind whose 10 matches are
- *   the oldest, 71 ranges and 507 documents, one page; a search that
- *   matches nothing or only the oldest group, 1,413 ranges and 1,858
- *   documents, one page;
+ * over one page. convex/tests/inboxPage.test.ts ("reads at the design
+ * size") logs what one call reads, in index ranges and documents as Convex
+ * counts them, with the default bounds, for a reader in 3 teams:
+ * - the everyday Inbox, browsed, and searched for nothing, which reads it
+ *   in one page;
+ * - one sub-project's 450 groups, 300 of open tasks and 150 of Done ones,
+ *   newest first, Unread only and oldest first, with 50 actors on the page,
+ *   and a kind whose 10 matches are the oldest and a search that matches
+ *   nothing or only the oldest group, each of which reads it in one page;
  * - one project's 1,000 groups over 3 sub-projects, 800 of open tasks and
- *   200 of Done ones: the browse as above; a kind whose 10 matches are the
- *   oldest, 77 ranges and 1,059 documents; a search that matches nothing,
- *   2 pages, the first stopped at 2,002 ranges and 2,639 documents, the
- *   second 1,133 ranges and 1,479 documents;
- * - one project's 200 read groups of Done tasks: 118 ranges and 161
- *   documents;
+ *   200 of Done ones, browsed, a kind whose 10 matches are the oldest, and
+ *   a search that matches nothing, which stops and goes on from `next`;
+ * - one project's 200 read groups of Done tasks;
  * - 6,000 groups over the 200 sub-projects one person can read (on
- *   demand, QIVO_INBOX_PERSON_READS=1): a browse 374 ranges and 345
- *   documents; Mentions whose 60 matches are the oldest, 50 rows on the
- *   first page with 429 ranges, 6,331 documents and 2.7 MB, as it passes
- *   every item row, and 10 on the second; a search that matches nothing,
- *   12 pages of about 500 groups, each stopped at about 2,000 ranges and
- *   2,500 documents;
+ *   demand, QIVO_INBOX_PERSON_READS=1), browsed, Mentions whose 60 matches
+ *   are the oldest, whose first page passes every item row, and a search
+ *   that matches nothing, which stops on each page until the last;
  * - 800 groups of a project the reader no longer sees, newer than every
- *   visible one: 229 ranges and 1,014 documents for 50 rows, each hidden
- *   group one item row;
- * - a person in 5 teams with the everyday Inbox: 217 ranges and 210
- *   documents;
- * - 50 groups at the item cap, 51 messages each: a browse 212 ranges and
- *   258 documents; a search that matches only each group's oldest message,
- *   262 ranges, 2,808 documents and 1.3 MB; every unread message a mention
- *   in a comment, which unreadChange walks, 262 ranges and 2,758
- *   documents;
- * - a group of an archived task in a visible project costs one range and
- *   two documents, so a page passes about 2,000 of them, half a page for
- *   each 1,000 such groups. One sub-project's 3,000 such groups take about
- *   2 pages and one project's 10,000 about 5.
- * A page answers at most 50 rows in about 42 KB, and a page kept live with
- * `through` at most 200, under the same read budget. Every case answers
- * whole except the searches that say stopped above, which go on from
- * `next`.
+ *   visible one, each hidden group one item row;
+ * - a person in 5 teams with the everyday Inbox;
+ * - 50 groups at the item cap, 51 messages each, browsed, searched for
+ *   only each group's oldest message, and with every unread message a
+ *   mention in a comment, which unreadChange walks.
+ * A group of an archived task in a visible project costs one range and two
+ * documents, so a page passes about 2,000 of them, half a page for each
+ * 1,000 such groups. One sub-project's 3,000 such groups take about 2
+ * pages and one project's 10,000 about 5. A page answers at most 50 rows,
+ * and a page kept live with `through` at most 200, under the same read
+ * budget. Every case answers whole except the searches that stop, which
+ * go on from `next`.
  */
 export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
   rows: INBOX_PAGE_ROWS,

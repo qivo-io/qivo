@@ -46,6 +46,10 @@ const USER_CONFLICT =
 
 const DEFAULT = { mode: 'dark', image_source: 'daily', custom_image: null }
 const headers = { 'Content-Type': 'image/jpeg', Origin: 'http://localhost:5199' }
+/* The size an upload ticket declares where a case sends no file of its own.
+   Outside the demo only its shape is checked, and the receiver reads at
+   most 8 MiB whatever it says. */
+const DECLARED = 64 * 1024
 
 function jpeg(width = 1920, height = 1080, tag = 0) {
   return new Uint8Array([
@@ -208,7 +212,7 @@ async function upload(
   mime = 'image/jpeg',
   name = 'Lake.jpg',
 ) {
-  const ticket = await caller.mutation(api.appearance.createUpload, { name })
+  const ticket = await caller.mutation(api.appearance.createUpload, { name, size: bytes.length })
   const response = await uploadRequest(t, ticket.upload_url, bytes, mime)
   expect(response.status, await response.text()).toBe(200)
   const result = await settings(caller)
@@ -274,7 +278,10 @@ describe('account appearance preferences', () => {
       t.mutation(api.appearance.save, { mode: 'dark', image_source: 'daily' }),
       'forbidden',
     )
-    await expectRefusal(t.mutation(api.appearance.createUpload, { name: 'Lake.jpg' }), 'forbidden')
+    await expectRefusal(
+      t.mutation(api.appearance.createUpload, { name: 'Lake.jpg', size: DECLARED }),
+      'forbidden',
+    )
     await expectRefusal(
       t.mutation(api.appearance.cancelUpload, { ticket_id: 'unknown' }),
       'forbidden',
@@ -335,12 +342,14 @@ describe('account appearance preferences', () => {
     await expect(
       owner.caller.query(api.appearance.get, { auth_user_id: other.id } as never),
     ).rejects.toThrow()
+    // a valid name and size, so the client's storage_id is all it refuses
     await expect(
       owner.caller.mutation(api.appearance.createUpload, {
         name: 'Lake.jpg',
+        size: 1024,
         storage_id: 'known-loose-file',
       } as never),
-    ).rejects.toThrow()
+    ).rejects.toThrow('Unexpected field `storage_id`')
     expect(await settings(owner.caller)).toEqual(DEFAULT)
     expect(await settings(other.caller)).toEqual(DEFAULT)
     await noLibraryChanges(t)
@@ -497,11 +506,22 @@ describe('private custom background uploads', () => {
   ])('refuses an invalid upload name without creating a ticket: %j', async (name, sentence) => {
     const { t, owner } = await setup()
     const refusal = await expectRefusal(
-      owner.caller.mutation(api.appearance.createUpload, { name }),
+      owner.caller.mutation(api.appearance.createUpload, { name, size: DECLARED }),
       'rule',
     )
     expect(refusal.data.message).toBe(sentence)
     expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
+  })
+
+  it('refuses an upload that declares no size by its validator, before any ticket', async () => {
+    const { t, owner } = await setup()
+    await expect(
+      owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' } as never),
+    ).rejects.toThrowError(/Validator error/)
+    expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
+    // a declared size opens the ticket
+    await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg', size: DECLARED })
+    expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toHaveLength(1)
   })
 
   it.each([
@@ -570,6 +590,7 @@ describe('private custom background uploads', () => {
       await owner.caller.mutation(api.appearance.save, { mode: 'dark', image_source: 'daily' })
       const ticket = await owner.caller.mutation(api.appearance.createUpload, {
         name: 'Invalid image',
+        size: DECLARED,
       })
       const response = await uploadRequest(t, ticket.upload_url, bytes(), mime)
       expect(response.status).toBeGreaterThanOrEqual(400)
@@ -602,7 +623,10 @@ describe('private custom background uploads', () => {
 
   it('cancels only the owner’s upload ticket and rejects a canceled URL', async () => {
     const { t, owner, other } = await setup()
-    const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: DECLARED,
+    })
     await expectRefusal(
       other.caller.mutation(api.appearance.cancelUpload, { ticket_id: ticket.ticket_id }),
       'not_found',
@@ -615,7 +639,10 @@ describe('private custom background uploads', () => {
 
   it('rejects expired upload URLs before storing bytes', async () => {
     const { t, owner } = await setup()
-    const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: DECLARED,
+    })
     vi.setSystemTime(new Date(Date.now() + 60 * 60 * 1000))
     expect((await uploadRequest(t, ticket.upload_url)).status).toBe(404)
     expect(await customRows(t)).toEqual([])
@@ -624,7 +651,10 @@ describe('private custom background uploads', () => {
 
   it('refuses an explicit foreign upload origin even with a valid ticket', async () => {
     const { t, owner } = await setup()
-    const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: DECLARED,
+    })
     const response = await uploadRequest(t, ticket.upload_url, jpeg(), 'image/jpeg', {
       origin: 'https://untrusted.example',
     })
@@ -638,6 +668,7 @@ describe('private custom background uploads', () => {
     const current = await upload(t, owner.caller)
     const ticket = await owner.caller.mutation(api.appearance.createUpload, {
       name: 'Canceled.jpg',
+      size: DECLARED,
     })
     let loose: Id<'_storage'> | undefined
     const response = await uploadRequest(t, ticket.upload_url, jpeg(1920, 1080, 1), 'image/jpeg', {
@@ -656,7 +687,10 @@ describe('private custom background uploads', () => {
 
   it('rejects a tampered upload owner and replay of a successfully consumed ticket', async () => {
     const { t, owner, other } = await setup()
-    const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: DECLARED,
+    })
     const tampered = ticket.upload_url.replace(/([?&]m=)[^&]+/, `$1${encodeURIComponent(other.id)}`)
     expect((await uploadRequest(t, tampered)).status).toBe(404)
     expect(await storedRows(t)).toEqual([])
@@ -669,7 +703,10 @@ describe('private custom background uploads', () => {
 
   it('rejects a stale upload prepared before another image was installed', async () => {
     const { t, owner } = await setup()
-    const stale = await owner.caller.mutation(api.appearance.createUpload, { name: 'Stale.jpg' })
+    const stale = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Stale.jpg',
+      size: DECLARED,
+    })
     const current = await upload(t, owner.caller, jpeg(1920, 1080, 1))
     const response = await uploadRequest(t, stale.upload_url, jpeg(1920, 1080, 2))
     expect(response.status).toBe(409)
@@ -690,7 +727,10 @@ describe('private custom background uploads', () => {
 
     it('saves the image after a conflict within the retries', async () => {
       const { t, owner } = await setup()
-      const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+      const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+        name: 'Lake.jpg',
+        size: DECLARED,
+      })
       const response = await uploadRequest(t, ticket.upload_url, jpeg(), 'image/jpeg', {
         conflicts: CONFLICT_RETRIES,
       })
@@ -703,7 +743,10 @@ describe('private custom background uploads', () => {
       const { t, owner } = await setup()
       const current = await upload(t, owner.caller)
       vi.spyOn(console, 'error').mockImplementation(() => {})
-      const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'New.jpg' })
+      const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+        name: 'New.jpg',
+        size: DECLARED,
+      })
       const response = await uploadRequest(
         t,
         ticket.upload_url,
@@ -734,7 +777,10 @@ describe('private custom background uploads', () => {
   it('prevents a previously prepared upload from undoing explicit image removal', async () => {
     const { t, owner } = await setup()
     await upload(t, owner.caller)
-    const stale = await owner.caller.mutation(api.appearance.createUpload, { name: 'Stale.jpg' })
+    const stale = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Stale.jpg',
+      size: DECLARED,
+    })
     await owner.caller.mutation(api.appearance.removeCustom, {})
     const response = await uploadRequest(t, stale.upload_url)
     expect(response.status).toBe(409)
@@ -1012,7 +1058,10 @@ describe('private custom background gateway', () => {
     await upload(t, owner.caller)
     const otherImage = await upload(t, other.caller, jpeg(1920, 1080, 2))
     const preview = await owner.caller.query(api.appearance.mintCustomUrl, {})
-    const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Later.jpg' })
+    const ticket = await owner.caller.mutation(api.appearance.createUpload, {
+      name: 'Later.jpg',
+      size: DECLARED,
+    })
     // A raw component deletion models CLI/provider cleanup that bypasses the
     // normal auth API hook; the gateway must still revoke without waiting.
     await t.mutation(components.betterAuth.adapter.deleteOne, {

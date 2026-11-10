@@ -320,10 +320,9 @@ export const deleteAgentKey = accessRemovalMutation({
  * prefix, its hash and a few ISO times, under 1 KB, and the walk reads
  * nothing else, so a search that matches only a person's oldest token
  * reads each of the person's tokens once in at most two index ranges a
- * seat. Measured in convex/tests/personalCredentialLists.test.ts ("reads
- * everyday batches"), the reader alone, a first batch over one seat with
- * 26 tokens read 26 documents, 1 index range and about 11 KB, and a search
- * that matched none of them read the same.
+ * seat. convex/tests/personalCredentialLists.test.ts ("reads everyday
+ * batches") logs what the reader alone reads for a first batch over one
+ * seat with 26 tokens, which a search that matches none of them reads too.
  * Past the share the batch answers `stopped` and Load more goes on. Tests
  * lower it. */
 export const PERSONAL_TOKENS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }

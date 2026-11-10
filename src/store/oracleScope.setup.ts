@@ -20,9 +20,8 @@ import type { ProjectFacts } from './viewModels'
 
 /** A scope as the oracles read it: the store's ScopeInfo with the groups,
     sub-projects and top-level projects it held while it held every
-    project, and `wide`, My view. */
+    project. */
 export type OracleScope = ScopeInfo & {
-  wide: boolean
   metas: ProjectFacts[]
   groups: { proj: ProjectFacts; subIds: string[] }[]
   subIds: string[]
@@ -95,7 +94,6 @@ export function oracleScope(whole: Whole, scopeId: string): OracleScope | null {
     const subIds = groups.flatMap((g) => g.subIds)
     return {
       mine: true,
-      wide: true,
       // the caller's own tasks, as P.isMine keeps them
       only: (it: IssueVM) => !!it.owner && whole.myProfileIds.includes(it.owner),
       id: scopeId,
@@ -121,7 +119,6 @@ export function oracleScope(whole: Whole, scopeId: string): OracleScope | null {
   const subIds = groups.flatMap((g) => g.subIds)
   return {
     mine: false,
-    wide: false,
     only: null,
     id: p.id,
     name: p.name,

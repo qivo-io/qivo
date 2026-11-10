@@ -182,11 +182,11 @@ describe('refusal sentences in restore and upload toasts', () => {
 
   it('declares the size and name of the file it sends, and quotes the sentence its upload URL refused', async () => {
     answers['files:uploadUrl'] = () => Promise.resolve('https://upload.example.test/u')
-    receiverRefuses('the file is larger than the most this upload URL takes; start a new upload')
+    receiverRefuses('the upload must be exactly the 11 bytes declared')
     expect(await P.addAttachment('task-1', file())).toBeNull()
     expect(sentWith('files:uploadUrl')).toMatchObject({ size: 11, name: 'notes.txt' })
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
-      'Couldn\'t upload "notes.txt". The file is larger than the most this upload URL takes; start a new upload.',
+      'Couldn\'t upload "notes.txt". The upload must be exactly the 11 bytes declared.',
       'error',
     )
   })

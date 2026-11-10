@@ -89,36 +89,23 @@ import {
  * and parse at most `parse` characters of descriptions that hide words
  * (lib/md.ts hidesWords), split into equal allowances (allowancesOf). The
  * page parses up to `pageParse` more, a page of descriptions at
- * LIMITS.description, and always its first row. Every
- * search result costs an index range, so `ranges` binds first, and each
- * result costs more as the search index grows. On a local backend
- * (2026-10-29) in an organization of 50,000 active tasks, 2,000 results
- * took up to 0.51 s of the 1 s Convex gives a query's own code and up to
- * 2.8 s with Convex's own search time, so `ranges` is 1,000 (owner,
- * 2026-10-29). Planning counts against `ranges` too: in convex-test
- * (2026-10-29) a member in 25 teams that each share every top-level
- * project the member sees read 90 to 190 ranges a seat besides its search
- * queries, so three such seats leave each about 140 ranges or more. Parsing
- * 1,000,000 characters of descriptions full of links took 0.1 to 0.2 s. A
- * seat that sees 32 projects runs 64 search queries; its pages there read
- * 400 to 630 documents in about 0.1 s of that time.
+ * LIMITS.description, and always its first row. Every search result costs
+ * an index range, so `ranges` binds first, and each result costs more as
+ * the search index grows. The owner set `ranges` on 29 October 2026 from a
+ * timing on a local backend in an organization past the design size, so
+ * that a call's results stay well inside the 1 s Convex gives a query's own
+ * code. Planning counts against `ranges` too, and in convex-test three
+ * seats of a member in 25 teams that each share every top-level project the
+ * member sees each kept room for their search queries. Parsing `parse`
+ * characters of descriptions full of links takes a small part of that time.
  *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin's
- * search cost the same as a standard user's with the same rows. Both read
- * the same ranges, documents and bytes, counted for the whole call with its
- * sign-in, and their JavaScript times differ only by run-to-run noise. A
- * seat that sees more than `projects` is searched whole and reports
- * coverage `projects`. Searched whole, 63 places over 1,890 tasks read 532
- * ranges by the backend's count (163 started by the code), 540 documents
- * and 0.28 MiB in 23 to 48 ms of JavaScript quiet and at most 74 ms busy,
- * once 535 ms in a further quiet session that had storage stalls. In an
- * organization of 10,000 open tasks, 60 places searched whole read 1,030
- * ranges (518 started), 1,022 documents and 0.51 MiB in 42 to 61 ms quiet
- * and at most 118 ms busy, once 642 ms in a further busy session. The same
- * organization with 27 places, searched project by project and complete,
- * read 292 ranges (190 started), 243 documents and 0.12 MiB in 25 to 44 ms
- * quiet and at most 74 ms busy.
+ * An organization admin's search costs the same as a standard user's with
+ * the same rows. A seat that sees more than `projects` is searched whole
+ * and reports coverage `projects`. The closing review's report in
+ * qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md,
+ * "Search") holds the timed figures, at everyday values and against the
+ * archive's size.
  *
  * A seat searched whole also asks its organization's project names, at
  * most `names` candidates, in one more search query outside `searches`, so
@@ -134,16 +121,14 @@ import {
  * with `reads` and goes on to its places with the rest. So in a large
  * organization whose project names match the text, a seat searched whole
  * has up to a quarter fewer reads left for its task sources than before,
- * and can stop with `reads` sooner. Measured in convex-test (2026-10-29) in
- * an organization of 300 projects whose names all held the text, the 256
- * candidates cost a seat searched whole about 255 documents and 95 KB more
- * than one candidate did, and on Convex,
- * which counts each search result as a range, as many ranges: about a
- * quarter of a lone seat's ranges, its whole names part, so there the names
- * can stop with `reads` a few candidates before `names`. The member's check
- * of hidden candidates
- * read no more, as their reach rows left those out (model/projectNav.ts
- * projectSight). Tests lower these. */
+ * and can stop with `reads` sooner. In an organization of 300 projects
+ * whose names all hold the text, each of the names' candidates costs a seat
+ * searched whole a document and, as Convex counts each search result as a
+ * range, a range, so `names` candidates take about a quarter of a lone
+ * seat's ranges, its whole names part, and there the names can stop with
+ * `reads` a few candidates before `names`. The member's check of hidden
+ * candidates reads no more, as their reach rows leave those out
+ * (model/projectNav.ts projectSight). Tests lower these. */
 export const MAIN_SEARCH = {
   rows: 25,
   candidates: 512,

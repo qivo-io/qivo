@@ -1,6 +1,6 @@
 /* Fixtures and readers shared by the Deleted items suites
  * (deletedItems.test.ts, deletedItemsRestore.test.ts,
- * deletedItemsList.test.ts, deletedItemsMachine.test.ts) and by the REST
+ * deletedItemsRows.test.ts, deletedItemsMachine.test.ts) and by the REST
  * and MCP delete tests.
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,

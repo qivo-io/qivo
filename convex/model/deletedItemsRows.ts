@@ -9,8 +9,7 @@
  *
  * deletedItems.list and matches, the list and search of the apps from
  * before the page, are gone, with their code here and the search_title
- * index of deleted_tasks that they and the page's older rows read. The
- * file keeps its name, which the design notes use. */
+ * index of deleted_tasks that they and the page's older rows read. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

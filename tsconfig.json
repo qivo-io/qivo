@@ -30,8 +30,8 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
-    /* convex/lib/workspaceJoin.ts names its imports with .ts, so Node
-       scripts can load it as it is (scripts/benchmark-live.mjs). */
+    /* convex/lib/workspaceJoin.ts names its imports with .ts
+       (./avatarColors.ts and ./workspaceParts.ts). */
     "allowImportingTsExtensions": true
   },
   "include": ["src", "vite.config.ts", "scripts/perf/entry.tsx"]

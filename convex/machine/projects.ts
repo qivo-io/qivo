@@ -396,9 +396,9 @@ const preambleOf = (): { ranges: number; documents: number } => ({
  * `reads` false, a project the caller manages without reading, answers
  * `milestones` and their cursor null and reads no milestone.
  *
- * The read at the design size's sum, 1,000 user grants and 5 team shares
- * under 260 weekly milestones, is measured in lib/core.ts PROJECT_DETAILS'
- * docstring.
+ * convex/tests/projectDetails.test.ts ("reads at the design size") logs
+ * the read at the design size's sum, 1,000 user grants and 5 team shares
+ * under 260 weekly milestones (lib/core.ts PROJECT_DETAILS).
  */
 async function projectDetail(
   ctx: QueryCtx,
