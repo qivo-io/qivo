@@ -1072,7 +1072,7 @@ describe('public demo provisioning steps', () => {
   // its steps (PUBLIC_DEMO_CALLS), held to a third of Convex's byte limits
   // and to counts that keep it inside a third of the rest. convex-test does
   // not keep the time limit, so the range budget stands in for it
-  // (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES has the numbers).
+  // (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES says how its caps were set).
   it('provisions a demo in calls inside a budget near their use, every step once', async () => {
     const limited = newT({
       transactionLimits: {

@@ -192,11 +192,10 @@ export type LabelsPageJson = { next_cursor: string | null; labels: ReturnType<ty
  * snapshot. Every label holds its name_lower, so the list needs no name
  * keys and is read in any organization.
  *
- * Labels have no design-size figure. Measured in
- * convex/tests/peopleLists.test.ts ("at the design size") with the call's
- * own reads, 60 labels, the most a test case holds, take one page at
- * limit 200 of 3 ranges, 61 documents and 0.02 MB, and a search that
- * matches none of them reads the same.
+ * Labels have no design-size figure. convex/tests/peopleLists.test.ts ("at
+ * the design size") logs the call's own reads for 60 labels, the most a
+ * test case holds, in one page at limit 200, and for a search that matches
+ * none of them, which reads the same.
  */
 export async function labelPage(
   ctx: QueryCtx,

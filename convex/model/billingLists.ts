@@ -62,13 +62,10 @@ import { idTieOf, nameKeysReady, profileIndex } from './nameKeys'
  * 1,000 accounts, the organization's people and agents with calls, so even
  * a search that matches only the account with the fewest calls reads about
  * 1,000 rows and 1,000 profiles in about 1,000 ranges, inside the share.
- * Measured in convex/tests/billingLists.test.ts ("reads at the design
- * size"), the reader alone without the caller's seat check, at 1,000
- * accounts with calls a first batch read 52 documents, 27 index ranges and
- * about 14 KB, and a search that matches only the account with the fewest
- * calls read 2,001 documents, 1,002 index ranges and about 535 KB. Past
- * the share the batch answers `stopped` and Load more goes on. Tests lower
- * it. */
+ * convex/tests/billingLists.test.ts ("reads at the design size") logs what
+ * the reader alone reads, without the caller's seat check, at 1,000
+ * accounts with calls, for a first batch and for that search. Past the
+ * share the batch answers `stopped` and Load more goes on. Tests lower it. */
 export const API_ACCOUNTS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
 
 /** The list's name, which seals its cursors (lib/namedPages.ts namedCursor). */
@@ -237,13 +234,11 @@ export type AccountKind = 'billable' | 'non_billable'
  * one more range. At the design size an organization holds up to 1,000
  * profiles with everyday guests, so a batch that passes them all, such as
  * the non-billable list with its inactive people named last, answers in
- * one call. Measured in convex/tests/billingLists.test.ts ("reads at the
- * design size"), the reader alone, at 1,000 people with 30 inactive ones
- * named last and 20 guests, half of them billed at home: a first batch of
- * the billable list read 68 documents, 23 index ranges and about 24 KB, a
- * search that matches only its last name 1,001 documents, 2 ranges and
- * about 364 KB, and a first batch of the non-billable list 1,018
- * documents, 23 ranges and about 370 KB. Past the share the batch answers
+ * one call. convex/tests/billingLists.test.ts ("reads at the design
+ * size") logs what the reader alone reads at 1,000 people with 30 inactive
+ * ones named last and 20 guests, half of them billed at home, for a first
+ * batch of the billable list, a search that matches only its last name and
+ * a first batch of the non-billable list. Past the share the batch answers
  * `stopped` and Load more goes on. Tests lower it. */
 export const ACCOUNT_NAMES: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
 

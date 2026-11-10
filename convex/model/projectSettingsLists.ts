@@ -138,66 +138,50 @@ import { idTieOf, type ListArgs, type ListAsk, orderedListAsk } from './projectS
  * checks included, past which the read answers the access_unchecked
  * refusal whole, never a part of the archive. The walk then takes
  * NAMED_READ of its own, which namedCeiling keeps inside what the request
- * has left. The collection's largest read at the design size is about
- * 1,540 ranges, 2,660 documents and 790 KB (below), and `collect` is about
- * twice that. A call at it reads at most these 3,000 ranges, with one more
- * step's reads past them, and ownRoots, which reads first under its own
- * bounds (PROJECT_NAV.rootRows and roots), counts inside them; the walk
- * then has at most the 1,080 ranges Convex's 4,096 leave less
+ * has left. `collect` is about twice the collection's largest read at the
+ * design size (below). A call at it reads at most these 3,000 ranges, with
+ * one more step's reads past them, and ownRoots, which reads first under
+ * its own bounds (PROJECT_NAV.rootRows and roots), counts inside them; the
+ * walk then has at most the 1,080 ranges Convex's 4,096 leave less
  * NAMED_RESERVE, which a batch's checks of 25 rows, or of 100 kept live,
  * stay well inside. In documents and bytes a call at the bound reads at
  * most 6,000 and 4 MiB here and NAMED_READ's 8,000 and 4 MiB in the walk,
  * inside Convex's 32,000 documents and 16 MiB.
  *
- * What one call reads at the design size, one figure a case, measured in
  * convex/tests/projectSettingsLists.test.ts ("reads at the design size")
- * under Convex's transaction limits, in index ranges and documents as
- * Convex counts them, every call answered whole. An admin reads only the
+ * logs what one call reads at the design size, one figure a case, under
+ * Convex's transaction limits, in index ranges and documents as Convex
+ * counts them, every call answered whole. An admin reads only the
  * organization's indexes:
- * - projects, 200 top-level projects and 500 sub-projects: at most 3
- *   ranges and 27 documents a batch, 102 kept live to 100 rows; a search
- *   matching nothing 2 and 701 in one batch; a search matching all 700, at
- *   most 10 and 34 a batch, 29 and 128 kept live;
- * - subProjects of 30: 3 and 28, then 4 and 7; archivedSubProjects of 40:
- *   3 and 28, then 4 and 17;
- * - archived, 300 archived top-level projects: at most 29 and 27 a batch,
- *   103 and 103 kept live, 3 and 301 for a search matching nothing; the
- *   projects list reads the same with or without them;
+ * - projects, 200 top-level projects and 500 sub-projects: a batch, a
+ *   batch kept live to 100 rows, a search matching nothing, in one batch,
+ *   and a search matching all 700;
+ * - subProjects of 30 and archivedSubProjects of 40, in two batches each;
+ * - archived, 300 archived top-level projects, beside which the projects
+ *   list reads the same as without them;
  * - archived at its sum, 300 archived top-level projects and 1,000
  *   archived sub-projects, half entries under live parents and half beneath
- *   archived ones: at most 29 and 52 a batch, 37 and 137 kept live, 3 and
- *   1,301 for a search matching nothing, at most 15 and 37 a batch for one
- *   matching all 500 beneath archived parents.
+ *   archived ones, with a search matching nothing and one matching all 500
+ *   beneath archived parents.
  * Anyone else, every call with its pre-walk and checks:
- * - projects, grants on 200 top-level projects: at most 79 and 78 a batch,
- *   237 and 336 kept live; a search matching nothing 639 and 995; matching
- *   all, 658 and 794 first and at most 854 and 790 later, 854 and 865 kept
- *   live from the first batch's end; with the 200 sub-projects under them
- *   the person reads, the two figures' sum, 639 and 1,163 matching
- *   nothing, at most 860 and 844 a batch, 916 and 901 kept live; archived
- *   beside 3 archived projects, 648 and 772, the pre-walk of the 200 root
- *   rows;
+ * - projects, grants on 200 top-level projects: a batch, kept live, a
+ *   search matching nothing and one matching all; with the 200
+ *   sub-projects under them the person reads, the two figures' sum; and
+ *   archived beside 3 archived projects, which reads the pre-walk of the
+ *   200 root rows;
  * - projects, 200 sub-projects through grants under 67 parents shown for
- *   navigation only: at most 162 and 211 a batch, 5 and 335 matching
- *   nothing, at most 108 and 196 a batch matching all, 309 and 600 kept
- *   live; subProjects of one parent 18 and 16;
+ *   navigation only, and subProjects of one parent;
  * - archived at its sum, 200 live and 300 archived top-level projects and
  *   500 archived sub-projects, half entries under live parents and half
  *   beneath archived ones, inherited through grants on the top-level
- *   projects: at most 989 and 1,638 a batch, 1,039 and 1,613 kept live,
- *   1,539 and 2,163 matching nothing, 1,551 and 2,663 a batch matching all
- *   250 beneath archived parents, the most of any call; through grants on
- *   the sub-projects themselves, under parents seen only through them: at
- *   most 1,037 and 2,070, 1,105 and 2,079 kept live, 1,035 and 1,827
- *   matching nothing, 1,328 and 2,111 matching all 250; archivedSubProjects
- *   of one parent 16 and 14;
- * - one team sharing 50 live and 150 archived projects of 3 sub-projects:
- *   projects at most 83 and 80 a batch, 175 and 536 matching nothing, at
- *   most 229 and 401 matching all 200; archived at most 350 and 661 a
- *   batch, 425 and 736 kept live, 475 and 1,086 matching nothing;
- * - a member of 5 teams each sharing 20 sub-projects: projects at most 193
- *   and 284 a batch, 20 and 180 matching nothing, at most 139 and 250
- *   matching all 100; archived 20 and 43. */
+ *   projects, whose batch matching all 250 beneath archived parents reads
+ *   the most of any call, and through grants on the sub-projects
+ *   themselves, under parents seen only through them; archivedSubProjects
+ *   of one parent;
+ * - one team sharing 50 live and 150 archived projects of 3 sub-projects,
+ *   its projects and archived lists;
+ * - a member of 5 teams each sharing 20 sub-projects, its projects and
+ *   archived lists. */
 export const PROJECT_ADMIN: { collect: ReadCeiling } = {
   collect: { ranges: 3000, documents: 6000, bytes: 4 * MIB },
 }

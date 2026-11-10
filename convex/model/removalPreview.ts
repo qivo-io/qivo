@@ -782,29 +782,25 @@ function changeScope(change: RemovalChange): string[] {
  * the lost subtasks, a few index ranges for each of their projects and
  * the lost tasks' projects (and for a parent stored directly under a
  * top-level project, each of its sub-projects) and each team that shares
- * them, and the profiles it walks. Measured with convex-test at the
- * design size on 5 November 2026 (tests/reassignChoices.test.ts "inside
- * Convex's limits"), one figure at a time, a first batch read:
+ * them, and the profiles it walks. tests/reassignChoices.test.ts ("the
+ * Reassign picker inside Convex's limits") reads a first batch, a search's
+ * batch and the preview at the design size under Convex's transaction
+ * limits, one figure at a time, checks that each answers whole and logs
+ * what it read:
  * - a member of a 995-member team who holds two tasks leaving, in an
- *   organization of 1,000 people: 37 index ranges, 1,091 documents and
- *   219 KB, and a search for the last name, which walks every person,
- *   2,063 documents and 605 KB;
+ *   organization of 1,000 people, with a search for the last name, which
+ *   walks every person;
  * - the same with three people keeping Edit through their own grants
- *   beside the team's Viewer share: 35 ranges, 2,065 documents, 606 KB;
+ *   beside the team's Viewer share;
  * - the 995-member team's share removed, 29 members holding a task, and the
- *   team deleted: 100 ranges, 9,033 documents and 2.1 MB, the most of
- *   these, of which the preview's own reads are 8,034 documents;
+ *   team deleted, the most of these, most of it the preview's own reads;
  * - a member holding a task in each of 50 shared sub-projects, beside 150
- *   archived shares: 511 ranges, 2,501 documents, 978 KB;
- * - a grant removed from a sub-project shared with five teams: 38 ranges,
- *   193 documents, 54 KB;
- * - 800 open and 200 Done tasks in one project, one person holding 100:
- *   35 ranges, 1,036 documents, 474 KB;
+ *   archived shares;
+ * - a grant removed from a sub-project shared with five teams;
+ * - 800 open and 200 Done tasks in one project, one person holding 100;
  * - a project of 30 live and 40 archived sub-projects, the person holding
- *   one of the 3 open tasks in each live one: 143 ranges, 283 documents,
- *   112 KB;
- * - an organization of 2,000 projects, live and archived: 28 ranges, 2,083
- *   documents, 769 KB.
+ *   one of the 3 open tasks in each live one;
+ * - an organization of 2,000 projects, live and archived.
  * The app reads it once a batch and never subscribes, as it reads the
  * preview.
  */

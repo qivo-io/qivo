@@ -225,10 +225,9 @@ export type TeamsPageJson = { next_cursor: string | null; teams: TeamSummaryJson
  * NAMES_NOT_READY until the organization's name keys are all written.
  *
  * A team reads its row from the index and its count row, one lookup.
- * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
- * the call's own reads, the 50 teams take one page at limit 200, of
- * 54 ranges, 102 documents and 0.02 MB, and a search that matches no team
- * reads no count row, 4 ranges, 52 documents and 0.01 MB.
+ * convex/tests/peopleLists.test.ts ("at the design size") logs the call's
+ * own reads for the 50 teams in one page at limit 200, and for a search
+ * that matches no team, which reads no count row.
  */
 export async function teamPage(
   ctx: QueryCtx,
@@ -342,12 +341,10 @@ async function unkeyedMembersGone(ctx: QueryCtx, team: Doc<'teams'>): Promise<bo
  * read in key order could skip.
  *
  * A member reads their membership from the index and their profile by id.
- * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
- * the call's own reads, a team of 1,000 members, everyone in an
- * organization of 1,000 people, takes 5 pages at limit 200, the heaviest
- * 208 ranges, 405 documents and 0.11 MB, and a search that matches nobody
- * reads the 1,000 memberships and no profile, 7 ranges, 1,004 documents
- * and 0.20 MB.
+ * convex/tests/peopleLists.test.ts ("at the design size") logs the call's
+ * own reads for a team of 1,000 members, everyone in an organization of
+ * 1,000 people, at limit 200, and for a search that matches nobody, which
+ * reads the memberships and no profile.
  */
 export async function memberPage(
   ctx: QueryCtx,

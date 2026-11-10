@@ -171,95 +171,75 @@ import { type Grantee, grantee, navReady } from './projectNav'
  * the design size, so two seats each at that figure stay under it. A call
  * at the bound, past the design size, stays inside Convex's limits (below).
  *
- * What one call reads at the design size, one figure a case, measured in
- * convex/tests/projectNav.test.ts ("reads at the design size") under
- * Convex's transaction limits, in index ranges and documents as Convex
- * counts them:
- * - page, each batch for a person with grants on 200 top-level projects:
- *   104 ranges and 78 documents; a batch kept live to 100 rows: 337 ranges
- *   and 335 documents; the same 200 as favorites: 105 ranges and 104
- *   documents a batch;
+ * convex/tests/projectNav.test.ts ("reads at the design size") logs what
+ * one call reads at the design size, one figure a case, under Convex's
+ * transaction limits, in index ranges and documents as Convex counts them:
+ * - page, each batch for a person with grants on 200 top-level projects, a
+ *   batch kept live to 100 rows, and the same 200 as favorites;
  * - page, the first batch beside 300 archived top-level projects the
- *   person reaches, with one shown for navigation in it: 108 ranges and 79
- *   documents, the same as without the archived ones;
+ *   person reaches, with one shown for navigation in it, which reads what
+ *   it reads without the archived ones;
  * - page, the first batch for a member of 5 teams each sharing 20
- *   sub-projects, every parent shown for navigation only: 219 ranges and
- *   284 documents, the most of any batch of 25 rows, and 4 of the 128
- *   single-row reads of OWN_READS.teamReads (with 3 it refuses whole);
+ *   sub-projects, every parent shown for navigation only, the most of any
+ *   batch of 25 rows, with the single-row reads of OWN_READS.teamReads it
+ *   takes (with 3 it refuses whole);
  * - page for one of the person's teams sharing 50 projects beside its 150
- *   archived shares: 108 ranges and 80 documents a batch;
+ *   archived shares;
  * - page for 200 sub-projects read through grants under 67 parents shown
- *   for navigation only: 187 ranges and 211 documents a batch, and each
- *   parent's children at most 16 ranges and 14 documents;
+ *   for navigation only, and each parent's children;
  * - page beside 500 archived sub-projects the person holds grants on under
  *   167 live parents, which lib/access.ts shows for navigation and these
- *   reads leave out: 599 ranges and 557 documents for its one batch of 20
- *   rows, which reads every parent's live root row and finds no live
- *   sub-project under it, the most of any batch;
+ *   reads leave out, whose one batch of 20 rows reads every parent's live
+ *   root row and finds no live sub-project under it, the most of any batch;
  * - children of a project with 30 live sub-projects for a person with
- *   access on it: 55 ranges and 29 documents for the first of two batches,
- *   and 10 ranges for one who holds one of them; a project's own 3 beside
- *   40 archived sub-projects, or among 500 live or 1,000 archived
- *   sub-projects of the organization: 11 ranges and 6 documents;
- * - resolve of a sub-project of a project shared with 5 teams: 15 ranges
- *   and 14 documents.
+ *   access on it, in two batches, and for one who holds one of them; a
+ *   project's own 3 beside 40 archived sub-projects, or among 500 live or
+ *   1,000 archived sub-projects of the organization;
+ * - resolve of a sub-project of a project shared with 5 teams.
  * No case reads the archived rows it leaves out: 500 archived sub-projects
  * under archived parents and 300 favorites on archived projects beside
  * live ones change no figure.
  * All of them far inside NAMED_READ (2,000 ranges, 8,000 documents).
  *
- * What one call of the search reads at the design size, measured in
- * convex/tests/projectNavSearch.test.ts ("reads at the design size") the
- * same way, for a search that matches nothing, which reads every candidate
- * in one batch, and for one that matches every name, every batch walked,
- * with a batch kept live to 100 rows from the start and one from the first
- * batch's end. A first call reads, before its walk, every live root row of
- * the person and asks accessible of each top-level project they hold a
- * source on, and every batch reads the first row of each such project's
- * live sub-projects, two ranges each after a cursor:
- * - grants on 200 top-level projects, 32 sub-projects under them: 640
- *   ranges and 995 documents matching nothing; batches of every name 665
- *   ranges and 794 documents first and at most 866 and 790 later; kept
- *   live to 100 rows, 740 and 864 from the start and 941 and 865 from the
- *   first batch's end. Beside 300 archived top-level projects with grants,
- *   the same;
- * - the same 200 as favorites: 640 and 1,195 matching nothing, and at most
- *   1,040 ranges and 1,155 documents in the batch that passes the 200 root
- *   rows the favorites leave out, the most of any batch;
+ * convex/tests/projectNavSearch.test.ts ("reads at the design size") logs
+ * what one call of the search reads at the design size the same way, for
+ * a search that matches nothing, which reads every candidate in one batch,
+ * and for one that matches every name, every batch walked, with a batch
+ * kept live to 100 rows from the start and one from the first batch's end.
+ * A first call reads, before its walk, every live root row of the person
+ * and asks accessible of each top-level project they hold a source on, and
+ * every batch reads the first row of each such project's live
+ * sub-projects, two ranges each after a cursor. Its cases:
+ * - grants on 200 top-level projects, 32 sub-projects under them, which
+ *   read the same beside 300 archived top-level projects with grants;
+ * - the same 200 as favorites, whose batch that passes the 200 root rows
+ *   the favorites leave out reads the most of any batch;
  * - grants on 200 top-level projects and the 200 sub-projects they read
- *   under 67 of them, the sum of the two figures one search lists: 640 and
- *   1,163 matching nothing; batches 665 and 850 first and at most 866 and
- *   844 later; kept live 740 and 906, and 941 and 901;
+ *   under 67 of them, the sum of the two figures one search lists;
  * - 200 sub-projects through grants on them under 67 parents shown for
- *   navigation only, beside 500 archived ones with grants under 167
- *   archived parents: 6 ranges and 335 documents matching nothing; batches
- *   at most 99 and 162; kept live 289 and 453, and 294 and 457; the same
- *   without the archived ones;
- * - the same 200 inherited through grants on their 67 parents, beside the
- *   500 archived ones under archived parents with grants on those: 240 and
- *   502; batches at most 333 and 317; kept live 341 and 507, and 409 and
- *   502; the same without the archived ones;
+ *   navigation only, which read the same beside 500 archived ones with
+ *   grants under 167 archived parents;
+ * - the same 200 inherited through grants on their 67 parents, which read
+ *   the same beside the 500 archived ones under archived parents with
+ *   grants on those;
  * - 500 archived sub-projects with grants under 167 live parents, which
  *   lib/access.ts shows for navigation and these reads leave out, for a
- *   search that matches every parent: 601 ranges and 744 documents in one
- *   batch with no row;
- * - a member of 5 teams each sharing 20 sub-projects: 21 and 180; batches
- *   at most 154 and 141; kept live 280 and 455, and 321 and 459;
+ *   search that matches every parent, in one batch with no row;
+ * - a member of 5 teams each sharing 20 sub-projects;
  * - one team sharing 50 projects of 3 sub-projects beside its 150 archived
- *   shares: 176 and 536; batches at most 236 and 382; kept live 201 and
- *   462, and 254 and 457;
+ *   shares;
  * - 30 live sub-projects under one project with a grant beside its 40
- *   archived ones: 59 ranges and 30 documents, then 24 and 11; an everyday
- *   person's search among 500 live or 1,000 archived sub-projects of the
- *   organization: 17 and 8, the same as without them; a sub-project of a
- *   project shared with 5 teams: 29 and 23.
+ *   archived ones, in two batches; an everyday person's search among 500
+ *   live or 1,000 archived sub-projects of the organization, which reads
+ *   the same as without them; a sub-project of a project shared with 5
+ *   teams.
  * Each top-level project the person holds a source on costs a first call
- * about 3.2 ranges and 5 documents before any row is judged (its read, its
- * check and the head of its sub-projects) and a later call about 4.2
- * ranges. At PROJECT_NAV.roots after a cursor that is about 2,200 ranges,
- * with a batch's own checks about 2,500, inside Convex's 4,096 ranges and
- * 32,000 documents; it passes NAMED_READ, so such a call answers `stopped`
- * after its first row and the next goes on from there. */
+ * a few ranges and documents before any row is judged (its read, its
+ * check and the head of its sub-projects), and a later call about one
+ * range more. At PROJECT_NAV.roots after a cursor that stays inside
+ * Convex's 4,096 ranges and 32,000 documents, a batch's own checks
+ * included; it passes NAMED_READ, so such a call answers `stopped` after
+ * its first row and the next goes on from there. */
 export const PROJECT_NAV = { teams: 64, children: 4, rootRows: 1000, roots: 512 }
 
 /* --------------------------------------------------------------- the rows */
@@ -1412,29 +1392,25 @@ export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
  * archive, a move or an access change of the projects it names, never on
  * a task write.
  *
- * What one call of 100 ids reads at the design size, one figure a case,
- * measured in convex/tests/projectNavByIds.test.ts ("reads at the design
- * size") under Convex's transaction limits, in index ranges and documents
- * as Convex counts them, every answer whole with nothing in `unchecked`:
+ * convex/tests/projectNavByIds.test.ts ("reads at the design size") logs
+ * what one call of 100 ids reads at the design size, one figure a case,
+ * under Convex's transaction limits, in index ranges and documents as
+ * Convex counts them, every answer whole with nothing in `unchecked`:
  * - 100 of 200 sub-projects the person reads through grants under 67
- *   parents, answered with their 34 parents: 303 ranges and 397 documents;
+ *   parents, answered with their 34 parents;
  * - the 67 parents of those 200 sub-projects, each seen only for
- *   navigation, with 33 of the sub-projects: 415 ranges and 608 documents,
- *   the most of any case;
- * - 100 of 200 top-level projects with grants: 234 ranges and 234
- *   documents;
+ *   navigation, with 33 of the sub-projects, the most of any case;
+ * - 100 of 200 top-level projects with grants;
  * - the 100 sub-projects 5 of the person's teams share, 20 each, with
- *   their parents: 211 ranges and 270 documents;
+ *   their parents;
  * - 100 projects each shared with 5 teams, the person in 3 teams reaching
- *   each through one and the other shares from teams of 20 projects each:
- *   182 ranges and 365 documents;
+ *   each through one and the other shares from teams of 20 projects each;
  * - 50 live projects one of the person's teams shares and 50 of its 150
- *   archived shares, which it leaves out: 168 ranges and 335 documents;
+ *   archived shares, which it leaves out;
  * - 100 projects the person does not see, each with other people's child
- *   reach rows: 266 ranges and 101 documents;
+ *   reach rows;
  * - 100 of 167 live parents shown only through 500 archived sub-projects
- *   with grants, all left out: 335 ranges and 134 documents; 100 of those
- *   archived sub-projects: 101 ranges and 101 documents.
+ *   with grants, all left out, and 100 of those archived sub-projects.
  * Every case stays far inside NAMED_READ (2,000 ranges, 8,000 documents),
  * so a chunk of 100 ids answers whole at the design size. Past it a call
  * that reaches the share lists the rest apart; at PROJECT_NAV.teams teams a
@@ -1583,13 +1559,12 @@ async function byIdRow(sight: SeatSight, project: Doc<'projects'>): Promise<NavB
  * organization and the team, so a cursor of one list opens only for its
  * own. `not_ready`, `stopped` and the refusal answer as the page's do.
  *
- * At the design size, measured in convex/tests/projectNavPageScope.test.ts
- * under Convex's transaction limits: one team sharing 50 live and 150
- * archived projects, for a caller in another team, 80 ranges and 103
- * documents for the first batch and 82 and 103 for the second. The page
- * with `org_id` alone, 200 live and 300 archived top-level projects of the
- * home organization beside a guest seat: 104 ranges and 77 documents for
- * the first batch and the eighth.
+ * convex/tests/projectNavPageScope.test.ts ("reads at the design size")
+ * logs what the first two batches read under Convex's transaction limits
+ * for one team sharing 50 live and 150 archived projects, for a caller in
+ * another team, and what the page with `org_id` alone reads in its first
+ * batch and its eighth for 200 live and 300 archived top-level projects of
+ * the home organization beside a guest seat.
  */
 async function navTeamOf(
   ctx: QueryCtx,
@@ -1671,14 +1646,14 @@ export type NavHolds =
  * check, and `stopped` where NAMED_READ ends the walk, which the app reads
  * as unknown.
  *
- * At the design size, one figure a case, measured in
- * convex/tests/projectNavTargets.test.ts under Convex's transaction
- * limits: 200 live top-level projects with grants and no sub-project, so
- * `sub` walks every root, 833 ranges and 760 documents; 167 live parents
- * seen only through 500 archived sub-projects with grants, both false, 538
- * and 497; a member of 5 teams whose shares are all archived sub-projects,
- * both false, 315 and 182; sub-projects each shared with 5 teams, 19 and
- * 16. Every case answers whole inside NAMED_READ.
+ * convex/tests/projectNavTargets.test.ts ("reads at the design size")
+ * logs what it reads at the design size, one figure a case, under Convex's
+ * transaction limits: 200 live top-level projects with grants and no
+ * sub-project, so `sub` walks every root; 167 live parents seen only
+ * through 500 archived sub-projects with grants, both false; a member of 5
+ * teams whose shares are all archived sub-projects, both false; and
+ * sub-projects each shared with 5 teams. Every case answers whole inside
+ * NAMED_READ.
  */
 export async function navHoldsOf(
   ctx: QueryCtx,
@@ -1846,20 +1821,18 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * NAMED_READ ends a batch, never `next: null`, and the access_unchecked
  * refusal whole where a bound of the caller's own reads stops a check.
  *
- * At the design size, one figure a case, measured in
- * convex/tests/projectNavTargets.test.ts under Convex's transaction
- * limits: 20 writable among the 200 sub-projects a person reads under 67
- * parents, every tenth writable, so one batch walks all 200, 705 ranges and
- * 1,097 documents, the most of any case; 30 live sub-projects beside 40
- * archived ones under one project the person edits, 57 ranges and 30
- * documents, then 19 and 9; the 100 sub-projects 5 of a member's teams
- * share with Edit, 180 and 237 for the first batch; the sub-projects of 50
- * live projects a team of the person's shares beside its 150 archived
- * shares, 89 and 257; 30 sub-projects each shared with 5 teams, 162 and
- * 255; each of the three batches beside 200 top-level projects with
- * grants, every tenth with 3 sub-projects, so the person reads 62
- * sub-projects, at most 336 ranges and 333 documents, the second. Every
- * batch answers inside NAMED_READ.
+ * convex/tests/projectNavTargets.test.ts ("reads at the design size")
+ * logs what it reads at the design size, one figure a case, under Convex's
+ * transaction limits: 20 writable among the 200 sub-projects a person
+ * reads under 67 parents, every tenth writable, so one batch walks all
+ * 200, the most of any case; 30 live sub-projects beside 40 archived ones
+ * under one project the person edits, in two batches; the 100 sub-projects
+ * 5 of a member's teams share with Edit; the sub-projects of 50 live
+ * projects a team of the person's shares beside its 150 archived shares;
+ * 30 sub-projects each shared with 5 teams; and each of the three batches
+ * beside 200 top-level projects with grants, every tenth with 3
+ * sub-projects, so the person reads 62 sub-projects. Every batch answers
+ * inside NAMED_READ.
  */
 export async function navTargetsOf(
   ctx: QueryCtx,

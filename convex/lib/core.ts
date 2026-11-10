@@ -800,11 +800,9 @@ export type UsersPageJson = { next_cursor: string | null; users: ReturnType<type
  * (model/nameKeys.ts nameKeysReady).
  *
  * A page reads the readiness row, two index ranges and one profile past
- * the page. Measured in convex/tests/peopleLists.test.ts ("at the design
- * size") with the call's own reads, 1,000 people take 5 pages at
- * limit 200, the heaviest 5 ranges, 203 documents and 0.07 MB, and a search
- * that matches nobody reads all 1,000 in one page of 4 ranges, 1,002
- * documents and 0.33 MB.
+ * the page. convex/tests/peopleLists.test.ts ("at the design size") logs
+ * the call's own reads for 1,000 people at limit 200, and for a search
+ * that matches nobody, which reads the whole roster in one page.
  */
 export async function userPage(
   ctx: QueryCtx,
@@ -874,20 +872,17 @@ export type ProjectUsersPageJson = { next_cursor: string | null; users: ProjectU
  * NAMES_NOT_READY until the organization's names are keyed, and with
  * CURSOR_REFUSAL for any other cursor, both before the rule's reads.
  *
- * Measured at the design size in convex/tests/projectDetails.test.ts
- * ("reads at the design size"), a page with the rule's reads: a project 995
- * of 1,000 people reach through one team's share, at most 10 ranges and
- * 1,204 documents at limit 200 and 1,054 at 50; one 3 of 1,000 reach by
- * grants, one page that walks the roster to its end in 8 ranges and 1,006
- * documents; one with 1,000 user grants, at most 18 ranges and 1,218
- * documents at 200. The rule's own cases raise one figure each, the first
- * page at 200 reading: 1,000 people in 3 teams each, 5 of the teams
- * sharing a sub-project or its parent, 18 ranges and 1,716 documents;
- * 1,000 grants on a sub-project and 1,000 on its parent, 10 ranges and
- * 2,506 documents, the most, inside PICKERS.rule's 8,000; 100 people in 5
- * teams each, 18 ranges and about 365 documents; and a sub-project shared
- * with 5 teams under a top-level project shared with 5 others, 100 people
- * in 3 teams each, 28 ranges, the most, and 225 documents.
+ * convex/tests/projectDetails.test.ts ("reads at the design size") logs
+ * what a page reads with the rule's reads, at limit 200, for a project 995
+ * of 1,000 people reach through one team's share, one 3 of 1,000 reach by
+ * grants, whose one page walks the roster to its end, and one with 1,000
+ * user grants. The rule's own cases there raise one figure each: 1,000
+ * people in 3 teams each, 5 of the teams sharing a sub-project or its
+ * parent; 1,000 grants on a sub-project and 1,000 on its parent, which read
+ * the most documents, inside PICKERS.rule's 8,000; 100 people in 5 teams
+ * each; and a sub-project shared with 5 teams under a top-level project
+ * shared with 5 others, 100 people in 3 teams each, which read the most
+ * ranges.
  */
 export async function projectUserPage(
   ctx: QueryCtx,
@@ -2680,11 +2675,11 @@ export const UNAVAILABLE_COMPLETION: CompletionJson = {
  * completion (machine/projects.ts projectDetail), as transaction totals
  * from the first page's start. A list that finds no room left answers no
  * rows and a cursor at its start, never as complete. Tests lower it.
- * Measured in convex/tests/projectDetails.test.ts ("reads at the design
- * size"), the details at the sum, a sub-project with 1,000 user grants and
- * 5 team shares under a top-level project with 260 weekly milestones, read
- * 71 index ranges and 170 documents in all, the first pages and the rest
- * of the read, and a PATCH renaming it 82 and 178. */
+ * convex/tests/projectDetails.test.ts ("reads at the design size") logs
+ * what the details read in all at the sum, a sub-project with 1,000 user
+ * grants and 5 team shares under a top-level project with 260 weekly
+ * milestones, the first pages and the rest of the read, and what a PATCH
+ * renaming it reads. */
 export const PROJECT_DETAILS: ReadCeiling = { ranges: 512, documents: 2000, bytes: 4 * MIB }
 
 /* The single reads of a project's details besides its first pages: its

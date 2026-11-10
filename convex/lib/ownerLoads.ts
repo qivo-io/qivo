@@ -62,11 +62,11 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  *   paused tasks included with the `paused` option. That is the design
  *   size's 200 live sub-projects one person can read.
  * - `spans`: the most spans one planning.ownerLoads answer carries, its
- *   load spans and its paused spans counted together. Measured at the
- *   design size, a load span with its task and project takes about 215
- *   bytes of JSON and a paused span about 155, so an answer stays under
- *   about 1.1 MB however many owners it holds, and one owner holds at most
- *   `checks` of both.
+ *   load spans and its paused spans counted together. A span's JSON holds
+ *   its task's and project's handles and a few numbers, so an answer of
+ *   `spans` stays far inside Convex's limits however many owners it holds
+ *   (convex/tests/ownerLoads.test.ts logs a span's size and the answer's at
+ *   the design size), and one owner holds at most `checks` of both.
  * - `call`: what one call may read past the caller's own grants,
  *   memberships and team shares (lib/access.ts accessOf `shared`), alike in
  *   every call, as lib/taskWindow.ts TASK_WINDOW counts them.
@@ -98,26 +98,24 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * step of OWN_READS.steps a question reads one or two ranges, so at
  * `projects` and `checks` an owner reads about 1,600 ranges, inside
  * `call`; the prices' worst case, 2,406, is past it, and `call` then makes
- * the owner unavailable rather than failing. Measured in
- * convex/tests/ownerLoads.test.ts ("at the design size"), an owner of
- * 2,000 open tasks with ordinary titles, 500 of them planned over 200
- * sub-projects, read by a staff member who reads them all through the
- * shares of 3 teams on their top-level projects, takes 848 ranges, 2,403
- * documents and 1.1 MB; 50 owners, the other 49 with 40 planned tasks
- * each, take two calls, of 26 owners (2,007 ranges, 3,469 documents,
- * 1.7 MB) and of the other 24. With the `paused` option, as
- * planning.ownerLoads reads, the same owner with one in twelve of its 450
- * planned leaves paused takes the same 848 ranges, 2,403 documents and
- * 1.1 MB, as its paused leaves fill `checks` beside the rest, and an owner
- * with 30 planned tasks in 3 sub-projects and a paused task in each of the
- * 200 takes 578 ranges, 583 documents and 0.24 MB. Past `projects` live
- * projects named by tasks that can carry load and paused ones together,
- * past `checks` checked tasks (the load tasks the caller receives by
- * loadShown, hidden ones included for staff and a guest's or Viewer's own,
- * and the paused ones in projects the caller can see), or past `open`
- * rows, an owner is unavailable in planning.ownerLoads, their paused weeks
- * with their hours, as for any figure that depends on people's workloads
- * (the owner's choice of 1 November 2026). Tests lower these. */
+ * the owner unavailable rather than failing.
+ * convex/tests/ownerLoads.test.ts ("at the design size") logs what a call
+ * reads for an owner of 2,000 open tasks with ordinary titles, 500 of them
+ * planned over 200 sub-projects, read by a staff member who reads them all
+ * through the shares of 3 teams on their top-level projects, and for 50
+ * owners, the other 49 with 40 planned tasks each, whom `call` splits over
+ * more than one call. With the `paused` option, as planning.ownerLoads
+ * reads, it logs the same owner with one in twelve of its 450 planned
+ * leaves paused, which fill `checks` beside the rest, and an owner with 30
+ * planned tasks in 3 sub-projects and a paused task in each of the 200.
+ * Past `projects` live projects named by tasks that can carry load and
+ * paused ones together, past `checks` checked tasks (the load tasks the
+ * caller receives by loadShown, hidden ones included for staff and a
+ * guest's or Viewer's own, and the paused ones in projects the caller can
+ * see), or past `open` rows, an owner is unavailable in
+ * planning.ownerLoads, their paused weeks with their hours, as for any
+ * figure that depends on people's workloads (the owner's choice of
+ * 1 November 2026). Tests lower these. */
 export const OWNER_LOADS = {
   owners: 50,
   open: 2000,

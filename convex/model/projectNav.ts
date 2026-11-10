@@ -468,8 +468,9 @@ export async function syncLeads(
  * Convex reads a document again to patch it, and an archive or a restore
  * patches nearly every row it read, so the change reads up to twice this
  * and one row more, beside the project, its parent and the rest of the
- * mutation: about 14 MiB, under Convex's 16 MiB read limit (measured in
- * tests/projectReach.test.ts, "a tree at the row bounds"). Rows near their
+ * mutation: about 14 MiB, under Convex's 16 MiB read limit, which
+ * tests/projectReach.test.ts ("a tree past TREE_READ.bytes") checks for a
+ * tree just under the bytes. Rows near their
  * bounds (lib/limits.ts PROJECT_ROW_MAX_BYTES, about 4.9 KB a sub-project
  * at the name and description caps and about 3 KB a reach row) reach it
  * before LIMITS.projectTreeChange.max, once 2,000 entries average more
