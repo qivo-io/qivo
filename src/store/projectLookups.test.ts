@@ -15,12 +15,10 @@ import {
   NAV_UNCHECKED,
 } from './projectNavStandIn.setup'
 
-/* The store's project lookups (store/planner.ts P.project, P.heldProject,
-   P.levelOn, P.canWrite, P.canSee, P.writeNote and the lookups built on
-   them) on the real store, with the double leaving projects out of the
-   projects part (Whole unheldProjects) while the navigation stand-in
-   answers projectNav.byIds from the whole: a project the part holds
-   answers from the part and is never read by id, and one it leaves out
+/* The store's project lookups (store/planner.ts P.project, P.levelOn,
+   P.canWrite, P.canSee, P.writeNote and the lookups built on them) on the
+   real store, with the navigation stand-in answering projectNav.byIds
+   from the whole: the workspace holds no project, so every project
    answers from the project cache once an owner names it, loading until
    then and never with a right before a current answer. */
 
@@ -47,8 +45,8 @@ afterEach(() => {
 
 const NOW = '2026-09-14T08:00:00.000Z'
 
-/** The fixture's organization with a held program the caller leads and
-    unheld ones: Unheld (a sub-project with User, one with Viewer), Granted
+/** The fixture's organization with Held, a program the caller leads, and
+    others: Unheld (a sub-project with User, one with Viewer), Granted
     (a top-level grant with User), Led (the caller leads it), Hidden (no
     access) and a twin of Held's name. */
 function world() {
@@ -184,7 +182,7 @@ describe('the project lookups', () => {
     expect(P.levelOn(w.heldSub.id)).toBe('lead')
   })
 
-  it('answers a project the part leaves out from the cache once named, loading until then, and never as held', async () => {
+  it('answers a sub-project and its parent from the cache once named, loading until then', async () => {
     const w = world()
     const { P, byIds } = await start(w.snap)
     expect(P.projectState(w.edits.id)).toBe('loading')
@@ -577,7 +575,7 @@ describe('the project lookups', () => {
     const org = w.org
     const me = w.snap.profiles[0].id
     // beside the fixture's 6 top-level projects, so the organization holds
-    // 200, the design size, 199 of them left out of the projects part
+    // 200, the design size, 199 of them read only through the cache
     const tops = Array.from({ length: 194 }, (_, i) => ({
       id: crypto.randomUUID(),
       org_id: org,
