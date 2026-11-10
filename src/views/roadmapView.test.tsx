@@ -343,6 +343,41 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(choices.sort()).toEqual([board.snapshot.projects[0].id, 'two'].sort())
   })
 
+  it("lists the ceiling note's sub-projects in the sidebar's order, by name and then id", async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // One takes Two's name, so the id decides between them, and Apple's
+        // name sorts first while its id sorts last
+        snap.projects[0].name = 'Two'
+        snap.projects.push({
+          ...snap.projects[0],
+          id: 'zz-apple',
+          key: 'APL',
+          num: 4,
+          name: 'Apple',
+        })
+      },
+      { scope: 'plan' },
+    )
+    const one = board.snapshot.projects[0].id
+    // the tracks in neither the name order nor the id order
+    board.server.roadmap.edit = (name, answer) =>
+      name === 'tasks:roadmap' && (answer as RoadmapAnswer).state === 'over_ceiling'
+        ? { ...(answer as RoadmapAnswer), projects: ['two', one, 'zz-apple'] }
+        : answer
+    board.server.roadmap.force = ['over_ceiling']
+    await renderRoadmap(board)
+    await board.answer()
+    const choices = [...document.querySelectorAll<HTMLElement>('[data-roadmap-choice]')].map(
+      (el) => el.dataset.roadmapChoice,
+    )
+    // must fail for the track order, the id order and localeCompare, which
+    // keeps the two Twos in the track order
+    expect(choices).toEqual(['zz-apple', one, 'two'])
+  })
+
   it('narrows one sub-project by filters or Search, and says the read failed with Try again', async () => {
     const board = await loadBoard(network, plan, { scope: 'two' })
     const palette = vi.fn()
