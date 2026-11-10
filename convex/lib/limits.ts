@@ -330,6 +330,10 @@ export const AUTH_FULL_CHECK_VALUES = 1_000
  * answers with (lib/authValidation.ts). */
 export const AUTH_VALIDATION_MESSAGE_MAX = 2_048
 
+/** The most labels a task holds, which LIMITS.labels and
+ * LIMITS.taskLabelRefs both state. */
+const TASK_LABELS_MAX = 20
+
 export const LIMITS = {
   title: text('Task title', 255, 'a task title'),
   description: text(
@@ -539,9 +543,9 @@ export const LIMITS = {
   labels: {
     label: 'Labels per task',
     group: 'tasks',
-    max: 20,
+    max: TASK_LABELS_MAX,
     unit: 'labels',
-    refusal: 'this task already has 20 labels, the most a task can have. Remove one first.',
+    refusal: `this task already has ${TASK_LABELS_MAX} labels, the most a task can have. Remove one first.`,
     on: ALL,
   },
   // Every comment counts, archive reasons and comments posted before the cap
@@ -904,10 +908,9 @@ export const LIMITS = {
   taskLabelRefs: {
     label: 'Labels one task update adds or removes',
     group: 'machine',
-    max: 20,
+    max: TASK_LABELS_MAX,
     unit: 'labels in each list',
-    refusal:
-      'add_labels and remove_labels must each name at most 20 labels, the most a task can have. Name fewer labels.',
+    refusal: `add_labels and remove_labels must each name at most ${TASK_LABELS_MAX} labels, the most a task can have. Name fewer labels.`,
     on: MACHINE,
   },
   inboxTasks: {

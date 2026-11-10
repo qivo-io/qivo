@@ -40,6 +40,10 @@ describe('the limits registry', () => {
     expect(linksFull('QN-7')).toContain(`QN-7 already has ${LIMITS.links.max} links`)
   })
 
+  it("bounds a task update's label lists by the labels a task can hold", () => {
+    expect(LIMITS.taskLabelRefs.max).toBe(LIMITS.labels.max)
+  })
+
   it('groups digits without Intl', () => {
     expect([grouped(80), grouped(20_000), grouped(99_999.9), grouped(604_800_000)]).toEqual([
       '80',
