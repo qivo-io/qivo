@@ -28,7 +28,8 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    itself once a project is shared again. Startup's own cases are in
    startupSelection.test.tsx. Team sync, which covers the home organization
    only, asks about that organization's projects. The phone's Roadmap gives the desktop's note for
-   every scope with nothing to schedule. A project's Roadmap keeps its
+   every scope with nothing to schedule, and its task list the desktop
+   Board's for a project without sub-projects. A project's Roadmap keeps its
    timeline with the milestones of its window behind the note, and the
    phone's agenda lists the scope's milestones under it, as the Overview
    does under its own note; My view's flags sit on its rows, so it shows
@@ -438,6 +439,24 @@ describe('New sub-project in a project without one', () => {
         await reload()
       }
     })
+
+  it("says it on the phone's task list as the desktop Board does, never to create a task", async () => {
+    phone = true
+    for (const [role, offered] of [
+      ['admin', true],
+      ['user', false],
+    ] as const) {
+      await app(granted(role), '/app/testbed/board/p/3')
+      await shows('Tasks live in sub-projects.')
+      expect(document.body.textContent).toContain('No sub-projects yet')
+      expect(document.body.textContent).not.toContain('No tasks here')
+      expect(document.body.textContent).not.toContain('Create a task to get started.')
+      expect(button('New sub-project') !== undefined, role).toBe(offered)
+      // the header offers no New task beside it, as the desktop Board does not
+      expect(document.querySelector('[data-mobile-new-task]'), role).toBeNull()
+      await reload()
+    }
+  })
 })
 
 /** `snap` with a milestone `name` on `project` a week from now, inside the

@@ -165,6 +165,12 @@ function passes(
   )
 }
 
+/** Whether `view` is the Board of a top-level project whose answer names
+    no sub-project, which holds no task, since tasks live in sub-projects. */
+export function holdsNoSubProject(view: BoardView, info: ScopeInfo) {
+  return !info.mine && info.isMeta && view.selection !== null && view.selection.length === 0
+}
+
 /** The Board's group order: a project selection's in the answer's order,
     My view's top-level projects with the home organization first, then by
     organization name and project number, groups whose project loads last. */

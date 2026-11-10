@@ -36,10 +36,10 @@ import {
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
 import type { ScopeGroup } from '../store/scopeGroups'
-import { BoardFrame, BoardNote, IncompleteNote } from './board/BoardNote'
+import { BoardFrame, BoardNote, IncompleteNote, NoSubProjectsNote } from './board/BoardNote'
 import { createEstimateCache } from './board/cardEstimate'
 import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
-import { type BoardView, useBoardView } from './board/useBoardView'
+import { type BoardView, holdsNoSubProject, useBoardView } from './board/useBoardView'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
@@ -1133,16 +1133,8 @@ function KanbanBoard({
   // limits, a Board that did not load
   if (!view.shows) return <BoardNote view={view} info={info} actions={actions} variant="desktop" />
   // a top-level project whose answer names no sub-project
-  if (!mine && info.isMeta && view.selection !== null && view.selection.length === 0)
-    return (
-      <EmptyState
-        icon="layers"
-        title="No sub-projects yet"
-        hint="Tasks live in sub-projects."
-        actionLabel={P.canManageOwnProjectAccess(info.id) ? 'New sub-project' : undefined}
-        onAction={() => actions.newProject({ parent: info.id })}
-      />
-    )
+  if (holdsNoSubProject(view, info))
+    return <NoSubProjectsNote info={info} actions={actions} variant="desktop" />
   // an incomplete Board is no empty one: its note says tasks are missing
   if (empty) {
     // a kept answer with no rows, while the fresh one is on its way
