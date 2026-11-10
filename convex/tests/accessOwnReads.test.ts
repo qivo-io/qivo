@@ -805,8 +805,8 @@ describe("the finding at Convex's real limits", () => {
 
   it("answers every caller's read of the person within the limits", async () => {
     const { f, me, families, other, task } = await finding()
-    // the reads by id the app opens these projects through, where the
-    // projects part's windows read them: each meta the person reaches
+    // the reads by id the app opens these projects through, as the
+    // project cache reads them (projectNav.byIds): each meta the person reaches
     // through sub-projects shared with 3 teams, and none of another family,
     // nothing listed apart
     const metas = [...families.map((family) => family.meta), other.meta]
@@ -1148,7 +1148,7 @@ describe('projectLevelsOf past its bounds of own rows', () => {
   })
 })
 
-describe('a workspace batch of parents shown for navigation', () => {
+describe('a batch of parents shown for navigation', () => {
   it("reads a batch of parents seen only through a team's sub-project, each shared with 5 teams, with one share read a parent for navigation, inside Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
@@ -1183,7 +1183,8 @@ describe('a workspace batch of parents shown for navigation', () => {
     await t.run((ctx) =>
       ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW }),
     )
-    // the parents only, as one batch of the projects part asks them
+    // the parents only, as one projectNav.byIds call of the project cache
+    // asks them
     const got = await t.run(async (ctx) => {
       const access = accessOf(
         ctx,

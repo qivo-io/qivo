@@ -5986,7 +5986,9 @@ function recordRoadmapChange(
   over?: Over,
   keepDraft?: SendOptions<unknown>['keepDraft'],
 ): Promise<boolean> | null {
-  expireRoadmapHistory()
+  // an open batch checked the expiry before it ran, so none of its
+  // operations goes on its own past the 24 hours
+  if (!roadmapBatch) expireRoadmapHistory()
   if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
   const operation = over ? ({ ...change, expected: expectedOf(over) } as RoadmapOperation) : change
   const batch = roadmapBatch
@@ -9268,12 +9270,14 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
 
 /** Moves task `row`, which only the Roadmap's dependency answer holds, to
     the weeks `start` to `end`, for Auto-move: the same task operation a
-    shown task's move sends, in the open batch, with the row's stored dates
-    as its `expected` values, or an ordinary write where no visit records
-    it. It paints nothing, since no screen shows the task, and the
-    dependency read's next answer, which Convex delivers before the write
-    resolves, holds it. A group's dates come from its subtasks, so it
-    writes none. */
+    shown task's move sends, with the row's stored dates as its `expected`
+    values. It goes only to a recording visit's journal, in Auto-move's
+    open batch (P.batchRoadmapChanges): with no visit to record it, it
+    sends nothing and answers false, so no move goes as an ordinary write.
+    It paints nothing, since no screen
+    shows the task, and the dependency read's next answer, which Convex
+    delivers before the write resolves, holds it. A group's dates come
+    from its subtasks, so it writes none. */
 function moveDependencyTask(row: DependencyRow, start: number, end: number): Promise<boolean> {
   if (row.has_subtasks) return Promise.resolve(true)
   if (refusePausedEdit()) return Promise.resolve(false)
@@ -9285,13 +9289,8 @@ function moveDependencyTask(row: DependencyRow, start: number, end: number): Pro
   if (!Object.keys(wire).length) return Promise.resolve(true)
   const over = overOf('issues', row, Object.keys(wire))
   return (
-    recordRoadmapChange({ kind: 'task', id: row.id, patch: wire }, {}, over) ||
-    send(
-      api.issues.update,
-      { org_id: row.org_id, id: row.id, patch: wire },
-      {},
-      { over, about: { task: row.id } },
-    )
+    recordRoadmapChange({ kind: 'task', id: row.id, patch: wire }, {}, over) ??
+    Promise.resolve(false)
   )
 }
 
@@ -10773,31 +10772,43 @@ export const PLANNER = {
     }
   },
   /** Runs `change`, whose Roadmap operations go to the server as one write
-      with one layer that holds all their paints. */
-  batchRoadmapChanges: (change: () => void) => {
-    if (roadmapBatch || !roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) {
+      with one layer that holds all their paints, and answers whether the
+      server accepted it. Only a recording visit takes a batch: with none,
+      after an undo conflict, a task content write or the 24-hour expiry
+      (which this toasts), or with a task window open, it runs nothing and
+      answers null, so no operation goes as a write of its own (Auto-move,
+      its one caller, says why from P.roadmapUndo.disabled). A batch run
+      inside another joins it. */
+  batchRoadmapChanges: (change: () => void): Promise<boolean> | null => {
+    const outer = roadmapBatch
+    if (outer) {
       change()
-      return
+      return new Promise((resolve) => outer.saved.push(resolve))
     }
+    expireRoadmapHistory()
+    if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
     const batch: NonNullable<typeof roadmapBatch> = {
       operations: [],
       saved: [],
       layer: layers.open('roadmap:change', {}),
     }
     roadmapBatch = batch
+    let saved = Promise.resolve(true)
     try {
       change()
     } finally {
       roadmapBatch = null
       if (!batch.operations.length) layers.remove(batch.layer)
       else
-        void submitRoadmapChanges(batch.operations, batch.layer).then((ok) => {
+        saved = submitRoadmapChanges(batch.operations, batch.layer).then((ok) => {
           for (const answer of batch.saved) answer(ok)
+          return ok
         })
     }
+    return saved
   },
   /** Moves a task only the Roadmap's dependency answer holds, for
-      Auto-move (moveDependencyTask). */
+      Auto-move, in a recording visit's journal only (moveDependencyTask). */
   moveDependencyTask,
   undoRoadmap: (all = false) => {
     expireRoadmapHistory()

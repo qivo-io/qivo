@@ -38,12 +38,11 @@
      and task: one round.
    - The Roadmap's Auto-move sends one roadmap.change of up to 1,000
      operations, atomic, while the Roadmap visit records changes
-     (batchRoadmapChanges). Without a recording visit, after an undo
-     conflict, the 24-hour expiry, a disabled visit or with a task window
-     open, recordRoadmapChange answers null and each move goes as its own
-     issues.update, all at once, with no keep-open notice; a later stage
-     sends that fallback as roadmap.change batches or refuses Auto-move
-     without a recording visit.
+     (batchRoadmapChanges): one round, which says it moved the tasks only
+     once the server accepted it. Without a recording visit, after an undo
+     conflict, a task content write, the 24-hour expiry or with a task
+     window open, batchRoadmapChanges sends nothing, and Auto-move says to
+     leave the Roadmap and return, which starts a new visit.
    - The Roadmap's planning confirm sends the few writes of one task's
      plan together: one round.
    - Several files attached to a task, images put into a description and

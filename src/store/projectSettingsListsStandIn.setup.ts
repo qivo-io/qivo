@@ -17,7 +17,7 @@
      memberships and leads (projectSettingsStandIn.setup.ts levelIn): a
      live top-level project it sees for a reason of its own or through a
      live sub-project, never one it sees only through an archived one, as
-     the projects part leaves it out (design specification row 403); the
+     the navigation reads leave it out (design specification row 403); the
      live sub-projects it sees; an archived top-level project it sees for a
      reason of its own or through a sub-project, and an archived
      sub-project it sees;

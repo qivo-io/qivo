@@ -718,16 +718,32 @@ export async function labelsByRef(
   return [...out.values()]
 }
 
+/** Refuses a task update whose add or remove list names more than
+ * LIMITS.taskLabelRefs.max labels. MCP update_task also calls it before its
+ * mutation, as a list past Convex's 8,192 array values would fail the
+ * mutation's argument check with Convex's own error. It counts the entries
+ * sent, duplicates included, as the inbox change counts its tasks: only
+ * the lookup knows that a name, another case of it and an id are one label,
+ * and a count of distinct entries would let 8,193 copies of one name reach
+ * that argument check. */
+export function checkLabelRefs(refs: { add: readonly string[]; remove: readonly string[] }) {
+  if (Math.max(refs.add.length, refs.remove.length) > LIMITS.taskLabelRefs.max) {
+    throw rule(LIMITS.taskLabelRefs.refusal)
+  }
+}
+
 /**
  * The labels a task update adds and removes, resolved from label ids or
- * names in the organization. Refuses an unknown label and one named in both
- * lists.
+ * names in the organization. Refuses a list past LIMITS.taskLabelRefs
+ * (checkLabelRefs) before any lookup, an unknown label and one named in
+ * both lists.
  */
 export async function labelChanges(
   ctx: QueryCtx,
   orgId: string,
   refs: { add: readonly string[]; remove: readonly string[] },
 ): Promise<{ add: Doc<'labels'>[]; remove: Doc<'labels'>[] }> {
+  checkLabelRefs(refs)
   const add = await labelsByRef(ctx, orgId, refs.add)
   const remove = await labelsByRef(ctx, orgId, refs.remove)
   const both = add.find((label) => remove.some((other) => other.id === label.id))

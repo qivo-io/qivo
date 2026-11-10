@@ -1127,6 +1127,12 @@ describe('a meeting that stops fitting', () => {
         expect(note()).not.toContain("Couldn't load some of the smaller projects.")
         // the gone project stays out, and no line says the list loads
         expect(note()).not.toContain('Loading the smaller teams and projects…')
+        // must fail for the answer's order: the sidebar's, by name (the
+        // edited answer names Failing sub twice)
+        const shown = [
+          ...document.querySelectorAll<HTMLElement>('[data-sync-choice^="project:"]'),
+        ].map((c) => c.dataset.syncChoice)
+        expect([...new Set(shown)]).toEqual(['project:fail-sub', `project:${sub(board.snapshot)}`])
       } finally {
         const { PROJECT_CACHE } = await import('../store/projectCache')
         PROJECT_CACHE.chunk = 100

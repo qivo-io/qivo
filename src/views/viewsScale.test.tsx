@@ -798,6 +798,8 @@ describe('the Roadmap at the design size', () => {
       }
     })
     board.server.roadmap.partTasks = 29
+    // a recording visit, as App opens one on the Roadmap
+    board.P.roadmapContext(true, false)
     await renderRoadmap(board)
     const button = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
     expect(roadmapState()).toBe('ok')

@@ -917,7 +917,16 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
   })
 
   it('asks to narrow a top-level project past the ceiling, offering its sub-projects', async () => {
-    const board = await loadBoard(network, plan, { scope: 'plan' })
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // after One among the lanes, before it by name
+        const two = snap.projects.find((p) => p.id === 'two')
+        if (two) two.name = 'Alpha'
+      },
+      { scope: 'plan' },
+    )
     board.server.force = 'over_ceiling'
     await board.render(root)
     expect(state()).toBe('over_ceiling')
@@ -926,12 +935,13 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(document.querySelector('[data-status-count]')).toBeNull()
     expect(document.querySelector('[data-card]')).toBeNull()
     const choices = [...document.querySelectorAll<HTMLButtonElement>('[data-board-choice]')]
-    // the answer's sub-projects, in its order
+    // the answer's sub-projects in the sidebar's order, by name; must fail
+    // for the lane order
     expect(choices.map((b) => b.dataset.boardChoice)).toEqual([
-      board.snapshot.projects[0].id,
       'two',
+      board.snapshot.projects[0].id,
     ])
-    await act(async () => choices[1].click())
+    await act(async () => choices[0].click())
     expect(board.actions.setScope).toHaveBeenCalledWith('two')
   })
 

@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import { LIMITS } from '../../../convex/lib/limits'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
+import { byNameOrder } from '../../lib/pagedList'
 import type { ScopeInfo } from '../../store/planner'
 import type { RoadmapView } from './useRoadmapView'
 
@@ -30,13 +31,11 @@ function narrowing(view: RoadmapView, info: ScopeInfo, phone: boolean) {
         : 'Narrow your filters, such as Priority or the text filter, or open a project.',
     }
   if (info.isMeta) {
-    // the answer's sub-projects the project cache names, in the Roadmap's
-    // track order
+    // the answer's sub-projects the project cache names, in the sidebar's
+    // order, as the Board's and Team sync's notes list them
     return {
       hint: 'Choose a sub-project or narrow your filters.',
-      projects: view.groups
-        .flatMap((g) => (g.proj ? [g.proj] : []))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+      projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])).sort(byNameOrder),
     }
   }
   return { hint: 'Narrow your filters.' }

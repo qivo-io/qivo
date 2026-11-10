@@ -384,6 +384,13 @@ its `users`; such code must follow the cursors until they are `null`, and
 its model learns the new arguments and tool only after the client refreshes
 its tool list.
 
+Later in November 2026 `update_task` added `maxItems` 20 to `add_labels`
+and `remove_labels`, and its description says so. A list of more than 20,
+which could pass before, or end in an `internal error` result past 8,192
+entries, is now refused with the sentence in [Limits](#limits) and changes
+nothing. A client holding the older catalogue keeps working, unless it
+sends such a list.
+
 Later in November 2026 `list_inbox` began to answer one page of items at a
 time, as `{next_cursor, items}`, and took `cursor`. An `offset` other than
 `0` is refused with `offset does not apply to inbox items; pass next_cursor
@@ -746,6 +753,7 @@ the range.
 | Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
 | User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
 | Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
+| Labels one task update adds or removes | 20 labels in each list | add_labels and remove_labels must each name at most 20 labels, the most a task can have. Name fewer labels. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -2511,6 +2519,10 @@ nothing. An unknown label, or one in both lists, is refused. A task carries
 at most 20 labels. `remove_labels` applies before `add_labels`, so one call
 can swap labels on a full task, and a label past 20 is refused with `this
 task already has 20 labels, the most a task can have. Remove one first.`
+Each list names at most 20 labels, a name sent twice counted twice, and a
+longer one is refused with `add_labels and remove_labels must each name at
+most 20 labels, the most a task can have. Name fewer labels.` before any
+label is looked up.
 
 One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
