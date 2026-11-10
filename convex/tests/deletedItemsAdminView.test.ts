@@ -29,7 +29,6 @@ import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
 import { restoreBlock, sightOf } from '../model/deletedItems'
-import type { DeletedRow } from '../model/deletedItemsList'
 import {
   DELETED_PAGE,
   type DeletedPage,
@@ -37,6 +36,7 @@ import {
   type PageSpend,
   pageFor,
 } from '../model/deletedItemsPage'
+import type { DeletedRow } from '../model/deletedItemsRows'
 import {
   as,
   expectRefusal,

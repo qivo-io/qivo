@@ -461,7 +461,7 @@ function weighed(key: string | symbol, result: unknown, doc: Meter['doc']): unkn
  * wraps the database the way lib/demo.ts demoWriter does for its own
  * accounting, and passes properties that are not functions on as they are,
  * demoWriter's uncounted writer included. A step meters a mutation; the
- * Deleted items list and search meter a query (model/deletedItemsList.ts). */
+ * Deleted items list and search meter a query (model/deletedItemsRows.ts). */
 export function meterDb<C extends QueryCtx>(ctx: C, meter: Meter): C {
   const db = new Proxy(ctx.db, {
     get(target, key) {
@@ -2069,7 +2069,7 @@ export type ItemView = {
   redacted: boolean
   /** An admin's task item whose root's project they cannot read. Its row
    * keeps the item's key, path, counts, deleter and state, for Delete now,
-   * and shows no title, status or reason (model/deletedItemsList.ts
+   * and shows no title, status or reason (model/deletedItemsRows.ts
    * rowOf). */
   hidden: boolean
 }

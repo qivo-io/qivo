@@ -50,13 +50,13 @@ import type {
   DeletedRole,
   PurgeSummary,
 } from '../../convex/model/deletedItemsChoices'
-import type { DeletedRow } from '../../convex/model/deletedItemsList'
 import type {
   DeletedEntry,
   DeletedHit,
   DeletedPage,
   PageArgs,
 } from '../../convex/model/deletedItemsPage'
+import type { DeletedRow } from '../../convex/model/deletedItemsRows'
 
 /** The reads the stand-in answers, by their function names. */
 export const DELETED_READS = [
@@ -92,7 +92,7 @@ export type DeletedFixtureItem = {
   order: number
   /** the profile that deleted it, while that profile is the one stored */
   deleted_by?: string
-  /** how the seat may know it was deleted (model/deletedItemsList.ts howOf) */
+  /** how the seat may know it was deleted (model/deletedItemsRows.ts howOf) */
   how: string
   /** the projects that put a task item in a scope of some projects */
   scope: string[]

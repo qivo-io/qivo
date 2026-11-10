@@ -3,7 +3,7 @@
  * each part newest first, with the type, deleter, search and assignee
  * filters applied before the page is cut, and a sealed next_cursor that
  * continues after its last entry. The app reads it from the release after
- * v0.1.148, and it builds its rows with model/deletedItemsList.ts rowOf,
+ * v0.1.148, and it builds its rows with model/deletedItemsRows.ts rowOf,
  * the row deletedItems.item answers, so it shows nothing of an item that
  * the item's row would not show the same caller.
  *
@@ -111,7 +111,7 @@ import {
   rowOf,
   spending,
   spent,
-} from './deletedItemsList'
+} from './deletedItemsRows'
 
 type Item = Doc<'deleted_items'>
 type Task = Doc<'deleted_tasks'>
@@ -549,10 +549,10 @@ const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean
 
 /** Whether `item` passes the deleter filters for `seat`. With `someone`,
  * its deleter line says Someone, since no profile that passes the
- * reference predicate deleted it, as deletedItemsList.ts deleterOf
+ * reference predicate deleted it, as deletedItemsRows.ts deleterOf
  * decides. With `deletedBy`, the person it names deleted it while their
  * profile is the one that deleted, and with `via` it was deleted the way
- * `via` names, as the seat may know it (deletedItemsList.ts howOf) or by
+ * `via` names, as the seat may know it (deletedItemsRows.ts howOf) or by
  * that way's table for a bare table, since a row shows the kind of
  * credential to every viewer. A `table:id` the seat may not know matches
  * nothing. */
@@ -1734,7 +1734,7 @@ const notThisPath = () => badRequest('cursor must be the next_cursor of an earli
 /** The page `run` gathered: its entries with their hits, each item's row
  * once, and the cursor and notes. The rows spend `build`, checked before
  * each row and inside a redacted row's search for the task it shows
- * (deletedItemsList.ts rowOf). Once it runs out the page ends before the
+ * (deletedItemsRows.ts rowOf). Once it runs out the page ends before the
  * entry whose row it could not build, with next_cursor at the entry
  * before. When that is the page's first entry, whose row alone needs more
  * than `build`, the page goes past it with `reads`, rather than answer the

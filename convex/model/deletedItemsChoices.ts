@@ -33,7 +33,7 @@ import {
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
 import { dependentRanges, namesProfile, newMemo, orgReadOnly, seesItem } from './deletedItems'
-import { type Reads, spending, spent } from './deletedItemsList'
+import { type Reads, spending, spent } from './deletedItemsRows'
 import { type IdTie, nameKeysReady, profileIndex } from './nameKeys'
 import { type PersonRow, personRow } from './projectSettings'
 
