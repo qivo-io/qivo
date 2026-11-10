@@ -36,7 +36,7 @@ export const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-
 
 /** The everyday organization the setup part grows Northstar to: its people,
     agents included, and teams, and the teams each person it adds joins. */
-export const EVERYDAY_ORG = { people: 50, teams: 10, teamsEach: 3 }
+export const EVERYDAY_ORG = { people: 50, teams: 10, teamsEach: 3, tasksEach: 3 }
 
 /** An option or environment the benchmark cannot run with. Its message
     says why. */
@@ -126,6 +126,8 @@ export function loadOptions(argv, env) {
     phases: listOf('phases', option('phases', DEFAULT_PHASES.join(',')), PHASES),
     people: whole('people', option('people', String(EVERYDAY_ORG.people))),
     teams: whole('teams', option('teams', String(EVERYDAY_ORG.teams))),
+    // the open tasks each person setup adds is made the assignee of
+    tasksEach: whole('tasks-each', option('tasks-each', String(EVERYDAY_ORG.tasksEach)), 0),
     // organizations at everyday size: Northstar and orgs - 1 that setup
     // makes, each with --people people and --teams teams, Nora a guest there
     orgs,

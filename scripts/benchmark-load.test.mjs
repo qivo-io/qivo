@@ -30,6 +30,7 @@ import {
   PARTS,
   VIEWS,
 } from './load/options.mjs'
+import { everydayAssignments } from './load/plan.mjs'
 import {
   cpuCounters,
   cpuShare,
@@ -64,6 +65,7 @@ describe('the load benchmark options', () => {
       views: VIEWS,
       phases: DEFAULT_PHASES,
       people: EVERYDAY_ORG.people,
+      tasksEach: 3,
       orgs: 1,
       busyLoops: 8,
       busyCpus: null,
@@ -876,5 +878,45 @@ describe("the idle phase's shares", () => {
       sessions: 0,
       'notifications:beat': 0,
     })
+  })
+})
+
+describe("setup's everyday people", () => {
+  const task = (id, assignee_id, extra = {}) => ({ id, assignee_id, status: 'todo', ...extra })
+
+  it("gives each added person open tasks of the seed's other people, never Nora's", () => {
+    const tasks = [
+      task('t5', 'leo'),
+      task('t1', 'nora'),
+      task('t2', 'aisha', { status: 'done' }),
+      task('t3', 'leo', { status: 'review' }),
+      task('t4', 'leo', { has_subtasks: true }),
+      task('t6', 'leo', { parent_id: 't5' }),
+      task('t7', null),
+      task('t8', 'emil', { status: 'progress' }),
+      task('t9', 'emil', { status: 'backlog' }),
+    ]
+    expect(everydayAssignments(['p1', 'p2'], tasks, 2, 'nora')).toEqual({
+      pairs: [
+        ['t5', 'p1'],
+        ['t7', 'p1'],
+        ['t8', 'p2'],
+        ['t9', 'p2'],
+      ],
+      short: [],
+    })
+  })
+
+  it('counts what an earlier run assigned and names the people left short', () => {
+    const tasks = [task('t1', 'p1'), task('t2', 'leo'), task('t3', 'leo')]
+    // p1 holds one already, so one more; p2 gets the last; p3 none
+    expect(everydayAssignments(['p1', 'p2', 'p3'], tasks, 2, 'nora')).toEqual({
+      pairs: [
+        ['t2', 'p1'],
+        ['t3', 'p2'],
+      ],
+      short: ['p2', 'p3'],
+    })
+    expect(everydayAssignments(['p1'], tasks, 0, 'nora')).toEqual({ pairs: [], short: [] })
   })
 })

@@ -47,7 +47,12 @@
 // of Northstar's two, which are shared with every top-level project, and
 // two new ones, and each new team is shared with one sub-project, so every
 // person reads Northstar's projects and no project holds more than 3 team
-// shares, inside the design size's 5. It also plants one
+// shares, inside the design size's 5. Each new person is then made the
+// assignee of --tasks-each open tasks (3 by default) that the seed's other
+// people held, as Nora, so they hold tasks and, from each assignment's
+// "Assigned to you" message, Inbox items as an everyday person does; the
+// organization's task counts stay as they were (plan.mjs
+// everydayAssignments). It also plants one
 // session for Nora, which the replay's Nora and the writer act with. A
 // second run adds only what is missing. With --orgs N it then adds N - 1
 // organizations at everyday size beside Northstar (setupOrg): a new login
@@ -102,8 +107,9 @@
 // the floor holds and the feed answers nothing. A client makes none of a
 // boot's one-off
 // writes (identity.claimMySeats, prefs.save), which the sets list under
-// `calls`. The people setup adds own no task and hold no Inbox item, so
-// their Inbox and My view answer less than Nora's. Its phases, each with
+// `calls`. With --tasks-each 0 the people setup adds hold no task and no
+// Inbox item, so their Inbox and My view answer less than an everyday
+// person's. Its phases, each with
 // the function log's figures and /proc/stat's steal over it:
 //
 // - match: one client per recorded set as Nora herself, compared with the
@@ -185,6 +191,7 @@ import {
   withoutLeaderReads,
 } from './load/frames.mjs'
 import { loadOptions, OptionsError, VIEWS } from './load/options.mjs'
+import { everydayAssignments } from './load/plan.mjs'
 import {
   cpuCounters,
   cpuShare,
@@ -481,6 +488,10 @@ async function setup(options) {
     seeded.push({ ...person, profile_id: own.profile_id, org_id: own.org_id })
   }
   const people = [{ ...nora }, ...made, ...grown.people, ...seeded]
+  const assigned = await assignEveryday(options, asNora, org, projects, {
+    owners: people.filter((person) => ADDED.test(person.key)).map((person) => person.profile_id),
+    keep: nora.profile_id,
+  })
   mkdirSync(options.dir, { recursive: true })
   const plan = { org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }
   const orgs = [{ k: 0, org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }]
@@ -494,7 +505,7 @@ async function setup(options) {
   plan.orgs = orgs
   writeFileSync(peopleFile, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 })
   say(
-    `setup: ${held} profiles, ${teams.length} teams, ${people.length} planted sessions in ${peopleFile}` +
+    `setup: ${held} profiles, ${teams.length} teams, ${people.length} planted sessions, ${assigned} tasks assigned in ${peopleFile}` +
       (orgs.length > 1
         ? `; ${orgs.length - 1} more organizations: ${orgs
             .slice(1)
@@ -505,6 +516,51 @@ async function setup(options) {
         : ''),
   )
   return plan
+}
+
+/** The keys of the people setup adds to Northstar (p1, p2 and on), as
+    against the seed's own (leo, aisha and the rest). */
+const ADDED = /^p[0-9]+$/
+
+/** Gives each of `owners` --tasks-each open tasks of Northstar's
+    `projects` as their assignee, as Nora (everydayAssignments), so each
+    holds tasks and an Inbox item for each. Answers how many tasks it
+    assigned; says so when the projects hold too few. */
+async function assignEveryday(options, asNora, org, projects, { owners, keep }) {
+  if (options.tasksEach === 0 || owners.length === 0) return 0
+  const tasks = []
+  for (const project of projects) {
+    const answer = await retry(() =>
+      asNora.query(ref('tasks:board'), {
+        scope: { kind: 'project', org_id: org, project_id: project.id },
+        filters: BOARD_FILTERS,
+      }),
+    )
+    if (answer.state !== 'ok')
+      throw new Error(`the Board of ${project.name} answered ${answer.state}`)
+    tasks.push(...answer.rows)
+  }
+  const { pairs, short } = everydayAssignments(owners, tasks, options.tasksEach, keep)
+  await pool(pairs, 8, ([id, owner]) =>
+    retry(() =>
+      asNora.mutation(ref('issues:update'), { org_id: org, id, patch: { assignee_id: owner } }),
+    ),
+  )
+  if (short.length > 0)
+    say(
+      `setup: ${short.length} people hold fewer than ${options.tasksEach} tasks; the projects hold too few open tasks`,
+    )
+  return pairs.length
+}
+
+/** A Board read's filters that leave every task in. */
+const BOARD_FILTERS = {
+  focus: false,
+  mine: false,
+  owners: [],
+  priority: null,
+  search: '',
+  stale_before: null,
 }
 
 /** Runs `step(item)` for every item of `items`, `width` at a time.
