@@ -254,8 +254,10 @@ export function recordedSet({ view, url, browser, person, tracker, recordedAt })
 }
 
 /** Recorded set `value`, checked: its format, a person with a profile, a
-    login and an organization, and queries that each name a function and
-    hold an arguments object. Throws an Error that names what is wrong. */
+    login and an organization, queries that each name a function and hold
+    an arguments object, and the root part (workspace:root), which every
+    tab subscribes and whose answer starts a replayed leader's alerts.
+    Throws an Error that names what is wrong. */
 export function checkSet(value) {
   if (value?.format !== SET_FORMAT) throw new Error(`not a recorded set (${SET_FORMAT})`)
   const person = value.person ?? {}
@@ -269,6 +271,8 @@ export function checkSet(value) {
       throw new Error(
         `the recorded set of ${value.view} holds a query without a function or arguments`,
       )
+  if (!value.queries.some((query) => query.udfPath === 'workspace:root'))
+    throw new Error(`the recorded set of ${value.view} holds no root part (workspace:root)`)
   return value
 }
 

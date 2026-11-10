@@ -477,12 +477,14 @@ describe('the recorded set and what another person replays of it', () => {
       add(0, 1, [
         [0, 'tasks:board', { scope: 'b' }],
         [1, 'inbox:summary', {}],
+        [2, 'workspace:root', {}],
       ]),
     )
     tracker.received(
       transition(1, [
         [0, []],
         [1, { n: 1 }],
+        [2, {}],
       ]),
     )
     const set = recordedSet({
@@ -502,6 +504,7 @@ describe('the recorded set and what another person replays of it', () => {
       queries: [
         { udfPath: 'inbox:summary', args: {}, bytes: 7 },
         { udfPath: 'tasks:board', args: { scope: 'b' }, bytes: 2 },
+        { udfPath: 'workspace:root', args: {}, bytes: 2 },
       ],
       calls: {},
     })
@@ -516,6 +519,8 @@ describe('the recorded set and what another person replays of it', () => {
     ],
     [setOf('board', []), 'holds no query'],
     [setOf('board', [{ udfPath: 'a:b', args: null }]), 'without a function or arguments'],
+    // every tab subscribes the root part, whose answer starts a leader's alerts
+    [setOf('board', [{ udfPath: 'tasks:board', args: {} }]), 'holds no root part'],
   ])('refuses a set that is not whole (%#)', (set, message) => {
     expect(() => checkSet(set)).toThrow(message)
   })

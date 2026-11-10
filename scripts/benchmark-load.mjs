@@ -1128,10 +1128,8 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
     constructor(address) {
       super(address)
       sockets.add(this)
-      this.openedAt = null
       this.addEventListener('open', () => {
-        this.openedAt = Date.now()
-        client.openedAt = this.openedAt
+        client.openedAt = Date.now()
       })
       this.addEventListener('message', (event) => {
         if (typeof event.data === 'string') tracker.received(event.data)
@@ -1153,23 +1151,22 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
     logger: false,
   })
   convex.setAdminAuth(adminKey, identityOf(person))
-  const client = { tracker, convex, sockets, person, openedAt: null, alerts: 0 }
+  const client = { tracker, convex, sockets, person, openedAt: null }
   // a leader's own reads are the alert client's, which subscribes them itself
   for (const query of alerts ? withoutLeaderReads(queries) : queries)
-    convex.client.subscribe(query.udfPath, jsonToConvex(query.args))
+    convex.client.subscribe(
+      query.udfPath,
+      jsonToConvex(query.args),
+      query.componentPath ? { componentPath: query.componentPath } : undefined,
+    )
   const startAlerts = () => {
     stopAlerts = leadAlerts({
       convex,
       connection: () => tracker.connects,
       app: alerts,
       name: `qivo-notifications:load:${index}`,
-      onAlert: () => {
-        client.alerts++
-      },
     })
   }
-  // a set without the root part, which no recorded tab holds, starts them at once
-  if (alerts && !queries.some((query) => query.udfPath === 'workspace:root')) startAlerts()
   /** Closes every open socket of the client, as a network drop does. */
   client.drop = () => {
     for (const socket of sockets) {
@@ -1195,6 +1192,15 @@ const isCurrent = (client, connects) =>
   client.tracker.current &&
   (!client.lead || client.tracker.holds('inbox:feed'))
 
+/** The p50, p99 and maximum of event loop delay histogram `delay`
+    (monitorEventLoopDelay's, at 10 ms resolution) as milliseconds past
+    that resolution, to a hundredth: the lag beyond the sampler's own
+    timer. */
+function lagOf(delay) {
+  const past = (nanoseconds) => Math.max(0, Math.round((nanoseconds / 1e6 - 10) * 100) / 100)
+  return { p50: past(delay.percentile(50)), p99: past(delay.percentile(99)), max: past(delay.max) }
+}
+
 /* ----------------------------------------------------------------- worker */
 
 /** A worker process: runs its share of the clients and answers the
@@ -1207,9 +1213,6 @@ async function runWorker() {
   const clients = []
   const delay = monitorEventLoopDelay({ resolution: 10 })
   delay.enable()
-  /** Nanoseconds `value` of the delay histogram as milliseconds past its
-      10 ms resolution, to a hundredth. */
-  const lag = (value) => Math.max(0, Math.round((value / 1e6 - 10) * 100) / 100)
   let phase = null
   let change = null
   let inFlightMost = 0
@@ -1316,12 +1319,7 @@ async function runWorker() {
         return { client, udfPath, ...seen }
       }),
       in_flight_most: inFlightMost,
-      // the delay past the sampler's own 10 ms timer, in milliseconds
-      event_loop_lag_ms: {
-        p50: lag(delay.percentile(50)),
-        p99: lag(delay.percentile(99)),
-        max: lag(delay.max),
-      },
+      event_loop_lag_ms: lagOf(delay),
     }
   }
   const mark = (name) => {
@@ -1551,7 +1549,6 @@ async function replay(options) {
   // the coordinator's own event loop, which follows the log and writes
   const delay = monitorEventLoopDelay({ resolution: 10 })
   delay.enable()
-  const lagOf = (value) => Math.max(0, Math.round((value / 1e6 - 10) * 100) / 100)
   await sleep(1000)
   const phases = {}
   const notRun = {}
@@ -1605,11 +1602,7 @@ async function replay(options) {
       steal: cpuShare(cpu, cpuNow()),
       started_at: new Date(from).toISOString(),
       ended_at: new Date(to).toISOString(),
-      coordinator_event_loop_lag_ms: {
-        p50: lagOf(delay.percentile(50)),
-        p99: lagOf(delay.percentile(99)),
-        max: lagOf(delay.max),
-      },
+      coordinator_event_loop_lag_ms: lagOf(delay),
       ...extra,
     })
     if (Array.isArray(figures.changes)) attachResends(figures, options.clients)
