@@ -1108,6 +1108,14 @@ textarea {
   max-width: 100%;
   vertical-align: top;
 }
+/* The placeholder and the image that takes its place are never a
+   scroller's scroll anchor; the reach around them, which keeps its size
+   through the swap, is. WebKit, anchored on a placeholder at a scroller's
+   top edge, moved the scroller down by an image's height as each image
+   showed, so a description with images walked away from the reader. */
+.mdimgreach > * {
+  overflow-anchor: none;
+}
 /* A loading image's placeholder at the size it will be drawn, its width
    and aspect ratio set inline (components/inlineImage.tsx). */
 .mdimgbox {
