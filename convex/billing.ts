@@ -35,13 +35,13 @@ import { checkoutDeadline } from './model/orgRetention'
  * renewal shows without a Refresh. It reads the organization row, the
  * subscription, any removal, the plan and one walk of the roster
  * (lib/billableUsers.ts rosterCounts), so it runs again on any change of a
- * profile of the organization, and answers a few dozen fields. The names
- * of who counts toward the bill and who does not come from
- * billing.accountList, only while a list is open. At 1,000 people with 30
- * inactive ones and 20 guests, half of them billed at home, it read 1,032
- * documents, 26 index ranges and about 375 KB in
- * convex/tests/billingLists.test.ts ("reads at the design size"), without
- * the caller's seat check.
+ * profile of the organization, and answers a few dozen fields. The names of who
+ * counts toward the bill and who does not come from billing.accountList, only
+ * while a list is open. What it reads at the design size's people is logged by
+ * convex/tests/billingLists.test.ts ("reads at the design size"), and the
+ * closing review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "View
+ * visibility") holds its timed figures.
  */
 export const details = orgQuery({
   args: {},

@@ -236,32 +236,12 @@ async function inboxItemOf(
  * bound of lib/access.ts OWN_READS stopped refuses the whole page with
  * accessUnchecked, never a page missing an item.
  *
- * What one page reads, measured in convex/tests/machineInbox.test.ts
- * ("reads at the design size"), one figure raised at a time beside an
- * everyday reader (3 teams, 63 sub-projects):
- * - the everyday Inbox, 60 groups of 2 messages over 3 sub-projects: 176
- *   index ranges and 269 documents for a page of 50, and all 60 at limit
- *   200 in 207 ranges and 318 documents, answered in 44 KB of JSON (63 KB
- *   as MCP's text); in 5 teams, 196 ranges and 248 documents;
- * - a page of 200 over one sub-project's 450 groups (300 open and 150 Done
- *   tasks) or one project's 1,000 (800 and 200 over 3 sub-projects): at
- *   most 667 ranges and 859 documents, 107 KB (149 KB);
- * - 60 groups at the item cap, 51 messages each, at limit 200: 206 ranges,
- *   3,258 documents and 1.4 MiB read, the largest answer, 667 KB of JSON
- *   and 979 KB as MCP's text;
- * - 800 groups of a project the reader no longer sees, newer than 60
- *   visible ones: 178 ranges and 1,013 documents at 50, 208 and 1,052 at
- *   200, the hint skipping the hidden items without their tasks;
- * - an organization of 1,000 people whose 60 groups name 180 of them: 376
- *   ranges and 548 documents at 200, exactly 180 of each more than the
- *   same page naming nobody;
- * - the 200 sub-projects one person can read, 6,000 groups: 1,037 ranges
- *   and 1,208 documents at 200 and 323 and 344 at 50, with no check
- *   stopped by OWN_READS;
- * - 2,000 groups of archived tasks in one visible sub-project, newer than
- *   an everyday Inbox: a first page of no items, stopped with a cursor at
- *   2,001 ranges and 3,988 documents (1.8 MiB), one task read for each
- *   group it passes.
+ * convex/tests/machineInbox.test.ts ("reads at the design size") logs what one
+ * page reads at the design size, one figure raised at a time beside an everyday
+ * reader, and the hint skips the items of a project the reader no longer sees
+ * without reading their tasks. The closing review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Machine
+ * Inbox") holds the figures.
  */
 export async function inboxPage(
   ctx: QueryCtx,
@@ -415,12 +395,13 @@ type InboxChangeJson = {
  * the caller holds messages about it (model/messages.ts
  * refuseArchivedItems). `read` and `remove` still work there.
  *
- * With `all`, a batch of INBOX_BATCH messages on as many tasks in as many
- * sub-projects the caller reads by grant read 1,108 index ranges and 1,499
- * documents for `read` and 787 and 1,338 for `remove`, all 160 named, and
- * a reader of everyday reach reads the same in an organization of 200 live
- * top-level projects as in an everyday one (convex/tests/machineInbox.test.ts,
- * "reads at the design size").
+ * With `all`, one call changes at most one batch of INBOX_BATCH messages, and a
+ * reader of everyday reach reads the same in an organization of the design
+ * size's live top-level projects as in an everyday one
+ * (convex/tests/machineInbox.test.ts, "reads at the design size"). The closing
+ * review's report in qivo-internal
+ * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Machine
+ * Inbox") holds the figures.
  */
 async function changeInbox(
   ctx: MutationCtx,

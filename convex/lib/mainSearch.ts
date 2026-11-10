@@ -103,22 +103,12 @@ import {
  * seat that sees 32 projects runs 64 search queries; its pages there read
  * 400 to 630 documents in about 0.1 s of that time.
  *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin's
- * search cost the same as a standard user's with the same rows. Both read
- * the same ranges, documents and bytes, counted for the whole call with its
- * sign-in, and their JavaScript times differ only by run-to-run noise. A
- * seat that sees more than `projects` is searched whole and reports
- * coverage `projects`. Searched whole, 63 places over 1,890 tasks read 532
- * ranges by the backend's count (163 started by the code), 540 documents
- * and 0.28 MiB in 23 to 48 ms of JavaScript quiet and at most 74 ms busy,
- * once 535 ms in a further quiet session that had storage stalls. In an
- * organization of 10,000 open tasks, 60 places searched whole read 1,030
- * ranges (518 started), 1,022 documents and 0.51 MiB in 42 to 61 ms quiet
- * and at most 118 ms busy, once 642 ms in a further busy session. The same
- * organization with 27 places, searched project by project and complete,
- * read 292 ranges (190 started), 243 documents and 0.12 MiB in 25 to 44 ms
- * quiet and at most 74 ms busy.
+ * An organization admin's search costs the same as a standard user's with
+ * the same rows. A seat that sees more than `projects` is searched whole
+ * and reports coverage `projects`. The closing review's report in
+ * qivo-internal (evaluations/limits/closing-review-2026-11-09/closing-report.md,
+ * "Search") holds the timed figures, at everyday values and against the
+ * archive's size.
  *
  * A seat searched whole also asks its organization's project names, at
  * most `names` candidates, in one more search query outside `searches`, so
