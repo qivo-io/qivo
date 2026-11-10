@@ -3125,8 +3125,8 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     // a seat's tokens, for the cascade, an organization's deletion, the demo
-    // cleanup, the admin access report, the operator's retirement of legacy
-    // fixtures (internal/operator.ts) and the contract tests' credential
+    // cleanup, the operator's retirement of legacy fixtures
+    // (internal/operator.ts) and the contract tests' credential
     // activation and sweeps (machine/testing.ts profileCredentials)
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['token_hash'])

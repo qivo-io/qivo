@@ -340,9 +340,8 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * caps the read can take up to about 2.3 times `bytes` (U+3307, whose name
  * key is six katakana, stores 1,905 bytes for 819 JSON characters), about
  * 1.2 MiB, which the margins that count it hold: lib/mainSearch.ts
- * SEARCH_RESERVE's extra 2 MiB, the shared reads in lib/taskWindow.ts
- * TASK_WINDOW and internal/adminAccessReport.ts ROOM. Past any other bound
- * the question refuses.
+ * SEARCH_RESERVE's extra 2 MiB and the shared reads in lib/taskWindow.ts
+ * TASK_WINDOW. Past any other bound the question refuses.
  *
  * What one instance reads, at these values, in index ranges and documents
  * as Convex counts them. Rows of the person's own (grants, memberships,
