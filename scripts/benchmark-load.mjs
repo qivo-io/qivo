@@ -131,9 +131,12 @@
 //   errors: the local backend's function log stream
 //   (/api/stream_function_logs, userExecutionTime and executionTime), top
 //   level calls only, a nested call's time inside its caller's. The stream
-//   drops entries when its queue fills, so a phase whose clients made more
-//   calls than it shows says so (log_coverage), and its counts are lower
-//   bounds.
+//   drops entries when its queue fills, so each phase compares the
+//   mutations and actions its clients and the changes' writer sent with the
+//   log and counts its failed reads (report.mjs logCoverage): `complete`,
+//   `lower_bounds` where the counts are lower bounds, or `unknown` where
+//   nothing was sent to compare. A change the log holds no entry of has
+//   reruns unknown (null), not none.
 // - The calls the backend ran at once: the overlap of those log entries.
 // - Time to current, a mutation's round trip and a query's first answer
 //   from its Add (client_first_answer_ms): each client's or tab's own
@@ -206,6 +209,7 @@ import {
   firstAnswerStats,
   functionStats,
   idleShares,
+  logCoverage,
   logEntry,
   mergeCalls,
   mostAtOnce,
@@ -1382,6 +1386,8 @@ function startWorker() {
     completion (report.mjs logEntry), until stopped. */
 function followLog(options) {
   const entries = []
+  // when each read of the stream failed, so a phase can say its log may miss entries
+  const failures = []
   let stopped = false
   let pages = 0
   // ends a read still waiting at the stop
@@ -1395,9 +1401,14 @@ function followLog(options) {
     return await response.json()
   }
   const done = (async () => {
-    let cursor = (await read(0)).newCursor
+    // the stream's end when it starts, so earlier entries stay out
+    let cursor = null
     while (!stopped) {
       try {
+        if (cursor === null) {
+          cursor = (await read(0)).newCursor
+          continue
+        }
         const page = await read(cursor)
         pages++
         cursor = page.newCursor
@@ -1406,6 +1417,7 @@ function followLog(options) {
           if (entry) entries.push(entry)
         }
       } catch {
+        if (!stopped) failures.push(Date.now())
         await sleep(500)
       }
     }
@@ -1414,6 +1426,8 @@ function followLog(options) {
     entries,
     /** The entries whose call started between `from` and `to`. */
     between: (from, to) => entries.filter((entry) => entry.start >= from && entry.start < to),
+    /** How many reads of the stream failed between `from` and `to`. */
+    failuresBetween: (from, to) => failures.filter((at) => at >= from && at < to).length,
     get pages() {
       return pages
     },
@@ -1506,6 +1520,7 @@ async function replay(options) {
       await Promise.all(workers.map((worker) => worker.ask({ type: 'report' }, 'report')))
     ).map((answer) => answer.report)
     const figures = phaseFigures(log.between(from, to), (to - from) / 1000, reports, {
+      log_read_failures: log.failuresBetween(from, to),
       steal: cpuShare(cpu, cpuNow()),
       started_at: new Date(from).toISOString(),
       ended_at: new Date(to).toISOString(),
@@ -1881,7 +1896,16 @@ async function runChanges(options, plan, boardSet, workers, log) {
     })
   if (away) await restore('issues:move', { org_id: org, id: moved.id, project_id: home })
   for (const id of comments) await restore('comments:remove', { org_id: org, id })
+  // the writer's calls that succeeded, each run once at least, which the
+  // phase's log coverage counts beside the clients' own
+  const writerCalls = {}
+  for (const name of [
+    ...done.filter((change) => change.error === null).map((change) => change.fn),
+    ...restored.filter((name) => !name.includes(' failed')),
+  ])
+    writerCalls[name] = (writerCalls[name] ?? 0) + 1
   return {
+    writer_calls: writerCalls,
     tasks: {
       renamed: renamed.id,
       moved: moved.id,
@@ -1902,19 +1926,25 @@ async function runChanges(options, plan, boardSet, workers, log) {
         entries.filter((entry) => entry.kind === 'Query'),
         (until - change.at) / 1000,
       )
+      // a change the log holds no entry of is one whose reruns it may have
+      // dropped too, so its reruns are unknown rather than none
+      const missed = change.error === null && !own
       return {
         ...change,
         js_ms: own?.js_ms ?? null,
-        reran: Object.fromEntries(
-          Object.entries(reran.functions).map(([name, figures]) => [
-            name,
-            {
-              executions: figures.executions,
-              cached: figures.cached,
-              js_ms_max: figures.js_ms.max,
-            },
-          ]),
-        ),
+        log_missed: missed,
+        reran: missed
+          ? null
+          : Object.fromEntries(
+              Object.entries(reran.functions).map(([name, figures]) => [
+                name,
+                {
+                  executions: figures.executions,
+                  cached: figures.cached,
+                  js_ms_max: figures.js_ms.max,
+                },
+              ]),
+            ),
       }
     }),
   }
@@ -2049,6 +2079,9 @@ async function tabsPart(options) {
     })
   }
   const phases = {}
+  /** The mutations and actions every tab has had answered so far, by
+      function, as mergeCalls gives them. */
+  const tabCalls = () => mergeCalls(tabs.map((tab) => Object.fromEntries(tab.tracker.calls)))
   /** Runs `body` as phase `name`, with the log, steal and each tab's bytes. */
   const timed = async (name, body) => {
     say(`phase ${name}`)
@@ -2058,6 +2091,7 @@ async function tabsPart(options) {
       tab.answers = new Map()
       tab.perChange = new Map()
     }
+    const callsBefore = tabCalls()
     const cpu = cpuNow()
     const from = Date.now()
     let extra
@@ -2071,11 +2105,22 @@ async function tabsPart(options) {
     const to = Date.now()
     const seconds = (to - from) / 1000
     const stats = functionStats(log.between(from, to), seconds)
+    // the calls the tabs had answered in this phase alone
+    const calls = Object.fromEntries(
+      Object.entries(tabCalls()).map(([fn, done]) => [
+        fn,
+        { calls: done.calls - (callsBefore[fn]?.calls ?? 0) },
+      ]),
+    )
     const figures = {
       tabs: tabs.length,
       seconds: Math.round(seconds * 10) / 10,
       ...stats,
       over_line: overLine(stats),
+      log_coverage: logCoverage(stats, calls, {
+        writerCalls: extra.writer_calls,
+        readFailures: log.failuresBetween(from, to),
+      }),
       backend_at_once: mostAtOnce(log.between(from, to).filter((entry) => !entry.nested)),
       steal: cpuShare(cpu, cpuNow()),
       per_tab: tabs.map((tab) => ({
@@ -2224,7 +2269,7 @@ async function tabsPart(options) {
     },
     sources: {
       functions:
-        "The local backend's function log stream: per top-level call, JavaScript (userExecutionTime) and total time.",
+        "The local backend's function log stream: per top-level call, JavaScript (userExecutionTime) and total time. log_coverage compares the mutations and actions the tabs and the changes' writer sent with the log: complete, lower_bounds or unknown.",
       bytes:
         "Each tab's received WebSocket frames from Playwright, pings included: an answer's bytes are its value's JSON length, a tab's bytes every frame's UTF-8 length.",
       time_to_current:

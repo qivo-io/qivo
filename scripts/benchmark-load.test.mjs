@@ -49,6 +49,7 @@ import {
   functionStats,
   hostedModel,
   idleShares,
+  logCoverage,
   logEntry,
   mergeCalls,
   mergeCounts,
@@ -1299,10 +1300,43 @@ describe("a phase's figures", () => {
       backend_at_once: 2,
       answers: { 'tasks:board': { updates: 4, bytes: 400 } },
       over_line: [{ fn: 'issues:update', js_ms_max: 600 }],
-      log_coverage: [{ fn: 'issues:update', client_calls: 4, logged: 2 }],
+      log_coverage: {
+        state: 'lower_bounds',
+        compared: 1,
+        missed: [{ fn: 'issues:update', calls: 4, logged: 2 }],
+        read_failures: 0,
+      },
       steal: null,
     })
     expect(figures.client_calls['issues:update']).toMatchObject({ calls: 4, failed: 2, logged: 2 })
+  })
+
+  it("compares the clients' and the writer's calls with the log, and says unknown when nothing was sent", () => {
+    const stats = functionStats(
+      [entry('issues:update', 0, 20), entry('notifications:beat', 1, 5)],
+      2,
+    )
+    const beat = { 'notifications:beat': { calls: 1, failed: 0, ms: [5] } }
+    expect(logCoverage(stats, beat, { writerCalls: { 'issues:update': 1 } })).toEqual({
+      state: 'complete',
+      compared: 2,
+      missed: [],
+      read_failures: 0,
+    })
+    // the writer's second rename is missing from the log
+    expect(logCoverage(stats, beat, { writerCalls: { 'issues:update': 2 } })).toMatchObject({
+      state: 'lower_bounds',
+      missed: [{ fn: 'issues:update', calls: 2, logged: 1 }],
+    })
+    // a failed read of the log may have lost entries
+    expect(logCoverage(stats, beat, { readFailures: 1 }).state).toBe('lower_bounds')
+    // clients that lead no alerts and no writer: nothing to compare, not complete
+    expect(logCoverage(functionStats([], 60), {})).toEqual({
+      state: 'unknown',
+      compared: 0,
+      missed: [],
+      read_failures: 0,
+    })
   })
 
   it('merges counts and calls by name', () => {
@@ -1353,18 +1387,24 @@ describe("a phase's figures", () => {
   })
 
   it('fires the pacing trigger on the modelled hosted load, a call over the line or a slow reconnect, never on a local overload', () => {
+    const whole = { log_coverage: { state: 'complete' } }
     const quiet = {
-      startup: { closes: {}, over_line: [], asked_at_once: 140 },
-      reconnect: { closes: {}, slow_clients: 0, asked_at_once: 139 },
+      startup: { ...whole, closes: {}, over_line: [], asked_at_once: 140 },
+      reconnect: { ...whole, closes: {}, slow_clients: 0, asked_at_once: 139 },
     }
     expect(pacingTrigger(quiet)).toMatchObject({ fires: false, fires_outside_noisy_phases: false })
     const noisy = {
       ...quiet,
-      startup: { closes: {}, noisy: true, over_line: [{ fn: 'tasks:board', js_ms_max: 700 }] },
+      startup: {
+        ...whole,
+        closes: {},
+        noisy: true,
+        over_line: [{ fn: 'tasks:board', js_ms_max: 700 }],
+      },
     }
     expect(pacingTrigger(noisy)).toMatchObject({ fires: true, fires_outside_noisy_phases: false })
     // a saturated local backend's closes are the test bed's, and fire nothing
-    expect(pacingTrigger({ ...quiet, idle: { closes: { 1013: 4 } } })).toMatchObject({
+    expect(pacingTrigger({ ...quiet, idle: { ...whole, closes: { 1013: 4 } } })).toMatchObject({
       test_bed_saturated: [{ phase: 'idle', overload_closes: 4 }],
       fires: false,
       fires_outside_noisy_phases: false,
@@ -1380,6 +1420,16 @@ describe("a phase's figures", () => {
     expect(
       pacingTrigger({ ...quiet, startup: { ...quiet.startup, asked_at_once: 256 } }).fires,
     ).toBe(false)
+    // a log that may have missed calls cannot show that none passed the line
+    const lossy = { ...quiet, idle: { log_coverage: { state: 'lower_bounds' }, closes: {} } }
+    expect(pacingTrigger(lossy)).toMatchObject({
+      log_incomplete: ['idle'],
+      fires: null,
+      fires_outside_noisy_phases: null,
+    })
+    expect(pacingTrigger({ ...lossy, reconnect: { ...whole, slow_clients: 1 } }).fires).toBe(true)
+    // no functions at all, as from an empty log, is unknown, not quiet
+    expect(pacingTrigger({ idle: { log_coverage: { state: 'unknown' } } }).fires).toBeNull()
   })
 
   it('models the queries a phase ran at once on average from its executed queries', () => {

@@ -268,7 +268,7 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
     rung,
     sources: {
       functions:
-        "The local backend's function log stream (/api/stream_function_logs): executions, cache answers, failures and their errors, JavaScript time (userExecutionTime) and total time (executionTime) per top-level call. The stream drops entries when its queue fills, so a phase that says so in log_coverage has counts that are lower bounds, and its clients' own times stand beside them.",
+        "The local backend's function log stream (/api/stream_function_logs): executions, cache answers, failures and their errors, JavaScript time (userExecutionTime) and total time (executionTime) per top-level call. The stream drops entries when its queue fills, so log_coverage compares the mutations and actions the clients and the changes' writer sent with the log and counts its failed reads: a phase whose coverage is lower_bounds has counts that are lower bounds, one whose coverage is unknown had nothing to compare, and its clients' own times stand beside them. Queries are not compared, since the backend answers a subscription from its cache with no log entry.",
       client_ms:
         "Each client's own clocks: a mutation's time from its frame to its response, a query's time from its Add to its first answer (client_first_answer_ms), and time to current, from the phase's start or the close and from the socket's open.",
       bytes:
@@ -309,9 +309,50 @@ export function watchedPerMinute(watched, seconds) {
   return out
 }
 
-/** One phase's figures: the log's per function statistics, the backend's
-    calls at once, the workers' bytes, calls, closes, calls in flight and
-    event loop lag, and `extra`. */
+/**
+ * How far the function log covers a phase whose statistics are `stats`
+ * (functionStats'): each mutation and action the clients sent (`calls`,
+ * mergeCalls') and the changes' writer sent and saw succeed
+ * (`writerCalls`, a count by function), against the executions the log
+ * holds of it, since every such call runs once at least. `state` is
+ * `complete` when the log holds them all and no read of it failed
+ * (`readFailures`), `lower_bounds` when it holds fewer of some (`missed`)
+ * or a read failed, so the phase's counts are lower bounds, and `unknown`
+ * when nothing was sent to compare, as in a phase whose clients lead no
+ * alerts. Queries are not compared: the backend answers a subscription
+ * from its cache with no log entry, so fewer entries than answers is no
+ * proof of a dropped one.
+ */
+export function logCoverage(stats, calls, { writerCalls = {}, readFailures = 0 } = {}) {
+  const sent = {}
+  for (const [name, done] of Object.entries(calls)) sent[name] = (sent[name] ?? 0) + done.calls
+  for (const [name, count] of Object.entries(writerCalls)) sent[name] = (sent[name] ?? 0) + count
+  const missed = Object.entries(sent)
+    .map(([name, count]) => ({
+      fn: name,
+      calls: count,
+      logged: stats.functions[name]?.executions ?? 0,
+    }))
+    .filter((row) => row.logged < row.calls)
+  const compared = Object.keys(sent).length
+  return {
+    state:
+      missed.length > 0 || readFailures > 0
+        ? 'lower_bounds'
+        : compared > 0
+          ? 'complete'
+          : 'unknown',
+    compared,
+    missed,
+    read_failures: readFailures,
+  }
+}
+
+/** One phase's figures: the log's per function statistics and its
+    coverage (logCoverage, with the writer's calls and the log's failed
+    reads from `extra.writer_calls` and `extra.log_read_failures`), the
+    backend's calls at once, the workers' bytes, calls, closes, calls in
+    flight and event loop lag, and `extra`. */
 export function phaseFigures(entries, seconds, reports, extra) {
   const stats = functionStats(entries, seconds)
   const calls = mergeCalls(reports.map((report) => report.calls))
@@ -338,9 +379,10 @@ export function phaseFigures(entries, seconds, reports, extra) {
         },
       ]),
     ),
-    log_coverage: Object.entries(calls)
-      .filter(([name, done]) => logged(name) < done.calls)
-      .map(([name, done]) => ({ fn: name, client_calls: done.calls, logged: logged(name) })),
+    log_coverage: logCoverage(stats, calls, {
+      writerCalls: extra.writer_calls,
+      readFailures: extra.log_read_failures ?? 0,
+    }),
     bytes_per_client: spread(perClient.map((client) => client.bytes)),
     bytes_total: perClient.reduce((all, client) => all + client.bytes, 0),
     answers: mergeCounts(reports.map((report) => report.answers)),
@@ -462,7 +504,9 @@ export function hostedModel(phases) {
  * ten times the lone client's, each with what showed it. The local
  * backend's overload closes (1013) are the test bed's saturation, listed
  * by phase under `test_bed_saturated`, and fire nothing, since they say
- * nothing of hosted Convex's limit.
+ * nothing of hosted Convex's limit. Where a phase's log coverage is not
+ * `complete` (`log_incomplete`), a trigger that did not fire answers null,
+ * unknown, since the calls the log missed may have passed the line.
  */
 export function pacingTrigger(phases) {
   const saturated = Object.entries(phases).filter(
@@ -475,6 +519,11 @@ export function pacingTrigger(phases) {
   const slow = phases.reconnect?.slow_clients ?? null
   const model = hostedModel(phases)
   const past = model.past_slots.length > 0
+  // a log that may have missed calls cannot show that none passed the line
+  const incomplete = Object.entries(phases)
+    .filter(([, figures]) => figures.log_coverage?.state !== 'complete')
+    .map(([name]) => name)
+  const unless = (fires) => (fires ? true : incomplete.length > 0 ? null : false)
   return {
     line_ms: JS_LINE_MS,
     hosted_query_slots: HOSTED_QUERY_SLOTS,
@@ -486,8 +535,11 @@ export function pacingTrigger(phases) {
       phase: name,
       overload_closes: figures.closes['1013'],
     })),
-    fires: past || over.length > 0 || (slow ?? 0) > 0,
-    fires_outside_noisy_phases: past || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
+    log_incomplete: incomplete,
+    fires: unless(past || over.length > 0 || (slow ?? 0) > 0),
+    fires_outside_noisy_phases: unless(
+      past || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
+    ),
   }
 }
 
