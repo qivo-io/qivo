@@ -16,8 +16,8 @@
    (report) whether the root holds a current answer. Only then is the
    workspace complete; otherwise the store keeps what it shows, and
    nothing a transition brought is dropped, since the next complete one
-   holds it. Design specification row 473 holds the budgets for the
-   queries a tab holds and for its idle work.
+   holds it. Design specification row 473 records the budgets for the
+   queries a tab subscribes and for its idle work.
 
    - A seat that goes leaves with the root part's answer, quietly. When the
      last seats go because their organization is being deleted, the root

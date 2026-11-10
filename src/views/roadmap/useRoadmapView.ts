@@ -5,8 +5,10 @@
    Auto-move's inputs from its dependency answer (roadmapDependencies). The
    workspace holds no task, so every row comes from the answer. The
    Board's view (views/board/useBoardView.ts) is the pattern. Design
-   specification row 473 holds the budget for what a Roadmap retains in
-   the browser and for the work of one change.
+   specification row 473 holds the budgets for what a Roadmap retains in
+   the browser and for the browser's work on one change. The over_budget
+   states below come from the server's read budgets instead
+   (convex/lib/roadmap.ts ROADMAP, DEPENDENCIES).
 
    - The store owns both reads (P.watchRoadmap, P.watchRoadmapDependencies).
      The Roadmap registers its arguments from an effect, or none while its
