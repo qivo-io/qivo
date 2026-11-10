@@ -746,6 +746,39 @@ describe('archiving seeded tasks', () => {
 })
 
 describe('a rerun of board-scale-seed', () => {
+  it('finds the active tasks it seeded by their description rows, so it adds none and archives and posts on them', async () => {
+    fake.people = [
+      { id: 'ana', name: 'Ana', auth_user_id: 'ana-login', org_id: 'org', org_role: 'user' },
+    ]
+    // tasks 0 and 1 of an earlier run, their text only in their description
+    // rows, as the server stores every task's
+    const tasks = [0, 1].map((n) => ({
+      ...seededTask(n, 'org', 'sub', 'ana'),
+      id: `task${n}`,
+      parent_id: null,
+    }))
+    fake.issues = tasks.map(({ description: _, ...row }) => row)
+    fake.texts = tasks.map(({ id, description }) => ({ issue_id: id, org_id: 'org', description }))
+    fake.comments = new Set()
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '2', '--archived', '1', '--inbox', '1'], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      fake.people = []
+      fake.issues = []
+      fake.texts = []
+    }
+    expect(
+      fake.calls.map(([name, fields, as]) => [name, fields.issue_id ?? fields.id, as]),
+    ).toEqual([
+      ['issues:archive', 'task0', 'nora-login'],
+      ['comments:create', 'task1', 'ana-login'],
+    ])
+  })
+
   it('finishes a partial family under the parent it made, with the existing task', async () => {
     // tasks 0 to 29 are all there but family 25: its first task alone
     const seeded = (n, more = {}) => ({
