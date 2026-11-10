@@ -1124,7 +1124,7 @@ describe('Archived projects', () => {
     )
   })
 
-  it('stacks a hit beneath an archived project over its project’s Restore on a phone, and leaves an entry’s row alone', async () => {
+  it('puts the text of every archived row on a line of its own over its buttons on a phone', async () => {
     // the phone rules of styles/mobile-settings.css, which the page reads
     // inside the settings page's scroller
     const style = document.createElement('style')
@@ -1150,12 +1150,16 @@ describe('Archived projects', () => {
     await type(find('[data-archived-projects-search]'), 'old')
     await rest()
     const line = (id: string) => find(`[data-archived-project="${id}"] > div:first-child`)
-    expect(phone(line('old-api'), 'flex-direction')).toBe('column')
-    // one line as wide as the row, so the name keeps to it
-    expect(phone(line('old-api'), 'flex-wrap')).toBe('nowrap')
+    // a hit beneath an archived project and a top-level entry alike: the
+    // text takes the whole line and the buttons wrap below it
+    for (const id of ['old-api', 'old']) {
+      expect(phone(line(id), 'flex-wrap'), id).toBe('wrap')
+      const textColumn = line(id).firstElementChild
+      expect(textColumn && phone(textColumn, 'flex-basis'), id).toBe('100%')
+    }
+    expect(has('[data-archived-project="old"] [data-restore-project="old"]')).toBe(true)
+    // the project's Restore wraps its label, which names the project
     expect(phone(find('[data-restore-parent="old-api"]'), 'white-space')).toBe('normal')
-    // an entry keeps its Restore and Delete beside its name
-    expect(phone(line('old'), 'flex-direction')).toBeUndefined()
   })
 
   it('lists the home organization once the chosen one’s seat goes while it shows, and keeps a typed deletion reason to copy', async () => {

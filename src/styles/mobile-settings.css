@@ -353,18 +353,15 @@
   .settings-content-scroll [data-fresh-key] {
     flex-basis: 100%;
   }
+  /* an archived project's row puts its text on a line of its own, with its
+     Restore and Delete, or its project's Restore, whose label names the
+     project, wrapping below, since beside them the text keeps a few
+     characters */
   .settings-content-scroll [data-archived-project] > div:first-child {
     flex-wrap: wrap;
   }
-  /* a search hit beneath an archived project puts its text over its
-     project's Restore, whose label names the project and would leave the
-     text a few characters beside it. One line, since a wrapping column's
-     line is as wide as its widest text and would let the name run past
-     the row. */
-  .settings-content-scroll [data-archived-under] > div:first-child {
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
+  .settings-content-scroll [data-archived-project] > div:first-child > div:first-child {
+    flex-basis: 100%;
   }
   .settings-content-scroll [data-restore-parent] {
     height: auto;
