@@ -40,7 +40,9 @@
      partial span come from its facts (factsOf), which P.isDone and the
      delay rules read before they walk subtasks.
 
-   What the Board holds, all of it (store/boardHolds.test.ts pins it):
+   What the Board holds, all of it (store/boardHolds.test.ts pins it;
+   design specification row 473 holds the budget for the total with the
+   kept pages):
    - One answer per slot (views/board/useBoardView.ts BOARD_SLOTS), of at
      most BOARD.ceiling cards and BOARD.context groups and shown parents
      together (convex/lib/board.ts), 1,000 and 2,000. A variant that mounts

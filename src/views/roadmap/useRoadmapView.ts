@@ -4,7 +4,9 @@
    filter row and the window (convex/tasks.ts roadmap), and the arrows and
    Auto-move's inputs from its dependency answer (roadmapDependencies). The
    workspace holds no task, so every row comes from the answer. The
-   Board's view (views/board/useBoardView.ts) is the pattern.
+   Board's view (views/board/useBoardView.ts) is the pattern. Design
+   specification row 473 holds the budget for what a Roadmap retains in
+   the browser and for the work of one change.
 
    - The store owns both reads (P.watchRoadmap, P.watchRoadmapDependencies).
      The Roadmap registers its arguments from an effect, or none while its
