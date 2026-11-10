@@ -171,8 +171,8 @@
 // local backend's query concurrency is not hosted Convex's, so a close
 // there is judged against the modelled hosted limit, not taken as one.
 import { fork, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpus } from 'node:os'
 import { join, resolve } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
@@ -185,26 +185,38 @@ import {
   checkSet,
   compareSets,
   FrameTracker,
-  personQueries,
   recordedSet,
   subscriptionsByOrganization,
   withoutLeaderReads,
 } from './load/frames.mjs'
-import { loadOptions, OptionsError, VIEWS } from './load/options.mjs'
-import { everydayAssignments } from './load/plan.mjs'
+import { loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
 import {
+  clientSpecs,
+  everydayAssignments,
+  findSeat,
+  orgsOf,
+  stableId,
+  viewUrls,
+} from './load/plan.mjs'
+import {
+  attachResends,
   cpuCounters,
   cpuShare,
   firstAnswerStats,
   functionStats,
   idleShares,
-  JS_LINE_MS,
   logEntry,
+  mergeCalls,
   mostAtOnce,
   overLine,
+  pacingTrigger,
   perSessionMinute,
+  phaseFigures,
   rungReport,
   spread,
+  tabResends,
+  tabsIdlePerMinute,
+  watchedPerMinute,
 } from './load/report.mjs'
 
 const ref = makeFunctionReference
@@ -245,13 +257,6 @@ const LAST = [
   'Moberg',
 ]
 const COLORS = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2']
-
-/** A lowercase UUID made from `text`, so a rerun of setup names the same
-    rows and adds only what is missing. */
-function stableId(text) {
-  const hex = createHash('sha256').update(`qivo-load:${text}`).digest('hex')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
-}
 
 /** The identity a planted login presents through the admin key: the login
     as subject and its Better Auth session as sessionId, which the session
@@ -454,7 +459,7 @@ async function setup(options) {
     asAdmin: asNora,
     org,
     count: Math.max(0, options.people - held),
-    from: made.length,
+    from: made.filter((person) => ADDED.test(person.key)).length,
     baseTeams: seat.team_ids,
     addedTeams: added,
     idOf: (i) => stableId(`person:${i}`),
@@ -566,7 +571,7 @@ const BOARD_FILTERS = {
 /** Runs `step(item)` for every item of `items`, `width` at a time.
     Answers the results in the items' order. */
 async function pool(items, width, step) {
-  const out = new Array(items.length)
+  const out = Array.from({ length: items.length })
   let next = 0
   await Promise.all(
     Array.from({ length: Math.min(width, items.length) }, async () => {
@@ -842,40 +847,6 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
   }
 }
 
-/** The signed-in login's seat in organization `which` (its slug, or a test
-    of its row) from the root part's answer: the profile, its organization
-    with its slug and the teams the profile is in, found by shape so a
-    change to the answer's layout fails here and not later. */
-function findSeat(root, which) {
-  const matches = typeof which === 'function' ? which : (row) => row.slug === which
-  const orgs = []
-  const profiles = []
-  const memberships = []
-  const walk = (value) => {
-    if (Array.isArray(value)) return value.forEach(walk)
-    if (value === null || typeof value !== 'object') return
-    if (typeof value.slug === 'string' && typeof value.id === 'string') orgs.push(value)
-    if (typeof value.org_id === 'string' && typeof value.org_role === 'string') profiles.push(value)
-    if (typeof value.team_id === 'string' && typeof value.profile_id === 'string')
-      memberships.push(value)
-    Object.values(value).forEach(walk)
-  }
-  walk(root)
-  const org = orgs.find(matches)
-  const profile = org && profiles.find((row) => row.org_id === org.id)
-  if (!profile) return null
-  return {
-    org_id: org.id,
-    slug: org.slug,
-    profile_id: profile.id,
-    team_ids: [
-      ...new Set(
-        memberships.filter((row) => row.profile_id === profile.id).map((row) => row.team_id),
-      ),
-    ],
-  }
-}
-
 /** people.json, which setup writes. */
 function readPlan(options) {
   const file = join(options.dir, 'people.json')
@@ -936,23 +907,6 @@ async function signedIn(options) {
   }
 }
 
-/** The addresses of the recorded views, from the projects setup listed.
-    The Board is Luma Sensor's Firmware sub-project, or the whole Luma
-    Sensor project with --board-top. */
-function viewUrls(plan, options) {
-  const sensor = plan.projects.find((project) => project.name === 'Luma Sensor') ?? plan.projects[0]
-  const board = sensor.children.find((child) => child.name === 'Firmware') ?? sensor.children[0]
-  const base = `/app/${plan.org_slug}`
-  return {
-    board: `${base}/board/p/${options?.boardTop ? sensor.num : board.num}`,
-    overview: `${base}/overview/p/${sensor.num}`,
-    roadmap: `${base}/roadmap/p/${sensor.num}`,
-    sync: `${base}/sync/p/${sensor.num}`,
-    inbox: `${base}/inbox`,
-    mine: `${base}/board/mine`,
-  }
-}
-
 /** A tracker fed by every backend socket `page` opens from now on, with
     `onAnswer` hearing each answer. The tracker's `openedAt` is when the
     page made its newest backend socket. */
@@ -1005,10 +959,6 @@ async function record(options) {
   return summaries
 }
 
-/** The organizations of people.json: Northstar first, then those setup
-    added with --orgs. */
-const orgsOf = (plan) => plan.orgs ?? [{ k: 0, ...plan }]
-
 /** The folder of organization `planOrg`'s recorded sets. */
 const setsDir = (options, planOrg) =>
   planOrg.k === 0 ? join(options.dir, 'sets') : join(options.dir, 'sets', planOrg.org_slug)
@@ -1017,7 +967,7 @@ const setsDir = (options, planOrg) =>
     there (people[0] of its part of people.json). */
 async function recordOrg(options, context, planOrg, notifications) {
   const recorder = planOrg.people[0]
-  const urls = viewUrls(planOrg, options)
+  const urls = viewUrls(planOrg, options.boardTop)
   const dir = setsDir(options, planOrg)
   mkdirSync(dir, { recursive: true })
   const summaries = []
@@ -1427,59 +1377,6 @@ function cpuNow() {
 
 /* ----------------------------------------------------------------- replay */
 
-/** The client specs of a replay: client i acts as one person and
-    subscribes one recorded set with that person's ids. With one
-    organization, person i of people.json takes view i modulo the views.
-    With --orgs, the clients are dealt to the organizations in turn; in
-    each, the first is Nora's seat there, on its Board as recorded there
-    (her one login holds a tab in each organization, item 9), and the
-    others are its people, each on Northstar's set of its view with the
-    organization's mirrored ids swapped in and Nora's other seats' reads
-    left out. One login leads its desktop alerts once (one browser
-    profile), so only Nora's Northstar tab leads among hers; a tab that
-    does not lead holds no leader reads. */
-function clientSpecs(options, plan, orgSets) {
-  const orgs = orgsOf(plan).slice(0, options.orgs)
-  const northstar = orgSets[0]
-  const viewSet = (sets, view) => sets.find((set) => set.view === view)
-  const bytesOf = (set) => set.queries.reduce((all, query) => all + (query.bytes ?? 0), 0)
-  const hasFeed = (set) => set.queries.some((query) => query.udfPath === 'inbox:feed')
-  return Array.from({ length: options.clients }, (_, index) => {
-    const k = index % orgs.length
-    const planOrg = orgs[k]
-    const j = Math.floor(index / orgs.length)
-    const person = planOrg.people[j]
-    if (!person)
-      throw new Error(
-        `${planOrg.org_slug} holds ${planOrg.people.length} planted sessions, fewer than its share of --clients`,
-      )
-    let set
-    let queries
-    if (orgs.length === 1) {
-      set = northstar[index % northstar.length]
-      queries = personQueries(set, person, { ownOrg: index !== 0 })
-    } else if (j === 0) {
-      set = viewSet(orgSets[k], 'board') ?? orgSets[k][0]
-      queries = set.queries
-    } else {
-      set = northstar[j % northstar.length]
-      queries = personQueries(set, person, { more: planOrg.mirror ?? {}, ownOrg: true })
-    }
-    // Nora's tabs beside her Northstar tab, in one browser profile, do not lead
-    const lead = hasFeed(set) && !(orgs.length > 1 && j === 0 && k > 0)
-    return {
-      index,
-      org: planOrg.org_slug,
-      view: set.view,
-      person,
-      queries: lead ? queries : withoutLeaderReads(queries),
-      lead,
-      watch: j === 0 ? `${person.key}` : null,
-      recorded_answer_bytes: bytesOf(set),
-    }
-  })
-}
-
 /** The busy loops of the busy phase: `count` processes that spin, each
     pinned to `cpus` (taskset) when given. Answers a stop. */
 function busyLoops(count, cpus) {
@@ -1627,8 +1524,6 @@ async function replay(options) {
         }),
       }
     })
-    if (!options.phases.includes('startup'))
-      notRun.startup_note = 'startup runs to start the clients'
     const changes = () => runChanges(options, plan, byView.get('board'), workers, log)
     for (const name of options.phases) {
       if (name === 'match' || name === 'startup') continue
@@ -1653,9 +1548,9 @@ async function replay(options) {
           return { seconds: options.idleSeconds }
         })
       else if (name === 'reconnect') {
-        if (options.hiddenTab) {
+        if (!options.noHiddenTab) {
           try {
-            hidden = await hiddenTab(options, plan)
+            hidden = await hiddenTab(options, byView.get('board')?.url ?? viewUrls(plan).board)
           } catch (error) {
             notRun.hidden_tab = `could not open the hidden tab: ${String(error?.message ?? error).slice(0, 200)}`
           }
@@ -1737,7 +1632,7 @@ async function replay(options) {
       teams: plan.teams.length,
       backend: options.url,
       commit: process.env.QIVO_LOAD_COMMIT ?? null,
-      host_cpus: (await import('node:os')).cpus().length,
+      host_cpus: cpus().length,
       at: new Date().toISOString(),
       log_pages: log.pages,
       clients_by_org: Object.fromEntries(
@@ -1774,149 +1669,6 @@ async function replay(options) {
   writeFileSync(file, `${JSON.stringify(output, null, 2)}\n`)
   say(`wrote ${file}`)
   return output
-}
-
-/** The watched clients' answers over the idle phase (`watched`, the
-    workers' { client, udfPath, updates, bytes }) per minute, by client
-    and function. */
-function watchedPerMinute(watched, seconds) {
-  const minutes = Math.max(seconds, 1e-9) / 60
-  const out = {}
-  for (const { client, udfPath, updates, bytes } of watched ?? []) {
-    out[client] ??= {}
-    out[client][udfPath] = {
-      answers: Math.round((updates / minutes) * 100) / 100,
-      bytes: Math.round(bytes / minutes),
-    }
-  }
-  return out
-}
-
-/** One phase's figures: the log's per function statistics, the backend's
-    calls at once, the workers' bytes, calls, closes, calls in flight and
-    event loop lag, and `extra`. */
-function phaseFigures(entries, seconds, reports, extra) {
-  const stats = functionStats(entries, seconds)
-  const calls = mergeCalls(reports.map((report) => report.calls))
-  const logged = (name) => stats.functions[name]?.executions ?? 0
-  const perClient = reports.flatMap((report) => report.per_client_bytes)
-  const closes = {}
-  for (const report of reports)
-    for (const [code, count] of Object.entries(report.closes))
-      closes[code] = (closes[code] ?? 0) + count
-  return {
-    clients: perClient.length,
-    seconds: Math.round(seconds * 10) / 10,
-    ...stats,
-    over_line: overLine(stats),
-    backend_at_once: mostAtOnce(entries.filter((entry) => !entry.nested)),
-    client_calls: Object.fromEntries(
-      Object.entries(calls).map(([name, done]) => [
-        name,
-        {
-          calls: done.calls,
-          failed: done.failed,
-          client_ms: spread(done.ms),
-          logged: logged(name),
-        },
-      ]),
-    ),
-    log_coverage: Object.entries(calls)
-      .filter(([name, done]) => logged(name) < done.calls)
-      .map(([name, done]) => ({ fn: name, client_calls: done.calls, logged: logged(name) })),
-    bytes_per_client: spread(perClient.map((client) => client.bytes)),
-    bytes_total: perClient.reduce((all, client) => all + client.bytes, 0),
-    answers: mergeCounts(reports.map((report) => report.answers)),
-    closes,
-    dropped_by_benchmark: reports.reduce((all, report) => all + report.dropped, 0),
-    watched: reports.flatMap((report) => report.watched ?? []),
-    in_flight_most: reports.reduce((all, report) => all + report.in_flight_most, 0),
-    processes: reports.map((report) => ({
-      pid: report.pid,
-      clients: report.clients,
-      event_loop_lag_ms: report.event_loop_lag_ms,
-    })),
-    _changes: reports.flatMap((report) => report.changes),
-    ...extra,
-  }
-}
-
-/** Adds to each change of the changes phase `figures` what the clients
-    received after it, until the next change: the bytes re-sent to each of
-    the `clients` (those that got none count as 0) and the queries each
-    re-send updated, and to the phase the bytes per client per change by
-    kind of change. */
-function attachResends(figures, clients) {
-  const byKind = {}
-  for (const change of figures.changes) {
-    const slots = figures._changes.filter((slot) => slot.id === change.id)
-    const perClient = new Map()
-    for (const slot of slots)
-      for (const [index, bytes] of Object.entries(slot.per_client)) perClient.set(index, bytes)
-    const bytes = Array.from({ length: clients }, (_, index) => perClient.get(String(index)) ?? 0)
-    change.resent_bytes_per_client = spread(bytes)
-    change.clients_resent = perClient.size
-    change.updated = mergeCounts(slots.map((slot) => slot.queries))
-    byKind[change.kind] = [...(byKind[change.kind] ?? []), ...bytes]
-  }
-  figures.bytes_per_client_per_change = Object.fromEntries(
-    Object.entries(byKind).map(([kind, bytes]) => [kind, spread(bytes)]),
-  )
-}
-
-/** The sums of `{ updates, bytes }` maps `maps` by key. */
-function mergeCounts(maps) {
-  const out = {}
-  for (const map of maps)
-    for (const [name, entry] of Object.entries(map)) {
-      const sum = out[name] ?? { updates: 0, bytes: 0 }
-      sum.updates += entry.updates
-      sum.bytes += entry.bytes
-      out[name] = sum
-    }
-  return out
-}
-
-/** The sums of `{ calls, failed, ms }` maps `maps` (the trackers' calls)
-    by function. */
-function mergeCalls(maps) {
-  const out = {}
-  for (const map of maps)
-    for (const [name, done] of Object.entries(map)) {
-      const entry = out[name] ?? { calls: 0, failed: 0, ms: [] }
-      entry.calls += done.calls
-      entry.failed += done.failed
-      entry.ms.push(...done.ms)
-      out[name] = entry
-    }
-  return out
-}
-
-/** The pacing trigger of the closing review's question 9 over `phases`:
-    an overload close (1013), a call whose JavaScript passed the 0.5 s line
-    and a client whose time to current after the reconnect passed ten
-    times the lone client's, each with what showed it. */
-function pacingTrigger(phases) {
-  const overload = Object.entries(phases).filter(
-    ([, figures]) => (figures.closes?.['1013'] ?? 0) > 0,
-  )
-  // each call over the line says whether its phase was noisy, which the reader judges
-  const over = Object.entries(phases).flatMap(([name, figures]) =>
-    (figures.over_line ?? []).map((entry) => ({ phase: name, noisy: figures.noisy, ...entry })),
-  )
-  const slow = phases.reconnect?.slow_clients ?? null
-  return {
-    line_ms: JS_LINE_MS,
-    overload_closes: overload.map(([name, figures]) => ({
-      phase: name,
-      count: figures.closes['1013'],
-    })),
-    over_line: over,
-    slow_reconnects: slow,
-    fires: overload.length > 0 || over.length > 0 || (slow ?? 0) > 0,
-    fires_outside_noisy_phases:
-      overload.length > 0 || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
-  }
 }
 
 /** The match phase: each recorded set replayed by one client as the
@@ -2104,26 +1856,26 @@ async function runChanges(options, plan, boardSet, workers, log) {
   }
 }
 
-/** One real Board tab in the browser, hidden, whose socket the reconnect
-    phase closes: `reconnect()` closes it and answers the check. */
-async function hiddenTab(options, plan) {
+/** One real tab of the Board at `url` in the browser, hidden, whose
+    socket the reconnect phase closes: `reconnect()` closes it and answers
+    the check. */
+async function hiddenTab(options, url) {
   const { browser, page: signInPage } = await signedIn(options)
   try {
-    return await hide(options, plan, browser, signInPage)
+    return await hide(options, url, browser, signInPage)
   } catch (error) {
     await browser.close().catch(() => {})
     throw error
   }
 }
 
-/** hiddenTab's Board tab in `browser`, opened after `signInPage` signed in,
-    then hidden. */
-async function hide(options, plan, browser, signInPage) {
+/** hiddenTab's Board tab at `url` in `browser`, opened after `signInPage`
+    signed in, then hidden. */
+async function hide(options, url, browser, signInPage) {
   const context = signInPage.context()
   await signInPage.close()
   const page = await context.newPage()
   const tracker = trackPage(page, options)
-  const url = viewUrls(plan, options).board
   await page.goto(`${options.siteUrl}${url}`, { waitUntil: 'domcontentloaded' })
   const visible = await settle(tracker, options.quietMs, options.timeoutMs)
   const shown = tracker.set().map((query) => query.udfPath)
@@ -2195,8 +1947,14 @@ async function hide(options, plan, browser, signInPage) {
     else <dir>/out/tabs-<tabs>.json. */
 async function tabsPart(options) {
   const plan = readPlan(options)
-  const boardSet = readSets(options).find((set) => set.view === 'board')
-  const urls = viewUrls(plan, options)
+  const sets = readSets(options)
+  const boardSet = sets.find((set) => set.view === 'board')
+  // each view at the address it was recorded at, so the tabs and the replay
+  // show the same Board
+  const urls = Object.fromEntries(sets.map((set) => [set.view, set.url]))
+  const missing = options.views.filter((view) => !urls[view])
+  if (missing.length > 0)
+    throw new Error(`no recorded set of ${missing.join(', ')}; record those views first`)
   const { browser, page: signInPage, notifications } = await signedIn(options)
   const context = signInPage.context()
   await signInPage.close()
@@ -2238,7 +1996,13 @@ async function tabsPart(options) {
     }
     const cpu = cpuNow()
     const from = Date.now()
-    const extra = (await body()) ?? {}
+    let extra
+    try {
+      extra = (await body()) ?? {}
+    } catch (error) {
+      extra = { failed: String(error?.message ?? error).slice(0, 300) }
+      say(`phase ${name} failed: ${extra.failed}`)
+    }
     await sleep(1500)
     const to = Date.now()
     const seconds = (to - from) / 1000
@@ -2290,8 +2054,9 @@ async function tabsPart(options) {
       (tab) => results.get(tab.index) ?? { index: tab.index, view: tab.view, current: false },
     )
   }
-  try {
-    await timed('startup', async () => {
+  /** Phase `name` of the tabs part. */
+  const run = {
+    startup: async () => {
       const from = Date.now()
       await Promise.all(
         tabs.map((tab) =>
@@ -2327,117 +2092,53 @@ async function tabsPart(options) {
         }),
         queries_all_tabs: tabs.reduce((all, tab) => all + tab.tracker.queries.size, 0),
       }
-    })
-    if (options.phases.includes('idle')) {
-      const idle = await timed('idle', async () => {
-        await sleep(options.idleSeconds * 1000)
-        return { seconds_asked: options.idleSeconds }
-      })
-      const minutes = idle.seconds / 60
-      const round = (value) => Math.round(value * 100) / 100
-      idle.per_tab_minute = idle.per_tab.map((tab) => ({
-        index: tab.index,
-        view: tab.view,
-        bytes: round(tab.bytes / minutes),
-        frames: round(tab.frames / minutes),
-        answers: round(
-          Object.values(tab.answers).reduce((all, entry) => all + entry.updates, 0) / minutes,
+    },
+    idle: async () => {
+      await sleep(options.idleSeconds * 1000)
+      return { seconds_asked: options.idleSeconds }
+    },
+    // the replay's changes, with this process's tabs in place of the workers
+    changes: () =>
+      runChanges(options, plan, boardSet, [{ ask: async (message) => (change = message.id) }], log),
+    reconnect: async () => {
+      const connects = tabs.map((tab) => tab.tracker.connects)
+      const at = Date.now()
+      await Promise.all(
+        tabs.map((tab) =>
+          tab.page.evaluate((prefix) => {
+            window.__loadMark = true
+            for (const socket of window.__loadSockets)
+              if (socket.url.startsWith(prefix) && socket.readyState <= 1) socket.close()
+          }, socketPrefix(options)),
         ),
-        answers_by_function: Object.fromEntries(
-          Object.entries(tab.answers).map(([name, entry]) => [
-            name,
-            { updates: round(entry.updates / minutes), bytes: round(entry.bytes / minutes) },
-          ]),
-        ),
-      }))
-      idle.backend_per_minute = {
-        executions: round(
-          Object.values(idle.functions).reduce((all, fn) => all + fn.executions, 0) / minutes,
-        ),
-        js_ms: round(
-          Object.values(idle.functions).reduce((all, fn) => all + fn.js_ms_sum, 0) / minutes,
-        ),
-        functions: Object.fromEntries(
-          Object.entries(idle.functions).map(([name, fn]) => [
-            name,
-            { executions: round(fn.executions / minutes), js_ms: round(fn.js_ms_sum / minutes) },
-          ]),
-        ),
+      )
+      const results = await allTabsCurrent(at, connects)
+      const reloaded = await Promise.all(
+        tabs.map((tab) => tab.page.evaluate(() => window.__loadMark !== true)),
+      )
+      return {
+        closed_at: at,
+        resubscriptions: results.reduce((all, result) => all + (result.queries ?? 0), 0),
+        current: results.filter((result) => result.current).length,
+        time_to_current_ms: spread(results.map((result) => result.ms)),
+        from_socket_ms: spread(results.map((result) => result.from_socket_ms)),
+        client_first_answer_ms: firstAnswerStats(tabs.flatMap((tab) => tab.tracker.firstAnswers())),
+        per_tab: results.map((result, i) => ({ ...result, reloaded: reloaded[i] })),
+      }
+    },
+  }
+  try {
+    // startup opens the tabs, so it runs first whatever --phases says
+    await timed('startup', run.startup)
+    for (const name of options.phases) {
+      if (name === 'startup') continue
+      const figures = await timed(name, run[name])
+      if (name === 'idle') Object.assign(figures, tabsIdlePerMinute(figures))
+      if (name === 'changes') {
+        Object.assign(figures, tabResends(figures.changes ?? [], tabs))
+        change = null
       }
     }
-    if (options.phases.includes('changes')) {
-      // the replay's changes, with this process's tabs in place of the workers
-      const local = [
-        {
-          ask: async (message) => {
-            change = message.id
-          },
-        },
-      ]
-      const figures = await timed('changes', () => runChanges(options, plan, boardSet, local, log))
-      const byKind = {}
-      const byView = {}
-      for (const done of figures.changes) {
-        done.resent_per_tab = tabs.map((tab) => ({
-          index: tab.index,
-          view: tab.view,
-          bytes: tab.perChange.get(done.id)?.bytes ?? 0,
-          queries: tab.perChange.get(done.id)?.queries ?? {},
-        }))
-        byKind[done.kind] = byKind[done.kind] ?? {}
-        byView[done.kind] = byView[done.kind] ?? {}
-        for (const tab of done.resent_per_tab) {
-          const kind = byKind[done.kind]
-          kind[tab.index] = [...(kind[tab.index] ?? []), tab.bytes]
-          const view = byView[done.kind]
-          view[tab.view] = [...(view[tab.view] ?? []), tab.bytes]
-        }
-      }
-      figures.bytes_per_tab_per_change = Object.fromEntries(
-        Object.entries(byKind).map(([kind, perTab]) => [
-          kind,
-          Object.fromEntries(
-            Object.entries(perTab).map(([index, bytes]) => [index, spread(bytes)]),
-          ),
-        ]),
-      )
-      figures.bytes_per_view_per_change = Object.fromEntries(
-        Object.entries(byView).map(([kind, perView]) => [
-          kind,
-          Object.fromEntries(Object.entries(perView).map(([view, bytes]) => [view, spread(bytes)])),
-        ]),
-      )
-      change = null
-    }
-    if (options.phases.includes('reconnect'))
-      await timed('reconnect', async () => {
-        const connects = tabs.map((tab) => tab.tracker.connects)
-        const at = Date.now()
-        await Promise.all(
-          tabs.map((tab) =>
-            tab.page.evaluate((prefix) => {
-              window.__loadMark = true
-              for (const socket of window.__loadSockets)
-                if (socket.url.startsWith(prefix) && socket.readyState <= 1) socket.close()
-            }, socketPrefix(options)),
-          ),
-        )
-        const results = await allTabsCurrent(at, connects)
-        const reloaded = await Promise.all(
-          tabs.map((tab) => tab.page.evaluate(() => window.__loadMark !== true)),
-        )
-        return {
-          closed_at: at,
-          resubscriptions: results.reduce((all, result) => all + (result.queries ?? 0), 0),
-          current: results.filter((result) => result.current).length,
-          time_to_current_ms: spread(results.map((result) => result.ms)),
-          from_socket_ms: spread(results.map((result) => result.from_socket_ms)),
-          client_first_answer_ms: firstAnswerStats(
-            tabs.flatMap((tab) => tab.tracker.firstAnswers()),
-          ),
-          per_tab: results.map((result, i) => ({ ...result, reloaded: reloaded[i] })),
-        }
-      })
   } finally {
     await browser.close().catch(() => {})
     await log.stop()
@@ -2453,7 +2154,7 @@ async function tabsPart(options) {
       teams: plan.teams.length,
       backend: options.url,
       commit: process.env.QIVO_LOAD_COMMIT ?? null,
-      host_cpus: (await import('node:os')).cpus().length,
+      host_cpus: cpus().length,
       at: new Date().toISOString(),
       log_pages: log.pages,
     },
@@ -2483,10 +2184,14 @@ async function main() {
     options = loadOptions(process.argv.slice(2), process.env)
   } catch (error) {
     if (error instanceof OptionsError) {
-      console.error(error.message)
+      console.error(`${error.message}\nnode scripts/benchmark-load.mjs --help lists the options.`)
       process.exit(2)
     }
     throw error
+  }
+  if (options.help) {
+    console.log(usage())
+    process.exit(0)
   }
   for (const part of options.parts) {
     if (part === 'setup') await setup(options)

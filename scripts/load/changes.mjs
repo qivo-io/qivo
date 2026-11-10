@@ -9,14 +9,14 @@ export const CHANGE_KINDS = ['rename', 'move', 'status', 'comment']
     (convex/lib/limits.ts LIMITS.commentRate, which the test compares). */
 export const COMMENT_RATE_MAX = 10
 
-/** The comments a run of the changes phase posts in any 60 seconds at one
+/** The comments a run of the changes phase posts in a minute at one
     change a second. */
-export const COMMENTS_PER_MINUTE = Math.ceil(60 / CHANGE_KINDS.length)
+export const COMMENTS_PER_MINUTE = 60 / CHANGE_KINDS.length
 
-/** The most comments one of `targets` tasks gets in any 60 seconds when
-    `perMinute` comments a minute go to them in turn. */
-export const mostInAMinute = (targets, perMinute = COMMENTS_PER_MINUTE) =>
-  Math.ceil(perMinute / Math.max(1, targets))
+/** The most comments one of `targets` tasks, taking the comments in turn,
+    gets in any 60 seconds, its ends included: one every
+    `CHANGE_KINDS.length * targets` seconds. */
+export const mostInAMinute = (targets) => Math.floor(60 / (CHANGE_KINDS.length * targets)) + 1
 
 /**
  * The tasks of `candidates` that take the comments, in turn: as few as
@@ -25,9 +25,9 @@ export const mostInAMinute = (targets, perMinute = COMMENTS_PER_MINUTE) =>
  * rule together and it refuses no comment. Throws an Error when
  * `candidates` holds too few.
  */
-export function commentTargets(candidates, perMinute = COMMENTS_PER_MINUTE) {
-  const each = Math.floor((COMMENT_RATE_MAX - 1) / 2)
-  const needed = Math.ceil(perMinute / each)
+export function commentTargets(candidates) {
+  let needed = 1
+  while (2 * mostInAMinute(needed) >= COMMENT_RATE_MAX) needed++
   if (candidates.length < needed)
     throw new Error(
       `the recorded Board shows ${candidates.length} other open tasks, fewer than the ${needed} the comments need to stay inside the comment rule`,

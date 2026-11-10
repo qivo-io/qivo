@@ -23,68 +23,79 @@ import {
   withoutLeaderReads,
 } from './load/frames.mjs'
 import {
-  DEFAULT_PHASES,
   EVERYDAY_ORG,
   loadOptions,
+  OPTIONS,
   OptionsError,
   PARTS,
+  PHASES,
+  usage,
   VIEWS,
 } from './load/options.mjs'
-import { everydayAssignments } from './load/plan.mjs'
+import { clientSpecs, everydayAssignments, findSeat, stableId, viewUrls } from './load/plan.mjs'
 import {
+  attachResends,
   cpuCounters,
   cpuShare,
   firstAnswerStats,
   functionStats,
   idleShares,
   logEntry,
+  mergeCalls,
+  mergeCounts,
   mostAtOnce,
   overLine,
+  pacingTrigger,
   percentile,
   perSessionMinute,
+  phaseFigures,
   REPORT_FORMAT,
   rungReport,
   spread,
+  tabResends,
+  tabsIdlePerMinute,
+  watchedPerMinute,
 } from './load/report.mjs'
 
 /* The combined load benchmark's pure parts (scripts/benchmark-load.mjs):
-   its options, the Convex frames it reads, the recorded set's format, the
-   swap of one person's ids into a set, the per-function statistics and the
-   output's shape. */
+   its options and help text, the Convex frames it reads, the recorded
+   set's format, the swap of one person's ids into a set, setup's plan and
+   which client replays what, the changes' comments, the replayed leader's
+   wiring of the app's alert client, the per-function and per-phase
+   figures and the output's shape. */
 
 const KEY = { QIVO_LOCAL_ADMIN_KEY: 'local-admin-key' }
 
 describe('the load benchmark options', () => {
-  it('runs every part for all, with the everyday organization and 10 clients by default', () => {
+  it('runs setup, record and replay for all, with the everyday organization and 10 clients', () => {
     const options = loadOptions(['all'], KEY)
-    expect(options.parts).toEqual(PARTS)
+    expect(options.parts).toEqual(['setup', 'record', 'replay'])
     expect(options).toMatchObject({
       url: 'http://127.0.0.1:3236',
       siteUrl: 'http://localhost:5241',
       browser: 'chromium',
       views: VIEWS,
-      phases: DEFAULT_PHASES,
+      phases: PHASES.replay.default,
       people: EVERYDAY_ORG.people,
-      tasksEach: 3,
-      orgs: 1,
-      busyLoops: 8,
-      busyCpus: null,
       teams: EVERYDAY_ORG.teams,
+      tasksEach: EVERYDAY_ORG.tasksEach,
+      orgs: 1,
       clients: 10,
       processes: 2,
-      hiddenTab: true,
+      busyLoops: 8,
+      busyCpus: null,
+      noHiddenTab: false,
+      boardTop: false,
       adminKey: 'local-admin-key',
     })
   })
 
-  it('takes one part with its views, phases, sizes and a loopback backend', () => {
+  it('takes one part with the options it reads and a loopback backend', () => {
     const options = loadOptions(
       [
         'replay',
         '--url',
         'http://localhost:3210/',
-        '--views',
-        'board,inbox,board',
         '--phases',
         'idle',
         '--clients',
@@ -98,23 +109,27 @@ describe('the load benchmark options', () => {
     expect(options).toMatchObject({
       parts: ['replay'],
       url: 'http://localhost:3210',
-      views: ['board', 'inbox'],
       phases: ['idle'],
       clients: 100,
       processes: 4,
-      hiddenTab: false,
+      noHiddenTab: true,
     })
+    expect(
+      loadOptions(['record', '--views', 'board,inbox,board', '--board-top'], KEY),
+    ).toMatchObject({ views: ['board', 'inbox'], boardTop: true })
+    expect(loadOptions(['setup', '--tasks-each', '0'], KEY).tasksEach).toBe(0)
   })
 
-  it('takes the tabs part, which all leaves out, with its tabs and the top-level Board', () => {
-    expect(loadOptions(['all'], KEY)).toMatchObject({ tabs: 1, boardTop: false })
+  it('takes the tabs part, which all leaves out, with its own phases', () => {
     expect(loadOptions(['all'], KEY).parts).not.toContain('tabs')
-    expect(loadOptions(['tabs', '--tabs', '10', '--board-top'], KEY)).toMatchObject({
+    expect(loadOptions(['tabs', '--tabs', '10'], KEY)).toMatchObject({
       parts: ['tabs'],
       tabs: 10,
-      boardTop: true,
+      phases: PHASES.tabs.default,
     })
-    expect(() => loadOptions(['tabs', '--tabs', '0'], KEY)).toThrow('--tabs takes a whole number')
+    expect(() => loadOptions(['tabs', '--phases', 'match,idle'], KEY)).toThrow(
+      '--phases of tabs takes startup, changes, reconnect, idle, not match',
+    )
   })
 
   it('keeps the phases in the order given and takes the organizations and the busy loops', () => {
@@ -140,6 +155,8 @@ describe('the load benchmark options', () => {
       busyLoops: 8,
       busyCpus: '0-3,6',
     })
+    // setup's organizations do not wait for the replay's clients
+    expect(loadOptions(['setup', '--orgs', '20'], KEY).orgs).toBe(20)
   })
 
   it.each([
@@ -158,6 +175,11 @@ describe('the load benchmark options', () => {
     [['replay', '--busy-cpus', 'all'], '--busy-cpus takes a CPU list'],
     [['replay', '--busy-cpus', '0-7;rm'], '--busy-cpus takes a CPU list'],
     [['replay', '--phases', 'idle,soak'], '--phases takes a comma list'],
+    [['replay', '--client', '100'], '--client is no option of the benchmark'],
+    [['replay', 'extra'], 'extra is no option of the benchmark'],
+    [['replay', '--views', 'board'], '--views is an option of record, tabs, not of replay'],
+    [['setup', '--clients', '100'], '--clients is an option of replay, not of setup'],
+    [['replay', '--output', '--clients'], '--output takes a value'],
   ])('refuses %j', (argv, message) => {
     expect(() => loadOptions(argv, KEY)).toThrow(OptionsError)
     expect(() => loadOptions(argv, KEY)).toThrow(message)
@@ -168,6 +190,21 @@ describe('the load benchmark options', () => {
       'CONVEX_DEPLOY_KEY is set',
     )
     expect(() => loadOptions(['all'], {})).toThrow('QIVO_LOCAL_ADMIN_KEY')
+  })
+
+  it('answers --help without a key, and its text names every part and option with its parts', () => {
+    expect(loadOptions(['--help'], {})).toEqual({ help: true })
+    expect(loadOptions(['replay', '-h'], {})).toEqual({ help: true })
+    const text = usage()
+    for (const part of Object.keys(PARTS)) expect(text).toContain(`  ${part} `)
+    for (const [name, spec] of Object.entries(OPTIONS)) {
+      expect(text).toContain(`--${name}`)
+      expect(text).toContain(`[${spec.parts.join(', ')}]`)
+      // every option the parser reads has a key, and each key is the parser's
+      expect(loadOptions(['all'], KEY)).toHaveProperty(spec.key)
+    }
+    expect(text).toContain('--clients <n>')
+    expect(text).toContain('(10)')
   })
 })
 
@@ -918,5 +955,326 @@ describe("setup's everyday people", () => {
       short: ['p2', 'p3'],
     })
     expect(everydayAssignments(['p1'], tasks, 0, 'nora')).toEqual({ pairs: [], short: [] })
+  })
+})
+
+describe("setup's plan", () => {
+  it('names the same rows on every run, as lowercase version 4 UUIDs', () => {
+    expect(stableId('person:0')).toBe(stableId('person:0'))
+    expect(stableId('person:0')).not.toBe(stableId('person:1'))
+    expect(stableId('team:3')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+  })
+
+  it("finds a seat by slug or by its organization's row, with the profile's own teams", () => {
+    const root = {
+      seats: [
+        { org: { id: 'org-ns', slug: 'northstar-labs', name: 'Northstar' } },
+        { org: { id: 'org-h', slug: 'harbor', name: 'Harbor Analytics' } },
+      ],
+      profiles: [
+        { id: 'prof-ns', org_id: 'org-ns', org_role: 'admin' },
+        { id: 'prof-h', org_id: 'org-h', org_role: 'user' },
+      ],
+      memberships: [
+        { team_id: 'team-1', profile_id: 'prof-ns' },
+        { team_id: 'team-1', profile_id: 'prof-ns' },
+        { team_id: 'team-2', profile_id: 'prof-h' },
+      ],
+    }
+    expect(findSeat(root, 'northstar-labs')).toEqual({
+      org_id: 'org-ns',
+      slug: 'northstar-labs',
+      profile_id: 'prof-ns',
+      team_ids: ['team-1'],
+    })
+    expect(findSeat(root, (row) => row.name === 'Harbor Analytics')).toMatchObject({
+      profile_id: 'prof-h',
+      team_ids: ['team-2'],
+    })
+    expect(findSeat(root, 'elsewhere')).toBeNull()
+  })
+
+  it('addresses the views on Luma Sensor, its Board on Firmware or the whole project', () => {
+    const plan = {
+      org_slug: 'northstar-labs',
+      projects: [
+        { name: 'Atlas', num: 1, children: [] },
+        {
+          name: 'Luma Sensor',
+          num: 4,
+          children: [
+            { name: 'Electronics', num: 5 },
+            { name: 'Firmware', num: 6 },
+          ],
+        },
+      ],
+    }
+    expect(viewUrls(plan)).toEqual({
+      board: '/app/northstar-labs/board/p/6',
+      overview: '/app/northstar-labs/overview/p/4',
+      roadmap: '/app/northstar-labs/roadmap/p/4',
+      sync: '/app/northstar-labs/sync/p/4',
+      inbox: '/app/northstar-labs/inbox',
+      mine: '/app/northstar-labs/board/mine',
+    })
+    expect(viewUrls(plan, true).board).toBe('/app/northstar-labs/board/p/4')
+  })
+})
+
+describe('which client replays what', () => {
+  const person = (key, org) => ({
+    key,
+    profile_id: `prof-${key}`,
+    auth_user_id: `auth-${key}`,
+    org_id: org,
+  })
+  const set = (view, org, queries) => ({
+    view,
+    person: { profile_id: 'prof-nora', auth_user_id: 'auth-nora', org_id: org },
+    queries,
+  })
+  const northstar = [
+    set('board', 'org-ns', [
+      { udfPath: 'tasks:board', args: { org_id: 'org-ns', project_id: 'proj-ns' }, bytes: 900 },
+      { udfPath: 'inbox:feed', args: { after: 1 }, bytes: 50 },
+      { udfPath: 'notifications:settings', args: {}, bytes: 21 },
+      { udfPath: 'billing:status', args: { org_id: 'org-h' }, bytes: 10 },
+    ]),
+    set('inbox', 'org-ns', [{ udfPath: 'inbox:page', args: { org_id: 'org-ns' }, bytes: 400 }]),
+  ]
+
+  it('gives person i view i of one organization, Nora first, and only leaders the leader reads', () => {
+    const plan = {
+      people: [person('nora', 'org-ns'), person('p1', 'org-ns'), person('p2', 'org-ns')],
+    }
+    const specs = clientSpecs({ clients: 3, orgs: 1 }, plan, [northstar])
+    expect(specs.map((spec) => [spec.person.key, spec.view, spec.lead, spec.watch])).toEqual([
+      ['nora', 'board', true, 'nora'],
+      ['p1', 'inbox', false, null],
+      ['p2', 'board', true, null],
+    ])
+    // Nora keeps her other seat's read; a person with one seat holds none
+    expect(specs[0].queries.map((query) => query.udfPath)).toContain('billing:status')
+    expect(specs[2].queries.map((query) => query.udfPath)).toEqual([
+      'tasks:board',
+      'inbox:feed',
+      'notifications:settings',
+    ])
+    expect(specs[2].queries[0].args.org_id).toBe('org-ns')
+    expect(specs[0].recorded_answer_bytes).toBe(981)
+    expect(() => clientSpecs({ clients: 4, orgs: 1 }, plan, [northstar])).toThrow(
+      'fewer than its share of --clients',
+    )
+  })
+
+  it("deals clients to the organizations in turn, with Nora's one leading tab in Northstar", () => {
+    const harborBoard = set('board', 'org-h', [
+      { udfPath: 'tasks:board', args: { org_id: 'org-h', project_id: 'proj-h' }, bytes: 300 },
+      { udfPath: 'inbox:feed', args: { after: 1 }, bytes: 50 },
+    ])
+    const plan = {
+      org_slug: 'northstar-labs',
+      people: [person('nora', 'org-ns'), person('p1', 'org-ns')],
+      orgs: [
+        {
+          k: 0,
+          org_slug: 'northstar-labs',
+          people: [person('nora', 'org-ns'), person('p1', 'org-ns')],
+        },
+        {
+          k: 1,
+          org_slug: 'harbor',
+          mirror: { 'org-ns': 'org-h', 'proj-ns': 'proj-h' },
+          people: [person('nora@harbor', 'org-h'), person('o1p1', 'org-h')],
+        },
+      ],
+    }
+    const specs = clientSpecs({ clients: 4, orgs: 2 }, plan, [northstar, [harborBoard]])
+    expect(specs.map((spec) => [spec.org, spec.person.key, spec.view, spec.lead])).toEqual([
+      ['northstar-labs', 'nora', 'board', true],
+      ['harbor', 'nora@harbor', 'board', false],
+      ['northstar-labs', 'p1', 'inbox', false],
+      ['harbor', 'o1p1', 'inbox', false],
+    ])
+    // Nora's Harbor tab does not lead, so it holds no leader read
+    expect(specs[1].queries.map((query) => query.udfPath)).toEqual(['tasks:board'])
+    // Harbor's people replay Northstar's sets with Harbor's ids
+    expect(specs[3].queries[0].args.org_id).toBe('org-h')
+  })
+})
+
+describe("a phase's figures", () => {
+  const report = (pid, extra = {}) => ({
+    pid,
+    clients: 1,
+    calls: { 'issues:update': { calls: 2, failed: 1, ms: [10, 30] } },
+    per_client_bytes: [{ index: pid, bytes: 100 * pid }],
+    closes: { 1013: 1 },
+    answers: { 'tasks:board': { updates: 2, bytes: 200 } },
+    dropped: 1,
+    watched: [],
+    in_flight_most: 3,
+    event_loop_lag_ms: { p50: 0, p99: 1, max: 2 },
+    changes: [],
+    ...extra,
+  })
+  const entry = (fn, start, js_ms, extra = {}) => ({
+    fn,
+    component: null,
+    kind: 'Mutation',
+    nested: false,
+    cached: false,
+    start,
+    end: start + js_ms,
+    js_ms,
+    total_ms: js_ms,
+    error: null,
+    ...extra,
+  })
+
+  it('sums the workers and says where the log missed calls the clients made', () => {
+    const figures = phaseFigures(
+      [entry('issues:update', 0, 20), entry('issues:update', 5, 600)],
+      2,
+      [report(1), report(2)],
+      { steal: null },
+    )
+    expect(figures).toMatchObject({
+      clients: 2,
+      seconds: 2,
+      closes: { 1013: 2 },
+      dropped_by_benchmark: 2,
+      in_flight_most: 6,
+      bytes_total: 300,
+      backend_at_once: 2,
+      answers: { 'tasks:board': { updates: 4, bytes: 400 } },
+      over_line: [{ fn: 'issues:update', js_ms_max: 600 }],
+      log_coverage: [{ fn: 'issues:update', client_calls: 4, logged: 2 }],
+      steal: null,
+    })
+    expect(figures.client_calls['issues:update']).toMatchObject({ calls: 4, failed: 2, logged: 2 })
+  })
+
+  it('merges counts and calls by name', () => {
+    expect(
+      mergeCounts([
+        { a: { updates: 1, bytes: 2 } },
+        { a: { updates: 3, bytes: 4 }, b: { updates: 1, bytes: 1 } },
+      ]),
+    ).toEqual({
+      a: { updates: 4, bytes: 6 },
+      b: { updates: 1, bytes: 1 },
+    })
+    expect(
+      mergeCalls([
+        { x: { calls: 1, failed: 0, ms: [5] } },
+        { x: { calls: 2, failed: 1, ms: [7, 9] } },
+      ]),
+    ).toEqual({
+      x: { calls: 3, failed: 1, ms: [5, 7, 9] },
+    })
+  })
+
+  it('gives every change what it re-sent to each client, none counting as 0', () => {
+    const figures = {
+      changes: [
+        { id: 0, kind: 'rename' },
+        { id: 1, kind: 'comment' },
+      ],
+      _changes: [
+        { id: 0, per_client: { 0: 500 }, queries: { 'tasks:board': { updates: 1, bytes: 500 } } },
+        { id: 0, per_client: { 1: 300 }, queries: { 'tasks:board': { updates: 1, bytes: 300 } } },
+      ],
+    }
+    attachResends(figures, 3)
+    expect(figures.changes[0]).toMatchObject({
+      clients_resent: 2,
+      resent_bytes_per_client: { count: 3, p50: 300, max: 500 },
+      updated: { 'tasks:board': { updates: 2, bytes: 800 } },
+    })
+    expect(figures.changes[1]).toMatchObject({
+      clients_resent: 0,
+      resent_bytes_per_client: { max: 0 },
+    })
+    expect(Object.keys(figures.bytes_per_client_per_change)).toEqual(['rename', 'comment'])
+  })
+
+  it('fires the pacing trigger on an overload, a call over the line or a slow reconnect', () => {
+    const quiet = {
+      startup: { closes: {}, over_line: [] },
+      reconnect: { closes: {}, slow_clients: 0 },
+    }
+    expect(pacingTrigger(quiet)).toMatchObject({ fires: false, fires_outside_noisy_phases: false })
+    const noisy = {
+      ...quiet,
+      startup: { closes: {}, noisy: true, over_line: [{ fn: 'tasks:board', js_ms_max: 700 }] },
+    }
+    expect(pacingTrigger(noisy)).toMatchObject({ fires: true, fires_outside_noisy_phases: false })
+    expect(pacingTrigger({ ...quiet, idle: { closes: { 1013: 4 } } })).toMatchObject({
+      overload_closes: [{ phase: 'idle', count: 4 }],
+      fires_outside_noisy_phases: true,
+    })
+    expect(pacingTrigger({ ...quiet, reconnect: { closes: {}, slow_clients: 2 } }).fires).toBe(true)
+  })
+
+  it("reads the watched clients' and the tabs' idle answers per minute", () => {
+    expect(
+      watchedPerMinute(
+        [
+          { client: 'nora', udfPath: 'inbox:feed', updates: 2, bytes: 100 },
+          { client: 'nora', udfPath: 'tasks:board', updates: 0, bytes: 0 },
+        ],
+        120,
+      ),
+    ).toEqual({
+      nora: { 'inbox:feed': { answers: 1, bytes: 50 }, 'tasks:board': { answers: 0, bytes: 0 } },
+    })
+    const idle = {
+      seconds: 30,
+      per_tab: [
+        {
+          index: 0,
+          view: 'board',
+          bytes: 200,
+          frames: 4,
+          answers: { 'inbox:feed': { updates: 1, bytes: 50 } },
+        },
+      ],
+      functions: { 'notifications:beat': { executions: 1, js_ms_sum: 4 } },
+    }
+    expect(tabsIdlePerMinute(idle)).toEqual({
+      per_tab_minute: [
+        {
+          index: 0,
+          view: 'board',
+          bytes: 400,
+          frames: 8,
+          answers: 2,
+          answers_by_function: { 'inbox:feed': { updates: 2, bytes: 100 } },
+        },
+      ],
+      backend_per_minute: {
+        executions: 2,
+        js_ms: 8,
+        functions: { 'notifications:beat': { executions: 2, js_ms: 8 } },
+      },
+    })
+  })
+
+  it('gives each tab what each change re-sent to it, by tab and by view', () => {
+    const changes = [
+      { id: 0, kind: 'rename' },
+      { id: 1, kind: 'rename' },
+    ]
+    const tabs = [
+      { index: 0, view: 'board', perChange: new Map([[0, { bytes: 900, queries: {} }]]) },
+      { index: 1, view: 'board', perChange: new Map([[1, { bytes: 100, queries: {} }]]) },
+    ]
+    const resent = tabResends(changes, tabs)
+    expect(changes[0].resent_per_tab.map((tab) => tab.bytes)).toEqual([900, 0])
+    expect(resent.bytes_per_tab_per_change.rename[0]).toMatchObject({ count: 2, max: 900 })
+    expect(resent.bytes_per_view_per_change.rename.board).toMatchObject({ count: 4, max: 900 })
   })
 })

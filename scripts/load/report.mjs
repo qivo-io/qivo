@@ -286,3 +286,212 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
     not_run: notRun,
   }
 }
+
+/** The watched clients' answers over the idle phase (`watched`, the
+    workers' { client, udfPath, updates, bytes }) per minute, by client
+    and function. */
+export function watchedPerMinute(watched, seconds) {
+  const minutes = Math.max(seconds, 1e-9) / 60
+  const out = {}
+  for (const { client, udfPath, updates, bytes } of watched ?? []) {
+    out[client] ??= {}
+    out[client][udfPath] = {
+      answers: Math.round((updates / minutes) * 100) / 100,
+      bytes: Math.round(bytes / minutes),
+    }
+  }
+  return out
+}
+
+/** One phase's figures: the log's per function statistics, the backend's
+    calls at once, the workers' bytes, calls, closes, calls in flight and
+    event loop lag, and `extra`. */
+export function phaseFigures(entries, seconds, reports, extra) {
+  const stats = functionStats(entries, seconds)
+  const calls = mergeCalls(reports.map((report) => report.calls))
+  const logged = (name) => stats.functions[name]?.executions ?? 0
+  const perClient = reports.flatMap((report) => report.per_client_bytes)
+  const closes = {}
+  for (const report of reports)
+    for (const [code, count] of Object.entries(report.closes))
+      closes[code] = (closes[code] ?? 0) + count
+  return {
+    clients: perClient.length,
+    seconds: Math.round(seconds * 10) / 10,
+    ...stats,
+    over_line: overLine(stats),
+    backend_at_once: mostAtOnce(entries.filter((entry) => !entry.nested)),
+    client_calls: Object.fromEntries(
+      Object.entries(calls).map(([name, done]) => [
+        name,
+        {
+          calls: done.calls,
+          failed: done.failed,
+          client_ms: spread(done.ms),
+          logged: logged(name),
+        },
+      ]),
+    ),
+    log_coverage: Object.entries(calls)
+      .filter(([name, done]) => logged(name) < done.calls)
+      .map(([name, done]) => ({ fn: name, client_calls: done.calls, logged: logged(name) })),
+    bytes_per_client: spread(perClient.map((client) => client.bytes)),
+    bytes_total: perClient.reduce((all, client) => all + client.bytes, 0),
+    answers: mergeCounts(reports.map((report) => report.answers)),
+    closes,
+    dropped_by_benchmark: reports.reduce((all, report) => all + report.dropped, 0),
+    watched: reports.flatMap((report) => report.watched ?? []),
+    in_flight_most: reports.reduce((all, report) => all + report.in_flight_most, 0),
+    processes: reports.map((report) => ({
+      pid: report.pid,
+      clients: report.clients,
+      event_loop_lag_ms: report.event_loop_lag_ms,
+    })),
+    _changes: reports.flatMap((report) => report.changes),
+    ...extra,
+  }
+}
+
+/** Adds to each change of the changes phase `figures` what the clients
+    received after it, until the next change: the bytes re-sent to each of
+    the `clients` (those that got none count as 0) and the queries each
+    re-send updated, and to the phase the bytes per client per change by
+    kind of change. */
+export function attachResends(figures, clients) {
+  const byKind = {}
+  for (const change of figures.changes) {
+    const slots = figures._changes.filter((slot) => slot.id === change.id)
+    const perClient = new Map()
+    for (const slot of slots)
+      for (const [index, bytes] of Object.entries(slot.per_client)) perClient.set(index, bytes)
+    const bytes = Array.from({ length: clients }, (_, index) => perClient.get(String(index)) ?? 0)
+    change.resent_bytes_per_client = spread(bytes)
+    change.clients_resent = perClient.size
+    change.updated = mergeCounts(slots.map((slot) => slot.queries))
+    byKind[change.kind] = [...(byKind[change.kind] ?? []), ...bytes]
+  }
+  figures.bytes_per_client_per_change = Object.fromEntries(
+    Object.entries(byKind).map(([kind, bytes]) => [kind, spread(bytes)]),
+  )
+}
+
+/** The sums of `{ updates, bytes }` maps `maps` by key. */
+export function mergeCounts(maps) {
+  const out = {}
+  for (const map of maps)
+    for (const [name, entry] of Object.entries(map)) {
+      const sum = out[name] ?? { updates: 0, bytes: 0 }
+      sum.updates += entry.updates
+      sum.bytes += entry.bytes
+      out[name] = sum
+    }
+  return out
+}
+
+/** The sums of `{ calls, failed, ms }` maps `maps` (the trackers' calls)
+    by function. */
+export function mergeCalls(maps) {
+  const out = {}
+  for (const map of maps)
+    for (const [name, done] of Object.entries(map)) {
+      const entry = out[name] ?? { calls: 0, failed: 0, ms: [] }
+      entry.calls += done.calls
+      entry.failed += done.failed
+      entry.ms.push(...done.ms)
+      out[name] = entry
+    }
+  return out
+}
+
+/** The pacing trigger of the closing review's question 9 over `phases`:
+    an overload close (1013), a call whose JavaScript passed the 0.5 s line
+    and a client whose time to current after the reconnect passed ten
+    times the lone client's, each with what showed it. */
+export function pacingTrigger(phases) {
+  const overload = Object.entries(phases).filter(
+    ([, figures]) => (figures.closes?.['1013'] ?? 0) > 0,
+  )
+  // each call over the line says whether its phase was noisy, which the reader judges
+  const over = Object.entries(phases).flatMap(([name, figures]) =>
+    (figures.over_line ?? []).map((entry) => ({ phase: name, noisy: figures.noisy, ...entry })),
+  )
+  const slow = phases.reconnect?.slow_clients ?? null
+  return {
+    line_ms: JS_LINE_MS,
+    overload_closes: overload.map(([name, figures]) => ({
+      phase: name,
+      count: figures.closes['1013'],
+    })),
+    over_line: over,
+    slow_reconnects: slow,
+    fires: overload.length > 0 || over.length > 0 || (slow ?? 0) > 0,
+    fires_outside_noisy_phases:
+      overload.length > 0 || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
+  }
+}
+
+/** The tabs part's idle phase `idle` per minute: each tab's bytes, frames
+    and answers, by function too, from its `per_tab`, and the backend's
+    executions and JavaScript time from its `functions` (functionStats'). */
+export function tabsIdlePerMinute(idle) {
+  const minutes = Math.max(idle.seconds, 1e-9) / 60
+  const round = (value) => Math.round((value / minutes) * 100) / 100
+  const functions = Object.entries(idle.functions)
+  return {
+    per_tab_minute: idle.per_tab.map((tab) => ({
+      index: tab.index,
+      view: tab.view,
+      bytes: round(tab.bytes),
+      frames: round(tab.frames),
+      answers: round(Object.values(tab.answers).reduce((all, entry) => all + entry.updates, 0)),
+      answers_by_function: Object.fromEntries(
+        Object.entries(tab.answers).map(([name, entry]) => [
+          name,
+          { updates: round(entry.updates), bytes: round(entry.bytes) },
+        ]),
+      ),
+    })),
+    backend_per_minute: {
+      executions: round(functions.reduce((all, [, fn]) => all + fn.executions, 0)),
+      js_ms: round(functions.reduce((all, [, fn]) => all + fn.js_ms_sum, 0)),
+      functions: Object.fromEntries(
+        functions.map(([name, fn]) => [
+          name,
+          { executions: round(fn.executions), js_ms: round(fn.js_ms_sum) },
+        ]),
+      ),
+    },
+  }
+}
+
+/** What the tabs part's `changes` (runChanges') re-sent to each of `tabs`
+    ({ index, view, perChange }, perChange a Map from a change's id to the
+    { bytes, queries } the tab received after it): each change's per-tab
+    re-send, added to the change, and the spread of each tab's and each
+    view's bytes by kind of change. */
+export function tabResends(changes, tabs) {
+  const byTab = {}
+  const byView = {}
+  for (const done of changes) {
+    done.resent_per_tab = tabs.map((tab) => ({
+      index: tab.index,
+      view: tab.view,
+      bytes: tab.perChange.get(done.id)?.bytes ?? 0,
+      queries: tab.perChange.get(done.id)?.queries ?? {},
+    }))
+    byTab[done.kind] ??= {}
+    byView[done.kind] ??= {}
+    for (const tab of done.resent_per_tab) {
+      byTab[done.kind][tab.index] = [...(byTab[done.kind][tab.index] ?? []), tab.bytes]
+      byView[done.kind][tab.view] = [...(byView[done.kind][tab.view] ?? []), tab.bytes]
+    }
+  }
+  const spreads = (groups) =>
+    Object.fromEntries(
+      Object.entries(groups).map(([kind, lists]) => [
+        kind,
+        Object.fromEntries(Object.entries(lists).map(([key, bytes]) => [key, spread(bytes)])),
+      ]),
+    )
+  return { bytes_per_tab_per_change: spreads(byTab), bytes_per_view_per_change: spreads(byView) }
+}
