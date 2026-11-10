@@ -368,6 +368,31 @@ export function maskClock(udfPath, args) {
   )
 }
 
+/** The local calendar day of `date` (a Date, an ISO text or milliseconds)
+    as YYYY-MM-DD, the day a tab works its dated arguments out from. */
+export function localDay(date) {
+  const day = new Date(date)
+  const two = (value) => String(value).padStart(2, '0')
+  return `${day.getFullYear()}-${two(day.getMonth() + 1)}-${two(day.getDate())}`
+}
+
+/** Refuses recorded sets `sets` recorded on another local day than
+    `now`'s. A tab works out some arguments from its day, the daily image's
+    date, the Overview's and Team sync's day and weeks and the milestones'
+    and the Roadmap's ranges among them, so a set of another day would
+    subscribe reads no tab makes today while the match and startup still
+    compare equal, its arguments being the ones compared. Checked once,
+    before a replay starts. Throws an Error that names the sets. */
+export function checkSetsDay(sets, now = new Date()) {
+  const today = localDay(now)
+  const stale = sets.filter((set) => localDay(set.recorded_at) !== today)
+  if (stale.length > 0)
+    throw new Error(
+      `the recorded sets ${stale.map((set) => `${set.org_slug ?? ''}${set.org_slug ? '/' : ''}${set.view} (${localDay(set.recorded_at)})`).join(', ')} were recorded on another day than today, ${today}, so their dated arguments are that day's; run the record part again`,
+    )
+  return sets
+}
+
 /** How a replayed set `replayed` matches recorded set `recorded`'s
     queries, both lists of { udfPath, args, bytes, error? } with the same
     person's ids: each query by function and arguments (CLOCK_ARGS masked)

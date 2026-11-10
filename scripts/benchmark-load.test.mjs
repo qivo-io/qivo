@@ -13,8 +13,10 @@ import {
 } from './load/changes.mjs'
 import {
   checkSet,
+  checkSetsDay,
   compareSets,
   FrameTracker,
+  localDay,
   personQueries,
   recordedSet,
   SET_FORMAT,
@@ -559,6 +561,17 @@ describe('the recorded set and what another person replays of it', () => {
     ])
     // without ownOrg the other seat's read stays, as the recorder holds it
     expect(personQueries(set, LEO).map((query) => query.udfPath)).toContain('inbox:summary')
+  })
+
+  it("refuses sets recorded on another local day, whose dated arguments are that day's", () => {
+    const at = (day, hour) => new Date(2026, 10, day, hour, 30)
+    const board = { ...setOf('board', []), recorded_at: at(10, 23).toISOString() }
+    expect(localDay(at(10, 23))).toBe('2026-11-10')
+    expect(checkSetsDay([board], at(10, 0))).toEqual([board])
+    // just past midnight the daily image and the Overview's day are another day's
+    expect(() => checkSetsDay([board], at(11, 0))).toThrow(
+      'the recorded sets board (2026-11-10) were recorded on another day than today, 2026-11-11',
+    )
   })
 
   it("drops only the leader's reads for a tab that does not lead", () => {

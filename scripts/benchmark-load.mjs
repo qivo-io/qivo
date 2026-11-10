@@ -92,7 +92,8 @@
 //   shows to whoever opens it (plan.mjs clientSpecs, frames.mjs
 //   personQueries). A client that would read an id of another organization,
 //   or one id twice in a list, stops the run before any client starts
-//   (plan.mjs checkSpecs). A client
+//   (plan.mjs checkSpecs), as do sets recorded on another local day, whose
+//   dated arguments are that day's (frames.mjs checkSetsDay). A client
 //   acts with the admin key as its person's planted login and session, so
 //   the session wrappers run as in the app, but no JWT is validated or
 //   refreshed, and it makes none of a boot's one-off writes, which the sets
@@ -200,6 +201,7 @@ import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
 import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
 import {
   checkSet,
+  checkSetsDay,
   compareSets,
   FrameTracker,
   recordedSet,
@@ -1563,6 +1565,7 @@ async function replay(options) {
       `people.json holds ${orgs.length} organizations, fewer than --orgs ${options.orgs}`,
     )
   const orgSets = orgs.slice(0, options.orgs).map((planOrg) => readSets(options, planOrg))
+  checkSetsDay(orgSets.flat())
   const sets = orgSets[0]
   const byView = new Map(sets.map((set) => [set.view, set]))
   const people = orgs.slice(0, options.orgs).reduce((all, one) => all + one.people.length, 0)
