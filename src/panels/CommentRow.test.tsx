@@ -12,7 +12,9 @@ import type { Row } from '../store/rows'
    another prop it reads changes. Each row's body goes through Markdown,
    which this file counts by text, so a body's count is its row's renders.
    The comments arrive through the threadComments subscription, answered by
-   hand. */
+   hand. Only Date is faked, at NOW unless a case moves it, so a row's age
+   changes only where a case says so while the store's and React's timers
+   run as they do. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -46,6 +48,8 @@ type Detail = typeof import('./IssueDetail')
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
 const at = (minute: number) => new Date(START + minute * 60_000).toISOString()
+/* The clock's time when a case opens the window, ten minutes after START. */
+const NOW = START + 10 * 60_000
 
 let P: Planner
 let detail: Detail
@@ -116,15 +120,13 @@ const bodies = () =>
     (row) => row.querySelector('.md, p')?.textContent ?? row.textContent ?? '',
   )
 
-/* Waits for the next minute when this one ends within ten seconds. A row
-   tells its comment's age (P.fmtAgo) and renders again in a new minute,
-   which a case must not cross between two counts. */
-async function freshMinute() {
-  const left = 60_000 - (Date.now() % 60_000)
-  if (left < 10_000) await new Promise((resolve) => setTimeout(resolve, left + 50))
-}
+/* The text of comment `n`'s row: its author, its age and its body. */
+const rowText = (n: number) =>
+  document.querySelector(`[data-comment="${comment(n).id}"]`)?.textContent ?? ''
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(NOW)
   // jsdom lays nothing out, and the window scrolls rows into view
   Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -145,11 +147,11 @@ afterEach(async () => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('the comment rows of the task window', { timeout: 30_000 }, () => {
   it('draws a delivered comment and leaves the rows that did not change alone', async () => {
-    await freshMinute()
     await open()
     await deliver({ comments: range(1, 6), earlier: false })
     expect(bodies()).toEqual(['Check 1', 'Check 2', 'Check 3', 'Check 4', 'Check 5'])
@@ -163,7 +165,6 @@ describe('the comment rows of the task window', { timeout: 30_000 }, () => {
   })
 
   it('draws an edited comment again, and only that one', async () => {
-    await freshMinute()
     await open()
     await deliver({ comments: range(1, 6), earlier: false })
     const before = new Map(renders)
@@ -183,5 +184,19 @@ describe('the comment rows of the task window', { timeout: 30_000 }, () => {
     expect(renders.get('Check 3 against the spare sensors')).toBeGreaterThan(0)
     for (const n of [1, 2, 4, 5])
       expect(renders.get(`Check ${n}`), `#${n}`).toBe(before.get(`Check ${n}`))
+  })
+
+  it('draws every row again with its new age in a render a minute later', async () => {
+    await open()
+    await deliver({ comments: range(1, 6), earlier: false })
+    for (let n = 1; n < 6; n++) expect(rowText(n), `#${n}`).toContain(`${10 - n}m ago`)
+    const before = new Map(renders)
+    vi.setSystemTime(NOW + 60_000)
+    await deliver({ comments: range(1, 7), earlier: false })
+    expect(renders.get('Check 6')).toBeGreaterThan(0)
+    for (let n = 1; n < 6; n++) {
+      expect(renders.get(`Check ${n}`), `#${n}`).toBe((before.get(`Check ${n}`) ?? 0) + 1)
+      expect(rowText(n), `#${n}`).toContain(`${11 - n}m ago`)
+    }
   })
 })
