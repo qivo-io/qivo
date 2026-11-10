@@ -11,6 +11,7 @@ import {
   CHANGE_KINDS,
   COMMENT_RATE_MAX,
   COMMENTS_PER_MINUTE,
+  changeWrites,
   commentTargets,
   mostInAMinute,
 } from './load/changes.mjs'
@@ -896,6 +897,41 @@ describe('the changes plan', () => {
     expect(() => commentTargets([{ id: 't1' }, { id: 't2' }, { id: 't3' }])).toThrow(
       'fewer than the 4 the comments need',
     )
+  })
+
+  it('puts back what landed, a move or status change whose return write failed included', () => {
+    const tasks = {
+      org: 'org',
+      renamed: { id: 'r', title: 'Calibrate', status: 'todo' },
+      moved: { id: 'm' },
+      home: 'home',
+      sibling: { id: 'sib' },
+      commented: [{ id: 'c' }],
+    }
+    const writes = changeWrites(tasks)
+    // a rename, a move out, a status change to In progress and a comment land
+    for (const i of [0, 1, 2]) writes.next(i).landed()
+    const comment = writes.next(3)
+    comment.landed()
+    writes.next(4).landed()
+    // the move back, the status change back and the next comment fail
+    expect(writes.next(5).args.project_id).toBe('home')
+    expect(writes.next(6).args.patch).toEqual({ status: 'todo' })
+    writes.next(7)
+    expect(writes.restores()).toEqual([
+      ['issues:update', { org_id: 'org', id: 'r', patch: { title: 'Calibrate' } }],
+      ['issues:update', { org_id: 'org', id: 'r', patch: { status: 'todo' } }],
+      ['issues:move', { org_id: 'org', id: 'm', project_id: 'home' }],
+      ['comments:remove', { org_id: 'org', id: comment.args.id }],
+    ])
+    expect(writes.comments()).toEqual({ made: 2, posted: 1, failed: 1 })
+    // a move that failed going out is tried again, and only the title goes back
+    const refused = changeWrites(tasks)
+    refused.next(1)
+    expect(refused.next(5).args.project_id).toBe('sib')
+    expect(refused.restores()).toEqual([
+      ['issues:update', { org_id: 'org', id: 'r', patch: { title: 'Calibrate' } }],
+    ])
   })
 })
 

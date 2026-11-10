@@ -207,7 +207,7 @@ import { makeFunctionReference } from 'convex/server'
 import { jsonToConvex } from 'convex/values'
 import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
 import { busyLoops } from './load/busy.mjs'
-import { CHANGE_KINDS, commentTargets } from './load/changes.mjs'
+import { changeWrites, commentTargets } from './load/changes.mjs'
 import {
   checkSet,
   checkSetsDay,
@@ -1916,8 +1916,9 @@ async function loneReconnect(options, recorder, set) {
 
 /** The changes phase: `options.changes` changes as Nora, one a second, on
     the recorded Board's tasks, in turn a rename, a move to a sibling
-    sub-project (and back the next time), a status change and a comment.
-    Answers each change with the log's reruns and the clients' re-sends. */
+    sub-project (and back the next time), a status change and a comment
+    (changes.mjs changeWrites), then what landed put back. Answers each
+    change with the log's reruns and the clients' re-sends. */
 async function runChanges(options, plan, boardSet, workers, log) {
   if (!boardSet) throw new Error('the changes phase needs the recorded Board set')
   const nora = plan.people[0]
@@ -1937,16 +1938,10 @@ async function runChanges(options, plan, boardSet, workers, log) {
   // the comments go to other tasks in turn, enough that the comment rule
   // refuses none (changes.mjs commentTargets)
   const commented = commentTargets(open.filter((task) => task !== renamed && task !== moved))
-  const original = { title: renamed.title, status: renamed.status }
-  let away = false
-  let status = original.status
-  let commentsMade = 0
-  // the comments posted, which the cleanup removes
-  const comments = []
+  const writes = changeWrites({ org, renamed, moved, home, sibling, commented })
   const done = []
   const begin = Date.now()
   for (let i = 0; i < options.changes; i++) {
-    const kind = CHANGE_KINDS[i % CHANGE_KINDS.length]
     const slot = begin + i * 1000
     await sleep(Math.max(0, slot - Date.now()))
     // a worker that failed leaves its clients' re-sends out (the phase's
@@ -1955,62 +1950,28 @@ async function runChanges(options, plan, boardSet, workers, log) {
       workers.map((worker) => worker.ask({ type: 'change', id: i }, 'changed')),
     )
     const at = Date.now()
-    let call
-    if (kind === 'rename')
-      call = [
-        'issues:update',
-        { org_id: org, id: renamed.id, patch: { title: `${original.title} (${i})`.slice(0, 200) } },
-      ]
-    else if (kind === 'move') {
-      call = ['issues:move', { org_id: org, id: moved.id, project_id: away ? home : sibling.id }]
-      away = !away
-    } else if (kind === 'status') {
-      // between two open statuses, so no project's open or Done count moves
-      status = status === 'progress' ? 'todo' : 'progress'
-      call = ['issues:update', { org_id: org, id: renamed.id, patch: { status } }]
-    } else {
-      const id = crypto.randomUUID()
-      const target = commented[commentsMade++ % commented.length]
-      call = [
-        'comments:create',
-        {
-          org_id: org,
-          id,
-          issue_id: target.id,
-          body: 'Checked the readings against the bench log; the drift stays inside the calibration window.',
-        },
-      ]
-    }
+    const change = writes.next(i)
     let error = null
     try {
-      await retry(() => writer.mutation(ref(call[0]), call[1]))
-      if (kind === 'comment') comments.push(call[1].id)
+      await retry(() => writer.mutation(ref(change.fn), change.args))
+      change.landed()
     } catch (failure) {
       error = String(failure?.message ?? failure).slice(0, 200)
     }
-    done.push({ id: i, kind, fn: call[0], at, client_ms: Date.now() - at, error })
+    done.push({ id: i, kind: change.kind, fn: change.fn, at, client_ms: Date.now() - at, error })
   }
   await sleep(1500)
   // what the clients receive from here on is no change's
   await Promise.allSettled(
     workers.map((worker) => worker.ask({ type: 'change', id: null }, 'changed')),
   )
-  // the rename, the status and the move are put back
+  // the rename, the status and the move are put back, the comments removed
   const restored = []
-  const restore = (name, args) =>
-    retry(() => writer.mutation(ref(name), args)).then(
+  for (const [name, args] of writes.restores())
+    await retry(() => writer.mutation(ref(name), args)).then(
       () => restored.push(name),
       (error) => restored.push(`${name} failed: ${String(error?.message ?? error).slice(0, 120)}`),
     )
-  await restore('issues:update', { org_id: org, id: renamed.id, patch: { title: original.title } })
-  if (status !== original.status)
-    await restore('issues:update', {
-      org_id: org,
-      id: renamed.id,
-      patch: { status: original.status },
-    })
-  if (away) await restore('issues:move', { org_id: org, id: moved.id, project_id: home })
-  for (const id of comments) await restore('comments:remove', { org_id: org, id })
   // the writer's calls that succeeded, each run once at least, which the
   // phase's log coverage counts beside the clients' own
   const writerCalls = {}
@@ -2027,11 +1988,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
       sibling: sibling.id,
       commented: commented.map((task) => task.id),
     },
-    comments: {
-      made: commentsMade,
-      posted: comments.length,
-      failed: commentsMade - comments.length,
-    },
+    comments: writes.comments(),
     restored,
     changes: done.map((change, i) => {
       const until = done[i + 1]?.at ?? change.at + 1000
