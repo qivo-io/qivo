@@ -723,9 +723,12 @@ describe('the output', () => {
       'functions',
       'client_ms',
       'bytes',
+      'idle',
       'backend_at_once',
       'in_flight',
       'steal',
+      'event_loop_lag',
+      'pacing_trigger',
     ])
     expect(report.sources.functions).toContain('drops entries')
     expect(report.not_run).toEqual({ changes: 'not asked' })

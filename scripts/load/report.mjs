@@ -268,16 +268,22 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
     rung,
     sources: {
       functions:
-        "The local backend's function log stream (/api/stream_function_logs): executions, cache answers, failures, JavaScript time (userExecutionTime) and total time (executionTime) per top-level call. The stream drops entries when its queue fills, so a saturating rung's counts are lower bounds and its per-call times come from the clients too.",
+        "The local backend's function log stream (/api/stream_function_logs): executions, cache answers, failures and their errors, JavaScript time (userExecutionTime) and total time (executionTime) per top-level call. The stream drops entries when its queue fills, so a phase that says so in log_coverage has counts that are lower bounds, and its clients' own times stand beside them.",
       client_ms:
-        "Each client's own clocks: a mutation's time from its frame to its response, a query's time from its Add to its first answer, and time to current.",
+        "Each client's own clocks: a mutation's time from its frame to its response, a query's time from its Add to its first answer (client_first_answer_ms), and time to current, from the phase's start or the close and from the socket's open.",
       bytes:
-        "Each client's received WebSocket frames: an answer's bytes are its value's JSON length.",
+        "Each client's received WebSocket frames: an answer's bytes are its value's JSON length, bytes_total every frame's, pings included, and a change's re-send what each client received until the next change.",
+      idle: "The idle phase over its sessions and minutes: per_session_minute for what the sessions ask and the backend's own jobs apart, shares for the leaders' beats, claims and own reads apart from the views' answers, watched_per_minute for one login's tabs.",
       backend_at_once:
         'The most top-level calls whose log intervals (executionTimestamp to timestamp) overlap.',
       in_flight:
         "The clients' own counts of mutations awaiting their response and queries awaiting their first answer, sampled every 100 ms, summed over the processes' maxima.",
-      steal: '/proc/stat over the phase, as the coordinator read it.',
+      steal:
+        '/proc/stat over the phase, as the coordinator read it; a phase at 10% steal or more is marked noisy.',
+      event_loop_lag:
+        "Each process's monitorEventLoopDelay over the phase, past its 10 ms resolution.",
+      pacing_trigger:
+        "An overload close (1013), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's.",
     },
     recorded,
     match,

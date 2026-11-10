@@ -1,175 +1,160 @@
-// The combined load of many tabs, people and sessions on one disposable
-// local Convex backend: what each view subscribes, what a change re-sends,
-// what a reconnect, a cold start and an idle minute cost the server.
+// The combined load benchmark: many tabs, people and sessions on one
+// disposable local Convex backend. It measures what each view subscribes,
+// what a change re-sends to whom, and what a cold start, a reconnect, an
+// idle stretch and busy CPUs cost the server and its clients. Design
+// specification §9.1's timing line judges the JavaScript time of each call
+// at the everyday values, quiet and busy; figures past them are information.
 //
-//   QIVO_LOCAL_ADMIN_KEY=… node scripts/benchmark-load.mjs <part>
-//     [--url http://127.0.0.1:3236] [--site-url http://localhost:5241]
-//     [--deployment local-sc-3236] [--dir dev-temp/load] [--output file.json]
-//     [--browser chromium|firefox|webkit] [--views board,overview,roadmap,sync,inbox,mine]
-//     [--people 50] [--teams 10] [--orgs 1] [--clients 10] [--processes 2]
-//     [--phases match,startup,changes,reconnect,idle,busy] [--changes 20] [--idle-s 120]
-//     [--busy-loops 8] [--busy-cpus 0-7]
-//     [--quiet-ms 3000] [--timeout-ms 90000] [--no-hidden-tab]
-//     [--tabs 1] [--board-top]
+//   QIVO_LOCAL_ADMIN_KEY=… node scripts/benchmark-load.mjs <part> [options]
+//   node scripts/benchmark-load.mjs --help
 //
-// <part> is setup, record, replay or all (the three in turn), or tabs,
-// which `all` leaves out: one person's --tabs real tabs open at once (see
-// tabsPart). --board-top puts the Board view on the whole Luma Sensor
-// project instead of its Firmware sub-project, for the rung that raises a
-// project's open tasks. Startup and the reconnect also give each query's
-// time from its Add to its first answer by the clients' own clocks
-// (client_first_answer_ms), which a saturated function log cannot drop. The
-// options
-// are read in scripts/load/options.mjs, the protocol and the recorded sets
-// in scripts/load/frames.mjs and the figures in scripts/load/report.mjs,
-// which scripts/benchmark-load.test.mjs checks.
+// --help prints the parts and every option with the parts that read it and
+// its default, from the one table the parser reads too (load/options.mjs
+// OPTIONS); an unknown option, or one its part does not read, stops the run
+// before anything starts. The pure parts live in scripts/load/, which
+// scripts/benchmark-load.test.mjs checks: options.mjs the options,
+// plan.mjs the organization setup grows and which client replays what,
+// frames.mjs the Convex sync protocol and the recorded sets, changes.mjs the
+// changes phase's plan, alerts.mjs the app's alert client wired for a
+// replayed leader, and report.mjs the figures.
 //
 // Only a disposable local backend. --url and --site-url must be loopback
 // origins, the run refuses a CONVEX_DEPLOY_KEY in its environment, and it
 // reads the local backend's admin key from QIVO_LOCAL_ADMIN_KEY, as the
 // local seeds do, and prints it nowhere. Never point it at a hosted
-// deployment: it plants logins and sessions, adds people and teams and
-// writes tasks and comments. Run it in a Boat sandbox against the backend
-// the sandbox started, after `marketing-demo.mjs seed --local` seeded
-// Northstar there and, for everyday tasks, `board-scale-seed.mjs --local
-// --tasks 300` gave its 12 sub-projects about 30 tasks each.
+// deployment: it plants logins and sessions, adds people, teams and
+// organizations, reassigns tasks and writes changes and comments. Run it in
+// a Boat sandbox against the backend the sandbox started, after
+// `marketing-demo.mjs seed --local` seeded Northstar there and
+// `board-scale-seed.mjs --local --tasks 300` gave its 12 sub-projects about
+// the everyday 30 tasks each. people.json holds the planted session ids,
+// which act only with the admin key; it stays in the untracked working
+// folder.
 //
-// setup grows Northstar to the everyday organization, --people profiles
-// (agents included, 50 by default) and --teams teams (10), and writes
-// <dir>/people.json. It deploys no module and plants nothing in tracked
-// code: with the admin key it creates each Better Auth login and session
-// through the Better Auth component's own adapter functions
-// (convex/betterAuth/adapter.ts create and findOne, called with the
-// component path), claims each seat through identity.claimSeatsInternal
-// as the sign-in does, and makes every team, share and person through the
-// app's public mutations as Nora, the organization's admin (teams.create,
-// projects.setAccess, profiles.create). Each new person joins 3 teams, one
-// of Northstar's two, which are shared with every top-level project, and
-// two new ones, and each new team is shared with one sub-project, so every
-// person reads Northstar's projects and no project holds more than 3 team
-// shares, inside the design size's 5. Each new person is then made the
-// assignee of --tasks-each open tasks (3 by default) that the seed's other
-// people held, as Nora, so they hold tasks and, from each assignment's
-// "Assigned to you" message, Inbox items as an everyday person does; the
-// organization's task counts stay as they were (plan.mjs
-// everydayAssignments). It also plants one
-// session for Nora, which the replay's Nora and the writer act with. A
-// second run adds only what is missing. With --orgs N it then adds N - 1
-// organizations at everyday size beside Northstar (setupOrg): a new login
-// creates each, mirrors Northstar's projects and sub-projects by name with
-// 30 tasks a sub-project, adds --teams teams and --people profiles, and
-// invites Nora, whose login claims the seat as a guest, since a login holds
-// one home seat (convex/identity.ts claimSeatsForLogin), with `user` on
-// every top-level project; Nora gets one session for each. record then
-// records Nora's views in each organization too. people.json holds the planted
-// session ids, which act only with the admin key; it stays in the
-// untracked working folder.
+// The parts:
 //
-// record opens one real tab per --views view in --browser as Nora, signed
-// in through the app's own sign-in with the local seed's fixture password
-// (scripts/browser-demo.mjs signInDemo): a sub-project's Board (Luma
-// Sensor's Firmware), the Overview, the Roadmap and Team sync of Luma
-// Sensor, the Inbox and My view. Chromium runs as the full browser in its
-// new headless mode (channel chromium), since the headless shell answers
-// notifications as denied, and its context is granted notifications, so
-// the tab leads its profile's desktop alerts (src/lib/notificationLeader.ts)
-// and its set holds the Inbox feed and the delivery mode; Firefox and
-// WebKit are asked for it too and run without it where they refuse. The
-// tabs open one after another in one context, so each leads in turn as
-// the one before closes. It reads the tab's WebSocket frames from
-// Playwright, waits until the tab is current (every query answered at the
-// newest query set version) and its frames have been quiet for --quiet-ms,
-// and writes <dir>/sets/<view>.json: each query's function, arguments and
-// last answer's bytes, and the mutations the tab called by name and count.
-// Authenticate frames are never read, so no token reaches a set. It
-// records what the app at --site-url subscribes, the Vite dev server or a
-// production build alike, and times nothing in the browser.
+// - setup grows Northstar to the everyday organization, --people profiles
+//   (agents included) and --teams teams, and writes <dir>/people.json. It
+//   deploys no module: with the admin key it creates each Better Auth login
+//   and session through the Better Auth component's own adapter functions
+//   (convex/betterAuth/adapter.ts create and findOne), claims each seat
+//   through identity.claimSeatsInternal as the sign-in does, and makes every
+//   team, share, person and assignment through the app's public mutations
+//   as Nora, the organization's admin. Each new person joins 3 teams, one of
+//   Northstar's two, which are shared with every top-level project, and two
+//   new ones, each shared with one sub-project, so no project holds more
+//   than 3 team shares, inside the design size's 5. Each new person is then
+//   made the assignee of --tasks-each open tasks the seed's other people
+//   held, so they hold tasks and, from each "Assigned to you" message,
+//   Inbox items as an everyday person does, while the organization's task
+//   counts stay as they were (plan.mjs everydayAssignments). It plants a
+//   session for Nora and for each of the seed's people with a login. With
+//   --orgs N it adds N - 1 organizations at everyday size (setupOrg): a new
+//   login creates each, mirrors Northstar's projects by name with 30 tasks
+//   a sub-project owned by its people, and invites Nora, whose login claims
+//   the seat as a guest, since a login holds one home seat
+//   (convex/identity.ts claimSeatsForLogin). A second run adds only what is
+//   missing.
+// - record opens one real tab per --views view in --browser as Nora,
+//   signed in through the app's own sign-in with the seed's fixture
+//   password (browser-demo.mjs signInDemo): the Board of Luma Sensor's
+//   Firmware sub-project (or of the whole project with --board-top), the
+//   Overview, the Roadmap and Team sync of Luma Sensor, the Inbox and My
+//   view, in each organization. Chromium runs as the full browser in its
+//   new headless mode, since the headless shell answers notifications as
+//   denied, and its context is granted notifications, so the tab leads its
+//   profile's desktop alerts and its set holds the Inbox feed and the
+//   delivery mode; Firefox and WebKit run without where they refuse. It
+//   waits until the tab is current and quiet for --quiet-ms, and writes
+//   <dir>/sets/<view>.json: each query's function, arguments and last
+//   answer's bytes, the address, and the mutations the tab called. It never
+//   reads an Authenticate frame, so no token reaches a set, and times
+//   nothing in the browser.
+// - replay runs --clients Node clients over --processes processes, each a
+//   ConvexClient from convex/browser over the WebSocket, as the app's own
+//   client is. Client i acts as person i of people.json, Nora first, on the
+//   recorded set of view i modulo the views, with that person's ids swapped
+//   in (plan.mjs clientSpecs); with --orgs the clients are dealt to the
+//   organizations in turn, Nora's first tab in each on its Board. A client
+//   acts with the admin key as its person's planted login and session, so
+//   the session wrappers run as in the app, but no JWT is validated or
+//   refreshed, and it makes none of a boot's one-off writes, which the sets
+//   list under `calls`. A client whose set holds the Inbox feed leads its
+//   profile's alerts with the app's own alert client and leader
+//   (src/lib/notificationFeed.ts and notificationLeader.ts, load/alerts.mjs),
+//   so it beats, watches the feed, claims, summarizes first where the
+//   server asks and runs the resume order after a reconnect as a leading
+//   tab does. Such a leader watches the feed again at each beat, about once
+//   a minute, once its floor is ten minutes old; for ten minutes after an
+//   Inbox event, or after a summary, it watches nothing new. Its phases,
+//   startup first, then the others in the order --phases names them:
+//   - match: before any load, one client per recorded set as Nora herself,
+//     compared with the tab in functions, arguments and answer bytes (the
+//     feed's `after` is the leader's clock and compared by presence), then
+//     a reconnect of that lone Board client, the reconnect trigger's base.
+//   - startup: every client created and subscribed at once, from cold, each
+//     one's time to current and its set against its person's swapped set.
+//   - changes: --changes changes, one a second, as Nora on the recorded
+//     Board's open tasks: a rename, a move to a sibling sub-project and
+//     back, a status change between two open statuses and a comment, the
+//     comments on four other tasks in turn so the rule of 10 comments a
+//     minute from one person on one task refuses none (changes.mjs). The
+//     title, the status and the move are put back and the posted comments
+//     removed after, so a later run reads the same data.
+//   - reconnect: every client's socket closed at once, and with the hidden
+//     tab one real tab on the recorded Board, hidden as the visibility
+//     stage hid it, whose check passes when what it subscribes again holds
+//     none of the reads it dropped on hiding and nothing new.
+//   - idle: --idle-s seconds with no change.
+//   - busy: the changes again beside --busy-loops spinning processes,
+//     pinned to --busy-cpus, the backend's, with taskset.
+//   A phase that fails, such as on a saturated backend, records why and
+//   the run goes on. The rung goes to --output, else
+//   <dir>/out/rung-<clients>.json.
+// - tabs opens --tabs real tabs of Nora at once in one browser profile,
+//   tab i on view i modulo --views at its recorded address, and runs
+//   startup, changes, reconnect and idle over them as the replay runs them
+//   over its clients, so a tab's figures stand beside a replayed client's.
+//   It writes <dir>/out/tabs-<tabs>.json unless --output names a file.
 //
-// replay runs --clients Node clients over --processes processes, each a
-// ConvexClient from convex/browser over the WebSocket, as the app's own
-// client is (src/lib/convex.ts). Client i acts as person i of people.json
-// (Nora first) and subscribes the set of view i modulo the views, with
-// that person's profile and login swapped in for Nora's (frames.mjs
-// personQueries). A client signs in as its person's planted session with
-// the admin key acting as that identity (setAdminAuth with the login as
-// subject and the session as sessionId), so the session wrappers' reads
-// run as in the app (lib/functions.ts), but no JWT is validated or
-// refreshed. A client whose set holds the Inbox feed also leads its
-// profile's alerts, with the app's own alert client and leader
-// (src/lib/notificationFeed.ts and notificationLeader.ts, loaded through
-// Vite and wired as a tab wires them, load/alerts.mjs): it beats at the
-// server's pace, watches the feed, claims, raises the feed's floor at each
-// beat once no event under ten minutes old holds it, and runs the resume
-// order after a reconnect. So a leader watches the feed again at each
-// beat, about once a minute, once its floor is ten minutes old, in the app
-// as here; for ten minutes after an Inbox event, or after a summary, which
-// a session makes first when another session of its person claimed last,
-// the floor holds and the feed answers nothing. A client makes none of a
-// boot's one-off
-// writes (identity.claimMySeats, prefs.save), which the sets list under
-// `calls`. With --tasks-each 0 the people setup adds hold no task and no
-// Inbox item, so their Inbox and My view answer less than an everyday
-// person's. Its phases, each with
-// the function log's figures and /proc/stat's steal over it:
+// Where each figure comes from (report.mjs rungReport `sources`):
 //
-// - match: one client per recorded set as Nora herself, compared with the
-//   tab in functions, arguments and answer bytes (the Inbox feed's `after`
-//   is the leader's clock and compared by presence), then a reconnect of
-//   that lone Board client, whose time to current is the reconnect
-//   trigger's base.
-// - startup: every client created and subscribed at once, from cold; each
-//   one's time to current and its set against its person's swapped set.
-// - changes: --changes changes, one a second, as Nora: a rename, a move to
-//   a sibling sub-project and back, a status change and a comment on the
-//   recorded Board's tasks (two open tasks without subtasks, and the
-//   comments on four others in turn, so the rule of 10 comments a minute
-//   from one person on one task refuses none, changes.mjs), each with
-//   the queries that reran and their JavaScript time from the log, and the
-//   bytes re-sent to each client until the next change. The title, the
-//   status and the move are put back and the posted comments removed
-//   after, so a later run reads the same data.
-// - reconnect: every client's socket closed at once; the re-subscriptions,
-//   the JavaScript times, the calls in flight, the closes with their codes
-//   (1013 is an overload) and each client's time to current, from the
-//   close and from the socket's open. With the hidden tab (default), one
-//   real Board tab in --browser, hidden as the visibility stage hid it
-//   (document.visibilityState overridden and visibilitychange sent), has
-//   its socket closed at the same moment, and the check passes when the
-//   set it subscribes again holds none of the reads it dropped on hiding
-//   and nothing it did not hold while hidden.
-// - idle: --idle-s seconds with no change; server work, bytes and calls
-//   per session per minute, the beats and claims included, the leaders'
-//   share apart from the views' (report.mjs idleShares), and the answers
-//   per minute of each watched client (Nora's tabs).
-// - busy: the changes again beside --busy-loops processes that spin, each
-//   pinned to --busy-cpus with taskset when given, so the backend's CPUs
-//   are busy while the clients run on others.
+// - JavaScript and total time per call, executions, cache answers and
+//   errors: the local backend's function log stream
+//   (/api/stream_function_logs, userExecutionTime and executionTime), top
+//   level calls only, a nested call's time inside its caller's. The stream
+//   drops entries when its queue fills, so a phase whose clients made more
+//   calls than it shows says so (log_coverage), and its counts are lower
+//   bounds.
+// - The calls the backend ran at once: the overlap of those log entries.
+// - Time to current, a mutation's round trip and a query's first answer
+//   from its Add (client_first_answer_ms): each client's or tab's own
+//   clocks, which a saturated log cannot drop. The calls in flight: the
+//   clients' own counts, sampled every 100 ms.
+// - Bytes: each client's or tab's received WebSocket frames. An answer's
+//   bytes are its value's JSON length; a phase's bytes_total counts every
+//   frame, pings included. A change's re-send is what each client received
+//   between it and the next change.
+// - Idle per session per minute: the bytes, answers and calls of the idle
+//   phase over its sessions, the leaders' beats, claims and own reads apart
+//   from the views' answers (idleShares), and the backend's own jobs per
+//   minute apart, since no session asks for them.
+// - Steal and busy CPU: /proc/stat over the phase; a phase at 10% steal or
+//   more is marked noisy and is no timing. Event loop lag: each process's
+//   monitorEventLoopDelay past its 10 ms resolution.
+// - The pacing trigger: an overload close (1013), a call whose JavaScript
+//   passes the 0.5 s line, or a client whose time to current after the
+//   reconnect passes ten times the lone client's, each with its phase.
 //
-// The phases after startup run in the order --phases names them. With
-// --orgs the clients are dealt to the organizations in turn (clientSpecs):
-// the first in each is Nora's tab there, on its Board as recorded there,
-// and only her Northstar tab leads her alerts, as one browser profile
-// does; the rest are that organization's people on Northstar's sets with
-// its mirrored ids swapped in. A replayed person with one seat holds none
-// of the reads a recorded set names for Nora's other organizations.
-//
-// The output (--output, else <dir>/out/rung-<clients>.json) is one rung:
-// per phase and function the executions a second and the JavaScript p50,
-// p99 and maximum, the backend's total time, the calls at once in the
-// backend and in flight in the clients, closes, bytes per client per
-// change, idle bytes and calls per session per minute, time to current
-// after the reconnect, each process's event loop lag, /proc/stat's steal
-// with `noisy` set on a phase where it reached 10%, and item 9's
-// subscriptions of one login per organization by name (report.mjs
-// rungReport says where each figure comes from). The local function log
-// stream drops entries when its queue fills, so the clients also time
-// their own calls, and a phase whose clients called more than the log
-// shows says so (log_coverage). The pacing trigger the closing review's
-// question 9 fixed is reported beside it: an overload close, a call whose
-// JavaScript passes the owner's 0.5 s line, or a client whose time to
-// current after the reconnect passes ten times the lone client's. The
-// local backend's query concurrency is not hosted Convex's, so a close
-// there is judged against the modelled hosted limit, not taken as one.
+// The test bed. The local backend runs at most 16 queries and 16
+// mutations at once, Convex's defaults, which nothing here raises. On 4
+// CPUs the closing review's rungs of 10 November 2026 saturated those
+// slots near 100 sessions: calls queued past their limits, were refused
+// (TooManyConcurrentRequests) and sockets closed with 1013. A rung past
+// that measures the test bed, not Qivo's reads, and a local overload close
+// says nothing of hosted Convex's limit. Pin the backend to its own CPUs
+// and the clients to the others (taskset), and start the sandbox without
+// snapshots, whose captures slow the backend.
 import { fork, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
