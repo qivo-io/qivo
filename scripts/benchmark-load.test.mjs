@@ -16,6 +16,7 @@ import {
   mostInAMinute,
 } from './load/changes.mjs'
 import {
+  allCurrent,
   checkSet,
   checkSetsDay,
   compareSets,
@@ -280,6 +281,45 @@ const transition = (version, answers) =>
   })
 
 describe('the frame tracker', () => {
+  it("waits for the clients to be current, counting each reconnected client's queries, current or not", async () => {
+    const reconnected = (names) => {
+      const tracker = new FrameTracker()
+      tracker.sent(JSON.stringify({ type: 'Connect', sessionId: 's', connectionCount: 1 }))
+      tracker.sent(
+        add(
+          0,
+          1,
+          names.map((name, id) => [id, name, {}]),
+        ),
+      )
+      return tracker
+    }
+    const quick = reconnected(['workspace:root', 'tasks:board'])
+    quick.received(
+      transition(1, [
+        [0, {}],
+        [1, {}],
+      ]),
+    )
+    const clients = [
+      { index: 0, tracker: quick, openedAt: null },
+      // sent its three queries again and is still waiting for them
+      { index: 1, tracker: reconnected(['workspace:root', 'tasks:board', 'inbox:summary']) },
+      // never connected again after the drop, so it asked nothing
+      { index: 2, tracker: reconnected(['workspace:root']), before: 1 },
+    ]
+    const rows = await allCurrent(clients, {
+      from: quick.currentSince - 5,
+      timeoutMs: 50,
+      connects: (client) => client.before ?? 0,
+    })
+    expect(rows.map((row) => [row.index, row.current, row.queries, row.ms])).toEqual([
+      [0, true, 2, 5],
+      [1, false, 3, null],
+      [2, false, 0, null],
+    ])
+  })
+
   it('is current only once every query of the newest set version is answered', () => {
     const tracker = new FrameTracker()
     tracker.sent(

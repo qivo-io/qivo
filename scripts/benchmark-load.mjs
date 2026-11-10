@@ -211,10 +211,12 @@ import { leadAlerts, loadAppAlerts } from './load/alerts.mjs'
 import { busyLoops } from './load/busy.mjs'
 import { changeWrites, commentTargets } from './load/changes.mjs'
 import {
+  allCurrent,
   checkSet,
   checkSetsDay,
   compareSets,
   FrameTracker,
+  isCurrent,
   recordedSet,
   subscriptionsByOrganization,
   withoutLeaderReads,
@@ -1205,17 +1207,6 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
   return client
 }
 
-/** Whether replayed `client` is current: connected more than `connects`
-    times and every query of its newest set answered, and for a leader its
-    Inbox feed answered too, since a leader watches the feed only after its
-    first beat answers, as a tab does, and after a reconnect only after its
-    resume order. The replay's clients and the lone reconnect read it
-    alike. */
-const isCurrent = (client, connects) =>
-  client.tracker.connects > connects &&
-  client.tracker.current &&
-  (!client.lead || client.tracker.holds('inbox:feed'))
-
 /** The p50, p99 and maximum of event loop delay histogram `delay`
     (monitorEventLoopDelay's, at 10 ms resolution) as milliseconds past
     that resolution, to a hundredth: the lag beyond the sampler's own
@@ -1276,39 +1267,6 @@ async function runWorker() {
       slot.queries.set(udfPath, query)
       figures.changes.set(change, slot)
     }
-  }
-  /** Waits until every client is current, counting a client only once it
-      connected more than `connects(client)` times, then answers each one's
-      time to current, to the moment its set became current (FrameTracker
-      currentSince), from `from` and from its socket's open. */
-  const allCurrent = async (from, connects = () => 0) => {
-    const deadline = Date.now() + config.timeoutMs
-    const results = new Map()
-    while (results.size < clients.length && Date.now() < deadline) {
-      for (const client of clients) {
-        if (results.has(client.index) || !isCurrent(client, connects(client))) continue
-        const since = client.tracker.currentSince
-        results.set(client.index, {
-          index: client.index,
-          // the queries the client's newest set holds, sent again after a reconnect
-          queries: client.tracker.queries.size,
-          ms: since - from,
-          from_open_ms: client.openedAt ? since - client.openedAt : null,
-          current: true,
-          first_answers: client.tracker.firstAnswers(),
-        })
-      }
-      await sleep(20)
-    }
-    return clients.map(
-      (client) =>
-        results.get(client.index) ?? {
-          index: client.index,
-          ms: null,
-          from_open_ms: null,
-          current: false,
-        },
-    )
   }
   const report = () => {
     // the server's or the network's closes by code, and the benchmark's own drops
@@ -1383,7 +1341,7 @@ async function runWorker() {
           client.lead = spec.lead
           clients.push(client)
         }
-        const results = await allCurrent(from)
+        const results = await allCurrent(clients, { from, timeoutMs: config.timeoutMs })
         process.send({
           type: 'started',
           results: results.map((result) => {
@@ -1401,7 +1359,11 @@ async function runWorker() {
         const at = Date.now()
         const before = new Map(clients.map((client) => [client, client.tracker.connects]))
         for (const client of clients) client.drop()
-        const results = await allCurrent(at, (client) => before.get(client))
+        const results = await allCurrent(clients, {
+          from: at,
+          timeoutMs: config.timeoutMs,
+          connects: (client) => before.get(client),
+        })
         process.send({ type: 'reconnected', results })
       } else if (message.type === 'report') {
         process.send({ type: 'report', report: report() })
