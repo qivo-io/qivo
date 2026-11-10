@@ -1,7 +1,9 @@
 // The combined load benchmark: many tabs, people and sessions on one
 // disposable local Convex backend. It measures what each view subscribes,
 // what a change re-sends to whom, and what a cold start, a reconnect, an
-// idle stretch and busy CPUs cost the server and its clients. Design
+// idle stretch and busy CPUs cost the server and its clients, the combined
+// load of many tabs, devices, people and organizations that the later-work
+// entry on it of 9 November 2026 in qivo-internal asks for. Design
 // specification §9.1's timing line judges the JavaScript time of each call
 // at the everyday values, quiet and busy; figures past them are information.
 //
@@ -170,14 +172,13 @@
 //   (test_bed_saturated) and fires nothing.
 //
 // The test bed. The local backend runs at most 16 queries and 16
-// mutations at once, Convex's defaults, which nothing here raises. On 4
-// CPUs the closing review's rungs of 10 November 2026 saturated those
-// slots near 100 sessions: calls queued past their limits, were refused
-// (TooManyConcurrentRequests) and sockets closed with 1013. A rung past
-// that measures the test bed, not Qivo's reads, and a local overload close
-// says nothing of hosted Convex's limit. Pin the backend to its own CPUs
-// and the clients to the others (taskset), and start the sandbox without
-// snapshots, whose captures slow the backend.
+// mutations at once, Convex's defaults, which nothing here raises. Once a
+// rung fills those slots, calls queue past their limits, are refused
+// (TooManyConcurrentRequests) and sockets close with 1013, and the rung
+// measures the test bed, not Qivo's reads; a local overload close says
+// nothing of hosted Convex's limit (test_bed_saturated). Pin the backend
+// to its own CPUs and the clients to the others (taskset), and start the
+// sandbox without snapshots, whose captures slow the backend.
 import { fork, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
@@ -1216,8 +1217,8 @@ async function runWorker() {
     bytesStart: new Map(),
     answers: new Map(),
     changes: new Map(),
-    // the answers of the clients marked `watch` (one login's tabs, item 9),
-    // by client and function
+    // the answers of the clients marked `watch` (one login's tab in each of
+    // its organizations), by client and function
     watched: new Map(),
   })
   let figures = fresh()

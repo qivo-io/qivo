@@ -268,8 +268,12 @@ export const noisyOf = (steal) => (steal ? steal.steal_pct >= NOISY_STEAL_PCT : 
 
 /** One rung's output: what ran, where and when (`rung`), the recorded
     sets' summaries (`recorded`), the replay's match with the tabs
-    (`match`), each phase's figures (`phases`), item 9's subscriptions of
-    one login per organization (`subscriptions`) and the phases that did
+    (`match`), each phase's figures (`phases`), the subscriptions of one
+    login per organization (`subscriptions`, which the later-work entry on
+    the combined load of 9 November 2026 in qivo-internal asks for, since a
+    login holds one home seat and guest seats in other organizations with
+    no cap, design specification §9.3's original size decisions) and the
+    phases that did
     not run with their reason (`not_run`). Each figure says where it came
     from in `sources`. */
 export function rungReport({ rung, recorded, match, phases, subscriptions, notRun }) {
