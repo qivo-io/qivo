@@ -84,8 +84,9 @@
 // It also opens a third page on a workspace whose one project holds 1,000
 // tasks over 3 sub-projects, a fifth of them Done (the design size's 800
 // open and 200 Done tasks of a project, at their sum), with that project
-// saved as Team sync's scope (scripts/perf/server.mjs syncscope=program),
-// and measures Team sync: opening it from the sidebar until the opening's
+// saved as Team sync's scope (scripts/perf/server.mjs syncscope=program)
+// and one hidden sub-project as full as a visible one (perf/options.mjs
+// SYNC_CASE), and measures Team sync: opening it from the sidebar until the opening's
 // facts show (syncOpen, with the longest frame after they first showed,
 // syncLongestFrameMs), Next to the first person's columns (syncNext), a
 // Remaining typed on that person's first card and Enter until the person's
@@ -154,6 +155,8 @@ import {
   OptionsError,
   SIZE_CASE_SHAPE,
   STATUS_WRITES,
+  SYNC_CASE,
+  VARIED_CASE_SHAPE,
   workspaceParameters,
 } from './perf/options.mjs'
 import { buildPage, checkoutOf, serve } from './perf/page.mjs'
@@ -1355,7 +1358,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     startup, scrolls it and drags one card into the next status. */
 async function runVariedSample(origin, tasks, metrics, query = '') {
   phase('variedStartup')
-  const opened = await openPage(origin, tasks, metrics, `&shape=varied${query}`)
+  const opened = await openPage(origin, tasks, metrics, `${VARIED_CASE_SHAPE}${query}`)
   const { context, page, errors, settle, timed } = opened
   await startedOn(page)
   await settle()
@@ -1451,15 +1454,11 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
 }
 
 /** Runs one sample of Team sync on a project of 1,000 tasks over 3
-    sub-projects, a fifth Done, saved as the scope (see the header). */
+    sub-projects, a fifth Done, saved as the scope, beside one hidden
+    sub-project (perf/options.mjs SYNC_CASE, and the header). */
 async function runSyncSample(origin, metrics, query = '') {
   phase('syncStartup')
-  const opened = await openPage(
-    origin,
-    1000,
-    metrics,
-    `&subprojects=3&done=0.2&syncscope=program${query}`,
-  )
+  const opened = await openPage(origin, SYNC_CASE.tasks, metrics, `${SYNC_CASE.shape}${query}`)
   const { context, page, errors, settle, timed } = opened
   await startedOn(page)
   await settle()
@@ -1990,7 +1989,7 @@ try {
   if (options.serve) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?${workspaceParameters(sizes[0])}${SIZE_CASE_SHAPE}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?${workspaceParameters(sizes[0])}${SIZE_CASE_SHAPE}&latency=${latency}&mbps=${bandwidth}${varied ? VARIED_CASE_SHAPE : ''}${target.query}`,
       )
     // a supervised service stops with SIGTERM
     await new Promise((resolve) => {

@@ -34,6 +34,21 @@ export const STATUS_WRITES = {
     visible ones' sub-projects. */
 export const SIZE_CASE_SHAPE = '&subprojects=3&hidden=1'
 
+/** The stand-in's page parameters of --fixture varied's Board page beside
+    each --sizes case's tasks: the varied workspace (scripts/perf/server.mjs
+    shape=varied) with the stand-in's own sub-projects and hidden program. */
+export const VARIED_CASE_SHAPE = '&shape=varied'
+
+/** --fixture varied's Team sync page: its tasks and its page parameters,
+    one project of 3 sub-projects, a fifth of its tasks Done, saved as Team
+    sync's scope, and one hidden sub-project as full as a visible one. The
+    project holds the design size's open and Done tasks of a project at
+    their sum, since the meeting reads both. */
+export const SYNC_CASE = {
+  tasks: 1000,
+  shape: '&subprojects=3&done=0.2&hidden=1&syncscope=program',
+}
+
 /** The page parameters that put `tasks` visible tasks in a stand-in
     workspace, spread over programsFor's top-level projects. */
 export const workspaceParameters = (tasks) => `tasks=${tasks}&programs=${programsFor(tasks)}`

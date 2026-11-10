@@ -6,6 +6,8 @@ import {
   OptionsError,
   SIZE_CASE_SHAPE,
   STATUS_WRITES,
+  SYNC_CASE,
+  VARIED_CASE_SHAPE,
   workspaceParameters,
 } from './options.mjs'
 
@@ -186,6 +188,26 @@ describe("the benchmark's default cases", () => {
     // the largest default case's creates hold the design size's open tasks
     // of a project
     expect([...reached]).toEqual(['openInProject'])
+  }, 30_000)
+
+  /* The varied sample's drag moves a To Do card to In Progress and the
+     Team sync sample types a Remaining, so neither adds a task or moves
+     one into or out of Done. */
+  it("--fixture varied's pages stay within the design size", async () => {
+    for (const tasks of DEFAULT_SIZES) {
+      const varied = await standIn(`${workspaceParameters(tasks)}${VARIED_CASE_SHAPE}`)
+      atDesignSize(figuresOf(await varied.tasks()), `on the varied page at ${tasks} tasks`)
+    }
+    const sync = await standIn(`${workspaceParameters(SYNC_CASE.tasks)}${SYNC_CASE.shape}`)
+    const figures = figuresOf(await sync.tasks())
+    for (const [figure, most] of Object.entries(DESIGN))
+      expect(figures[figure], `${figure} on the Team sync page`).toBeLessThanOrEqual(most)
+    // the meeting reads a project's open and Done tasks, so the page holds
+    // both at their design size, at their sum, and no other figure
+    expect(Object.keys(DESIGN).filter((figure) => figures[figure] === DESIGN[figure])).toEqual([
+      'openInProject',
+      'doneInProject',
+    ])
   }, 30_000)
 
   it('change a status only from one open status to another', () => {
