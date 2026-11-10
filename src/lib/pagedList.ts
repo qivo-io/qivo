@@ -268,6 +268,12 @@ export function listEnd(
 /* The place of a row with `name` and `id` in the server's name order. */
 const placeOf = (name: string, id: string) => [nameKey(name), id]
 
+/** Sorts rows in the server's name order, the name key tied by the id, the
+    order projectNav.children and the sidebar list a project's sub-projects
+    in, for a list the app gathers itself, such as a ceiling note's. */
+export const byNameOrder = (a: { name: string; id: string }, b: { name: string; id: string }) =>
+  compareValues(placeOf(a.name, a.id), placeOf(b.name, b.id))
+
 /** Whether `list`, in the server's name key order tied by the id, tells
     that it does not hold the row with `name` and `id`: its batches reached
     past that place, or the list ended, with no batch stopped or failed,

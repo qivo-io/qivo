@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../../convex/lib/limits'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
+import { byNameOrder } from '../../lib/pagedList'
 import type { ScopeInfo } from '../../store/planner'
 import type { BoardVariant } from './boardArgs'
 import type { BoardView } from './useBoardView'
@@ -42,11 +43,11 @@ export function BoardNote({
           : 'Narrow your filters, such as Focus, Priority, Stale or the text filter, or open a project.',
       }
     if (info.isMeta) {
-      // the answer's sub-projects the project cache names, in the Board's
-      // lane order (useBoardView groups)
+      // the answer's sub-projects the project cache names, in the sidebar's
+      // order, as the Roadmap's and Team sync's notes list them
       return {
         hint: 'Choose a sub-project or narrow your filters.',
-        projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])),
+        projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])).sort(byNameOrder),
       }
     }
     return { hint: 'Narrow your filters.' }
