@@ -45,9 +45,11 @@
 //   new ones, each shared with one sub-project, so no project holds more
 //   than 3 team shares, inside the design size's 5. Each new person is then
 //   made the assignee of --tasks-each open tasks the seed's other people
-//   held, so they hold tasks and, from each "Assigned to you" message,
-//   Inbox items as an everyday person does, while the organization's task
-//   counts stay as they were (plan.mjs everydayAssignments). It plants a
+//   held where it holds Edit, as an assignee must (under its Northstar
+//   team's own projects and in its new teams' sub-projects), so it holds
+//   tasks and, from each "Assigned to you" message, Inbox items as an
+//   everyday person does, while the organization's task counts stay as
+//   they were (plan.mjs holdPlaces and everydayAssignments). It plants a
 //   session for Nora and for each of the seed's people with a login. With
 //   --orgs N it adds N - 1 organizations at everyday size (setupOrg): a new
 //   login creates each, mirrors Northstar's projects by name with 30 tasks
@@ -179,8 +181,10 @@ import {
   clientSpecs,
   everydayAssignments,
   findSeat,
+  holdPlaces,
   orgsOf,
   stableId,
+  teamsOfPerson,
   viewUrls,
 } from './load/plan.mjs'
 import {
@@ -295,6 +299,24 @@ async function navRows(client, name, args) {
     rows.push(...batch.rows)
     if (batch.stopped) throw new Error(`${name} stopped`)
     if (batch.next === null) return rows
+    after = batch.next
+  }
+}
+
+/** Every row of a settings list (projectSettings teams and the like) as
+    `client` reads it, waiting out not_ready. */
+async function listRows(client, name, args) {
+  const rows = []
+  const deadline = Date.now() + 30_000
+  for (let after; ; ) {
+    const batch = await client.query(ref(name), { ...args, ...(after ? { after } : {}) })
+    if (batch.state === 'not_ready' && Date.now() < deadline) {
+      await sleep(250)
+      continue
+    }
+    if (batch.state !== 'ready' || batch.stopped) throw new Error(`${name} answered ${batch.state}`)
+    rows.push(...batch.rows)
+    if (!batch.next) return rows
     after = batch.next
   }
 }
@@ -478,8 +500,31 @@ async function setup(options) {
     seeded.push({ ...person, profile_id: own.profile_id, org_id: own.org_id })
   }
   const people = [{ ...nora }, ...made, ...grown.people, ...seeded]
+  // where each added person may hold tasks: under the top-level projects
+  // its Northstar team holds Edit on, and in the sub-projects its new teams
+  // are shared with, at Edit
+  const editors = new Map()
+  for (const top of projects) {
+    const shares = await listRows(asNora, 'projectSettings:teams', {
+      org_id: org,
+      project_id: top.id,
+    })
+    editors.set(
+      top.id,
+      new Set(shares.filter((share) => share.level !== 'viewer').map((share) => share.id)),
+    )
+  }
+  const places = holdPlaces(
+    people.filter((person) => ADDED.test(person.key)),
+    {
+      projects,
+      editors,
+      sharedBy: new Map(added.map((team, j) => [team, subprojects[j % subprojects.length].id])),
+      teamsOf: (person) => teamsOfPerson(Number(person.key.slice(1)) - 1, seat.team_ids, added),
+    },
+  )
   const assigned = await assignEveryday(options, asNora, org, projects, {
-    owners: people.filter((person) => ADDED.test(person.key)).map((person) => person.profile_id),
+    places,
     keep: nora.profile_id,
   })
   mkdirSync(options.dir, { recursive: true })
@@ -512,12 +557,13 @@ async function setup(options) {
     against the seed's own (leo, aisha and the rest). */
 const ADDED = /^p[0-9]+$/
 
-/** Gives each of `owners` --tasks-each open tasks of Northstar's
-    `projects` as their assignee, as Nora (everydayAssignments), so each
-    holds tasks and an Inbox item for each. Answers how many tasks it
-    assigned; says so when the projects hold too few. */
-async function assignEveryday(options, asNora, org, projects, { owners, keep }) {
-  if (options.tasksEach === 0 || owners.length === 0) return 0
+/** Gives each owner of `places` --tasks-each open tasks of Northstar's
+    `projects` in the sub-projects `places` names for it, as their assignee,
+    as Nora (everydayAssignments), so each holds tasks and an Inbox item for
+    each. Answers how many tasks it assigned; says so when the sub-projects
+    hold too few. */
+async function assignEveryday(options, asNora, org, projects, { places, keep }) {
+  if (options.tasksEach === 0 || places.size === 0) return 0
   const tasks = []
   for (const project of projects) {
     const answer = await retry(() =>
@@ -530,7 +576,7 @@ async function assignEveryday(options, asNora, org, projects, { owners, keep }) 
       throw new Error(`the Board of ${project.name} answered ${answer.state}`)
     tasks.push(...answer.rows)
   }
-  const { pairs, short } = everydayAssignments(owners, tasks, options.tasksEach, keep)
+  const { pairs, short } = everydayAssignments(places, tasks, options.tasksEach, keep)
   await pool(pairs, 8, ([id, owner]) =>
     retry(() =>
       asNora.mutation(ref('issues:update'), { org_id: org, id, patch: { assignee_id: owner } }),
@@ -538,7 +584,7 @@ async function assignEveryday(options, asNora, org, projects, { owners, keep }) 
   )
   if (short.length > 0)
     say(
-      `setup: ${short.length} people hold fewer than ${options.tasksEach} tasks; the projects hold too few open tasks`,
+      `setup: ${short.length} people hold fewer than ${options.tasksEach} tasks; their sub-projects hold too few open tasks`,
     )
   return pairs.length
 }
@@ -593,11 +639,6 @@ async function addPeople({
     const name = `${FIRST[i % FIRST.length]} ${LAST[Math.floor(i / FIRST.length) % LAST.length]}`
     const email = emailOf(i)
     const id = idOf(i)
-    const pick = [
-      baseTeams[i % baseTeams.length],
-      addedTeams[i % addedTeams.length],
-      addedTeams[(i + 3) % addedTeams.length],
-    ]
     const made = await once(() =>
       asAdmin.mutation(ref('profiles:create'), {
         org_id: org,
@@ -607,7 +648,7 @@ async function addPeople({
         org_role: 'user',
         kind: 'person',
         color: COLORS[i % COLORS.length],
-        teams: [...new Set(pick.filter(Boolean))],
+        teams: teamsOfPerson(i, baseTeams, addedTeams),
       }),
     )
     if (made) created++

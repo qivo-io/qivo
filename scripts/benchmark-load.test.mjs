@@ -32,7 +32,15 @@ import {
   usage,
   VIEWS,
 } from './load/options.mjs'
-import { clientSpecs, everydayAssignments, findSeat, stableId, viewUrls } from './load/plan.mjs'
+import {
+  clientSpecs,
+  everydayAssignments,
+  findSeat,
+  holdPlaces,
+  stableId,
+  teamsOfPerson,
+  viewUrls,
+} from './load/plan.mjs'
 import {
   attachResends,
   cpuCounters,
@@ -922,9 +930,15 @@ describe("the idle phase's shares", () => {
 })
 
 describe("setup's everyday people", () => {
-  const task = (id, assignee_id, extra = {}) => ({ id, assignee_id, status: 'todo', ...extra })
+  const task = (id, assignee_id, extra = {}) => ({
+    id,
+    assignee_id,
+    status: 'todo',
+    project_id: 'sub-a',
+    ...extra,
+  })
 
-  it("gives each added person open tasks of the seed's other people, never Nora's", () => {
+  it("gives each added person open tasks of the seed's other people where it holds Edit, never Nora's", () => {
     const tasks = [
       task('t5', 'leo'),
       task('t1', 'nora'),
@@ -933,10 +947,15 @@ describe("setup's everyday people", () => {
       task('t4', 'leo', { has_subtasks: true }),
       task('t6', 'leo', { parent_id: 't5' }),
       task('t7', null),
-      task('t8', 'emil', { status: 'progress' }),
-      task('t9', 'emil', { status: 'backlog' }),
+      task('t8', 'emil', { status: 'progress', project_id: 'sub-b' }),
+      task('t9', 'emil', { status: 'backlog', project_id: 'sub-b' }),
+      task('t0', 'emil', { project_id: 'sub-c' }),
     ]
-    expect(everydayAssignments(['p1', 'p2'], tasks, 2, 'nora')).toEqual({
+    const places = new Map([
+      ['p1', ['sub-a']],
+      ['p2', ['sub-b', 'sub-a']],
+    ])
+    expect(everydayAssignments(places, tasks, 2, 'nora')).toEqual({
       pairs: [
         ['t5', 'p1'],
         ['t7', 'p1'],
@@ -945,19 +964,69 @@ describe("setup's everyday people", () => {
       ],
       short: [],
     })
+    // t0's sub-project is nobody's place, so nobody is given it
+    const one = new Map([['p1', ['sub-b']]])
+    expect(everydayAssignments(one, tasks, 3, 'nora')).toEqual({
+      pairs: [
+        ['t8', 'p1'],
+        ['t9', 'p1'],
+      ],
+      short: ['p1'],
+    })
+  })
+
+  it('puts each person in 3 teams and lets it hold tasks only where a team of it holds Edit', () => {
+    const base = ['hardware', 'cloud']
+    const added = ['t0', 't1', 't2', 't3', 't4']
+    expect(teamsOfPerson(0, base, added)).toEqual(['hardware', 't0', 't3'])
+    expect(teamsOfPerson(3, base, added)).toEqual(['cloud', 't3', 't1'])
+    const projects = [
+      { id: 'sensor', children: [{ id: 'sensor-fw' }, { id: 'sensor-hw' }] },
+      { id: 'cloud-app', children: [{ id: 'cloud-api' }] },
+    ]
+    const places = holdPlaces(
+      [
+        { key: 'p1', profile_id: 'prof-1' },
+        { key: 'p4', profile_id: 'prof-4' },
+      ],
+      {
+        projects,
+        // each Northstar team holds Edit on its own project alone
+        editors: new Map([
+          ['sensor', new Set(['hardware'])],
+          ['cloud-app', new Set(['cloud'])],
+        ]),
+        sharedBy: new Map([
+          ['t0', 'cloud-api'],
+          ['t1', 'sensor-hw'],
+          ['t3', 'sensor-fw'],
+        ]),
+        teamsOf: (person) => teamsOfPerson(Number(person.key.slice(1)) - 1, base, added),
+      },
+    )
+    expect(places.get('prof-1')).toEqual(['sensor-fw', 'sensor-hw', 'cloud-api'])
+    expect(places.get('prof-4')).toEqual(['cloud-api', 'sensor-fw', 'sensor-hw'])
   })
 
   it('counts what an earlier run assigned and names the people left short', () => {
     const tasks = [task('t1', 'p1'), task('t2', 'leo'), task('t3', 'leo')]
+    const places = new Map([
+      ['p1', ['sub-a']],
+      ['p2', ['sub-a']],
+      ['p3', ['sub-a']],
+    ])
     // p1 holds one already, so one more; p2 gets the last; p3 none
-    expect(everydayAssignments(['p1', 'p2', 'p3'], tasks, 2, 'nora')).toEqual({
+    expect(everydayAssignments(places, tasks, 2, 'nora')).toEqual({
       pairs: [
         ['t2', 'p1'],
         ['t3', 'p2'],
       ],
       short: ['p2', 'p3'],
     })
-    expect(everydayAssignments(['p1'], tasks, 0, 'nora')).toEqual({ pairs: [], short: [] })
+    expect(everydayAssignments(new Map([['p1', ['sub-a']]]), tasks, 0, 'nora')).toEqual({
+      pairs: [],
+      short: [],
+    })
   })
 })
 

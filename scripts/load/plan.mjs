@@ -5,22 +5,61 @@
 import { createHash } from 'node:crypto'
 import { personQueries, withoutLeaderReads } from './frames.mjs'
 
+/** The three teams person number `n` that setup adds joins: one of
+    `baseTeams`, which are shared with every top-level project, and two of
+    `addedTeams`, each shared with one sub-project. */
+export const teamsOfPerson = (n, baseTeams, addedTeams) => [
+  ...new Set(
+    [
+      baseTeams[n % baseTeams.length],
+      addedTeams[n % addedTeams.length],
+      addedTeams[(n + 3) % addedTeams.length],
+    ].filter(Boolean),
+  ),
+]
+
+/**
+ * Where each person of `people` setup added may hold tasks, as a Map from
+ * its profile id to sub-project ids: the sub-projects of each top-level
+ * project of `projects` one of its teams (`teamsOf(person)`) holds Edit or
+ * more on (`editors`, a Map from a top-level project's id to those teams),
+ * and the sub-project each of its teams is shared with at Edit (`sharedBy`,
+ * a Map from a team to its sub-project's id).
+ */
+export function holdPlaces(people, { projects, editors, sharedBy, teamsOf }) {
+  return new Map(
+    people.map((person) => {
+      const teams = teamsOf(person)
+      const places = new Set()
+      for (const top of projects)
+        if (teams.some((team) => editors.get(top.id)?.has(team)))
+          for (const child of top.children) places.add(child.id)
+      for (const team of teams) if (sharedBy.has(team)) places.add(sharedBy.get(team))
+      return [person.profile_id, [...places]]
+    }),
+  )
+}
+
 /** The statuses of a task that an assignment hands to its new assignee
     with an Inbox message (convex/model/messages.ts notifyIssueUpdate): open
     and not in Review, whose owner is the reviewer (lib/review.ts). */
 const ASSIGNABLE = new Set(['backlog', 'todo', 'progress'])
 
 /**
- * The assignments that give each of `owners` (profile ids) `each` open
- * tasks of `tasks` (Board rows), so the people setup adds hold tasks and,
- * from each assignment's "Assigned to you" message, Inbox items as an
- * everyday person does. A task is taken only when it is open outside
- * Review, has no subtasks and no parent, and is not `keep`'s (Nora's, whose
- * views the recorded sets show), in id order. A task an owner already holds
- * counts toward that owner's `each`, so a second run adds only what is
- * missing. Answers [task id, owner] pairs and the owners left short.
+ * The assignments that give each owner of `places` (a Map from a profile id
+ * to the sub-projects it may hold tasks in) `each` open tasks of `tasks`
+ * (Board rows), so the people setup adds hold tasks and, from each
+ * assignment's "Assigned to you" message, Inbox items as an everyday person
+ * does. An assignee needs Edit on the task's project (convex/model/issues.ts
+ * assertAssigneeRule), which holdPlaces works out. A task is taken only when it is in one of its
+ * owner's places, open outside Review, has no subtasks and no parent, and
+ * is not `keep`'s (Nora's, whose views the recorded sets show), in id
+ * order. A task an owner already holds counts toward its `each`, so a
+ * second run adds only what is missing. Answers [task id, owner] pairs and
+ * the owners left short.
  */
-export function everydayAssignments(owners, tasks, each, keep) {
+export function everydayAssignments(places, tasks, each, keep) {
+  const owners = [...places.keys()]
   const mine = new Set(owners)
   const held = new Map(owners.map((owner) => [owner, 0]))
   for (const task of tasks)
@@ -38,9 +77,11 @@ export function everydayAssignments(owners, tasks, each, keep) {
   const pairs = []
   const short = []
   for (const owner of owners) {
+    const where = new Set(places.get(owner))
     for (let n = held.get(owner); n < each; n++) {
-      const task = free.shift()
-      if (!task) break
+      const at = free.findIndex((task) => where.has(task.project_id))
+      if (at < 0) break
+      const [task] = free.splice(at, 1)
       pairs.push([task.id, owner])
       held.set(owner, n + 1)
     }
