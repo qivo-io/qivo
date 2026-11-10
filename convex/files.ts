@@ -935,9 +935,9 @@ export const restoreWitness = internalMutation({
   handler: async (): Promise<null> => null,
 })
 
-/* The /demo-uploads/ URL of a new reservation for an upload of `kind` to
- * `targetId` with the declared `size`, or without one the kind's limit or
- * the free space (model/demoUploads.ts reserveDemoUpload). */
+/* The /demo-uploads/ URL of a new reservation of the declared `size` for
+ * an upload of `kind` to `targetId` (model/demoUploads.ts
+ * reserveDemoUpload). */
 async function demoUploadUrl(
   ctx: MutationCtx,
   authId: string,
