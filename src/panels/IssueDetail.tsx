@@ -2653,9 +2653,8 @@ function IssueDetail({
   const gap = spineGap(gapSides.comments, gapSides.events)
   const parts = splitSpine(spine, gap, gapSides, editingComment)
   const shown = [...parts.above, ...parts.below]
-  // the minute the comments' ages are told in, so a render in a later
-  // minute tells them again while the memoized rows skip within one
-  const ageMinute = Math.floor(Date.now() / 60_000)
+  // the minute the comments' ages are told in (CommentRow)
+  const ageMinute = P.ageMinute()
   const newer = newerRow(
     gap,
     all ? from.start : Number.NEGATIVE_INFINITY,
