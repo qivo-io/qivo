@@ -100,7 +100,8 @@
 //   - match: before any load, one client per recorded set as Nora herself,
 //     compared with the tab in functions, arguments and answer bytes (the
 //     feed's `after` is the leader's clock and compared by presence), then
-//     a reconnect of that lone Board client, the reconnect trigger's base.
+//     a reconnect of one Board client alone, leading its alerts as the
+//     replay's Board clients do, the reconnect trigger's base.
 //   - startup: every client created and subscribed at once, from cold, each
 //     one's time to current and its set against the recorded set it was
 //     given.
@@ -1179,6 +1180,17 @@ function replayClient({ url, adminKey, person, queries, alerts, index, onAnswer 
   return client
 }
 
+/** Whether replayed `client` is current: connected more than `connects`
+    times and every query of its newest set answered, and for a leader its
+    Inbox feed answered too, since a leader watches the feed only after its
+    first beat answers, as a tab does, and after a reconnect only after its
+    resume order. The replay's clients and the lone reconnect read it
+    alike. */
+const isCurrent = (client, connects) =>
+  client.tracker.connects > connects &&
+  client.tracker.current &&
+  (!client.lead || client.tracker.holds('inbox:feed'))
+
 /* ----------------------------------------------------------------- worker */
 
 /** A worker process: runs its share of the clients and answers the
@@ -1242,11 +1254,7 @@ async function runWorker() {
     const results = new Map()
     while (results.size < clients.length && Date.now() < deadline) {
       for (const client of clients) {
-        if (results.has(client.index) || !client.tracker.current) continue
-        if (client.tracker.connects <= connects(client)) continue
-        // a leader watches the feed only after its first beat answers, as a
-        // tab does, so it is current once the feed has answered too
-        if (client.lead && !client.tracker.holds('inbox:feed')) continue
+        if (results.has(client.index) || !isCurrent(client, connects(client))) continue
         const start = from
         results.set(client.index, {
           index: client.index,
@@ -1783,11 +1791,10 @@ async function replay(options) {
 
 /** The match phase: each recorded set replayed by one client as the
     recorder, compared with the tab, then a reconnect of the lone Board
-    client timed. Runs in this process, before any load. */
+    client timed (loneReconnect). Runs in this process, before any load. */
 async function matchSets(options, plan, sets) {
   const recorder = plan.people[0]
   const views = []
-  let lone = null
   for (const set of sets) {
     const client = replayClient({
       url: options.url,
@@ -1813,20 +1820,48 @@ async function matchSets(options, plan, sets) {
       queries: set.queries.length,
       ...compared,
     })
-    if (set.view === 'board') {
-      const connects = client.tracker.connects
-      const at = Date.now()
-      client.drop()
-      const fresh = () => client.tracker.connects > connects && client.tracker.current
-      while (!fresh() && Date.now() - at < options.timeoutMs) await sleep(10)
-      lone = fresh() ? Date.now() - at : null
-    }
     await client.close()
   }
+  const board = sets.find((set) => set.view === 'board')
   return {
     matched: views.every((view) => view.matched),
     views,
-    lone_reconnect_ms: lone,
+    lone_reconnect_ms: board ? await loneReconnect(options, recorder, board) : null,
+  }
+}
+
+/** The reconnect trigger's base: one client alone as `recorder` on
+    recorded Board `set`, leading its alerts with the app's alert client
+    where the set holds the Inbox feed, as the replay's own clients of that
+    set do, so its reconnect runs the same resume order (a beat, the
+    summary, then the feed) before it counts as current (isCurrent). It
+    reconnects once current and quiet for --quiet-ms. Answers the
+    milliseconds from the close until it is current again, or null. */
+async function loneReconnect(options, recorder, set) {
+  const lead = set.queries.some((query) => query.udfPath === 'inbox:feed')
+  const client = replayClient({
+    url: options.url,
+    adminKey: options.adminKey,
+    person: recorder,
+    queries: set.queries,
+    alerts: lead ? await loadAppAlerts(ROOT) : null,
+    index: 899,
+    onAnswer: () => {},
+  })
+  client.lead = lead
+  try {
+    const started = Date.now()
+    while (!isCurrent(client, 0) && Date.now() - started < options.timeoutMs) await sleep(20)
+    if (!isCurrent(client, 0)) return null
+    // the leader's first claims done, as a replayed client's are by the reconnect
+    await settle(client.tracker, options.quietMs, options.timeoutMs)
+    const connects = client.tracker.connects
+    const at = Date.now()
+    client.drop()
+    while (!isCurrent(client, connects) && Date.now() - at < options.timeoutMs) await sleep(10)
+    return isCurrent(client, connects) ? Date.now() - at : null
+  } finally {
+    await client.close()
   }
 }
 
