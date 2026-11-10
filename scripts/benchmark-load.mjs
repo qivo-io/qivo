@@ -252,7 +252,7 @@ async function retry(step) {
       const text = String(error?.message ?? error)
       if (
         attempt > 20 ||
-        !/OptimisticConcurrency|TooManyWrites|overloaded|fetch failed|ECONNRESET|timed out/i.test(
+        !/OptimisticConcurrency|TooManyWrites|TooManyConcurrentRequests|ExpiredInQueue|overloaded|fetch failed|ECONNRESET|timed out/i.test(
           text,
         )
       )
@@ -1508,7 +1508,15 @@ async function replay(options) {
     const from = Date.now()
     delay.reset()
     await Promise.all(workers.map((worker) => worker.ask({ type: 'phase', name }, 'marked')))
-    const extra = (await body()) ?? {}
+    // a phase whose own work fails keeps the figures it reached and says why,
+    // so a saturated backend's refusal does not lose the rung's other phases
+    let extra
+    try {
+      extra = (await body()) ?? {}
+    } catch (error) {
+      extra = { failed: String(error?.message ?? error).slice(0, 300) }
+      say(`phase ${name} failed: ${extra.failed}`)
+    }
     // the log's entries trail their calls
     await sleep(1500)
     const to = Date.now()
@@ -1938,7 +1946,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
   const writer = httpClient(options, nora)
   const boardQuery = boardSet.queries.find((query) => query.udfPath === 'tasks:board')
   if (!boardQuery) throw new Error('the recorded Board set holds no tasks:board query')
-  const answer = await writer.query(ref('tasks:board'), jsonToConvex(boardQuery.args))
+  const answer = await retry(() => writer.query(ref('tasks:board'), jsonToConvex(boardQuery.args)))
   if (answer.state !== 'ok') throw new Error(`the recorded Board answered ${answer.state}`)
   // tasks of their own, neither a group (status follows its subtasks) nor a subtask
   const open = answer.rows.filter(
