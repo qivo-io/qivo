@@ -1652,7 +1652,9 @@ async function replay(options) {
       else if (name === 'idle')
         await timed('idle', async () => {
           await sleep(options.idleSeconds * 1000)
-          return { seconds: options.idleSeconds }
+          // the asked seconds apart: the rates divide by the measured
+          // window, over which the bytes, answers and log were counted
+          return { seconds_asked: options.idleSeconds }
         })
       else if (name === 'reconnect') {
         if (!options.noHiddenTab) {
