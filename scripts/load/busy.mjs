@@ -4,9 +4,11 @@
 import { spawn } from 'node:child_process'
 
 /** A loop's program: it spins, and every few million turns checks that
-    the process that started it still lives, so a coordinator killed by a
-    signal, whose 'exit' handlers never run, leaves no loop spinning. */
-const LOOP = 'const p=process.ppid;for(let i=1;;i++)if(i%5e6===0&&process.ppid!==p)process.exit()'
+    its parent is still `parent`, the process that started it, so a
+    coordinator killed by a signal, whose 'exit' handlers never run, leaves
+    no loop spinning. The pid is given rather than read at the loop's start,
+    which a coordinator that died first would already have changed. */
+const loopOf = (parent) => `for(let i=1;;i++)if(i%5e6===0&&process.ppid!==${parent})process.exit()`
 
 /**
  * Starts `count` processes that spin, each pinned to `cpus` (taskset) when
@@ -18,12 +20,14 @@ const LOOP = 'const p=process.ppid;for(let i=1;;i++)if(i%5e6===0&&process.ppid!=
 export function busyLoops(count, cpus) {
   let failure = null
   let stopping = false
+  // taskset execs the loop, so its parent is this process either way
+  const code = loopOf(process.pid)
   const loops = Array.from({ length: count }, () => {
     const loop = cpus
-      ? spawn('taskset', ['-c', cpus, process.execPath, '-e', LOOP], {
+      ? spawn('taskset', ['-c', cpus, process.execPath, '-e', code], {
           stdio: ['ignore', 'ignore', 'pipe'],
         })
-      : spawn(process.execPath, ['-e', LOOP], { stdio: ['ignore', 'ignore', 'pipe'] })
+      : spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'ignore', 'pipe'] })
     let said = ''
     loop.stderr.on('data', (chunk) => {
       said += chunk
