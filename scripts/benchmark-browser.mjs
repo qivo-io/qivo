@@ -1,8 +1,36 @@
 // Real production UI/store; synthetic transport isolates CPU/DOM costs from backend variance.
 //
-//   node scripts/benchmark-browser.mjs [--sizes 100,1000,10000] [--samples 5]
+//   node scripts/benchmark-browser.mjs [--browser chromium|firefox|webkit]
+//     [--sizes 100,960] [--samples 5] [--cpu 4]
 //     [--baseline [revision]] [--root checkout] [--output file.json]
 //     [--fixture varied] [--files parameters] [--serve [--host address]]
+//
+// The options are read in scripts/perf/options.mjs, which its test checks.
+//
+// --browser picks the browser Playwright drives, Chromium by default.
+// Chromium's own figures come from a CDP session, which Firefox and WebKit
+// do not have, so there the run skips the CPU slowdown
+// (Emulation.setCPUThrottlingRate), the shaping of the page's own requests
+// (Network.emulateNetworkConditions), each phase's script, layout and style
+// time (Performance.getMetrics) and the heap after a collection
+// (HeapProfiler.collectGarbage), and names each one in report.skipped and
+// in its output. It also leaves out and names the longest animation frames
+// and key press delays in a browser that reports no such entries (long
+// animation frames are Chromium's alone). The stand-in's own latency and
+// bandwidth delay every answer in all three browsers alike
+// (scripts/perf/server.mjs latency and mbps). --cpu is the CPU slowdown, 4
+// in Chromium by default for Chromium's own figures. Firefox and WebKit run
+// at 1 and refuse another, so a run at --cpu 1 in each of the three is the
+// condition that compares them.
+//
+// Each --sizes case puts that many visible tasks in the stand-in's
+// workspace, in top-level projects of 3 sub-projects each (perf/page.mjs
+// programsFor, perf/options.mjs SIZE_CASE_SHAPE), with one hidden
+// sub-project as full as a visible one. The stand-in makes every sixth
+// task Done, so the default 100 is an everyday project, and 960 is the
+// design size's 800 open tasks of one project with 160 Done, about 267
+// open in each sub-project. Neither raises two figures at once, and
+// neither passes the design size.
 //
 // The page loads a realistic workspace from a stand-in server in a Web Worker
 // (scripts/perf/server.mjs) and pays for every delivery what a real client
@@ -36,12 +64,11 @@
 // The Board answers one top-level project from the server (tasks:board),
 // at most 1,000 tasks. The workspace spreads its tasks over a top-level
 // project for each 1,000 of them or part of them (perf/page.mjs
-// programsFor), so the one the app opens holds about 1,000 tasks and 900
-// cards at whole thousands and fewer between them, in a build that filters
-// in the browser as in one that asks the server. The Board's
-// phases wait for its answer where the build marks its state
-// (data-board-state), so they include the round trip and the answer's
-// bytes.
+// programsFor), so the one the app opens holds every task of a case up to
+// 1,000, in a build that filters in the browser as in one that asks the
+// server. The Board's phases wait for its answer where the build marks
+// its state (data-board-state), so they include the round trip and the
+// answer's bytes.
 //
 // --fixture varied also opens a second page per sample on the varied
 // workspace (scripts/perf/transport.mjs, shape=varied) and measures opening
@@ -112,48 +139,52 @@ import assert from 'node:assert/strict'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { loadavg, tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { chromium } from 'playwright'
+import { join } from 'node:path'
+import { chromium, firefox, webkit } from 'playwright'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
 import { gitIn } from './git.mjs'
 import { routePerfFiles, servesFiles } from './perf/files.mjs'
-import { buildPage, checkoutOf, programsFor, serve } from './perf/page.mjs'
+import {
+  benchmarkOptions,
+  OptionsError,
+  SIZE_CASE_SHAPE,
+  workspaceParameters,
+} from './perf/options.mjs'
+import { buildPage, checkoutOf, serve } from './perf/page.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const option = (name, fallback) => {
-  const index = process.argv.indexOf(`--${name}`)
-  return index < 0 ? fallback : process.argv[index + 1]
-}
-const root = resolve(option('root', join(here, '..')))
-const sizes = option('sizes', '100,1000,10000').split(',').map(Number)
-const samples = Number(option('samples', '5'))
-const cpu = Number(option('cpu', '4'))
-const latency = Number(option('latency', '100'))
-const bandwidth = Number(option('mbps', '8'))
-const output = option('output', '/tmp/qivo-browser-benchmark.json')
-// long enough for the default 10,000 tasks: at 8 Mbps every result of
-// theirs takes about 16 s, and marking 500 messages read takes two
-const timeout = Number(option('timeout', '60000'))
-// unread messages the bulk-read scenario adds just before it runs, so the
-// earlier scenarios load the same workspace as before it existed
-const messages = Number(option('messages', '500'))
-const host = option('host', '127.0.0.1')
-const varied = option('fixture', 'default') === 'varied'
-// --thread: the figures the task window's thread phase measures, alone
-const threadFigures = option('thread', null)?.split(',').map(Number) ?? null
-const phone = process.argv.includes('--phone')
-// the stand-in's file parameters every page takes (see the header)
-const files = option('files', '')
-const filesQuery = files ? `&${files.replace(/^[?&]/, '')}` : ''
-// --baseline, with the revision when one follows it
-const baselineAt = process.argv.indexOf('--baseline')
-const baselineRevision =
-  baselineAt < 0
-    ? null
-    : process.argv[baselineAt + 1] && !process.argv[baselineAt + 1].startsWith('--')
-      ? process.argv[baselineAt + 1]
-      : ''
+const options = (() => {
+  try {
+    return benchmarkOptions(process.argv.slice(2))
+  } catch (error) {
+    if (!(error instanceof OptionsError)) throw error
+    console.error(error.message)
+    process.exit(1)
+  }
+})()
+const {
+  browser: browserName,
+  root,
+  sizes,
+  samples,
+  cpu,
+  latency,
+  bandwidth,
+  output,
+  timeout,
+  messages,
+  host,
+  varied,
+  threadFigures,
+  phone,
+  filesQuery,
+  baselineRevision,
+  trace,
+} = options
+/* Whether the page gets a CDP session, which only Chromium has. The CPU
+   slowdown, the shaping of the page's own requests, the script, layout and
+   style times of every phase and the heap after a collection come from it,
+   so the other browsers' output names them as skipped (report.skipped). */
+const devtools = browserName === 'chromium'
 /* The --baseline commit, resolved before anything is made, so a revision
    that is not usable stops here with nothing to clean up. */
 let baseline = null
@@ -172,7 +203,7 @@ const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
 // Ctrl-C or a stop skips the finally below, so a measuring run removes its
 // builds and the baseline checkout here, and keeps the sizes it finished
 // with a note of where it stopped. --serve waits for the signal itself.
-if (!process.argv.includes('--serve'))
+if (!options.serve)
   for (const [signal, code] of [
     ['SIGINT', 130],
     ['SIGTERM', 143],
@@ -324,6 +355,7 @@ const servers = []
 let running
 const report = {
   root,
+  browser: browserName,
   cpu,
   latency,
   bandwidthMbps: bandwidth,
@@ -333,34 +365,54 @@ const report = {
   scenarios: [],
   // the one-minute load average after each sample
   loads: [],
+  // the figures this browser cannot give, which its scenarios leave out
+  skipped: devtools
+    ? []
+    : [
+        'CPU slowdown (Emulation.setCPUThrottlingRate)',
+        "shaping of the page's own requests (Network.emulateNetworkConditions)",
+        '*ScriptDurationMs, *LayoutDurationMs and *RecalcStyleDurationMs (Performance.getMetrics)',
+        'heapMb (HeapProfiler.collectGarbage and Performance.getMetrics)',
+      ],
 }
-// --trace prints each phase as it starts, to find a step that stalls
-const trace = process.argv.includes('--trace')
 const phase = (name) => {
   running.phase = name
   if (trace)
     console.error(`${running.label} ${running.tasks} tasks, sample ${running.sample}: ${name}`)
 }
+/* A figure this browser cannot give is pushed as null and left out. */
 const summary = (values) => {
-  const ordered = [...values].sort((a, b) => a - b)
+  const ordered = values.filter((value) => value !== null).sort((a, b) => a - b)
   return {
     p50: ordered[Math.floor(ordered.length * 0.5)],
     p95: ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * 0.95))],
     samples: values,
   }
 }
-const summarized = (tasks, metrics) => ({
-  tasks,
-  metrics: Object.fromEntries(
-    Object.entries(metrics)
-      .filter(([, values]) => values.length)
-      .map(([key, values]) => [key, summary(values)]),
-  ),
-})
+/* The medians of `metrics` for `tasks`. A figure the browser gave in no
+   sample joins report.skipped by its key, unless the list names it. */
+const summarized = (tasks, metrics) => {
+  for (const [key, values] of Object.entries(metrics))
+    if (
+      values.length &&
+      values.every((value) => value === null) &&
+      !report.skipped.some((named) => named === key || named.startsWith(`${key} `))
+    )
+      report.skipped.push(key)
+  return {
+    tasks,
+    metrics: Object.fromEntries(
+      Object.entries(metrics)
+        .filter(([, values]) => values.some((value) => value !== null))
+        .map(([key, values]) => [key, summary(values)]),
+    ),
+  }
+}
 
 /** Opens the benchmark page at `origin` with `tasks` tasks and the extra
-    `query`, throttled and on the slow network. Its `timed` adds the running
-    phase's numbers to `metrics`. */
+    `query`, in Chromium throttled and on the slow network. Its `timed`
+    adds the running phase's numbers to `metrics`. Its `cdp` is null in a
+    browser without a CDP session. */
 async function openPage(origin, tasks, metrics, query = '') {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   const page = await context.newPage()
@@ -378,16 +430,20 @@ async function openPage(origin, tasks, metrics, query = '') {
       console.error(message.text())
     }
   })
-  const cdp = await context.newCDPSession(page)
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu })
-  await cdp.send('Performance.enable')
-  await cdp.send('Network.enable')
-  await cdp.send('Network.emulateNetworkConditions', {
-    offline: false,
-    latency,
-    downloadThroughput: bandwidth * 125000,
-    uploadThroughput: bandwidth * 125000,
-  })
+  // the stand-in's own latency and bandwidth delay its answers in every
+  // browser; Chromium also slows the CPU and the page's own requests
+  const cdp = devtools ? await context.newCDPSession(page) : null
+  if (cdp) {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu })
+    await cdp.send('Performance.enable')
+    await cdp.send('Network.enable')
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency,
+      downloadThroughput: bandwidth * 125000,
+      uploadThroughput: bandwidth * 125000,
+    })
+  }
   // the stand-in's perf.invalid files, which only this page can serve
   const fileStats = servesFiles(query + filesQuery) ? await routePerfFiles(page) : null
   const settle = () =>
@@ -398,9 +454,10 @@ async function openPage(origin, tasks, metrics, query = '') {
   const wireBytes = () => page.evaluate(() => window.__perf.wireBytes)
   const decodeMs = () => page.evaluate(() => window.__perf.decodeMs)
   /* Times `operation` as the running phase, with its script, layout and
-     style time, its App renders and the bytes delivered in it. */
+     style time where the browser gives them, its App renders and the bytes
+     delivered in it. */
   const timed = async (operation) => {
-    const before = await cdp.send('Performance.getMetrics')
+    const before = cdp ? await cdp.send('Performance.getMetrics') : null
     const renders = await appRenders()
     const bytes = await wireBytes()
     const decoding = await decodeMs()
@@ -408,8 +465,8 @@ async function openPage(origin, tasks, metrics, query = '') {
     await operation()
     await settle()
     const elapsed = (await page.evaluate(() => performance.now())) - start
-    const after = await cdp.send('Performance.getMetrics')
-    for (const metric of ['ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration']) {
+    const after = cdp ? await cdp.send('Performance.getMetrics') : null
+    for (const metric of after ? ['ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration'] : []) {
       const value =
         (after.metrics.find((item) => item.name === metric).value -
           before.metrics.find((item) => item.name === metric).value) *
@@ -427,7 +484,7 @@ async function openPage(origin, tasks, metrics, query = '') {
     return elapsed
   }
   await page.goto(
-    `${origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&latency=${latency}&mbps=${bandwidth}${query}${filesQuery}`,
+    `${origin}/?${workspaceParameters(tasks)}&latency=${latency}&mbps=${bandwidth}${query}${filesQuery}`,
   )
   /* Adds the files the page served to `metrics`, once its sample ends. */
   const recordFiles = () => {
@@ -521,8 +578,10 @@ const OVERVIEW_SHOWN =
     subtasks are their cards. */
 const boardCards = (page) => page.evaluate(() => window.__perf.boardCards)
 
-/** The heap in use after a collection, in MiB, and the page's elements. */
+/** The heap in use after a collection, in MiB (null without a CDP
+    session), and the page's elements. */
 async function pageSize(page, cdp) {
+  if (!cdp) return { heapMb: null, domNodes: await page.locator('*').count() }
   await cdp.send('HeapProfiler.collectGarbage')
   const performanceMetrics = await cdp.send('Performance.getMetrics')
   return {
@@ -563,19 +622,28 @@ function pressEvery50ms(page) {
 /** Watches the page's animation frames and key presses, with a Shift
     press every 50ms, which nothing handles, from now until `stop`. Then
     `read(after)` answers the longest frame that started at page time
-    `after` or later, and the longest any press waited for its turn. */
+    `after` or later, and the longest any press waited for its turn. Each
+    is null in a browser that reports no such entries (long animation
+    frames are Chromium's alone), so the run leaves that figure out. */
 async function watchInput(page) {
   await page.evaluate(() => {
-    const state = { frames: [], events: [], observers: [] }
+    const supported = PerformanceObserver.supportedEntryTypes ?? []
+    const state = {
+      frames: [],
+      events: [],
+      observers: [],
+      framesKnown: supported.includes('long-animation-frame'),
+      eventsKnown: supported.includes('event'),
+    }
     window.__watch = state
     const frames = new PerformanceObserver((list) => {
       state.frames.push(...list.getEntries())
     })
-    frames.observe({ type: 'long-animation-frame' })
+    if (state.framesKnown) frames.observe({ type: 'long-animation-frame' })
     const events = new PerformanceObserver((list) => {
       state.events.push(...list.getEntries())
     })
-    events.observe({ type: 'event', durationThreshold: 16 })
+    if (state.eventsKnown) events.observe({ type: 'event', durationThreshold: 16 })
     state.observers = [frames, events]
   })
   const presses = pressEvery50ms(page)
@@ -583,23 +651,29 @@ async function watchInput(page) {
     stop: () => presses.stop(),
     read: (after) =>
       page.evaluate((after) => {
-        const { frames, events, observers } = window.__watch
+        const { frames, events, observers, framesKnown, eventsKnown } = window.__watch
         const [frameObserver, eventObserver] = observers
         frames.push(...frameObserver.takeRecords())
         events.push(...eventObserver.takeRecords())
         for (const observer of observers) observer.disconnect()
         delete window.__watch
         return {
-          frame: Math.max(
-            0,
-            ...frames.filter((entry) => entry.startTime >= after).map((entry) => entry.duration),
-          ),
-          keyDelay: Math.max(
-            0,
-            ...events
-              .filter((entry) => entry.name === 'keydown')
-              .map((entry) => entry.processingStart - entry.startTime),
-          ),
+          frame: framesKnown
+            ? Math.max(
+                0,
+                ...frames
+                  .filter((entry) => entry.startTime >= after)
+                  .map((entry) => entry.duration),
+              )
+            : null,
+          keyDelay: eventsKnown
+            ? Math.max(
+                0,
+                ...events
+                  .filter((entry) => entry.name === 'keydown')
+                  .map((entry) => entry.processingStart - entry.startTime),
+              )
+            : null,
         }
       }, after),
   }
@@ -777,7 +851,7 @@ const searchRowsOf = (target, tasks) => Math.min(target.browserSearch ? 9 : 25, 
     tasks, adding its numbers to `metrics`. `searchRows` is how many rows
     the build's Search shows for "signed firm" (searchRowsOf). */
 async function runSample(origin, tasks, metrics, query = '', searchRows = Math.min(25, tasks)) {
-  const opened = await openPage(origin, tasks, metrics, query)
+  const opened = await openPage(origin, tasks, metrics, `${SIZE_CASE_SHAPE}${query}`)
   const { context, page, cdp, errors, settle, appRenders, timed } = opened
   await startedOn(page)
   await settle()
@@ -1876,7 +1950,7 @@ try {
   for (const target of targets) {
     const outDir = join(temporary, `dist-${target.label}`)
     await buildPage(target.source, outDir, temporary)
-    const server = await serve(outDir, process.argv.includes('--serve') ? host : '127.0.0.1')
+    const server = await serve(outDir, options.serve ? host : '127.0.0.1')
     servers.push(server)
     target.origin = server.origin
     // an app from before it derived the load of the tasks it shows from
@@ -1884,10 +1958,10 @@ try {
     target.query = existsSync(join(target.source, 'convex/lib/loadRows.ts')) ? '' : '&shownload=1'
     target.browserSearch = existsSync(join(target.source, 'src/lib/paletteSearch.ts'))
   }
-  if (process.argv.includes('--serve')) {
+  if (options.serve) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&programs=${programsFor(sizes[0])}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?${workspaceParameters(sizes[0])}${SIZE_CASE_SHAPE}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
       )
     // a supervised service stops with SIGTERM
     await new Promise((resolve) => {
@@ -1897,7 +1971,13 @@ try {
     process.exitCode = 0
   } else {
     // the handlers above stop the run; the browser goes with the process
-    browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false })
+    if (report.skipped.length)
+      console.log(`${browserName} cannot give ${report.skipped.join('; ')}`)
+    browser = await { chromium, firefox, webkit }[browserName].launch({
+      headless: true,
+      handleSIGINT: false,
+      handleSIGTERM: false,
+    })
     if (threadFigures) await runThreadPhase(targets[0].origin)
     for (const tasks of threadFigures ? [] : sizes) {
       for (const target of targets) target.metrics = emptyMetrics()
@@ -1930,7 +2010,7 @@ try {
     console.log(JSON.stringify(report, null, 2))
     if (report.baseline) {
       console.log(
-        `Baseline ${report.baseline.commit.slice(0, 12)} (${report.baseline.chosen}), medians of ${samples} samples taken in turns at ${cpu}x CPU throttling, times in ms, heap in MiB:`,
+        `Baseline ${report.baseline.commit.slice(0, 12)} (${report.baseline.chosen}), medians of ${samples} samples taken in turns in ${browserName} at ${cpu}x CPU throttling, times in ms, heap in MiB:`,
       )
       console.table(comparison(report.scenarios, report.baseline.scenarios))
     }
