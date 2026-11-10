@@ -360,6 +360,26 @@ describe('the frame tracker', () => {
     expect(tracker.closes).toEqual([expect.objectContaining({ code: 1006, reason: 'gone' })])
   })
 
+  it('counts a call in the phase that sent it, not the one its slow answer reaches', () => {
+    let now = 1000
+    const tracker = new FrameTracker({ now: () => now })
+    const call = (requestId) =>
+      JSON.stringify({ type: 'Mutation', requestId, udfPath: 'notifications:beat', args: [{}] })
+    const answer = (requestId) =>
+      JSON.stringify({ type: 'MutationResponse', requestId, success: true, ts: '1', logLines: [] })
+    tracker.sent(call(1))
+    // a new phase starts while the beat waits; its log holds the beat in the old one
+    now = 2000
+    tracker.calls.clear()
+    tracker.callsSince = now
+    tracker.sent(call(2))
+    now = 6000
+    tracker.received(answer(1))
+    tracker.received(answer(2))
+    expect(tracker.calls.get('notifications:beat')).toEqual({ calls: 1, failed: 0, ms: [4000] })
+    expect(tracker.pending.size).toBe(0)
+  })
+
   it('records when its newest set became current, and forgets it while a newer set waits', () => {
     let now = 1000
     const tracker = new FrameTracker({ now: () => now })

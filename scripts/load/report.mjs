@@ -325,8 +325,11 @@ export function watchedPerMinute(watched, seconds) {
 
 /**
  * How far the function log covers a phase whose statistics are `stats`
- * (functionStats'): each mutation and action the clients sent (`calls`,
- * mergeCalls') and the changes' writer sent and saw succeed
+ * (functionStats'): each mutation and action the clients sent in the
+ * phase and had answered by its end (`calls`, mergeCalls', counted by when
+ * each was sent, FrameTracker callsSince, so a slow call answered in the
+ * next phase does not count against that phase's log) and the changes'
+ * writer sent and saw succeed
  * (`writerCalls`, a count by function), against the executions the log
  * holds of it, since every such call runs once at least. `state` is
  * `complete` when the log holds them all and no read of it failed

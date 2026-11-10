@@ -1338,7 +1338,9 @@ async function runWorker() {
     delay.reset()
     for (const client of clients) {
       figures.bytesStart.set(client.index, client.tracker.bytesReceived)
+      // the phase counts the calls it sends, which its log window holds
       client.tracker.calls.clear()
+      client.tracker.callsSince = client.tracker.now()
       client.closesSeen = client.tracker.closes.length
     }
   }
@@ -2254,9 +2256,6 @@ async function tabsPart(options) {
     })
   }
   const phases = {}
-  /** The mutations and actions every tab has had answered so far, by
-      function, as mergeCalls gives them. */
-  const tabCalls = () => mergeCalls(tabs.map((tab) => Object.fromEntries(tab.tracker.calls)))
   /** Runs `body` as phase `name`, with the log, steal and each tab's bytes. */
   const timed = async (name, body) => {
     say(`phase ${name}`)
@@ -2265,8 +2264,10 @@ async function tabsPart(options) {
       tab.framesStart = tab.tracker.framesReceived
       tab.answers = new Map()
       tab.perChange = new Map()
+      // the phase counts the calls it sends, which its log window holds
+      tab.tracker.calls.clear()
+      tab.tracker.callsSince = tab.tracker.now()
     }
-    const callsBefore = tabCalls()
     const cpu = cpuNow()
     const from = Date.now()
     let extra
@@ -2280,13 +2281,7 @@ async function tabsPart(options) {
     const to = Date.now()
     const seconds = (to - from) / 1000
     const stats = functionStats(log.between(from, to), seconds)
-    // the calls the tabs had answered in this phase alone
-    const calls = Object.fromEntries(
-      Object.entries(tabCalls()).map(([fn, done]) => [
-        fn,
-        { calls: done.calls - (callsBefore[fn]?.calls ?? 0) },
-      ]),
-    )
+    const calls = mergeCalls(tabs.map((tab) => Object.fromEntries(tab.tracker.calls)))
     const figures = {
       tabs: tabs.length,
       seconds: Math.round(seconds * 10) / 10,

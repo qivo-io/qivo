@@ -42,6 +42,11 @@ export class FrameTracker {
     this.pending = new Map()
     /** udfPath -> { calls, ms: [] } for the mutations and actions answered */
     this.calls = new Map()
+    /** The time from which `calls` counts a call by when it was sent: a
+        call sent earlier, in a phase whose function log already holds it,
+        is answered but not counted, so a phase compares its own calls with
+        its own log entries. */
+    this.callsSince = Number.NEGATIVE_INFINITY
     this.framesSent = 0
     this.framesReceived = 0
     this.bytesReceived = 0
@@ -121,6 +126,7 @@ export class FrameTracker {
       const call = this.pending.get(id)
       if (!call) return
       this.pending.delete(id)
+      if (call.at < this.callsSince) return
       const done = this.calls.get(call.udfPath) ?? { calls: 0, failed: 0, ms: [] }
       done.calls++
       if (message.success === false) done.failed++
