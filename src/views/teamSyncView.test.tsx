@@ -1063,10 +1063,12 @@ describe('a meeting that stops fitting', () => {
         (snap) => {
           people({})(snap)
           underProgram(snap)
-          // a second sub-project under the program, whose read fails
+          // a second sub-project under the program, whose read fails. Its
+          // id sorts after any UUID and its name before the other's, so the
+          // answer's id order is never the sidebar's.
           snap.projects.push({
             ...snap.projects[0],
-            id: 'fail-sub',
+            id: 'zz-fail-sub',
             key: 'FAIL',
             num: 50,
             name: 'Failing sub',
@@ -1079,7 +1081,7 @@ describe('a meeting that stops fitting', () => {
           // sees, and the failing one
           b.server.sync.edit = (answer) =>
             answer.state === 'ok'
-              ? { ...answer, sub_projects: [...answer.sub_projects, gone, 'fail-sub'] }
+              ? { ...answer, sub_projects: [...answer.sub_projects, gone, 'zz-fail-sub'] }
               : answer
           // one project a read, the reads answered here, Failing sub's
           // failing while `failing` holds
@@ -1092,7 +1094,7 @@ describe('a meeting that stops fitting', () => {
           network.onUpdate.mockImplementation((ref, args, next, fail) => {
             if (getFunctionName(ref) !== 'projectNav:byIds')
               return base?.(ref, args, next, fail) ?? (() => {})
-            if (failing && (args as { ids: string[] }).ids.includes('fail-sub'))
+            if (failing && (args as { ids: string[] }).ids.includes('zz-fail-sub'))
               fail?.(new Error('the byIds read failed'))
             else answerProjectNav(b.snapshot, 'projectNav:byIds', args, next, fail)
             return () => {}
@@ -1122,7 +1124,7 @@ describe('a meeting that stops fitting', () => {
         await click(document.querySelector('[data-sync-names-retry]'))
         await frame()
         await vi.waitFor(() =>
-          expect(document.querySelector('[data-sync-choice="project:fail-sub"]')).not.toBeNull(),
+          expect(document.querySelector('[data-sync-choice="project:zz-fail-sub"]')).not.toBeNull(),
         )
         expect(note()).not.toContain("Couldn't load some of the smaller projects.")
         // the gone project stays out, and no line says the list loads
@@ -1132,7 +1134,10 @@ describe('a meeting that stops fitting', () => {
         const shown = [
           ...document.querySelectorAll<HTMLElement>('[data-sync-choice^="project:"]'),
         ].map((c) => c.dataset.syncChoice)
-        expect([...new Set(shown)]).toEqual(['project:fail-sub', `project:${sub(board.snapshot)}`])
+        expect([...new Set(shown)]).toEqual([
+          'project:zz-fail-sub',
+          `project:${sub(board.snapshot)}`,
+        ])
       } finally {
         const { PROJECT_CACHE } = await import('../store/projectCache')
         PROJECT_CACHE.chunk = 100
