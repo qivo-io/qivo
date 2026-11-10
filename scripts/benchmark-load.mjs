@@ -1399,27 +1399,45 @@ async function runWorker() {
 }
 
 /** The coordinator's handle on one worker process: `ask(message, answer)`
-    sends a command and resolves with the reply of type `answer`, and
-    `stop()` asks the worker to close its clients and kills it when it has
-    not exited within `STOP_MS`. */
+    sends a command and resolves with the reply of type `answer`, or
+    rejects when the worker reports an error, exits or cannot be sent to,
+    so a phase records `failed` rather than waiting forever, and `stop()`
+    asks the worker to close its clients and kills it when it has not
+    exited within `STOP_MS`. */
 function startWorker() {
   const child = fork(fileURLToPath(import.meta.url), ['--worker'], { stdio: 'inherit' })
   const waiting = []
+  // why the worker can answer no more, once it exited
+  let gone = null
+  const failAll = (error) => {
+    for (const wait of waiting.splice(0)) wait.fail(error)
+  }
   child.on('message', (message) => {
     if (message.type === 'error') {
       console.error(`worker ${child.pid}: ${message.message}`)
+      failAll(new Error(`worker ${child.pid} failed: ${message.message.split('\n')[0]}`))
       return
     }
     const at = waiting.findIndex((wait) => wait.type === message.type)
     if (at >= 0) waiting.splice(at, 1)[0].done(message)
   })
-  const exited = new Promise((done) => child.once('exit', done))
+  child.on('error', (error) => failAll(error))
+  const exited = new Promise((done) =>
+    child.once('exit', (code, signal) => {
+      gone = new Error(`worker ${child.pid} exited (${signal ?? code})`)
+      failAll(gone)
+      done()
+    }),
+  )
   return {
     child,
     ask(message, type) {
-      return new Promise((done) => {
-        waiting.push({ type, done })
-        child.send(message)
+      return new Promise((done, fail) => {
+        if (gone) return fail(gone)
+        waiting.push({ type, done, fail })
+        child.send(message, (error) => {
+          if (error) failAll(error)
+        })
       })
     },
     async stop() {
@@ -1548,17 +1566,23 @@ async function replay(options) {
   const workers = []
   let hidden = null
   /** Runs `body` as phase `name`, with the log, steal and the workers'
-      figures over it. */
+      figures over it. A worker that failed or exited leaves its figures
+      out, and the phase says so in `workers_lost` and `failed`. */
   const timed = async (name, body) => {
     say(`phase ${name}`)
     const cpu = cpuNow()
     const from = Date.now()
     delay.reset()
-    await Promise.all(workers.map((worker) => worker.ask({ type: 'phase', name }, 'marked')))
+    const lost = new Set()
+    const marked = await Promise.allSettled(
+      workers.map((worker) => worker.ask({ type: 'phase', name }, 'marked')),
+    )
     // a phase whose own work fails keeps the figures it reached and says why,
     // so a saturated backend's refusal does not lose the rung's other phases
     let extra
     try {
+      const failedMark = marked.find((answer) => answer.status === 'rejected')
+      if (failedMark) throw failedMark.reason
       extra = (await body()) ?? {}
     } catch (error) {
       extra = { failed: String(error?.message ?? error).slice(0, 300) }
@@ -1567,9 +1591,21 @@ async function replay(options) {
     // the log's entries trail their calls
     await sleep(1500)
     const to = Date.now()
-    const reports = (
-      await Promise.all(workers.map((worker) => worker.ask({ type: 'report' }, 'report')))
-    ).map((answer) => answer.report)
+    const answers = await Promise.allSettled(
+      workers.map((worker) => worker.ask({ type: 'report' }, 'report')),
+    )
+    answers.forEach((answer, k) => {
+      if (answer.status === 'rejected') lost.add(workers[k].child.pid)
+    })
+    for (const [k, answer] of marked.entries())
+      if (answer.status === 'rejected') lost.add(workers[k].child.pid)
+    if (lost.size > 0) {
+      extra.workers_lost = [...lost]
+      extra.failed ??= `${lost.size} of ${workers.length} worker processes failed or exited; their clients' figures are missing`
+    }
+    const reports = answers
+      .filter((answer) => answer.status === 'fulfilled')
+      .map((answer) => answer.value.report)
     const figures = phaseFigures(log.between(from, to), (to - from) / 1000, reports, {
       log_read_failures: log.failuresBetween(from, to),
       steal: cpuShare(cpu, cpuNow()),
@@ -1919,7 +1955,11 @@ async function runChanges(options, plan, boardSet, workers, log) {
     const kind = CHANGE_KINDS[i % CHANGE_KINDS.length]
     const slot = begin + i * 1000
     await sleep(Math.max(0, slot - Date.now()))
-    await Promise.all(workers.map((worker) => worker.ask({ type: 'change', id: i }, 'changed')))
+    // a worker that failed leaves its clients' re-sends out (the phase's
+    // workers_lost), but never stops the changes or the cleanup after them
+    await Promise.allSettled(
+      workers.map((worker) => worker.ask({ type: 'change', id: i }, 'changed')),
+    )
     const at = Date.now()
     let call
     if (kind === 'rename')
@@ -1958,7 +1998,9 @@ async function runChanges(options, plan, boardSet, workers, log) {
   }
   await sleep(1500)
   // what the clients receive from here on is no change's
-  await Promise.all(workers.map((worker) => worker.ask({ type: 'change', id: null }, 'changed')))
+  await Promise.allSettled(
+    workers.map((worker) => worker.ask({ type: 'change', id: null }, 'changed')),
+  )
   // the rename, the status and the move are put back
   const restored = []
   const restore = (name, args) =>
