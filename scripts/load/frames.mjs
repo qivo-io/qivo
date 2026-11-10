@@ -165,6 +165,15 @@ export class FrameTracker {
     return count
   }
 
+  /** Each answered query of the current set as [udfPath, milliseconds from
+      its Add to its first answer], the client's own timing of a query,
+      which a saturated function log cannot drop. */
+  firstAnswers() {
+    return [...this.queries.values()]
+      .filter((query) => query.answeredAt !== null)
+      .map((query) => [query.udfPath, query.answeredAt - query.addedAt])
+  }
+
   /** The query set as a recorded set's `queries`, in a stable order: each
       query's function, arguments, component when it has one, its last
       answer's bytes and its error when it failed. */

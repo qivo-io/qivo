@@ -9,8 +9,16 @@
 //     [--people 50] [--teams 10] [--clients 10] [--processes 2]
 //     [--phases match,startup,changes,reconnect,idle] [--changes 20] [--idle-s 120]
 //     [--quiet-ms 3000] [--timeout-ms 90000] [--no-hidden-tab]
+//     [--tabs 1] [--board-top]
 //
-// <part> is setup, record, replay or all (the three in turn). The options
+// <part> is setup, record, replay or all (the three in turn), or tabs,
+// which `all` leaves out: one person's --tabs real tabs open at once (see
+// tabsPart). --board-top puts the Board view on the whole Luma Sensor
+// project instead of its Firmware sub-project, for the rung that raises a
+// project's open tasks. Startup and the reconnect also give each query's
+// time from its Add to its first answer by the clients' own clocks
+// (client_first_answer_ms), which a saturated function log cannot drop. The
+// options
 // are read in scripts/load/options.mjs, the protocol and the recorded sets
 // in scripts/load/frames.mjs and the figures in scripts/load/report.mjs,
 // which scripts/benchmark-load.test.mjs checks.
@@ -148,6 +156,7 @@ import { loadOptions, OptionsError, VIEWS } from './load/options.mjs'
 import {
   cpuCounters,
   cpuShare,
+  firstAnswerStats,
   functionStats,
   JS_LINE_MS,
   logEntry,
@@ -534,13 +543,15 @@ async function signedIn(options) {
   return { browser, context, page, demo, notifications }
 }
 
-/** The addresses of the recorded views, from the projects setup listed. */
-function viewUrls(plan) {
+/** The addresses of the recorded views, from the projects setup listed.
+    The Board is Luma Sensor's Firmware sub-project, or the whole Luma
+    Sensor project with --board-top. */
+function viewUrls(plan, options) {
   const sensor = plan.projects.find((project) => project.name === 'Luma Sensor') ?? plan.projects[0]
   const board = sensor.children.find((child) => child.name === 'Firmware') ?? sensor.children[0]
   const base = `/app/${plan.org_slug}`
   return {
-    board: `${base}/board/p/${board.num}`,
+    board: `${base}/board/p/${options?.boardTop ? sensor.num : board.num}`,
     overview: `${base}/overview/p/${sensor.num}`,
     roadmap: `${base}/roadmap/p/${sensor.num}`,
     sync: `${base}/sync/p/${sensor.num}`,
@@ -549,11 +560,15 @@ function viewUrls(plan) {
   }
 }
 
-/** A tracker fed by every backend socket `page` opens from now on. */
-function trackPage(page, options) {
-  const tracker = new FrameTracker()
+/** A tracker fed by every backend socket `page` opens from now on, with
+    `onAnswer` hearing each answer. The tracker's `openedAt` is when the
+    page made its newest backend socket. */
+function trackPage(page, options, onAnswer) {
+  const tracker = new FrameTracker(onAnswer ? { onAnswer } : {})
+  tracker.openedAt = null
   page.on('websocket', (socket) => {
     if (!socket.url().startsWith(socketPrefix(options))) return
+    tracker.openedAt = Date.now()
     socket.on('framesent', (frame) => {
       if (typeof frame.payload === 'string') tracker.sent(frame.payload)
     })
@@ -583,7 +598,7 @@ async function settle(tracker, quietMs, timeoutMs, from = Date.now()) {
 async function record(options) {
   const plan = readPlan(options)
   const recorder = plan.people[0]
-  const urls = viewUrls(plan)
+  const urls = viewUrls(plan, options)
   const { browser, page: signInPage, notifications } = await signedIn(options)
   const context = signInPage.context()
   await signInPage.close()
@@ -846,6 +861,7 @@ async function runWorker() {
           ms: Date.now() - start,
           from_open_ms: client.openedAt ? Date.now() - client.openedAt : null,
           current: true,
+          first_answers: client.tracker.firstAnswers(),
         })
       }
       await sleep(20)
@@ -1127,6 +1143,9 @@ async function replay(options) {
         clients: options.clients,
         current: results.filter((result) => result.current).length,
         time_to_current_ms: spread(results.map((result) => result.ms)),
+        client_first_answer_ms: firstAnswerStats(
+          results.flatMap((result) => result.first_answers ?? []),
+        ),
         against_recorded: results.map((result) => {
           const spec = clientSpecs[result.index]
           const compared = compareSets(spec.queries, result.set)
@@ -1178,6 +1197,9 @@ async function replay(options) {
           current: results.filter((result) => result.current).length,
           time_to_current_ms: spread(results.map((result) => result.ms)),
           from_open_ms: spread(results.map((result) => result.from_open_ms)),
+          client_first_answer_ms: firstAnswerStats(
+            results.flatMap((result) => result.first_answers ?? []),
+          ),
           lone_client_ms: lone,
           slow_clients: lone
             ? results.filter((result) => result.ms === null || result.ms > 10 * lone).length
@@ -1551,7 +1573,7 @@ async function hiddenTab(options, plan) {
   await signInPage.close()
   const page = await context.newPage()
   const tracker = trackPage(page, options)
-  const url = viewUrls(plan).board
+  const url = viewUrls(plan, options).board
   await page.goto(`${options.siteUrl}${url}`, { waitUntil: 'domcontentloaded' })
   const visible = await settle(tracker, options.quietMs, options.timeoutMs)
   const shown = tracker.set().map((query) => query.udfPath)
@@ -1609,6 +1631,300 @@ async function hiddenTab(options, plan) {
   }
 }
 
+/* ------------------------------------------------------------------- tabs */
+
+/** The tabs part: one person, Nora, with --tabs real tabs open at once in
+    one --browser context, tab i on view i modulo --views. Its phases, each
+    with the function log's figures and steal over it: startup (every tab
+    opened at once; each one's subscriptions, answer bytes and time to
+    current), changes (the replay's changes on the recorded Board's tasks,
+    with the bytes re-sent to each tab), reconnect (every tab's backend
+    socket closed at once; each one's re-subscriptions and time to current,
+    from the close and from its new socket) and idle (the bytes, frames and
+    answers each tab received, per minute). Writes one rung to --output,
+    else <dir>/out/tabs-<tabs>.json. */
+async function tabsPart(options) {
+  const plan = readPlan(options)
+  const boardSet = readSets(options).find((set) => set.view === 'board')
+  const urls = viewUrls(plan, options)
+  const { browser, page: signInPage, notifications } = await signedIn(options)
+  const context = signInPage.context()
+  await signInPage.close()
+  const log = followLog(options)
+  await sleep(1000)
+  let change = null
+  const tabs = Array.from({ length: options.tabs }, (_, index) => ({
+    index,
+    view: options.views[index % options.views.length],
+    answers: new Map(),
+    perChange: new Map(),
+  }))
+  for (const tab of tabs) {
+    tab.page = await context.newPage()
+    tab.tracker = trackPage(tab.page, options, (udfPath, bytes) => {
+      const entry = tab.answers.get(udfPath) ?? { updates: 0, bytes: 0 }
+      entry.updates++
+      entry.bytes += bytes
+      tab.answers.set(udfPath, entry)
+      if (change === null) return
+      const slot = tab.perChange.get(change) ?? { bytes: 0, queries: {} }
+      slot.bytes += bytes
+      const query = slot.queries[udfPath] ?? { updates: 0, bytes: 0 }
+      query.updates++
+      query.bytes += bytes
+      slot.queries[udfPath] = query
+      tab.perChange.set(change, slot)
+    })
+  }
+  const phases = {}
+  /** Runs `body` as phase `name`, with the log, steal and each tab's bytes. */
+  const timed = async (name, body) => {
+    say(`phase ${name}`)
+    for (const tab of tabs) {
+      tab.bytesStart = tab.tracker.bytesReceived
+      tab.framesStart = tab.tracker.framesReceived
+      tab.answers = new Map()
+      tab.perChange = new Map()
+    }
+    const cpu = cpuNow()
+    const from = Date.now()
+    const extra = (await body()) ?? {}
+    await sleep(1500)
+    const to = Date.now()
+    const seconds = (to - from) / 1000
+    const stats = functionStats(log.between(from, to), seconds)
+    const figures = {
+      tabs: tabs.length,
+      seconds: Math.round(seconds * 10) / 10,
+      ...stats,
+      over_line: overLine(stats),
+      backend_at_once: mostAtOnce(log.between(from, to).filter((entry) => !entry.nested)),
+      steal: cpuShare(cpu, cpuNow()),
+      per_tab: tabs.map((tab) => ({
+        index: tab.index,
+        view: tab.view,
+        bytes: tab.tracker.bytesReceived - tab.bytesStart,
+        frames: tab.tracker.framesReceived - tab.framesStart,
+        answers: Object.fromEntries(tab.answers),
+      })),
+      ...extra,
+    }
+    figures.noisy = (figures.steal?.steal_pct ?? 0) >= 10
+    phases[name] = figures
+    return figures
+  }
+  /** Each tab's time to current from `from`, once it connected more than
+      `connects[i]` times, its queries and its time from its newest socket. */
+  const allTabsCurrent = async (from, connects) => {
+    const results = new Map()
+    const deadline = from + options.timeoutMs
+    while (results.size < tabs.length && Date.now() < deadline) {
+      for (const tab of tabs) {
+        if (results.has(tab.index) || !tab.tracker.current) continue
+        if (tab.tracker.connects <= connects[tab.index]) continue
+        if (Date.now() - (tab.tracker.lastFrameAt ?? from) < 300) continue
+        results.set(tab.index, {
+          index: tab.index,
+          view: tab.view,
+          queries: tab.tracker.queries.size,
+          ms: (tab.tracker.lastFrameAt ?? Date.now()) - from,
+          from_socket_ms: tab.tracker.openedAt
+            ? (tab.tracker.lastFrameAt ?? Date.now()) - tab.tracker.openedAt
+            : null,
+          current: true,
+        })
+      }
+      await sleep(20)
+    }
+    return tabs.map(
+      (tab) => results.get(tab.index) ?? { index: tab.index, view: tab.view, current: false },
+    )
+  }
+  try {
+    await timed('startup', async () => {
+      const from = Date.now()
+      await Promise.all(
+        tabs.map((tab) =>
+          tab.page.goto(`${options.siteUrl}${urls[tab.view]}`, { waitUntil: 'domcontentloaded' }),
+        ),
+      )
+      const results = await allTabsCurrent(
+        from,
+        tabs.map(() => 0),
+      )
+      // the sets once every tab has been quiet, as the record part reads them
+      await Promise.all(tabs.map((tab) => settle(tab.tracker, options.quietMs, options.timeoutMs)))
+      return {
+        notifications,
+        time_to_current_ms: spread(results.map((result) => result.ms)),
+        client_first_answer_ms: firstAnswerStats(tabs.flatMap((tab) => tab.tracker.firstAnswers())),
+        subscriptions: tabs.map((tab, i) => {
+          const set = tab.tracker.set()
+          return {
+            index: tab.index,
+            view: tab.view,
+            url: urls[tab.view],
+            current: results[i].current,
+            ms_to_current: results[i].ms ?? null,
+            queries: set.length,
+            answer_bytes: set.reduce((all, query) => all + (query.bytes ?? 0), 0),
+            functions: set.map((query) => query.udfPath),
+            leads_alerts: set.some((query) => query.udfPath === 'inbox:feed'),
+            calls: Object.fromEntries(
+              [...tab.tracker.calls.entries()].map(([name, done]) => [name, done.calls]),
+            ),
+          }
+        }),
+        queries_all_tabs: tabs.reduce((all, tab) => all + tab.tracker.queries.size, 0),
+      }
+    })
+    if (options.phases.includes('idle')) {
+      const idle = await timed('idle', async () => {
+        await sleep(options.idleSeconds * 1000)
+        return { seconds_asked: options.idleSeconds }
+      })
+      const minutes = idle.seconds / 60
+      const round = (value) => Math.round(value * 100) / 100
+      idle.per_tab_minute = idle.per_tab.map((tab) => ({
+        index: tab.index,
+        view: tab.view,
+        bytes: round(tab.bytes / minutes),
+        frames: round(tab.frames / minutes),
+        answers: round(
+          Object.values(tab.answers).reduce((all, entry) => all + entry.updates, 0) / minutes,
+        ),
+        answers_by_function: Object.fromEntries(
+          Object.entries(tab.answers).map(([name, entry]) => [
+            name,
+            { updates: round(entry.updates / minutes), bytes: round(entry.bytes / minutes) },
+          ]),
+        ),
+      }))
+      idle.backend_per_minute = {
+        executions: round(
+          Object.values(idle.functions).reduce((all, fn) => all + fn.executions, 0) / minutes,
+        ),
+        js_ms: round(
+          Object.values(idle.functions).reduce((all, fn) => all + fn.js_ms_sum, 0) / minutes,
+        ),
+        functions: Object.fromEntries(
+          Object.entries(idle.functions).map(([name, fn]) => [
+            name,
+            { executions: round(fn.executions / minutes), js_ms: round(fn.js_ms_sum / minutes) },
+          ]),
+        ),
+      }
+    }
+    if (options.phases.includes('changes')) {
+      // the replay's changes, with this process's tabs in place of the workers
+      const local = [
+        {
+          ask: async (message) => {
+            change = message.id
+          },
+        },
+      ]
+      const figures = await timed('changes', () => runChanges(options, plan, boardSet, local, log))
+      const byKind = {}
+      const byView = {}
+      for (const done of figures.changes) {
+        done.resent_per_tab = tabs.map((tab) => ({
+          index: tab.index,
+          view: tab.view,
+          bytes: tab.perChange.get(done.id)?.bytes ?? 0,
+          queries: tab.perChange.get(done.id)?.queries ?? {},
+        }))
+        byKind[done.kind] = byKind[done.kind] ?? {}
+        byView[done.kind] = byView[done.kind] ?? {}
+        for (const tab of done.resent_per_tab) {
+          const kind = byKind[done.kind]
+          kind[tab.index] = [...(kind[tab.index] ?? []), tab.bytes]
+          const view = byView[done.kind]
+          view[tab.view] = [...(view[tab.view] ?? []), tab.bytes]
+        }
+      }
+      figures.bytes_per_tab_per_change = Object.fromEntries(
+        Object.entries(byKind).map(([kind, perTab]) => [
+          kind,
+          Object.fromEntries(
+            Object.entries(perTab).map(([index, bytes]) => [index, spread(bytes)]),
+          ),
+        ]),
+      )
+      figures.bytes_per_view_per_change = Object.fromEntries(
+        Object.entries(byView).map(([kind, perView]) => [
+          kind,
+          Object.fromEntries(Object.entries(perView).map(([view, bytes]) => [view, spread(bytes)])),
+        ]),
+      )
+      change = null
+    }
+    if (options.phases.includes('reconnect'))
+      await timed('reconnect', async () => {
+        const connects = tabs.map((tab) => tab.tracker.connects)
+        const at = Date.now()
+        await Promise.all(
+          tabs.map((tab) =>
+            tab.page.evaluate((prefix) => {
+              window.__loadMark = true
+              for (const socket of window.__loadSockets)
+                if (socket.url.startsWith(prefix) && socket.readyState <= 1) socket.close()
+            }, socketPrefix(options)),
+          ),
+        )
+        const results = await allTabsCurrent(at, connects)
+        const reloaded = await Promise.all(
+          tabs.map((tab) => tab.page.evaluate(() => window.__loadMark !== true)),
+        )
+        return {
+          closed_at: at,
+          resubscriptions: results.reduce((all, result) => all + (result.queries ?? 0), 0),
+          current: results.filter((result) => result.current).length,
+          time_to_current_ms: spread(results.map((result) => result.ms)),
+          from_socket_ms: spread(results.map((result) => result.from_socket_ms)),
+          client_first_answer_ms: firstAnswerStats(
+            tabs.flatMap((tab) => tab.tracker.firstAnswers()),
+          ),
+          per_tab: results.map((result, i) => ({ ...result, reloaded: reloaded[i] })),
+        }
+      })
+  } finally {
+    await browser.close().catch(() => {})
+    await log.stop()
+  }
+  const output = {
+    format: 'qivo-load-tabs/1',
+    rung: {
+      tabs: options.tabs,
+      views: tabs.map((tab) => tab.view),
+      browser: options.browser,
+      person: plan.people[0].key,
+      profiles: plan.profiles,
+      teams: plan.teams.length,
+      backend: options.url,
+      commit: process.env.QIVO_LOAD_COMMIT ?? null,
+      host_cpus: (await import('node:os')).cpus().length,
+      at: new Date().toISOString(),
+      log_pages: log.pages,
+    },
+    sources: {
+      functions:
+        "The local backend's function log stream: per top-level call, JavaScript (userExecutionTime) and total time.",
+      bytes:
+        "Each tab's received WebSocket frames from Playwright, pings included: an answer's bytes are its value's JSON length, a tab's bytes every frame's UTF-8 length.",
+      time_to_current:
+        'From the phase start (startup) or the close (reconnect) to the last frame of the first moment the tab was current and quiet for 300 ms; from_socket_ms from the tab making its new backend socket.',
+      steal: '/proc/stat over the phase.',
+    },
+    phases,
+  }
+  const file = options.output ?? join(options.dir, 'out', `tabs-${options.tabs}.json`)
+  mkdirSync(resolve(file, '..'), { recursive: true })
+  writeFileSync(file, `${JSON.stringify(output, null, 2)}\n`)
+  say(`wrote ${file}`)
+  return output
+}
+
 /* ------------------------------------------------------------------- main */
 
 async function main() {
@@ -1625,6 +1941,7 @@ async function main() {
   for (const part of options.parts) {
     if (part === 'setup') await setup(options)
     else if (part === 'record') await record(options)
+    else if (part === 'tabs') await tabsPart(options)
     else await replay(options)
   }
 }

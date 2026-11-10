@@ -13,6 +13,7 @@ import { EVERYDAY_ORG, loadOptions, OptionsError, PARTS, PHASES, VIEWS } from '.
 import {
   cpuCounters,
   cpuShare,
+  firstAnswerStats,
   functionStats,
   logEntry,
   mostAtOnce,
@@ -77,6 +78,17 @@ describe('the load benchmark options', () => {
       processes: 4,
       hiddenTab: false,
     })
+  })
+
+  it('takes the tabs part, which all leaves out, with its tabs and the top-level Board', () => {
+    expect(loadOptions(['all'], KEY)).toMatchObject({ tabs: 1, boardTop: false })
+    expect(loadOptions(['all'], KEY).parts).not.toContain('tabs')
+    expect(loadOptions(['tabs', '--tabs', '10', '--board-top'], KEY)).toMatchObject({
+      parts: ['tabs'],
+      tabs: 10,
+      boardTop: true,
+    })
+    expect(() => loadOptions(['tabs', '--tabs', '0'], KEY)).toThrow('--tabs takes a whole number')
   })
 
   it.each([
@@ -218,6 +230,31 @@ describe('the frame tracker', () => {
     expect(tracker.current).toBe(true)
     expect(tracker.set().map((query) => query.udfPath)).toEqual(['workspace:root'])
     expect(tracker.closes).toEqual([expect.objectContaining({ code: 1006, reason: 'gone' })])
+  })
+
+  it('times each query from its Add to its first answer, leaving out one that has none', () => {
+    let now = 1000
+    const tracker = new FrameTracker({ now: () => now })
+    tracker.sent(
+      add(0, 1, [
+        [0, 'workspace:root', {}],
+        [1, 'tasks:board', {}],
+      ]),
+    )
+    now = 1040
+    tracker.received(transition(1, [[0, { orgs: [] }]]))
+    now = 1300
+    // a later answer does not move the first one
+    tracker.received(transition(1, [[0, { orgs: [1] }]]))
+    expect(tracker.firstAnswers()).toEqual([['workspace:root', 40]])
+    const stats = firstAnswerStats([
+      ['workspace:root', 40],
+      ['tasks:board', 120],
+      ['workspace:root', 60],
+    ])
+    expect(stats.all).toEqual({ count: 3, p50: 60, p99: 120, max: 120 })
+    expect(stats.functions['workspace:root']).toEqual({ count: 2, p50: 40, p99: 60, max: 60 })
+    expect(Object.keys(stats.functions)).toEqual(['tasks:board', 'workspace:root'])
   })
 
   it('times each mutation from its frame to its response, and never reads an Authenticate frame', () => {
@@ -478,7 +515,12 @@ describe('the per-function statistics', () => {
       js_ms: { count: 2, p50: 10, p99: 600, max: 600 },
       total_ms_sum: 730,
     })
-    expect(stats.functions['issues:update']).toMatchObject({ failed: 1, per_second: 0.5 })
+    expect(stats.functions['issues:update']).toMatchObject({
+      failed: 1,
+      per_second: 0.5,
+      errors: [{ error: 'refused', count: 1 }],
+    })
+    expect(stats.functions['tasks:board'].errors).toEqual([])
     expect(stats.backend_total_ms).toBe(750)
     expect(overLine(stats)).toEqual([{ fn: 'tasks:board', js_ms_max: 600 }])
     expect(overLine(stats, 1000)).toEqual([])

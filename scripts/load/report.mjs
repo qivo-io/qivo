@@ -56,6 +56,22 @@ export function spread(values) {
   }
 }
 
+/** The distinct errors of log entries `list`, at most three, each its
+    first 120 characters with its count, the most frequent first, so a
+    reader can tell a refusal from a time limit or a cancelled call. */
+function errorCounts(list) {
+  const counts = new Map()
+  for (const entry of list) {
+    if (!entry.error) continue
+    const text = entry.error.replace(/\[Request ID: [^\]]*\] /, '').slice(0, 120)
+    counts.set(text, (counts.get(text) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([error, count]) => ({ error, count }))
+}
+
 /** Per function, the log entries `entries` (logEntry's) that ran in the
     `seconds` long phase: executions, executions a second, how many the
     cache answered, failures, and the JavaScript and total time spread of
@@ -83,6 +99,7 @@ export function functionStats(entries, seconds) {
       per_second: Math.round((list.length / Math.max(seconds, 1e-9)) * 100) / 100,
       cached: list.length - ran.length,
       failed: list.filter((entry) => entry.error).length,
+      errors: errorCounts(list),
       js_ms: spread(ran.map((entry) => entry.js_ms)),
       total_ms: spread(ran.map((entry) => entry.total_ms)),
       js_ms_sum: tenth(js),
@@ -90,6 +107,20 @@ export function functionStats(entries, seconds) {
     }
   }
   return { functions, backend_total_ms: tenth(total) }
+}
+
+/** Per function, the spread of the clients' own first-answer times
+    `pairs` ([udfPath, milliseconds], FrameTracker firstAnswers'), the
+    whole set's spread under `all`. */
+export function firstAnswerStats(pairs) {
+  const byFn = new Map()
+  for (const [name, ms] of pairs) byFn.set(name, [...(byFn.get(name) ?? []), ms])
+  return {
+    all: spread(pairs.map(([, ms]) => ms)),
+    functions: Object.fromEntries(
+      [...byFn.entries()].sort().map(([name, ms]) => [name, spread(ms)]),
+    ),
+  }
 }
 
 /** Idle phase `idle` (its functionStats', bytes, answers and client calls)
