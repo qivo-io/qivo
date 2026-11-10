@@ -575,6 +575,13 @@ describe('roadmap undo through the client store', () => {
     expect(await whole).toBe(true)
   })
 
+  it('refuses a batch inside another rather than answer it never', () => {
+    expect(() => P.batchRoadmapChanges(() => void P.batchRoadmapChanges(() => {}))).toThrow(
+      'P.batchRoadmapChanges ran inside another batch',
+    )
+    expect(requests).toHaveLength(0)
+  })
+
   it('sends no batch without a recording visit, also when the 24 hours end at the press', async () => {
     const [first, second] = [task(), shaped(P, snap.issues[1].id)]
     const both = () =>

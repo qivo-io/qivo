@@ -271,9 +271,10 @@ function watchRows() {
   }
 }
 /* jsdom has no layout: lays the spine's scroller out `offset()` px down the
-   screen with each row of the thread 100 px tall inside it, at scrollTop
-   9000, and answers the scroller's scrollTop. */
-function layOut(offset: () => number) {
+   screen with each row of the thread 100 px tall inside it, `inside()` px
+   below what sits above them in the scroller, at scrollTop 9000, and
+   answers the scroller's scrollTop. */
+function layOut(offset: () => number, inside: () => number = () => 0) {
   const scroller = document.querySelector<HTMLElement>('[data-spine-scroll]')
   if (!scroller) throw new Error('missing the scroller')
   let scrollTop = 9000
@@ -295,7 +296,7 @@ function layOut(offset: () => number) {
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
     if (this === scroller) return new DOMRect(0, offset(), 600, 600)
     const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0
-    return new DOMRect(0, offset() + index * 100 - scrollTop, 600, 100)
+    return new DOMRect(0, offset() + inside() + index * 100 - scrollTop, 600, 100)
   })
   return () => scrollTop
 }
@@ -556,6 +557,28 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     await see((el) => reading.has(el.getAttribute('data-comment') ?? ''))
     const rows = thread()
     await open({ above: true })
+    expect(thread()).toEqual(rows)
+    expect(scrollTop()).toBe(9000)
+  })
+
+  it('leaves the thread where it is when what sits above its rows changes and no row goes', async () => {
+    await load()
+    const see = watchRows()
+    await walkBack(2)
+    // the description, as in the stacked window, sits above the rows in
+    // their scroller and leaves while its pop-out is open
+    const scrollTop = layOut(
+      () => 0,
+      () => (document.querySelector('[data-focus-window]') ? 0 : 180),
+    )
+    const reading = new Set([comment(280).id, comment(281).id])
+    await see((el) => reading.has(el.getAttribute('data-comment') ?? ''))
+    const rows = thread()
+    await act(async () => document.querySelector<HTMLElement>('[data-desc-popout]')?.click())
+    expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
+    expect(scrollTop()).toBe(9000)
+    await act(async () => document.querySelector<HTMLElement>('[data-focus-close]')?.click())
+    expect(document.querySelector('[data-focus-window]')).toBeNull()
     expect(thread()).toEqual(rows)
     expect(scrollTop()).toBe(9000)
   })
