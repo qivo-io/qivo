@@ -12,8 +12,13 @@ import { useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
 import { usePlannerVersion } from '../store/usePlannerVersion'
-import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
-import { BOARD_SLOTS, type BoardView, useBoardView } from '../views/board/useBoardView'
+import { BoardFrame, BoardNote, IncompleteNote, NoSubProjectsNote } from '../views/board/BoardNote'
+import {
+  BOARD_SLOTS,
+  type BoardView,
+  holdsNoSubProject,
+  useBoardView,
+} from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
 import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusDot } from './qivo'
 import { Button } from './ui/button'
@@ -425,6 +430,13 @@ function MobileTaskBoard({
   // server confirms (useHolds), asked only while its empty note could show
   const noProjects =
     useHolds(info.mine && count === 0 && view.shows && !waiting && view.empty()) === 'none'
+  // a top-level project whose answer names no sub-project, which says so in
+  // place of the sections, as the desktop Board does
+  const noSubProjects = view.shows && holdsNoSubProject(view, info)
+  // the empty note, none while tasks the answer names are missing, which
+  // IncompleteNote says
+  const empty =
+    count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && !noSubProjects
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -596,8 +608,8 @@ function MobileTaskBoard({
       {!view.shows && !noProjects && (
         <BoardNote view={view} info={info} actions={actions} variant="phone" />
       )}
-      {/* none while tasks the answer names are missing: the note says so */}
-      {count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && (
+      {noSubProjects && <NoSubProjectsNote info={info} actions={actions} variant="phone" />}
+      {empty && (
         <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
           <h2 data-empty-state-title>{waiting ? 'Loading tasks…' : 'No tasks here'}</h2>
