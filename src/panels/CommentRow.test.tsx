@@ -199,4 +199,24 @@ describe('the comment rows of the task window', { timeout: 30_000 }, () => {
       expect(rowText(n), `#${n}`).toContain(`${11 - n}m ago`)
     }
   })
+
+  it("draws a row again when its own age's label changes, and only that row", async () => {
+    await open()
+    // posted 20 s before NOW, so 'just now' until its age rounds to a minute
+    const recent = { ...comment(6), created_at: new Date(NOW - 20_000).toISOString() }
+    await deliver({ comments: [...range(1, 6), recent], earlier: false })
+    expect(rowText(6)).toContain('just now')
+    const before = new Map(renders)
+    // 35 s after the comment, within the same minute of the clock
+    vi.setSystemTime(NOW + 15_000)
+    const next = { ...comment(7), created_at: new Date(NOW + 15_000).toISOString() }
+    await deliver({ comments: [...range(1, 6), recent, next], earlier: false })
+    expect(renders.get('Check 7')).toBeGreaterThan(0)
+    expect(renders.get('Check 6')).toBe((before.get('Check 6') ?? 0) + 1)
+    expect(rowText(6)).toContain('1m ago')
+    for (let n = 1; n < 6; n++) {
+      expect(renders.get(`Check ${n}`), `#${n}`).toBe(before.get(`Check ${n}`))
+      expect(rowText(n), `#${n}`).toContain(`${10 - n}m ago`)
+    }
+  })
 })

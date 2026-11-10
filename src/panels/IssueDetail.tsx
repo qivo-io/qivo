@@ -1346,9 +1346,11 @@ function scrollerOf(el: Element): Element {
     the comment is unchanged (store/stable.ts keepItems), the task's
     organization, the rights and the edit in place it shows, the store's
     context (P.contextVersion, for the author's name and picture and the
-    signed-in person's own profiles) and the minute its age is told in
-    (P.fmtAgo). `onEdit` is the window's state setter, which never changes,
-    and takes null when the edit in place closes. */
+    signed-in person's own profiles) and its age as the row shows it
+    (P.fmtAgo), which the window tells on each of its renders, so a row
+    renders again exactly when its own age's label changes. `onEdit` is
+    the window's state setter, which never changes, and takes null when the
+    edit in place closes. */
 const CommentRow = memo(function CommentRow({
   c,
   org,
@@ -1356,6 +1358,7 @@ const CommentRow = memo(function CommentRow({
   locked = false,
   editing,
   onEdit,
+  age,
 }: {
   c: CommentVM
   org: string
@@ -1365,7 +1368,8 @@ const CommentRow = memo(function CommentRow({
   editing: boolean
   onEdit: (id: string | null) => void
   context: StoreVersion
-  minute: number
+  /** the comment's age, P.fmtAgo of its time */
+  age: string
 }) {
   const [hover, setHover] = useStateID(false)
   const deletion = useConfirmArm<'delete'>()
@@ -1399,7 +1403,7 @@ const CommentRow = memo(function CommentRow({
           </span>
           <HoverTooltip content={new Date(c.ts).toLocaleString()}>
             <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [flex-shrink:0]">
-              {P.fmtAgo(c.ts)}
+              {age}
             </span>
           </HoverTooltip>
           {c.editedTs != null && <EditedGlyph c={c} />}
@@ -2653,8 +2657,6 @@ function IssueDetail({
   const gap = spineGap(gapSides.comments, gapSides.events)
   const parts = splitSpine(spine, gap, gapSides, editingComment)
   const shown = [...parts.above, ...parts.below]
-  // the minute the comments' ages are told in (CommentRow)
-  const ageMinute = P.ageMinute()
   const newer = newerRow(
     gap,
     all ? from.start : Number.NEGATIVE_INFINITY,
@@ -2999,7 +3001,7 @@ function IssueDetail({
                   editing={editingComment === s.id}
                   onEdit={setEditingComment}
                   context={P.contextVersion}
-                  minute={ageMinute}
+                  age={P.fmtAgo(s.c.ts)}
                 />
               ) : (
                 <EventRow key={s.id} e={s.e} />

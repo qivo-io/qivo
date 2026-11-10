@@ -11858,10 +11858,9 @@ export const PLANNER = {
       homeRow()?.project_creators,
     )
   },
-  /** The minute fmtAgo tells ages in. A memoized row that shows an age
-      takes it as a prop, so a render in a later minute tells the age
-      again while renders within one minute skip the row. */
-  ageMinute: () => Math.floor(Date.now() / 60000),
+  /** How long ago epoch milliseconds `ts` was, as the task window tells a
+      comment's or a change's age: just now, then rounded minutes, hours
+      or days. */
   fmtAgo: (ts: number) => {
     const m = Math.round((Date.now() - ts) / 60000)
     if (m < 1) return 'just now'
