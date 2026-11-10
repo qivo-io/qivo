@@ -56,7 +56,9 @@
    One path per query. A query a view reads on the live transport is never
    also held through convex.onUpdate (lib/liveQueries.ts), and
    store/guard/liveRoutes.test.ts holds the app to that. src/hiddenReads.test.tsx
-   holds a hidden page to this list.
+   holds a hidden page to this list. Design specification row 473 holds
+   the budgets for what a shown and a hidden tab read again after a
+   reconnect and for the time until they are current.
    Views read the gate through useViewVisibility; the store through
    watchVisibility. */
 
