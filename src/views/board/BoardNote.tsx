@@ -3,8 +3,9 @@
    a selection past the Board's limits,
    a Board that is not available or did not load, a text filter past its
    limit, a wait too large to show tasks during and a top-level project
-   without sub-projects. Each is an empty state
-   (components/ViewNote.tsx), where focus goes once a task window closes
+   without sub-projects. Each is an empty state (components/ViewNote.tsx,
+   or components/qivo EmptyState for the desktop's note of a project
+   without sub-projects), where focus goes once a task window closes
    over it (lib/taskFocus.ts). The filter row stays usable beside every
    one. */
 
