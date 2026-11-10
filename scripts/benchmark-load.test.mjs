@@ -8,8 +8,16 @@ import {
   SET_FORMAT,
   subscriptionsByOrganization,
   swapIds,
+  withoutLeaderReads,
 } from './load/frames.mjs'
-import { EVERYDAY_ORG, loadOptions, OptionsError, PARTS, PHASES, VIEWS } from './load/options.mjs'
+import {
+  DEFAULT_PHASES,
+  EVERYDAY_ORG,
+  loadOptions,
+  OptionsError,
+  PARTS,
+  VIEWS,
+} from './load/options.mjs'
 import {
   cpuCounters,
   cpuShare,
@@ -41,8 +49,11 @@ describe('the load benchmark options', () => {
       siteUrl: 'http://localhost:5241',
       browser: 'chromium',
       views: VIEWS,
-      phases: PHASES,
+      phases: DEFAULT_PHASES,
       people: EVERYDAY_ORG.people,
+      orgs: 1,
+      busyLoops: 8,
+      busyCpus: null,
       teams: EVERYDAY_ORG.teams,
       clients: 10,
       processes: 2,
@@ -91,6 +102,31 @@ describe('the load benchmark options', () => {
     expect(() => loadOptions(['tabs', '--tabs', '0'], KEY)).toThrow('--tabs takes a whole number')
   })
 
+  it('keeps the phases in the order given and takes the organizations and the busy loops', () => {
+    const options = loadOptions(
+      [
+        'replay',
+        '--phases',
+        'startup,idle,changes,reconnect,busy',
+        '--orgs',
+        '5',
+        '--clients',
+        '100',
+        '--busy-loops',
+        '8',
+        '--busy-cpus',
+        '0-3,6',
+      ],
+      KEY,
+    )
+    expect(options).toMatchObject({
+      phases: ['startup', 'idle', 'changes', 'reconnect', 'busy'],
+      orgs: 5,
+      busyLoops: 8,
+      busyCpus: '0-3,6',
+    })
+  })
+
   it.each([
     [['measure'], 'The first argument is the part'],
     [['record', '--url', 'https://happy-otter-123.convex.cloud'], 'loopback origin'],
@@ -103,6 +139,10 @@ describe('the load benchmark options', () => {
     [['replay', '--clients', '2.5'], '--clients takes a whole number'],
     [['replay', '--clients'], 'and none followed it'],
     [['replay', '--clients', '2', '--processes', '3'], '--processes 3 is more than --clients 2'],
+    [['replay', '--clients', '4', '--processes', '1', '--orgs', '5'], '--orgs 5 is more than'],
+    [['replay', '--busy-cpus', 'all'], '--busy-cpus takes a CPU list'],
+    [['replay', '--busy-cpus', '0-7;rm'], '--busy-cpus takes a CPU list'],
+    [['replay', '--phases', 'idle,soak'], '--phases takes a comma list'],
   ])('refuses %j', (argv, message) => {
     expect(() => loadOptions(argv, KEY)).toThrow(OptionsError)
     expect(() => loadOptions(argv, KEY)).toThrow(message)
@@ -396,6 +436,30 @@ describe('the recorded set and the id swap', () => {
     })
     const set = setOf('inbox', [{ udfPath: 'inbox:page', args: { org_id: 'org-ns' }, bytes: 1 }])
     expect(personQueries(set, { ...LEO, org_id: undefined })[0].args.org_id).toBe('org-ns')
+  })
+
+  it("swaps a mirrored organization's ids and leaves out the recorder's other seats", () => {
+    const set = setOf('board', [
+      { udfPath: 'tasks:board', args: { org_id: 'org-ns', project_id: 'proj-ns' }, bytes: 9 },
+      { udfPath: 'inbox:summary', args: { org_id: 'org-other' }, bytes: 3 },
+      { udfPath: 'workspace:root', args: {}, bytes: 5 },
+    ])
+    const two = { profile_id: 'prof-ida', auth_user_id: 'auth-ida', org_id: 'org-two' }
+    expect(personQueries(set, two, { more: { 'proj-ns': 'proj-two' }, ownOrg: true })).toEqual([
+      { udfPath: 'tasks:board', args: { org_id: 'org-two', project_id: 'proj-two' }, bytes: 9 },
+      { udfPath: 'workspace:root', args: {}, bytes: 5 },
+    ])
+    // without ownOrg the other seat's read stays, as the recorder holds it
+    expect(personQueries(set, LEO).map((query) => query.udfPath)).toContain('inbox:summary')
+  })
+
+  it("drops only the leader's reads for a tab that does not lead", () => {
+    const queries = [
+      { udfPath: 'inbox:feed', args: { after: 1 } },
+      { udfPath: 'notifications:settings', args: {} },
+      { udfPath: 'inbox:summary', args: {} },
+    ]
+    expect(withoutLeaderReads(queries)).toEqual([{ udfPath: 'inbox:summary', args: {} }])
   })
 })
 

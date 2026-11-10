@@ -6,8 +6,9 @@
 //     [--url http://127.0.0.1:3236] [--site-url http://localhost:5241]
 //     [--deployment local-sc-3236] [--dir dev-temp/load] [--output file.json]
 //     [--browser chromium|firefox|webkit] [--views board,overview,roadmap,sync,inbox,mine]
-//     [--people 50] [--teams 10] [--clients 10] [--processes 2]
-//     [--phases match,startup,changes,reconnect,idle] [--changes 20] [--idle-s 120]
+//     [--people 50] [--teams 10] [--orgs 1] [--clients 10] [--processes 2]
+//     [--phases match,startup,changes,reconnect,idle,busy] [--changes 20] [--idle-s 120]
+//     [--busy-loops 8] [--busy-cpus 0-7]
 //     [--quiet-ms 3000] [--timeout-ms 90000] [--no-hidden-tab]
 //     [--tabs 1] [--board-top]
 //
@@ -48,7 +49,14 @@
 // person reads Northstar's projects and no project holds more than 3 team
 // shares, inside the design size's 5. It also plants one
 // session for Nora, which the replay's Nora and the writer act with. A
-// second run adds only what is missing. people.json holds the planted
+// second run adds only what is missing. With --orgs N it then adds N - 1
+// organizations at everyday size beside Northstar (setupOrg): a new login
+// creates each, mirrors Northstar's projects and sub-projects by name with
+// 30 tasks a sub-project, adds --teams teams and --people profiles, and
+// invites Nora, whose login claims the seat as a guest, since a login holds
+// one home seat (convex/identity.ts claimSeatsForLogin), with `user` on
+// every top-level project; Nora gets one session for each. record then
+// records Nora's views in each organization too. people.json holds the planted
 // session ids, which act only with the admin key; it stays in the
 // untracked working folder.
 //
@@ -116,7 +124,19 @@
 //   set it subscribes again holds none of the reads it dropped on hiding
 //   and nothing it did not hold while hidden.
 // - idle: --idle-s seconds with no change; server work, bytes and calls
-//   per session per minute, the beats and claims included.
+//   per session per minute, the beats and claims included, and the
+//   answers per minute of each watched client (Nora's tabs).
+// - busy: the changes again beside --busy-loops processes that spin, each
+//   pinned to --busy-cpus with taskset when given, so the backend's CPUs
+//   are busy while the clients run on others.
+//
+// The phases after startup run in the order --phases names them. With
+// --orgs the clients are dealt to the organizations in turn (clientSpecs):
+// the first in each is Nora's tab there, on its Board as recorded there,
+// and only her Northstar tab leads her alerts, as one browser profile
+// does; the rest are that organization's people on Northstar's sets with
+// its mirrored ids swapped in. A replayed person with one seat holds none
+// of the reads a recorded set names for Nora's other organizations.
 //
 // The output (--output, else <dir>/out/rung-<clients>.json) is one rung:
 // per phase and function the executions a second and the JavaScript p50,
@@ -135,7 +155,7 @@
 // current after the reconnect passes ten times the lone client's. The
 // local backend's query concurrency is not hosted Convex's, so a close
 // there is judged against the modelled hosted limit, not taken as one.
-import { fork } from 'node:child_process'
+import { fork, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -151,6 +171,7 @@ import {
   personQueries,
   recordedSet,
   subscriptionsByOrganization,
+  withoutLeaderReads,
 } from './load/frames.mjs'
 import { loadOptions, OptionsError, VIEWS } from './load/options.mjs'
 import {
@@ -240,7 +261,7 @@ async function retry(step) {
       const text = String(error?.message ?? error)
       if (
         attempt > 20 ||
-        !/OptimisticConcurrency|TooManyWrites|overloaded|fetch failed|ECONNRESET|timed out/i.test(
+        !/OptimisticConcurrency|TooManyWrites|TooManyConcurrentRequests|ExpiredInQueue|overloaded|fetch failed|ECONNRESET|timed out/i.test(
           text,
         )
       )
@@ -409,18 +430,119 @@ async function setup(options) {
   // the people an earlier run planted keep their sessions; person i has id
   // stableId(person:i), and no run goes past --people profiles
   const made = earlier?.people?.slice(1) ?? []
-  const people = [{ ...nora }, ...made]
   const added = teams.slice(seat.team_ids.length)
-  for (let i = made.length; held < options.people && i < options.people; i++) {
+  const grown = await addPeople({
+    admin,
+    asAdmin: asNora,
+    org,
+    count: Math.max(0, options.people - held),
+    from: made.length,
+    baseTeams: seat.team_ids,
+    addedTeams: added,
+    idOf: (i) => stableId(`person:${i}`),
+    emailOf: (i) => `load.person.${String(i + 1).padStart(3, '0')}@northstar.test`,
+    keyOf: (i) => `p${i + 1}`,
+  })
+  held += grown.created
+  // the seed's own people with a login (marketing-demo.mjs PEOPLE, name@demo.qivo.io)
+  // get a planted session too, last, so an organization of --people
+  // profiles has a session for every person in it, its agent aside
+  const seeded = []
+  const known = new Set(made.map((person) => person.key))
+  for (const key of ['leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben']) {
+    if (known.has(key)) continue
+    const login = await component(admin, 'adapter:findOne', {
+      model: 'user',
+      where: [{ field: 'email', value: `${key}@demo.qivo.io` }],
+    })
+    if (!login) continue
+    const person = {
+      key,
+      name: login.name,
+      auth_user_id: login._id,
+      session_id: await sessionOf(admin, login._id),
+    }
+    const own = findSeat(
+      await httpClient(options, person).query(ref('workspace:root'), {}),
+      ORG_SLUG,
+    )
+    if (!own) continue
+    seeded.push({ ...person, profile_id: own.profile_id, org_id: own.org_id })
+  }
+  const people = [{ ...nora }, ...made, ...grown.people, ...seeded]
+  mkdirSync(options.dir, { recursive: true })
+  const plan = { org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }
+  const orgs = [{ k: 0, org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }]
+  for (let k = 1; k < options.orgs; k++) {
+    const kept = earlier?.orgs?.[k]
+    orgs.push(
+      kept ?? (await setupOrg(options, { admin, noraLogin: noraLogin._id, northstar: plan, k })),
+    )
+    writeFileSync(peopleFile, `${JSON.stringify({ ...plan, orgs }, null, 2)}\n`, { mode: 0o600 })
+  }
+  plan.orgs = orgs
+  writeFileSync(peopleFile, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 })
+  say(
+    `setup: ${held} profiles, ${teams.length} teams, ${people.length} planted sessions in ${peopleFile}` +
+      (orgs.length > 1
+        ? `; ${orgs.length - 1} more organizations: ${orgs
+            .slice(1)
+            .map(
+              (one) => `${one.org_slug} (${one.profiles} profiles, ${one.people.length} sessions)`,
+            )
+            .join(', ')}`
+        : ''),
+  )
+  return plan
+}
+
+/** Runs `step(item)` for every item of `items`, `width` at a time.
+    Answers the results in the items' order. */
+async function pool(items, width, step) {
+  const out = new Array(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(width, items.length) }, async () => {
+      while (next < items.length) {
+        const at = next++
+        out[at] = await step(items[at], at)
+      }
+    }),
+  )
+  return out
+}
+
+/** Adds `count` people to organization `org` as its admin `asAdmin`,
+    numbered from `from`, each with a Better Auth login, its seat claimed
+    as the sign-in claims it, and a planted session. Person i joins three
+    teams: one of `baseTeams`, which reach every project, and two of
+    `addedTeams`. Eight at a time. Answers the people and how many seats
+    this call made. */
+async function addPeople({
+  admin,
+  asAdmin,
+  org,
+  count,
+  from,
+  baseTeams,
+  addedTeams,
+  idOf,
+  emailOf,
+  keyOf,
+}) {
+  let created = 0
+  const numbers = Array.from({ length: count }, (_, n) => from + n)
+  const people = await pool(numbers, 8, async (i) => {
     const name = `${FIRST[i % FIRST.length]} ${LAST[Math.floor(i / FIRST.length) % LAST.length]}`
-    const email = `load.person.${String(i + 1).padStart(3, '0')}@northstar.test`
-    const id = stableId(`person:${i}`)
-    // three teams a person: one of Northstar's, which reach every project,
-    // and two that setup added
-    const own = seat.team_ids
-    const pick = [own[i % own.length], added[i % added.length], added[(i + 3) % added.length]]
-    const created = await once(() =>
-      asNora.mutation(ref('profiles:create'), {
+    const email = emailOf(i)
+    const id = idOf(i)
+    const pick = [
+      baseTeams[i % baseTeams.length],
+      addedTeams[i % addedTeams.length],
+      addedTeams[(i + 3) % addedTeams.length],
+    ]
+    const made = await once(() =>
+      asAdmin.mutation(ref('profiles:create'), {
         org_id: org,
         id,
         name,
@@ -431,7 +553,7 @@ async function setup(options) {
         teams: [...new Set(pick.filter(Boolean))],
       }),
     )
-    if (created) held++
+    if (made) created++
     const auth = await loginOf(admin, name, email)
     await retry(() =>
       admin.mutation(ref('identity:claimSeatsInternal'), {
@@ -440,28 +562,225 @@ async function setup(options) {
         emailVerified: true,
       }),
     )
-    people.push({
-      key: `p${i + 1}`,
+    if ((i + 1) % 100 === 0) say(`setup: ${i + 1} people in ${org}`)
+    return {
+      key: keyOf(i),
       name,
       profile_id: id,
       org_id: org,
       auth_user_id: auth,
       session_id: await sessionOf(admin, auth),
-    })
-  }
-  mkdirSync(options.dir, { recursive: true })
-  const plan = { org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }
-  writeFileSync(peopleFile, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 })
-  say(
-    `setup: ${held} profiles, ${teams.length} teams, ${people.length} planted sessions in ${peopleFile}`,
-  )
-  return plan
+    }
+  })
+  return { people, created }
 }
 
-/** Nora's seat in organization `slug` from the root part's answer: her
-    profile, its organization and the teams she is in, found by shape so a
+/** The names of the organizations setup adds beside Northstar, and of
+    the owner who creates each one. */
+const MORE_ORGS = [
+  { name: 'Harbor Analytics', owner: 'Ines Kaya' },
+  { name: 'Fjordline Robotics', owner: 'Tomas Wieland' },
+  { name: 'Copperfield Studio', owner: 'Priya Nair' },
+  { name: 'Birchway Health', owner: 'Jonas Ek' },
+  { name: 'Alder Logistics', owner: 'Mira Holt' },
+]
+
+/** Organization number `k` beside Northstar at everyday size, mirroring
+    Northstar's projects and sub-projects by name: a new login creates it
+    (identity.createOrganization, which makes its starter team), adds a
+    second team shared with every top-level project like Northstar's two,
+    --teams teams in all with each added one shared with one sub-project,
+    30 tasks a sub-project (board-scale-seed's seededTask, owned in turn by
+    its people), and --people profiles: the owner, Nora, invited by her
+    email so her login claims the seat as a guest (one home seat a login,
+    identity.ts claimSeatsForLogin) and given `user` on every top-level
+    project, and new people with logins and sessions. Nora gets a session
+    of her own for each organization, as one tab in each would. Answers the
+    organization's part of people.json. */
+async function setupOrg(options, { admin, noraLogin, northstar, k }) {
+  const { seededTask } = await import('./board-scale-seed.mjs')
+  const spec = MORE_ORGS[(k - 1) % MORE_ORGS.length]
+  const ownerEmail = `load.owner.${k}@org${k}.test`
+  const ownerLogin = await loginOf(admin, spec.owner, ownerEmail)
+  const owner = {
+    key: `owner${k}`,
+    name: spec.owner,
+    auth_user_id: ownerLogin,
+    session_id: await sessionOf(admin, ownerLogin),
+  }
+  const asOwner = httpClient(options, owner)
+  let root = await asOwner.query(ref('workspace:root'), {})
+  let seat = findSeat(root, (row) => row.name === spec.name)
+  if (!seat) {
+    await retry(() => asOwner.mutation(ref('identity:createOrganization'), { name: spec.name }))
+    root = await asOwner.query(ref('workspace:root'), {})
+    seat = findSeat(root, (row) => row.name === spec.name)
+  }
+  if (!seat) throw new Error(`${spec.owner} holds no seat in ${spec.name}`)
+  const org = seat.org_id
+  owner.profile_id = seat.profile_id
+  owner.org_id = org
+  const note = (text) => say(`setup ${seat.slug}: ${text}`)
+  // the teams: the starter team and a second one reach every project
+  const base = seat.team_ids.slice(0, 1)
+  const second = stableId(`org${k}:team:base`)
+  await once(() =>
+    asOwner.mutation(ref('teams:create'), { org_id: org, id: second, name: 'Operations' }),
+  )
+  base.push(second)
+  // the projects and sub-projects, Northstar's by name and order
+  const projects = []
+  const ids = {}
+  for (const [t, top] of northstar.projects.entries()) {
+    const id = stableId(`org${k}:project:${t}`)
+    const made = await retry(() =>
+      asOwner.mutation(ref('projects:create'), {
+        org_id: org,
+        id,
+        type: 'meta',
+        key: `T${t + 1}`,
+        name: top.name,
+      }),
+    )
+    ids[top.id] = id
+    const entry = { id, name: top.name, num: made.num, children: [] }
+    for (const [c, child] of top.children.entries()) {
+      const childId = stableId(`org${k}:project:${t}:${c}`)
+      const sub = await retry(() =>
+        asOwner.mutation(ref('projects:create'), {
+          org_id: org,
+          id: childId,
+          type: 'project',
+          parent_id: id,
+          key: `S${t + 1}${String.fromCharCode(65 + c)}`,
+          name: child.name,
+        }),
+      )
+      ids[child.id] = childId
+      entry.children.push({ id: childId, name: child.name, num: sub.num })
+    }
+    for (const team of base)
+      await once(() =>
+        asOwner.mutation(ref('projects:setAccess'), {
+          org_id: org,
+          id,
+          team_id: team,
+          level: 'user',
+        }),
+      )
+    projects.push(entry)
+  }
+  const subprojects = projects.flatMap((project) => project.children)
+  const teams = base.slice()
+  for (let i = 0; teams.length < options.teams; i++) {
+    const id = stableId(`org${k}:team:${i}`)
+    await once(() =>
+      asOwner.mutation(ref('teams:create'), {
+        org_id: org,
+        id,
+        name: TEAM_NAMES[i % TEAM_NAMES.length],
+      }),
+    )
+    await once(() =>
+      asOwner.mutation(ref('projects:setAccess'), {
+        org_id: org,
+        id: subprojects[i % subprojects.length].id,
+        team_id: id,
+        level: 'user',
+      }),
+    )
+    teams.push(id)
+  }
+  // Northstar's teams by order, for the swap of a recorded set's ids
+  northstar.teams.forEach((team, i) => {
+    if (teams[i]) ids[team] = teams[i]
+  })
+  note(`${projects.length} projects, ${subprojects.length} sub-projects, ${teams.length} teams`)
+  // Nora, invited by her address, claims the seat as a guest
+  const noraId = stableId(`org${k}:nora`)
+  await once(() =>
+    asOwner.mutation(ref('profiles:create'), {
+      org_id: org,
+      id: noraId,
+      name: 'Nora Berg',
+      email: 'nora@demo.qivo.io',
+      org_role: 'user',
+      kind: 'person',
+      color: COLORS[0],
+    }),
+  )
+  await retry(() =>
+    admin.mutation(ref('identity:claimSeatsInternal'), {
+      userId: noraLogin,
+      email: 'nora@demo.qivo.io',
+      emailVerified: true,
+    }),
+  )
+  for (const project of projects)
+    await once(() =>
+      asOwner.mutation(ref('projects:setAccess'), {
+        org_id: org,
+        id: project.id,
+        user_id: noraId,
+        level: 'user',
+      }),
+    )
+  const nora = {
+    key: `nora@${seat.slug}`,
+    name: 'Nora Berg',
+    profile_id: noraId,
+    org_id: org,
+    auth_user_id: noraLogin,
+    session_id: await sessionOf(admin, noraLogin),
+    guest: true,
+  }
+  // the people, the owner and Nora counted among --people
+  const grown = await addPeople({
+    admin,
+    asAdmin: asOwner,
+    org,
+    count: Math.max(0, options.people - 2),
+    from: 0,
+    baseTeams: base,
+    addedTeams: teams.slice(base.length),
+    idOf: (i) => stableId(`org${k}:person:${i}`),
+    emailOf: (i) => `load.person.${String(i + 1).padStart(3, '0')}@org${k}.test`,
+    keyOf: (i) => `o${k}p${i + 1}`,
+  })
+  note(`${grown.people.length + 2} profiles`)
+  // 30 tasks a sub-project, owned in turn by the people
+  const owners = grown.people.map((person) => person.profile_id)
+  const jobs = subprojects.flatMap((sub, s) =>
+    Array.from({ length: 30 }, (_, n) => ({ sub, n: s * 30 + n })),
+  )
+  await pool(jobs, 8, async ({ sub, n }) => {
+    const { id: _id, ...task } = seededTask(n, org, sub.id, owners[n % owners.length])
+    await retry(() =>
+      asOwner.mutation(ref('issues:create'), { ...task, id: stableId(`org${k}:task:${n}`) }),
+    )
+  })
+  note(`${jobs.length} tasks`)
+  return {
+    k,
+    org_id: org,
+    org_slug: seat.slug,
+    name: spec.name,
+    profiles: grown.people.length + 2,
+    teams,
+    projects,
+    // Northstar's ids to this organization's, by name and order
+    mirror: { [northstar.org_id]: org, ...ids },
+    owner: { ...owner },
+    people: [nora, ...grown.people],
+  }
+}
+
+/** The signed-in login's seat in organization `which` (its slug, or a test
+    of its row) from the root part's answer: the profile, its organization
+    with its slug and the teams the profile is in, found by shape so a
     change to the answer's layout fails here and not later. */
-function findSeat(root, slug) {
+function findSeat(root, which) {
+  const matches = typeof which === 'function' ? which : (row) => row.slug === which
   const orgs = []
   const profiles = []
   const memberships = []
@@ -475,11 +794,12 @@ function findSeat(root, slug) {
     Object.values(value).forEach(walk)
   }
   walk(root)
-  const org = orgs.find((row) => row.slug === slug)
+  const org = orgs.find(matches)
   const profile = org && profiles.find((row) => row.org_id === org.id)
   if (!profile) return null
   return {
     org_id: org.id,
+    slug: org.slug,
     profile_id: profile.id,
     team_ids: [
       ...new Set(
@@ -597,52 +917,80 @@ async function settle(tracker, quietMs, timeoutMs, from = Date.now()) {
     <dir>/sets/<view>.json. */
 async function record(options) {
   const plan = readPlan(options)
-  const recorder = plan.people[0]
-  const urls = viewUrls(plan, options)
   const { browser, page: signInPage, notifications } = await signedIn(options)
   const context = signInPage.context()
   await signInPage.close()
-  mkdirSync(join(options.dir, 'sets'), { recursive: true })
   const summaries = []
   try {
-    for (const view of options.views) {
-      const page = await context.newPage()
-      const tracker = trackPage(page, options)
-      const started = Date.now()
-      await page.goto(`${options.siteUrl}${urls[view]}`, { waitUntil: 'domcontentloaded' })
-      const { settled, ms } = await settle(tracker, options.quietMs, options.timeoutMs, started)
-      const set = recordedSet({
-        view,
-        url: urls[view],
-        browser: options.browser,
-        person: {
-          profile_id: recorder.profile_id,
-          auth_user_id: recorder.auth_user_id,
-          org_id: recorder.org_id,
-        },
-        tracker,
-        recordedAt: new Date().toISOString(),
-      })
-      set.settled = settled
-      set.ms_to_quiet = ms
-      set.notifications = notifications
-      writeFileSync(join(options.dir, 'sets', `${view}.json`), `${JSON.stringify(set, null, 2)}\n`)
-      const bytes = set.queries.reduce((all, query) => all + (query.bytes ?? 0), 0)
-      say(
-        `record ${view}: ${set.queries.length} queries, ${bytes} answer bytes, ${settled ? 'current' : 'NOT current'} after ${ms} ms`,
-      )
-      summaries.push({ view, queries: set.queries.length, answer_bytes: bytes, settled, ms })
-      await page.close()
-    }
+    // Northstar's sets in <dir>/sets, each other organization's, recorded
+    // as Nora's seat there, in <dir>/sets/<slug>
+    for (const planOrg of orgsOf(plan))
+      summaries.push(...(await recordOrg(options, context, planOrg, notifications)))
   } finally {
     await browser.close()
   }
   return summaries
 }
 
+/** The organizations of people.json: Northstar first, then those setup
+    added with --orgs. */
+const orgsOf = (plan) => plan.orgs ?? [{ k: 0, ...plan }]
+
+/** The folder of organization `planOrg`'s recorded sets. */
+const setsDir = (options, planOrg) =>
+  planOrg.k === 0 ? join(options.dir, 'sets') : join(options.dir, 'sets', planOrg.org_slug)
+
+/** The views of one organization recorded in `context`, as Nora's seat
+    there (people[0] of its part of people.json). */
+async function recordOrg(options, context, planOrg, notifications) {
+  const recorder = planOrg.people[0]
+  const urls = viewUrls(planOrg, options)
+  const dir = setsDir(options, planOrg)
+  mkdirSync(dir, { recursive: true })
+  const summaries = []
+  for (const view of options.views) {
+    const page = await context.newPage()
+    const tracker = trackPage(page, options)
+    const started = Date.now()
+    await page.goto(`${options.siteUrl}${urls[view]}`, { waitUntil: 'domcontentloaded' })
+    const { settled, ms } = await settle(tracker, options.quietMs, options.timeoutMs, started)
+    const set = recordedSet({
+      view,
+      url: urls[view],
+      browser: options.browser,
+      person: {
+        profile_id: recorder.profile_id,
+        auth_user_id: recorder.auth_user_id,
+        org_id: recorder.org_id,
+      },
+      tracker,
+      recordedAt: new Date().toISOString(),
+    })
+    set.settled = settled
+    set.ms_to_quiet = ms
+    set.notifications = notifications
+    set.org_slug = planOrg.org_slug
+    writeFileSync(join(dir, `${view}.json`), `${JSON.stringify(set, null, 2)}\n`)
+    const bytes = set.queries.reduce((all, query) => all + (query.bytes ?? 0), 0)
+    say(
+      `record ${planOrg.org_slug} ${view}: ${set.queries.length} queries, ${bytes} answer bytes, ${settled ? 'current' : 'NOT current'} after ${ms} ms`,
+    )
+    summaries.push({
+      org: planOrg.org_slug,
+      view,
+      queries: set.queries.length,
+      answer_bytes: bytes,
+      settled,
+      ms,
+    })
+    await page.close()
+  }
+  return summaries
+}
+
 /** The recorded sets in <dir>/sets, checked, by view in VIEWS' order. */
-function readSets(options) {
-  const dir = join(options.dir, 'sets')
+function readSets(options, planOrg = { k: 0 }) {
+  const dir = setsDir(options, planOrg)
   if (!existsSync(dir)) throw new Error(`${dir} is missing. Run the record part first.`)
   const sets = readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
@@ -820,6 +1168,9 @@ async function runWorker() {
     bytesStart: new Map(),
     answers: new Map(),
     changes: new Map(),
+    // the answers of the clients marked `watch` (one login's tabs, item 9),
+    // by client and function
+    watched: new Map(),
   })
   let figures = fresh()
   const sampler = setInterval(() => {
@@ -828,11 +1179,18 @@ async function runWorker() {
     inFlightMost = Math.max(inFlightMost, now)
   }, 100)
   sampler.unref()
-  const onAnswer = (index) => (udfPath, bytes) => {
+  const onAnswer = (index, watch) => (udfPath, bytes) => {
     const entry = figures.answers.get(udfPath) ?? { updates: 0, bytes: 0 }
     entry.updates++
     entry.bytes += bytes
     figures.answers.set(udfPath, entry)
+    if (watch) {
+      const key = `${watch}\u0000${udfPath}`
+      const seen = figures.watched.get(key) ?? { updates: 0, bytes: 0 }
+      seen.updates++
+      seen.bytes += bytes
+      figures.watched.set(key, seen)
+    }
     if (change !== null) {
       const slot = figures.changes.get(change) ?? { perClient: new Map(), queries: new Map() }
       slot.perClient.set(index, (slot.perClient.get(index) ?? 0) + bytes)
@@ -904,6 +1262,10 @@ async function runWorker() {
       calls,
       closes,
       dropped,
+      watched: [...figures.watched.entries()].map(([key, seen]) => {
+        const [client, udfPath] = key.split('\u0000')
+        return { client, udfPath, ...seen }
+      }),
       in_flight_most: inFlightMost,
       // the delay past the sampler's own 10 ms timer, in milliseconds
       event_loop_lag_ms: {
@@ -936,7 +1298,11 @@ async function runWorker() {
         mark('startup')
         const from = Date.now()
         for (const spec of message.clients) {
-          const client = replayClient({ ...config, ...spec, onAnswer: onAnswer(spec.index) })
+          const client = replayClient({
+            ...config,
+            ...spec,
+            onAnswer: onAnswer(spec.index, spec.watch ?? null),
+          })
           client.index = spec.index
           client.view = spec.view
           clients.push(client)
@@ -1054,17 +1420,95 @@ function cpuNow() {
 
 /* ----------------------------------------------------------------- replay */
 
+/** The client specs of a replay: client i acts as one person and
+    subscribes one recorded set with that person's ids. With one
+    organization, person i of people.json takes view i modulo the views.
+    With --orgs, the clients are dealt to the organizations in turn; in
+    each, the first is Nora's seat there, on its Board as recorded there
+    (her one login holds a tab in each organization, item 9), and the
+    others are its people, each on Northstar's set of its view with the
+    organization's mirrored ids swapped in and Nora's other seats' reads
+    left out. One login leads its desktop alerts once (one browser
+    profile), so only Nora's Northstar tab leads among hers; a tab that
+    does not lead holds no leader reads. */
+function clientSpecs(options, plan, orgSets) {
+  const orgs = orgsOf(plan).slice(0, options.orgs)
+  const northstar = orgSets[0]
+  const viewSet = (sets, view) => sets.find((set) => set.view === view)
+  const bytesOf = (set) => set.queries.reduce((all, query) => all + (query.bytes ?? 0), 0)
+  const hasFeed = (set) => set.queries.some((query) => query.udfPath === 'inbox:feed')
+  return Array.from({ length: options.clients }, (_, index) => {
+    const k = index % orgs.length
+    const planOrg = orgs[k]
+    const j = Math.floor(index / orgs.length)
+    const person = planOrg.people[j]
+    if (!person)
+      throw new Error(
+        `${planOrg.org_slug} holds ${planOrg.people.length} planted sessions, fewer than its share of --clients`,
+      )
+    let set
+    let queries
+    if (orgs.length === 1) {
+      set = northstar[index % northstar.length]
+      queries = personQueries(set, person, { ownOrg: index !== 0 })
+    } else if (j === 0) {
+      set = viewSet(orgSets[k], 'board') ?? orgSets[k][0]
+      queries = set.queries
+    } else {
+      set = northstar[j % northstar.length]
+      queries = personQueries(set, person, { more: planOrg.mirror ?? {}, ownOrg: true })
+    }
+    // Nora's tabs beside her Northstar tab, in one browser profile, do not lead
+    const lead = hasFeed(set) && !(orgs.length > 1 && j === 0 && k > 0)
+    return {
+      index,
+      org: planOrg.org_slug,
+      view: set.view,
+      person,
+      queries: lead ? queries : withoutLeaderReads(queries),
+      lead,
+      watch: j === 0 ? `${person.key}` : null,
+      recorded_answer_bytes: bytesOf(set),
+    }
+  })
+}
+
+/** The busy loops of the busy phase: `count` processes that spin, each
+    pinned to `cpus` (taskset) when given. Answers a stop. */
+function busyLoops(count, cpus) {
+  const loops = Array.from({ length: count }, () =>
+    cpus
+      ? spawn('taskset', ['-c', cpus, process.execPath, '-e', 'for(;;){}'], { stdio: 'ignore' })
+      : spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
+  )
+  return {
+    pids: loops.map((loop) => loop.pid),
+    stop: () => {
+      for (const loop of loops) loop.kill('SIGKILL')
+    },
+  }
+}
+
 /** The replay part: the phases of `options.phases` against the recorded
     sets, written as one rung. */
 async function replay(options) {
   const plan = readPlan(options)
-  const sets = readSets(options)
-  const byView = new Map(sets.map((set) => [set.view, set]))
-  if (plan.people.length < options.clients)
+  const orgs = orgsOf(plan)
+  if (orgs.length < options.orgs)
     throw new Error(
-      `people.json holds ${plan.people.length} people, fewer than --clients ${options.clients}`,
+      `people.json holds ${orgs.length} organizations, fewer than --orgs ${options.orgs}`,
     )
+  const orgSets = orgs.slice(0, options.orgs).map((planOrg) => readSets(options, planOrg))
+  const sets = orgSets[0]
+  const byView = new Map(sets.map((set) => [set.view, set]))
+  const people = orgs.slice(0, options.orgs).reduce((all, one) => all + one.people.length, 0)
+  if (people < options.clients)
+    throw new Error(`people.json holds ${people} people, fewer than --clients ${options.clients}`)
   const log = followLog(options)
+  // the coordinator's own event loop, which follows the log and writes
+  const delay = monitorEventLoopDelay({ resolution: 10 })
+  delay.enable()
+  const lagOf = (value) => Math.max(0, Math.round((value / 1e6 - 10) * 100) / 100)
   await sleep(1000)
   const phases = {}
   const notRun = {}
@@ -1078,8 +1522,17 @@ async function replay(options) {
     say(`phase ${name}`)
     const cpu = cpuNow()
     const from = Date.now()
+    delay.reset()
     await Promise.all(workers.map((worker) => worker.ask({ type: 'phase', name }, 'marked')))
-    const extra = (await body()) ?? {}
+    // a phase whose own work fails keeps the figures it reached and says why,
+    // so a saturated backend's refusal does not lose the rung's other phases
+    let extra
+    try {
+      extra = (await body()) ?? {}
+    } catch (error) {
+      extra = { failed: String(error?.message ?? error).slice(0, 300) }
+      say(`phase ${name} failed: ${extra.failed}`)
+    }
     // the log's entries trail their calls
     await sleep(1500)
     const to = Date.now()
@@ -1088,6 +1541,13 @@ async function replay(options) {
     ).map((answer) => answer.report)
     const figures = phaseFigures(log.between(from, to), (to - from) / 1000, reports, {
       steal: cpuShare(cpu, cpuNow()),
+      started_at: new Date(from).toISOString(),
+      ended_at: new Date(to).toISOString(),
+      coordinator_event_loop_lag_ms: {
+        p50: lagOf(delay.percentile(50)),
+        p99: lagOf(delay.percentile(99)),
+        max: lagOf(delay.max),
+      },
       ...extra,
     })
     if (Array.isArray(figures.changes)) attachResends(figures, options.clients)
@@ -1095,24 +1555,17 @@ async function replay(options) {
     // a phase in which the hypervisor took a tenth of the CPU or more is no timing
     figures.noisy = (figures.steal?.steal_pct ?? 0) >= 10
     phases[name] = figures
+    say(
+      `phase ${name} done: ${Math.round((to - from) / 1000)} s, steal ${figures.steal?.steal_pct ?? '?'}%, slowest JS ${Math.max(0, ...Object.values(figures.functions).map((one) => one.js_ms.max ?? 0))} ms`,
+    )
   }
+  const specs = clientSpecs(options, plan, orgSets)
   try {
     if (options.phases.includes('match')) {
       say('phase match')
       match = await matchSets(options, plan, sets)
       lone = match.lone_reconnect_ms
     }
-    const clientSpecs = Array.from({ length: options.clients }, (_, index) => {
-      const set = sets[index % sets.length]
-      const person = plan.people[index]
-      return {
-        index,
-        view: set.view,
-        person,
-        queries: personQueries(set, person),
-        lead: set.queries.some((query) => query.udfPath === 'inbox:feed'),
-      }
-    })
     for (let k = 0; k < options.processes; k++) {
       const worker = startWorker()
       await worker.ask(
@@ -1132,7 +1585,7 @@ async function replay(options) {
           worker.ask(
             {
               type: 'start',
-              clients: clientSpecs.filter((spec) => spec.index % workers.length === k),
+              clients: specs.filter((spec) => spec.index % workers.length === k),
             },
             'started',
           ),
@@ -1147,74 +1600,104 @@ async function replay(options) {
           results.flatMap((result) => result.first_answers ?? []),
         ),
         against_recorded: results.map((result) => {
-          const spec = clientSpecs[result.index]
+          const spec = specs[result.index]
           const compared = compareSets(spec.queries, result.set)
           return {
             index: result.index,
+            org: spec.org,
             person: spec.person.key,
             view: spec.view,
+            lead: spec.lead,
+            ms: result.ms,
             queries: result.set.length,
             same_queries: compared.missing.length === 0 && compared.extra.length === 0,
             missing: compared.missing,
             extra: compared.extra,
             failed: result.set.filter((query) => query.error).map((query) => query.udfPath),
             answer_bytes: result.set.reduce((all, query) => all + (query.bytes ?? 0), 0),
-            recorded_answer_bytes: byView
-              .get(spec.view)
-              .queries.reduce((all, query) => all + (query.bytes ?? 0), 0),
+            recorded_answer_bytes: spec.recorded_answer_bytes,
           }
         }),
       }
     })
     if (!options.phases.includes('startup'))
       notRun.startup_note = 'startup runs to start the clients'
-    if (options.phases.includes('changes'))
-      await timed('changes', () => runChanges(options, plan, byView.get('board'), workers, log))
-    else notRun.changes = 'not asked (--phases)'
-    if (options.phases.includes('reconnect')) {
-      if (options.hiddenTab) {
-        try {
-          hidden = await hiddenTab(options, plan)
-        } catch (error) {
-          notRun.hidden_tab = `could not open the hidden tab: ${String(error?.message ?? error).slice(0, 200)}`
+    const changes = () => runChanges(options, plan, byView.get('board'), workers, log)
+    for (const name of options.phases) {
+      if (name === 'match' || name === 'startup') continue
+      if (name === 'changes') await timed('changes', changes)
+      else if (name === 'busy')
+        await timed('busy', async () => {
+          const loops = busyLoops(options.busyLoops, options.busyCpus)
+          try {
+            // the loops take their CPUs before the first change
+            await sleep(3000)
+            return {
+              busy_loops: { count: options.busyLoops, cpus: options.busyCpus, pids: loops.pids },
+              ...(await changes()),
+            }
+          } finally {
+            loops.stop()
+          }
+        })
+      else if (name === 'idle')
+        await timed('idle', async () => {
+          await sleep(options.idleSeconds * 1000)
+          return { seconds: options.idleSeconds }
+        })
+      else if (name === 'reconnect') {
+        if (options.hiddenTab) {
+          try {
+            hidden = await hiddenTab(options, plan)
+          } catch (error) {
+            notRun.hidden_tab = `could not open the hidden tab: ${String(error?.message ?? error).slice(0, 200)}`
+          }
         }
+        await timed('reconnect', async () => {
+          const at = Date.now()
+          const [answers, tab] = await Promise.all([
+            Promise.all(workers.map((worker) => worker.ask({ type: 'reconnect' }, 'reconnected'))),
+            hidden ? hidden.reconnect() : null,
+          ])
+          const results = answers.flatMap((answer) => answer.results)
+          const resubscribed = results.reduce((all, result) => all + (result.queries ?? 0), 0)
+          const slowest = Math.max(
+            0,
+            ...results.map((result) => result.ms ?? Number.POSITIVE_INFINITY),
+          )
+          return {
+            closed_at: at,
+            resubscriptions: resubscribed,
+            current: results.filter((result) => result.current).length,
+            time_to_current_ms: spread(results.map((result) => result.ms)),
+            from_open_ms: spread(results.map((result) => result.from_open_ms)),
+            client_first_answer_ms: firstAnswerStats(
+              results.flatMap((result) => result.first_answers ?? []),
+            ),
+            by_view: Object.fromEntries(
+              [...new Set(specs.map((spec) => spec.view))].map((view) => [
+                view,
+                spread(
+                  results
+                    .filter((result) => specs[result.index].view === view)
+                    .map((result) => result.ms),
+                ),
+              ]),
+            ),
+            lone_client_ms: lone,
+            slow_clients: lone
+              ? results.filter((result) => result.ms === null || result.ms > 10 * lone).length
+              : null,
+            slowest_ms: Number.isFinite(slowest) ? slowest : null,
+            hidden_tab: tab,
+          }
+        })
+        await hidden?.close().catch(() => {})
+        hidden = null
       }
-      await timed('reconnect', async () => {
-        const at = Date.now()
-        const [answers, tab] = await Promise.all([
-          Promise.all(workers.map((worker) => worker.ask({ type: 'reconnect' }, 'reconnected'))),
-          hidden ? hidden.reconnect() : null,
-        ])
-        const results = answers.flatMap((answer) => answer.results)
-        const resubscribed = results.reduce((all, result) => all + (result.queries ?? 0), 0)
-        const slowest = Math.max(
-          0,
-          ...results.map((result) => result.ms ?? Number.POSITIVE_INFINITY),
-        )
-        return {
-          closed_at: at,
-          resubscriptions: resubscribed,
-          current: results.filter((result) => result.current).length,
-          time_to_current_ms: spread(results.map((result) => result.ms)),
-          from_open_ms: spread(results.map((result) => result.from_open_ms)),
-          client_first_answer_ms: firstAnswerStats(
-            results.flatMap((result) => result.first_answers ?? []),
-          ),
-          lone_client_ms: lone,
-          slow_clients: lone
-            ? results.filter((result) => result.ms === null || result.ms > 10 * lone).length
-            : null,
-          slowest_ms: Number.isFinite(slowest) ? slowest : null,
-          hidden_tab: tab,
-        }
-      })
-    } else notRun.reconnect = 'not asked (--phases)'
-    if (options.phases.includes('idle'))
-      await timed('idle', async () => {
-        await sleep(options.idleSeconds * 1000)
-        return { seconds: options.idleSeconds }
-      })
-    else notRun.idle = 'not asked (--phases)'
+    }
+    for (const name of ['changes', 'reconnect', 'idle', 'busy'])
+      if (!options.phases.includes(name)) notRun[name] = 'not asked (--phases)'
   } finally {
     await hidden?.close().catch(() => {})
     await Promise.all(
@@ -1225,26 +1708,36 @@ async function replay(options) {
   const idle = phases.idle
   if (idle) {
     // the functions a session subscribes or calls; the rest are the backend's own jobs
-    const own = new Set(sets.flatMap((set) => set.queries.map((query) => query.udfPath)))
+    const own = new Set(orgSets.flat().flatMap((set) => set.queries.map((query) => query.udfPath)))
     for (const name of Object.keys(idle.client_calls)) own.add(name)
     idle.per_session_minute = perSessionMinute(idle, options.clients, idle.seconds, own)
+    idle.watched_per_minute = watchedPerMinute(idle.watched, idle.seconds)
   }
   const output = rungReport({
     rung: {
       clients: options.clients,
       processes: options.processes,
+      orgs: options.orgs,
       views: sets.map((set) => set.view),
       browser: sets[0]?.browser,
-      people: plan.people.length,
-      profiles: plan.profiles,
+      people: people,
+      profiles: orgs
+        .slice(0, options.orgs)
+        .map((one) => ({ org: one.org_slug, profiles: one.profiles })),
       teams: plan.teams.length,
       backend: options.url,
       commit: process.env.QIVO_LOAD_COMMIT ?? null,
       host_cpus: (await import('node:os')).cpus().length,
       at: new Date().toISOString(),
       log_pages: log.pages,
+      clients_by_org: Object.fromEntries(
+        orgs
+          .slice(0, options.orgs)
+          .map((one) => [one.org_slug, specs.filter((spec) => spec.org === one.org_slug).length]),
+      ),
     },
-    recorded: sets.map((set) => ({
+    recorded: orgSets.flat().map((set) => ({
+      org: set.org_slug ?? plan.org_slug,
       view: set.view,
       url: set.url,
       queries: set.queries.length,
@@ -1257,7 +1750,11 @@ async function replay(options) {
     phases,
     subscriptions: {
       login: plan.people[0].key,
-      by_organization: subscriptionsByOrganization(sets),
+      org_names: Object.fromEntries(orgs.map((one) => [one.org_id, one.org_slug])),
+      // by the organization the tab showed, then by the organization each query names
+      by_organization: Object.fromEntries(
+        orgSets.map((orgSet, k) => [orgs[k].org_slug, subscriptionsByOrganization(orgSet)]),
+      ),
     },
     notRun,
   })
@@ -1267,6 +1764,22 @@ async function replay(options) {
   writeFileSync(file, `${JSON.stringify(output, null, 2)}\n`)
   say(`wrote ${file}`)
   return output
+}
+
+/** The watched clients' answers over the idle phase (`watched`, the
+    workers' { client, udfPath, updates, bytes }) per minute, by client
+    and function. */
+function watchedPerMinute(watched, seconds) {
+  const minutes = Math.max(seconds, 1e-9) / 60
+  const out = {}
+  for (const { client, udfPath, updates, bytes } of watched ?? []) {
+    out[client] ??= {}
+    out[client][udfPath] = {
+      answers: Math.round((updates / minutes) * 100) / 100,
+      bytes: Math.round(bytes / minutes),
+    }
+  }
+  return out
 }
 
 /** One phase's figures: the log's per function statistics, the backend's
@@ -1306,6 +1819,7 @@ function phaseFigures(entries, seconds, reports, extra) {
     answers: mergeCounts(reports.map((report) => report.answers)),
     closes,
     dropped_by_benchmark: reports.reduce((all, report) => all + report.dropped, 0),
+    watched: reports.flatMap((report) => report.watched ?? []),
     in_flight_most: reports.reduce((all, report) => all + report.in_flight_most, 0),
     processes: reports.map((report) => ({
       pid: report.pid,
@@ -1454,7 +1968,7 @@ async function runChanges(options, plan, boardSet, workers, log) {
   const writer = httpClient(options, nora)
   const boardQuery = boardSet.queries.find((query) => query.udfPath === 'tasks:board')
   if (!boardQuery) throw new Error('the recorded Board set holds no tasks:board query')
-  const answer = await writer.query(ref('tasks:board'), jsonToConvex(boardQuery.args))
+  const answer = await retry(() => writer.query(ref('tasks:board'), jsonToConvex(boardQuery.args)))
   if (answer.state !== 'ok') throw new Error(`the recorded Board answered ${answer.state}`)
   // tasks of their own, neither a group (status follows its subtasks) nor a subtask
   const open = answer.rows.filter(
@@ -1462,6 +1976,10 @@ async function runChanges(options, plan, boardSet, workers, log) {
   )
   if (open.length < 2) throw new Error('the recorded Board shows fewer than 2 open tasks to change')
   const [renamed, moved] = open
+  // the comments go to up to four other tasks in turn, since one person
+  // posts at most 10 a minute on one task (LIMITS.commentRate) and a run
+  // of one change a second posts 15 a minute
+  const commented = open.slice(2, 6).length > 0 ? open.slice(2, 6) : [renamed]
   const home = moved.project_id
   const sibling = plan.projects
     .flatMap((project) =>
@@ -1498,13 +2016,14 @@ async function runChanges(options, plan, boardSet, workers, log) {
       call = ['issues:update', { org_id: org, id: renamed.id, patch: { status } }]
     } else {
       const id = crypto.randomUUID()
+      const target = commented[comments.length % commented.length]
       comments.push(id)
       call = [
         'comments:create',
         {
           org_id: org,
           id,
-          issue_id: renamed.id,
+          issue_id: target.id,
           body: 'Checked the readings against the bench log; the drift stays inside the calibration window.',
         },
       ]
@@ -1537,7 +2056,12 @@ async function runChanges(options, plan, boardSet, workers, log) {
   if (away) await restore('issues:move', { org_id: org, id: moved.id, project_id: home })
   for (const id of comments) await restore('comments:remove', { org_id: org, id })
   return {
-    tasks: { renamed: renamed.id, moved: moved.id, sibling: sibling.id },
+    tasks: {
+      renamed: renamed.id,
+      moved: moved.id,
+      sibling: sibling.id,
+      commented: commented.map((task) => task.id),
+    },
     restored,
     changes: done.map((change, i) => {
       const until = done[i + 1]?.at ?? change.at + 1000
