@@ -206,6 +206,9 @@ const say = (text) => console.log(`${new Date().toISOString().slice(11, 19)} ${t
 
 /** The checkout's root, which Vite loads the app's modules from. */
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
+/** How long a worker may take to close its clients at the end of a run
+    before it is killed. */
+const STOP_MS = 30_000
 /** The slug of the organization the local seed makes. */
 const ORG_SLUG = 'northstar-labs'
 /** The everyday names of the teams setup adds, in turn. */
@@ -830,7 +833,8 @@ function readPlan(options) {
 const socketPrefix = (options) => options.url.replace(/^http/, 'ws')
 
 /** A Playwright browser of `options.browser` and a context signed in as
-    Nora, with the page it signed in on. */
+    Nora, with the page it signed in on. A sign-in that fails closes the
+    browser it launched, whose process would otherwise keep the run alive. */
 async function signedIn(options) {
   const playwright = await import('playwright')
   const { loadBrowserDemo, signInDemo } = await import('./browser-demo.mjs')
@@ -847,28 +851,33 @@ async function signedIn(options) {
   const browser = await playwright[options.browser].launch(
     options.browser === 'chromium' ? { channel: 'chromium' } : {},
   )
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
-  let notifications = false
   try {
-    await context.grantPermissions(['notifications'], { origin: options.siteUrl })
-    notifications = true
-  } catch {
-    // Firefox and WebKit may refuse; the tab then does not lead its alerts
-  }
-  // every socket the page opens, for the hidden tab's reconnect
-  await context.addInitScript(() => {
-    const Native = window.WebSocket
-    window.__loadSockets = []
-    window.WebSocket = class extends Native {
-      constructor(...args) {
-        super(...args)
-        window.__loadSockets.push(this)
-      }
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+    let notifications = false
+    try {
+      await context.grantPermissions(['notifications'], { origin: options.siteUrl })
+      notifications = true
+    } catch {
+      // Firefox and WebKit may refuse; the tab then does not lead its alerts
     }
-  })
-  const page = await context.newPage()
-  await signInDemo(page, demo, 'nora')
-  return { browser, context, page, demo, notifications }
+    // every socket the page opens, for the hidden tab's reconnect
+    await context.addInitScript(() => {
+      const Native = window.WebSocket
+      window.__loadSockets = []
+      window.WebSocket = class extends Native {
+        constructor(...args) {
+          super(...args)
+          window.__loadSockets.push(this)
+        }
+      }
+    })
+    const page = await context.newPage()
+    await signInDemo(page, demo, 'nora')
+    return { browser, page, notifications }
+  } catch (error) {
+    await browser.close().catch(() => {})
+    throw error
+  }
 }
 
 /** The addresses of the recorded views, from the projects setup listed.
@@ -1261,7 +1270,6 @@ async function runWorker() {
         process.send({ type: 'report', report: report() })
       } else if (message.type === 'stop') {
         await Promise.all(clients.map((client) => client.close().catch(() => {})))
-        process.send({ type: 'stopped' })
         process.exit(0)
       }
     } catch (error) {
@@ -1271,7 +1279,9 @@ async function runWorker() {
 }
 
 /** The coordinator's handle on one worker process: `ask(message, answer)`
-    sends a command and resolves with the reply of type `answer`. */
+    sends a command and resolves with the reply of type `answer`, and
+    `stop()` asks the worker to close its clients and kills it when it has
+    not exited within `STOP_MS`. */
 function startWorker() {
   const child = fork(fileURLToPath(import.meta.url), ['--worker'], { stdio: 'inherit' })
   const waiting = []
@@ -1283,6 +1293,7 @@ function startWorker() {
     const at = waiting.findIndex((wait) => wait.type === message.type)
     if (at >= 0) waiting.splice(at, 1)[0].done(message)
   })
+  const exited = new Promise((done) => child.once('exit', done))
   return {
     child,
     ask(message, type) {
@@ -1290,6 +1301,12 @@ function startWorker() {
         waiting.push({ type, done })
         child.send(message)
       })
+    },
+    async stop() {
+      if (child.exitCode === null && child.signalCode === null && child.connected)
+        child.send({ type: 'stop' })
+      const gone = await Promise.race([exited.then(() => true), sleep(STOP_MS).then(() => false)])
+      if (!gone) child.kill('SIGKILL')
     },
   }
 }
@@ -1302,9 +1319,12 @@ function followLog(options) {
   const entries = []
   let stopped = false
   let pages = 0
+  // ends a read still waiting at the stop
+  const abort = new AbortController()
   const read = async (cursor) => {
     const response = await fetch(`${options.url}/api/stream_function_logs?cursor=${cursor}`, {
       headers: { Authorization: `Convex ${options.adminKey}` },
+      signal: abort.signal,
     })
     if (!response.ok) throw new Error(`the function log answered ${response.status}`)
     return await response.json()
@@ -1334,7 +1354,8 @@ function followLog(options) {
     },
     async stop() {
       stopped = true
-      await Promise.race([done, sleep(2000)])
+      await Promise.race([done.catch(() => {}), sleep(2000)])
+      abort.abort()
     },
   }
 }
@@ -1411,12 +1432,12 @@ function busyLoops(count, cpus) {
       ? spawn('taskset', ['-c', cpus, process.execPath, '-e', 'for(;;){}'], { stdio: 'ignore' })
       : spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
   )
-  return {
-    pids: loops.map((loop) => loop.pid),
-    stop: () => {
-      for (const loop of loops) loop.kill('SIGKILL')
-    },
+  const stop = () => {
+    for (const loop of loops) loop.kill('SIGKILL')
   }
+  // a run that ends early takes its loops with it
+  process.once('exit', stop)
+  return { pids: loops.map((loop) => loop.pid), stop }
 }
 
 /** The replay part: the phases of `options.phases` against the recorded
@@ -1630,9 +1651,7 @@ async function replay(options) {
       if (!options.phases.includes(name)) notRun[name] = 'not asked (--phases)'
   } finally {
     await hidden?.close().catch(() => {})
-    await Promise.all(
-      workers.map((worker) => worker.ask({ type: 'stop' }, 'stopped').catch(() => {})),
-    )
+    await Promise.all(workers.map((worker) => worker.stop()))
     await log.stop()
   }
   const idle = phases.idle
@@ -2033,6 +2052,17 @@ async function runChanges(options, plan, boardSet, workers, log) {
     phase closes: `reconnect()` closes it and answers the check. */
 async function hiddenTab(options, plan) {
   const { browser, page: signInPage } = await signedIn(options)
+  try {
+    return await hide(options, plan, browser, signInPage)
+  } catch (error) {
+    await browser.close().catch(() => {})
+    throw error
+  }
+}
+
+/** hiddenTab's Board tab in `browser`, opened after `signInPage` signed in,
+    then hidden. */
+async function hide(options, plan, browser, signInPage) {
   const context = signInPage.context()
   await signInPage.close()
   const page = await context.newPage()
@@ -2408,6 +2438,9 @@ async function main() {
     else if (part === 'tabs') await tabsPart(options)
     else await replay(options)
   }
+  // the output is written; a socket or a browser a saturated backend left
+  // half open would keep the event loop, and the run, alive
+  process.exit(0)
 }
 
 if (process.argv[2] === '--worker') await runWorker()
