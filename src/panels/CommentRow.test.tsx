@@ -57,6 +57,10 @@ let container: HTMLDivElement
 let root: Root
 let me: string
 let publish: (page: Page) => void
+/* The workspace the window opened on, and its root part's subscriber,
+   which a case answers again to change the workspace. */
+let workspace: Snapshot
+let answerWhole: (snap: Snapshot) => void
 
 const comment = (n: number): Row<'comments'> => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -90,12 +94,15 @@ async function open() {
   })
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:threadComments') publish = next
+    if (name === 'workspace:whole') {
+      answerWhole = next
+      next(structuredClone(snap))
+    } else if (name === 'snapshot:threadComments') publish = next
     return () => {}
   })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
+  workspace = snap
   const store = await import('../store/planner')
   P = store.P
   await store.initStore()
@@ -217,6 +224,23 @@ describe('the comment rows of the task window', { timeout: 30_000 }, () => {
     for (let n = 1; n < 6; n++) {
       expect(renders.get(`Check ${n}`), `#${n}`).toBe(before.get(`Check ${n}`))
       expect(rowText(n), `#${n}`).toContain(`${10 - n}m ago`)
+    }
+  })
+
+  it("draws every row again with its author's new name when the store's context moves", async () => {
+    await open()
+    await deliver({ comments: range(1, 6), earlier: false })
+    for (let n = 1; n < 6; n++) expect(rowText(n), `#${n}`).toContain('Planner')
+    const before = new Map(renders)
+    const context = P.contextVersion
+    // the signed-in person renames themselves, which the root part answers
+    const renamed = structuredClone(workspace)
+    renamed.profiles[0].name = 'Pat Lindqvist'
+    await act(async () => answerWhole(renamed))
+    expect(P.contextVersion).not.toBe(context)
+    for (let n = 1; n < 6; n++) {
+      expect(renders.get(`Check ${n}`), `#${n}`).toBe((before.get(`Check ${n}`) ?? 0) + 1)
+      expect(rowText(n), `#${n}`).toContain('Pat Lindqvist')
     }
   })
 })
