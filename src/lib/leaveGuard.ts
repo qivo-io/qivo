@@ -36,8 +36,9 @@ let leaving = false
 let unloadAt = Number.NEGATIVE_INFINITY
 
 /** How long after a beforeunload a failed request counts as cut off by the
-    page's next load. WebKit 26.6 and Firefox 155 rejected the session fetch
-    0 to 25 ms after it, before pagehide (measured on 2026-10-26). */
+    page's next load. In a check on 26 October 2026, WebKit 26.6 and Firefox
+    155 rejected the session fetch right after it, before pagehide, well
+    inside this time. */
 export const LEAVING_MS = 1000
 
 /** Whether a beforeunload came within LEAVING_MS: a request that fails now

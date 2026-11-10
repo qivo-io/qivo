@@ -59,16 +59,11 @@ import type { MintOutcome } from './mintQueue'
       with a retry.
     - `skew`: how long before its lease ends a cached image needs a mint
       that names it again before it shows again.
-    Measured on the benchmark page (images=100, photos of 1,200 by 800 and
-    143 KB answered after 150 ms, the description scrolling in its own box
-    of 258 pixels at 1440 by 1000): 2 images asked for with the window at
-    its top, at most 3 downloads at once (4 at 390 by 844), 18 downloads
-    while scrolling to the end in steps, then 2.3 MB kept out of reach and
-    0.3 MB near after scrolling back, with a JS heap of 14 MB. Six images
-    of 4,096 pixels (3.5 MB each) kept 20.9 MB in all, inside cacheBytes.
-    On a local backend the app before this asked for that task's 100
-    images in 100 calls as it opened, with 99 downloads at once; this one
-    asked for 2. */
+    scripts/benchmark-browser.mjs records the image downloads, the most in
+    flight at once and their bytes with `--files images=100`. The app before
+    this asked for every image of a task in one call each as the task opened
+    and downloaded them all at once; this one asks for the images near
+    view. */
 export const INLINE_IMAGES = {
   downloads: 4,
   external: 4,
