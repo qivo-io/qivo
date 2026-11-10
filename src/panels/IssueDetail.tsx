@@ -1338,6 +1338,15 @@ function scrollerOf(el: Element): Element {
   return document.scrollingElement ?? document.documentElement
 }
 
+/* The top of `el` measured from the top of the scroller that holds it, so
+   a move of the scroller itself on screen, as when the Inbox pane's
+   description opens above it, does not count. */
+function topInScroller(el: Element): number {
+  const scroller = scrollerOf(el)
+  const top = scroller === document.scrollingElement ? 0 : scroller.getBoundingClientRect().top
+  return el.getBoundingClientRect().top - top
+}
+
 /** One comment of the thread. It renders again only when one of its
     props changes, so a delivered comment, a page that Show earlier or Show
     newer brought, or an edit of another comment leaves the other rows
@@ -2823,17 +2832,18 @@ function IssueDetail({
   // its own row. This runs in every browser, as the presses do: WebKit
   // reports CSS scroll anchoring but lost the place when many rows above
   // went, and where the browser's anchoring already kept the row, the shift
-  // is 0.
+  // is 0. The row is measured inside its scroller, since every render runs
+  // this and one that only moves the scroller on screen keeps the rows.
   const placeTop = useRefID<number | null>(null)
   placeTop.current = null
   if (!earlierFrom.current && !newerFrom.current && placeRow.current?.isConnected)
-    placeTop.current = placeRow.current.getBoundingClientRect().top
+    placeTop.current = topInScroller(placeRow.current)
   useLayoutEffectID(() => {
     const top = placeTop.current
     const row = placeRow.current
     placeTop.current = null
     if (top === null || !row?.isConnected) return
-    const shift = row.getBoundingClientRect().top - top
+    const shift = topInScroller(row) - top
     if (shift !== 0) scrollerOf(row).scrollTop += shift
   })
   // nothing is said until the thread is in, and under All its history too:
