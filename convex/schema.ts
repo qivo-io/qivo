@@ -567,8 +567,11 @@ export default defineSchema({
     storage_id: v.optional(v.id('_storage')),
     // true when reserved_bytes is the size the app declared for the file,
     // so the receiver refuses a longer body as one its upload did not
-    // declare; absent for a reservation an app without sizes asked for, and
-    // for a preview. Only the demo writes it.
+    // declare. Absent for a preview, and for an attachment, picture or
+    // background row that v0.1.162 or an earlier release reserved for an
+    // app that sent no size, whose wait for its file ended with its upload
+    // ticket, minutes after it was made. demoBodyRefusal treats every row
+    // without it as a preview. Only the demo writes it.
     declared: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
