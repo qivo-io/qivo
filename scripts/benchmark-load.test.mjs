@@ -47,6 +47,7 @@ import {
   cpuShare,
   firstAnswerStats,
   functionStats,
+  hostedModel,
   idleShares,
   logEntry,
   mergeCalls,
@@ -1346,12 +1347,15 @@ describe("a phase's figures", () => {
       resent_bytes_per_client: { max: 0 },
     })
     expect(Object.keys(figures.bytes_per_client_per_change)).toEqual(['rename', 'comment'])
+    // the rename's two answers are the most one change re-sent
+    expect(figures.changes.map((change) => change.answers)).toEqual([2, 0])
+    expect(figures.asked_at_once).toBe(2)
   })
 
-  it('fires the pacing trigger on an overload, a call over the line or a slow reconnect', () => {
+  it('fires the pacing trigger on the modelled hosted load, a call over the line or a slow reconnect, never on a local overload', () => {
     const quiet = {
-      startup: { closes: {}, over_line: [] },
-      reconnect: { closes: {}, slow_clients: 0 },
+      startup: { closes: {}, over_line: [], asked_at_once: 140 },
+      reconnect: { closes: {}, slow_clients: 0, asked_at_once: 139 },
     }
     expect(pacingTrigger(quiet)).toMatchObject({ fires: false, fires_outside_noisy_phases: false })
     const noisy = {
@@ -1359,11 +1363,41 @@ describe("a phase's figures", () => {
       startup: { closes: {}, noisy: true, over_line: [{ fn: 'tasks:board', js_ms_max: 700 }] },
     }
     expect(pacingTrigger(noisy)).toMatchObject({ fires: true, fires_outside_noisy_phases: false })
+    // a saturated local backend's closes are the test bed's, and fire nothing
     expect(pacingTrigger({ ...quiet, idle: { closes: { 1013: 4 } } })).toMatchObject({
-      overload_closes: [{ phase: 'idle', count: 4 }],
-      fires_outside_noisy_phases: true,
+      test_bed_saturated: [{ phase: 'idle', overload_closes: 4 }],
+      fires: false,
+      fires_outside_noisy_phases: false,
     })
     expect(pacingTrigger({ ...quiet, reconnect: { closes: {}, slow_clients: 2 } }).fires).toBe(true)
+    // more than hosted Professional's 256 queries asked at once fires, 256 does not
+    const crowded = { ...quiet, reconnect: { ...quiet.reconnect, asked_at_once: 257 } }
+    expect(pacingTrigger(crowded)).toMatchObject({
+      past_hosted_slots: [{ phase: 'reconnect', asked_at_once: 257 }],
+      fires: true,
+      fires_outside_noisy_phases: true,
+    })
+    expect(
+      pacingTrigger({ ...quiet, startup: { ...quiet.startup, asked_at_once: 256 } }).fires,
+    ).toBe(false)
+  })
+
+  it('models the queries a phase ran at once on average from its executed queries', () => {
+    const changes = {
+      seconds: 10,
+      asked_at_once: 12,
+      functions: {
+        'tasks:board': { kind: 'Query', total_ms_sum: 4000 },
+        'issues:update': { kind: 'Mutation', total_ms_sum: 9000 },
+      },
+    }
+    expect(hostedModel({ changes, idle: { seconds: 60, functions: {} } })).toEqual({
+      phases: {
+        changes: { asked_at_once: 12, running_on_average: 0.4 },
+        idle: { asked_at_once: null, running_on_average: 0 },
+      },
+      past_slots: [],
+    })
   })
 
   it("reads the watched clients' and the tabs' idle answers per minute", () => {

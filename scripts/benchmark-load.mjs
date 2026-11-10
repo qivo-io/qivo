@@ -150,9 +150,14 @@
 // - Steal and busy CPU: /proc/stat over the phase; a phase at 10% steal or
 //   more is marked noisy and is no timing. Event loop lag: each process's
 //   monitorEventLoopDelay past its 10 ms resolution.
-// - The pacing trigger: an overload close (1013), a call whose JavaScript
-//   passes the 0.5 s line, or a client whose time to current after the
-//   reconnect passes ten times the lone client's, each with its phase.
+// - The pacing trigger, judged against the modelled hosted query limit, not
+//   the local backend's overload: a phase whose clients asked more than
+//   hosted Professional's 256 queries at one moment (report.mjs
+//   hostedModel, a model and not a hosted measurement), a call whose
+//   JavaScript passes the 0.5 s line, or a client whose time to current
+//   after the reconnect passes ten times the lone client's, each with its
+//   phase. An overload close (1013) is listed as the test bed's saturation
+//   (test_bed_saturated) and fires nothing.
 //
 // The test bed. The local backend runs at most 16 queries and 16
 // mutations at once, Convex's defaults, which nothing here raises. On 4
@@ -1554,6 +1559,8 @@ async function replay(options) {
       const results = started.flatMap((answer) => answer.results).sort((a, b) => a.index - b.index)
       return {
         clients: options.clients,
+        // every client subscribed its whole set at once, from cold
+        asked_at_once: results.reduce((all, result) => all + result.set.length, 0),
         current: results.filter((result) => result.current).length,
         time_to_current_ms: spread(results.map((result) => result.ms)),
         client_first_answer_ms: firstAnswerStats(
@@ -1626,6 +1633,7 @@ async function replay(options) {
           return {
             closed_at: at,
             resubscriptions: resubscribed,
+            asked_at_once: resubscribed,
             current: results.filter((result) => result.current).length,
             time_to_current_ms: spread(results.map((result) => result.ms)),
             from_open_ms: spread(results.map((result) => result.from_open_ms)),

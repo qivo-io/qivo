@@ -283,7 +283,7 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
       event_loop_lag:
         "Each process's monitorEventLoopDelay over the phase, past its 10 ms resolution.",
       pacing_trigger:
-        "An overload close (1013), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's.",
+        "A model, not a hosted measurement: a phase whose clients asked more than hosted Professional's 256 queries at one moment (every subscription at startup, the re-subscriptions at the reconnect, the answers one change re-sent), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's. The local backend's overload closes (1013) are its own saturation, listed as test_bed_saturated, and fire nothing.",
     },
     recorded,
     match,
@@ -361,10 +361,13 @@ export function phaseFigures(entries, seconds, reports, extra) {
 /** Adds to each change of the changes phase `figures` what the clients
     received after it, until the next change: the bytes re-sent to each of
     the `clients` (those that got none count as 0) and the queries each
-    re-send updated, and to the phase the bytes per client per change by
-    kind of change. */
+    re-send updated with the answers they hold, and to the phase the bytes
+    per client per change by kind of change and the most answers one change
+    re-sent (`asked_at_once`, the change's reruns the pacing trigger's model
+    reads, hostedModel). */
 export function attachResends(figures, clients) {
   const byKind = {}
+  let most = 0
   for (const change of figures.changes) {
     const slots = figures._changes.filter((slot) => slot.id === change.id)
     const perClient = new Map()
@@ -374,11 +377,14 @@ export function attachResends(figures, clients) {
     change.resent_bytes_per_client = spread(bytes)
     change.clients_resent = perClient.size
     change.updated = mergeCounts(slots.map((slot) => slot.queries))
+    change.answers = Object.values(change.updated).reduce((all, entry) => all + entry.updates, 0)
+    most = Math.max(most, change.answers)
     byKind[change.kind] = [...(byKind[change.kind] ?? []), ...bytes]
   }
   figures.bytes_per_client_per_change = Object.fromEntries(
     Object.entries(byKind).map(([kind, bytes]) => [kind, spread(bytes)]),
   )
+  figures.asked_at_once = most
 }
 
 /** The sums of `{ updates, bytes }` maps `maps` by key. */
@@ -409,12 +415,57 @@ export function mergeCalls(maps) {
   return out
 }
 
-/** The pacing trigger of the closing review's question 9 over `phases`:
-    an overload close (1013), a call whose JavaScript passed the 0.5 s line
-    and a client whose time to current after the reconnect passed ten
-    times the lone client's, each with what showed it. */
+/** The queries hosted Convex's Professional plan runs at once, which the
+    pacing trigger's model holds the replay's load against. */
+export const HOSTED_QUERY_SLOTS = 256
+
+/**
+ * The modelled hosted load of each phase of `phases`, a model and not a
+ * hosted measurement: `asked_at_once`, the most queries the clients asked
+ * of the backend at one moment as the phase recorded it (every
+ * subscription at startup, the re-subscriptions at the reconnect, the most
+ * answers one change re-sent, which leaves out a rerun whose answer did not
+ * change), null for a phase with no such moment, and `running_on_average`,
+ * the executed queries' total time over the phase's seconds, the queries a
+ * backend runs at once on average, from the function log and so a lower
+ * bound where its coverage is. `past_slots` lists the phases that asked
+ * more than HOSTED_QUERY_SLOTS at once.
+ */
+export function hostedModel(phases) {
+  const model = {}
+  for (const [name, figures] of Object.entries(phases)) {
+    const queryMs = Object.values(figures.functions ?? {})
+      .filter((fn) => fn.kind === 'Query')
+      .reduce((all, fn) => all + (fn.total_ms_sum ?? 0), 0)
+    model[name] = {
+      asked_at_once: figures.asked_at_once ?? null,
+      running_on_average: figures.seconds
+        ? Math.round((queryMs / (figures.seconds * 1000)) * 100) / 100
+        : null,
+    }
+  }
+  return {
+    phases: model,
+    past_slots: Object.entries(model)
+      .filter(([, one]) => (one.asked_at_once ?? 0) > HOSTED_QUERY_SLOTS)
+      .map(([name, one]) => ({ phase: name, asked_at_once: one.asked_at_once })),
+  }
+}
+
+/**
+ * The pacing trigger over `phases`, judged against the modelled hosted
+ * query limit (hostedModel) rather than the local backend's overload, as
+ * the later-work entry on the combined load of 9 November 2026 in
+ * qivo-internal asks: a phase whose modelled load asked more than
+ * HOSTED_QUERY_SLOTS queries at once, a call whose JavaScript passed the
+ * 0.5 s line and a client whose time to current after the reconnect passed
+ * ten times the lone client's, each with what showed it. The local
+ * backend's overload closes (1013) are the test bed's saturation, listed
+ * by phase under `test_bed_saturated`, and fire nothing, since they say
+ * nothing of hosted Convex's limit.
+ */
 export function pacingTrigger(phases) {
-  const overload = Object.entries(phases).filter(
+  const saturated = Object.entries(phases).filter(
     ([, figures]) => (figures.closes?.['1013'] ?? 0) > 0,
   )
   // each call over the line says whether its phase was noisy, which the reader judges
@@ -422,17 +473,21 @@ export function pacingTrigger(phases) {
     (figures.over_line ?? []).map((entry) => ({ phase: name, noisy: figures.noisy, ...entry })),
   )
   const slow = phases.reconnect?.slow_clients ?? null
+  const model = hostedModel(phases)
+  const past = model.past_slots.length > 0
   return {
     line_ms: JS_LINE_MS,
-    overload_closes: overload.map(([name, figures]) => ({
-      phase: name,
-      count: figures.closes['1013'],
-    })),
+    hosted_query_slots: HOSTED_QUERY_SLOTS,
+    hosted_model: model.phases,
+    past_hosted_slots: model.past_slots,
     over_line: over,
     slow_reconnects: slow,
-    fires: overload.length > 0 || over.length > 0 || (slow ?? 0) > 0,
-    fires_outside_noisy_phases:
-      overload.length > 0 || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
+    test_bed_saturated: saturated.map(([name, figures]) => ({
+      phase: name,
+      overload_closes: figures.closes['1013'],
+    })),
+    fires: past || over.length > 0 || (slow ?? 0) > 0,
+    fires_outside_noisy_phases: past || over.some((entry) => !entry.noisy) || (slow ?? 0) > 0,
   }
 }
 
