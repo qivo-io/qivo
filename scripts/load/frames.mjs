@@ -272,6 +272,20 @@ export function checkSet(value) {
   return value
 }
 
+/** The organization arguments `args` name: the first `org_id` string at
+    any depth, a query's own before its scope's (tasks:board and the
+    Overview's reads carry it in `scope`), or null for none. */
+export function orgArgOf(args) {
+  const queue = [args]
+  while (queue.length > 0) {
+    const value = queue.shift()
+    if (value === null || typeof value !== 'object') continue
+    if (!Array.isArray(value) && typeof value.org_id === 'string') return value.org_id
+    queue.push(...Object.values(value))
+  }
+  return null
+}
+
 /** Every string of `value` at any depth, object keys left out. */
 export function stringsOf(value) {
   if (typeof value === 'string') return [value]
@@ -297,7 +311,8 @@ export const PERSONAL_VIEWS = ['mine']
  * out of its people read, which the recorded list may name, and name the
  * recorder there where the view shows her, so the replay holds the same
  * reads with at most those ids apart. With `ownOrg`, a query whose
- * `org_id` names an organization other than the recorded one is left out,
+ * `org_id`, at any depth (orgArgOf), names an organization other than the
+ * recorded one is left out,
  * since it is the recording login's seat elsewhere, which a person with
  * one seat does not hold. Throws for a person of another organization,
  * whose rows the set does not show, and for a view of PERSONAL_VIEWS
@@ -313,9 +328,10 @@ export function personQueries(set, person, { ownOrg = false } = {}) {
       `the ${set.view} set reads its recorder's own tasks, so only its recorder replays it`,
     )
   return ownOrg
-    ? set.queries.filter(
-        (query) => typeof query.args.org_id !== 'string' || query.args.org_id === set.person.org_id,
-      )
+    ? set.queries.filter((query) => {
+        const org = orgArgOf(query.args)
+        return org === null || org === set.person.org_id
+      })
     : set.queries
 }
 
@@ -390,16 +406,24 @@ export function compareSets(recorded, replayed) {
   }
 }
 
+/** The bucket of subscriptionsByOrganization for a query that names no
+    organization and no id of one, such as the root part or the Inbox
+    summary, which read across the login's seats. */
+export const NO_ORG = 'no_org_argument'
+
 /** The organizations recorded sets `sets` read, each with the functions
-    its queries name and how many queries each holds, as item 9 of the
-    limits work lists what one login subscribes per organization. A query
-    names its organization by its `org_id` argument; one with none is the
-    login's own (`login`). */
-export function subscriptionsByOrganization(sets) {
+    its queries name and how many queries each holds, as one login's
+    subscriptions per organization. A query names its organization by its
+    `org_id` at any depth (orgArgOf), else by the first of its strings that
+    `idOrgs` (a Map from a project's, a person's or a team's id to its
+    organization) knows, as projectNav:byIds names projects and people:byIds
+    people, else it goes under NO_ORG. */
+export function subscriptionsByOrganization(sets, idOrgs = new Map()) {
   const byOrg = new Map()
   for (const set of sets)
     for (const query of set.queries) {
-      const org = typeof query.args.org_id === 'string' ? query.args.org_id : 'login'
+      const named = stringsOf(query.args).find((text) => idOrgs.has(text))
+      const org = orgArgOf(query.args) ?? (named === undefined ? NO_ORG : idOrgs.get(named))
       const views = byOrg.get(org) ?? new Map()
       const entry = views.get(query.udfPath) ?? { queries: 0, views: new Set() }
       entry.queries++

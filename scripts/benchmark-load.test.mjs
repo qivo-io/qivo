@@ -618,10 +618,44 @@ describe('the replay against the tab', () => {
       ]),
     ]
     expect(subscriptionsByOrganization(sets)).toEqual({
-      login: { 'workspace:root': { queries: 2, views: ['board', 'inbox'] } },
+      no_org_argument: { 'workspace:root': { queries: 2, views: ['board', 'inbox'] } },
       'org-a': { 'people:byIds': { queries: 2, views: ['board', 'inbox'] } },
       'org-b': { 'inbox:page': { queries: 1, views: ['inbox'] } },
     })
+  })
+
+  it("reads an organization in a query's scope, and one a project-only read names by its ids", () => {
+    const board = setOf('board', [
+      {
+        udfPath: 'tasks:board',
+        args: { scope: { kind: 'project', org_id: 'org-b', project_id: 'proj-b' } },
+      },
+      { udfPath: 'projectNav:byIds', args: { ids: ['proj-b'] } },
+      { udfPath: 'projectNav:children', args: { project_id: 'proj-a' } },
+      { udfPath: 'projectNav:page', args: {} },
+    ])
+    const idOrgs = new Map([
+      ['proj-a', 'org-a'],
+      ['proj-b', 'org-b'],
+    ])
+    expect(subscriptionsByOrganization([board], idOrgs)).toEqual({
+      no_org_argument: { 'projectNav:page': { queries: 1, views: ['board'] } },
+      'org-a': { 'projectNav:children': { queries: 1, views: ['board'] } },
+      'org-b': {
+        'projectNav:byIds': { queries: 1, views: ['board'] },
+        'tasks:board': { queries: 1, views: ['board'] },
+      },
+    })
+    // a person with one seat leaves out another organization's read in a scope too
+    const two = setOf('board', [
+      ...board.queries,
+      { udfPath: 'overview:summary', args: { scope: { kind: 'project', org_id: 'org-ns' } } },
+    ])
+    expect(
+      personQueries({ ...two, person: { ...NORA, org_id: 'org-ns' } }, LEO, { ownOrg: true }).map(
+        (query) => query.udfPath,
+      ),
+    ).toEqual(['projectNav:byIds', 'projectNav:children', 'projectNav:page', 'overview:summary'])
   })
 })
 

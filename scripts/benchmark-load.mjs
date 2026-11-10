@@ -204,6 +204,7 @@ import {
   everydayAssignments,
   findSeat,
   holdPlaces,
+  idsOfOrg,
   orgsOf,
   stableId,
   teamsOfPerson,
@@ -1777,9 +1778,16 @@ async function replay(options) {
     subscriptions: {
       login: plan.people[0].key,
       org_names: Object.fromEntries(orgs.map((one) => [one.org_id, one.org_slug])),
-      // by the organization the tab showed, then by the organization each query names
+      // by the organization the tab showed, then by the organization each
+      // query names, by its org_id or by the ids of people.json it holds
       by_organization: Object.fromEntries(
-        orgSets.map((orgSet, k) => [orgs[k].org_slug, subscriptionsByOrganization(orgSet)]),
+        orgSets.map((orgSet, k) => [
+          orgs[k].org_slug,
+          subscriptionsByOrganization(
+            orgSet,
+            new Map(orgs.flatMap((one) => [...idsOfOrg(one)].map((id) => [id, one.org_id]))),
+          ),
+        ]),
       ),
     },
     notRun,
