@@ -1180,6 +1180,9 @@ async function runWorker() {
       for (const client of clients) {
         if (results.has(client.index) || !client.tracker.current) continue
         if (client.tracker.connects <= connects(client)) continue
+        // a leader watches the feed only after its first beat answers, as a
+        // tab does, so it is current once the feed has answered too
+        if (client.lead && !client.tracker.holds('inbox:feed')) continue
         const start = from
         results.set(client.index, {
           index: client.index,
@@ -1276,6 +1279,7 @@ async function runWorker() {
           })
           client.index = spec.index
           client.view = spec.view
+          client.lead = spec.lead
           clients.push(client)
         }
         const results = await allCurrent(from)

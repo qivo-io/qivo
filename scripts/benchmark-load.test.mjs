@@ -332,6 +332,21 @@ describe('the frame tracker', () => {
     expect(tracker.closes).toEqual([expect.objectContaining({ code: 1006, reason: 'gone' })])
   })
 
+  it('says whether its set holds an answered query of a function', () => {
+    const tracker = new FrameTracker()
+    tracker.sent(
+      add(0, 1, [
+        [0, 'workspace:root', {}],
+        [1, 'inbox:feed', { after: 1 }],
+      ]),
+    )
+    tracker.received(transition(1, [[0, { orgs: [] }]]))
+    expect(tracker.holds('workspace:root')).toBe(true)
+    // added but not answered yet, as a leader's feed right after its first beat
+    expect(tracker.holds('inbox:feed')).toBe(false)
+    expect(tracker.holds('tasks:board')).toBe(false)
+  })
+
   it('times each query from its Add to its first answer, leaving out one that has none', () => {
     let now = 1000
     const tracker = new FrameTracker({ now: () => now })

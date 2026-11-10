@@ -158,6 +158,14 @@ export class FrameTracker {
     return true
   }
 
+  /** Whether the current set holds an answered query of function
+      `udfPath`. */
+  holds(udfPath) {
+    for (const query of this.queries.values())
+      if (query.udfPath === udfPath && query.answered) return true
+    return false
+  }
+
   /** The queries waiting for their first answer since they were added. */
   get waiting() {
     let count = 0
