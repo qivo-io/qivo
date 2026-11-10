@@ -61,10 +61,16 @@ export function MobileHeader({
           : info?.name || 'Projects'
   // New task where the cache says the scope, or a sub-project the phone
   // list's answer names, is writable, and in My view always: the dialog's
-  // targets (projectNav.targets) decide
+  // targets (projectNav.targets) decide. None over the task list of a
+  // top-level project whose answer names no sub-project, whose note
+  // offers New sub-project instead (NoSubProjectsNote), as the desktop
+  // Board offers no New task there.
   const listed = P.boardRead(BOARD_SLOTS.phone).value
+  const noSubProject =
+    view === 'kanban' && !!info?.isMeta && listed?.state === 'ok' && listed.projects?.length === 0
   const canCreate =
     !!info &&
+    !noSubProject &&
     (info.mine ||
       P.canWrite(info.id) ||
       (listed?.state === 'ok' && (listed.projects ?? []).some((id) => P.canWrite(id))))

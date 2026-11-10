@@ -452,6 +452,8 @@ describe('New sub-project in a project without one', () => {
       expect(document.body.textContent).not.toContain('No tasks here')
       expect(document.body.textContent).not.toContain('Create a task to get started.')
       expect(button('New sub-project') !== undefined, role).toBe(offered)
+      // the header offers no New task beside it, as the desktop Board does not
+      expect(document.querySelector('[data-mobile-new-task]'), role).toBeNull()
       await reload()
     }
   })
