@@ -4,8 +4,25 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { lastInputWasPointer } from '@/lib/focusVisibility'
 import { cn } from '@/lib/utils'
 
-const customizable = typeof CSS !== 'undefined' && CSS.supports('appearance', 'base-select')
+/* Where the select is customizable: in a browser that has it, wider than
+   760px, as tokens.css gives it appearance base-select. A classic select
+   must hold no label button, which WebKit paints as an empty field. */
+const customizable =
+  typeof CSS !== 'undefined' && CSS.supports('appearance', 'base-select')
+    ? window.matchMedia('(min-width: 761px)')
+    : null
+const subscribeCustomizable = (change: () => void) => {
+  customizable?.addEventListener('change', change)
+  return () => customizable?.removeEventListener('change', change)
+}
 const labelKeys = new WeakMap<HTMLSelectElement, string>()
+
+/** Takes the label syncSelectLabel gave `select` away again, as the window
+    narrows to where the select is classic. */
+function dropSelectLabel(select: HTMLSelectElement) {
+  select.querySelector(':scope > button[data-select-label]')?.remove()
+  labelKeys.delete(select)
+}
 
 /* Where the select is customizable (tokens.css), give its closed field a label
    the page can style. The browser's own label cannot be clipped, so a long
@@ -59,9 +76,15 @@ const NativeSelect = React.forwardRef<
   // keys in an open list make it the keyboard.
   const select = React.useRef<HTMLSelectElement | null>(null)
   React.useImperativeHandle(ref, () => select.current as HTMLSelectElement)
+  const labelled = React.useSyncExternalStore(
+    subscribeCustomizable,
+    () => customizable?.matches ?? false,
+  )
   // Runs every render, because the options arrive as children and may change.
   React.useLayoutEffect(() => {
-    if (customizable && select.current) syncSelectLabel(select.current)
+    if (!select.current) return
+    if (labelled) syncSelectLabel(select.current)
+    else if (customizable) dropSelectLabel(select.current)
   })
   return (
     <HoverTooltip content={title}>
