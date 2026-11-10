@@ -356,4 +356,18 @@
   .settings-content-scroll [data-archived-project] > div:first-child {
     flex-wrap: wrap;
   }
+  /* a search hit beneath an archived project puts its text over its
+     project's Restore, whose label names the project and would leave the
+     text a few characters beside it. One line, since a wrapping column's
+     line is as wide as its widest text and would let the name run past
+     the row. */
+  .settings-content-scroll [data-archived-under] > div:first-child {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+  .settings-content-scroll [data-restore-parent] {
+    height: auto;
+    white-space: normal;
+  }
 }

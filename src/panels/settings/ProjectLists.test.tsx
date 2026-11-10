@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act } from 'react'
@@ -1120,6 +1122,40 @@ describe('Archived projects', () => {
     expect(text('[data-archived-project="old-api"]')).toContain(
       "only the project's lead can restore it",
     )
+  })
+
+  it('stacks a hit beneath an archived project over its project’s Restore on a phone, and leaves an entry’s row alone', async () => {
+    // the phone rules of styles/mobile-settings.css, which the page reads
+    // inside the settings page's scroller
+    const style = document.createElement('style')
+    style.textContent = readFileSync(join(__dirname, '../../styles/mobile-settings.css'), 'utf8')
+    document.head.append(style)
+    const phoneRules = [...(style.sheet?.cssRules ?? [])]
+      .filter((rule): rule is CSSMediaRule => rule instanceof CSSMediaRule)
+      .filter((rule) => rule.media.mediaText.includes('max-width: 760px'))
+      .flatMap((rule) => [...rule.cssRules])
+      .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
+      .filter((rule) => /\[data-(archived|restore)/.test(rule.selectorText))
+    style.remove()
+    /** The phone value of `property` on `el`: the last of these rules that
+        matches it and sets it, as they share one specificity. */
+    const phone = (el: Element, property: string) =>
+      phoneRules
+        .filter((r) => el.matches(r.selectorText))
+        .map((r) => r.style.getPropertyValue(property))
+        .filter(Boolean)
+        .at(-1)
+    container.className = 'settings-content-scroll'
+    await archived()
+    await type(find('[data-archived-projects-search]'), 'old')
+    await rest()
+    const line = (id: string) => find(`[data-archived-project="${id}"] > div:first-child`)
+    expect(phone(line('old-api'), 'flex-direction')).toBe('column')
+    // one line as wide as the row, so the name keeps to it
+    expect(phone(line('old-api'), 'flex-wrap')).toBe('nowrap')
+    expect(phone(find('[data-restore-parent="old-api"]'), 'white-space')).toBe('normal')
+    // an entry keeps its Restore and Delete beside its name
+    expect(phone(line('old'), 'flex-direction')).toBeUndefined()
   })
 
   it('lists the home organization once the chosen one’s seat goes while it shows, and keeps a typed deletion reason to copy', async () => {
