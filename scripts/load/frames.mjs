@@ -3,8 +3,8 @@
 // set they name, each query's last answer and its bytes, and whether the
 // client is current. The record part feeds it a real tab's frames from
 // Playwright and the replay part a Node client's frames from its socket,
-// so both measure the same way. Also the recorded set's format, the swap of
-// one person's ids into it and the comparison of a replay with a tab.
+// so both measure the same way. Also the recorded set's format, what
+// another person replays of it and the comparison of a replay with a tab.
 //
 // A frame is the JSON text Convex sends (convex/browser's protocol): the
 // client's Connect, ModifyQuerySet, Mutation, Action and Authenticate, and
@@ -260,42 +260,51 @@ export function checkSet(value) {
   return value
 }
 
-/** `value` with every occurrence of each key of `ids` in its strings
-    replaced by that key's value. Object keys stay as they are. */
-export function swapIds(value, ids) {
-  const pairs = Object.entries(ids).filter(([from, to]) => from !== '' && from !== to)
-  if (pairs.length === 0) return value
-  const swap = (item) => {
-    if (typeof item === 'string')
-      return pairs.reduce((text, [from, to]) => text.split(from).join(to), item)
-    if (Array.isArray(item)) return item.map(swap)
-    if (item !== null && typeof item === 'object')
-      return Object.fromEntries(Object.entries(item).map(([key, inner]) => [key, swap(inner)]))
-    return item
-  }
-  return swap(value)
+/** Every string of `value` at any depth, object keys left out. */
+export function stringsOf(value) {
+  if (typeof value === 'string') return [value]
+  if (value === null || typeof value !== 'object') return []
+  return Object.values(value).flatMap(stringsOf)
 }
 
-/** Recorded set `set`'s queries with `person`'s ids in place of the
-    recorded person's: its profile, its login, and its organization when
-    `person` names another, and each id of `more` (recorded id to the
-    person's, such as a mirrored organization's projects and teams).
-    With `ownOrg`, a query whose `org_id` names an organization other than
-    the recorded one is left out, since it is the recording login's seat
-    elsewhere, which a person with one seat does not hold. */
-export function personQueries(set, person, { more = {}, ownOrg = false } = {}) {
-  const ids = {
-    ...more,
-    [set.person.profile_id]: person.profile_id,
-    [set.person.auth_user_id]: person.auth_user_id,
-    [set.person.org_id]: person.org_id ?? set.person.org_id,
-  }
-  const kept = ownOrg
+/** The views whose reads follow the recorder's own rows rather than what
+    the view shows to whoever opens it: My view's tasks are the recorder's,
+    so its people, projects and owner loads are the recorder's too, and
+    another person's My view reads other ids, which only that person's own
+    tab can record. */
+export const PERSONAL_VIEWS = ['mine']
+
+/**
+ * Recorded set `set`'s queries as `person`, another person of the
+ * recorder's organization, subscribes them on the same view. No id is
+ * swapped: the id lists a view reads (people, owners, projects) name the
+ * rows the view shows, which are the same for whoever sees them, the
+ * recorder among them where the rows name her, and the arguments that
+ * name no row (the scope, the filters, the organization) are the same for
+ * every person of the organization. A person's own tab would leave itself
+ * out of its people read, which the recorded list may name, and name the
+ * recorder there where the view shows her, so the replay holds the same
+ * reads with at most those ids apart. With `ownOrg`, a query whose
+ * `org_id` names an organization other than the recorded one is left out,
+ * since it is the recording login's seat elsewhere, which a person with
+ * one seat does not hold. Throws for a person of another organization,
+ * whose rows the set does not show, and for a view of PERSONAL_VIEWS
+ * recorded by someone else.
+ */
+export function personQueries(set, person, { ownOrg = false } = {}) {
+  if (person.org_id !== undefined && person.org_id !== set.person.org_id)
+    throw new Error(
+      `the ${set.view} set was recorded in organization ${set.person.org_id}, not in ${person.org_id}, the organization of ${person.key ?? person.profile_id}`,
+    )
+  if (PERSONAL_VIEWS.includes(set.view) && person.profile_id !== set.person.profile_id)
+    throw new Error(
+      `the ${set.view} set reads its recorder's own tasks, so only its recorder replays it`,
+    )
+  return ownOrg
     ? set.queries.filter(
         (query) => typeof query.args.org_id !== 'string' || query.args.org_id === set.person.org_id,
       )
     : set.queries
-  return kept.map((query) => ({ ...query, args: swapIds(query.args, ids) }))
 }
 
 /** The reads only a tab that leads its profile's desktop alerts holds

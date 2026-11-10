@@ -74,10 +74,15 @@
 //   nothing in the browser.
 // - replay runs --clients Node clients over --processes processes, each a
 //   ConvexClient from convex/browser over the WebSocket, as the app's own
-//   client is. Client i acts as person i of people.json, Nora first, on the
-//   recorded set of view i modulo the views, with that person's ids swapped
-//   in (plan.mjs clientSpecs); with --orgs the clients are dealt to the
-//   organizations in turn, Nora's first tab in each on its Board. A client
+//   client is. The clients are dealt to the --orgs organizations in turn,
+//   and in each the first is Nora on its Board as she recorded it, and
+//   person j of people.json takes the organization's recorded set of view j
+//   modulo the views but My view, whose reads follow the recorder's own
+//   tasks, with no id swapped, since a view's id lists name the rows it
+//   shows to whoever opens it (plan.mjs clientSpecs, frames.mjs
+//   personQueries). A client that would read an id of another organization,
+//   or one id twice in a list, stops the run before any client starts
+//   (plan.mjs checkSpecs). A client
 //   acts with the admin key as its person's planted login and session, so
 //   the session wrappers run as in the app, but no JWT is validated or
 //   refreshed, and it makes none of a boot's one-off writes, which the sets
@@ -95,7 +100,8 @@
 //     feed's `after` is the leader's clock and compared by presence), then
 //     a reconnect of that lone Board client, the reconnect trigger's base.
 //   - startup: every client created and subscribed at once, from cold, each
-//     one's time to current and its set against its person's swapped set.
+//     one's time to current and its set against the recorded set it was
+//     given.
 //   - changes: --changes changes, one a second, as Nora on the recorded
 //     Board's open tasks: a rename, a move to a sibling sub-project and
 //     back, a status change between two open statuses and a comment, the
@@ -178,6 +184,7 @@ import {
 } from './load/frames.mjs'
 import { loadOptions, OptionsError, usage, VIEWS } from './load/options.mjs'
 import {
+  checkSpecs,
   clientSpecs,
   everydayAssignments,
   findSeat,
@@ -439,8 +446,10 @@ async function setup(options) {
     )
     teams.push(id)
   }
-  // the organization's profiles as Settings › Users lists them, agents included
+  // the organization's profiles as Settings › Users lists them, agents
+  // included, whose ids the replay's check of other organizations' sets reads
   let held = 0
+  const profileIds = []
   const deadline = Date.now() + 30_000
   for (let after; ; ) {
     const page = await asNora.query(ref('people:settingsPage'), {
@@ -454,6 +463,7 @@ async function setup(options) {
     if (page.state !== 'ready' || page.stopped)
       throw new Error('Settings › Users did not list the people')
     held += page.rows.length
+    profileIds.push(...page.rows.map((row) => row.id))
     if (!page.next) break
     after = page.next
   }
@@ -528,8 +538,20 @@ async function setup(options) {
     keep: nora.profile_id,
   })
   mkdirSync(options.dir, { recursive: true })
-  const plan = { org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }
-  const orgs = [{ k: 0, org_id: org, org_slug: ORG_SLUG, profiles: held, teams, projects, people }]
+  const profile_ids = [
+    ...new Set([...profileIds, ...grown.people.map((person) => person.profile_id)]),
+  ]
+  const northstar = {
+    org_id: org,
+    org_slug: ORG_SLUG,
+    profiles: held,
+    profile_ids,
+    teams,
+    projects,
+    people,
+  }
+  const plan = { ...northstar }
+  const orgs = [{ k: 0, ...northstar }]
   for (let k = 1; k < options.orgs; k++) {
     const kept = earlier?.orgs?.[k]
     orgs.push(
@@ -728,7 +750,6 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
   base.push(second)
   // the projects and sub-projects, Northstar's by name and order
   const projects = []
-  const ids = {}
   for (const [t, top] of northstar.projects.entries()) {
     const id = stableId(`org${k}:project:${t}`)
     const made = await retry(() =>
@@ -740,7 +761,6 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
         name: top.name,
       }),
     )
-    ids[top.id] = id
     const entry = { id, name: top.name, num: made.num, children: [] }
     for (const [c, child] of top.children.entries()) {
       const childId = stableId(`org${k}:project:${t}:${c}`)
@@ -754,7 +774,6 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
           name: child.name,
         }),
       )
-      ids[child.id] = childId
       entry.children.push({ id: childId, name: child.name, num: sub.num })
     }
     for (const team of base)
@@ -789,10 +808,6 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
     )
     teams.push(id)
   }
-  // Northstar's teams by order, for the swap of a recorded set's ids
-  northstar.teams.forEach((team, i) => {
-    if (teams[i]) ids[team] = teams[i]
-  })
   note(`${projects.length} projects, ${subprojects.length} sub-projects, ${teams.length} teams`)
   // Nora, invited by her address, claims the seat as a guest
   const noraId = stableId(`org${k}:nora`)
@@ -864,10 +879,9 @@ async function setupOrg(options, { admin, noraLogin, northstar, k }) {
     org_slug: seat.slug,
     name: spec.name,
     profiles: grown.people.length + 2,
+    profile_ids: [owner.profile_id, noraId, ...grown.people.map((person) => person.profile_id)],
     teams,
     projects,
-    // Northstar's ids to this organization's, by name and order
-    mirror: { [northstar.org_id]: org, ...ids },
     owner: { ...owner },
     people: [nora, ...grown.people],
   }
@@ -1448,6 +1462,9 @@ async function replay(options) {
   const people = orgs.slice(0, options.orgs).reduce((all, one) => all + one.people.length, 0)
   if (people < options.clients)
     throw new Error(`people.json holds ${people} people, fewer than --clients ${options.clients}`)
+  // what each client replays, refused before anything starts when a client
+  // would read another organization's ids
+  const specs = checkSpecs(clientSpecs(options, plan, orgSets), orgs.slice(0, options.orgs))
   const log = followLog(options)
   // the coordinator's own event loop, which follows the log and writes
   const delay = monitorEventLoopDelay({ resolution: 10 })
@@ -1503,7 +1520,6 @@ async function replay(options) {
       `phase ${name} done: ${Math.round((to - from) / 1000)} s, steal ${figures.steal?.steal_pct ?? '?'}%, slowest JS ${Math.max(0, ...Object.values(figures.functions).map((one) => one.js_ms.max ?? 0))} ms`,
     )
   }
-  const specs = clientSpecs(options, plan, orgSets)
   try {
     if (options.phases.includes('match')) {
       say('phase match')

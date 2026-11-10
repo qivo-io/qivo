@@ -19,7 +19,6 @@ import {
   recordedSet,
   SET_FORMAT,
   subscriptionsByOrganization,
-  swapIds,
   withoutLeaderReads,
 } from './load/frames.mjs'
 import {
@@ -33,6 +32,7 @@ import {
   VIEWS,
 } from './load/options.mjs'
 import {
+  checkSpecs,
   clientSpecs,
   everydayAssignments,
   findSeat,
@@ -67,8 +67,9 @@ import {
 
 /* The combined load benchmark's pure parts (scripts/benchmark-load.mjs):
    its options and help text, the Convex frames it reads, the recorded
-   set's format, the swap of one person's ids into a set, setup's plan and
-   which client replays what, the changes' comments, the replayed leader's
+   set's format, what another person replays of a set, setup's plan,
+   which client replays what and the check of other organizations' ids,
+   the changes' comments, the replayed leader's
    wiring of the app's alert client, the per-function and per-phase
    figures and the output's shape. */
 
@@ -421,7 +422,7 @@ const setOf = (view, queries) => ({
   queries,
 })
 
-describe('the recorded set and the id swap', () => {
+describe('the recorded set and what another person replays of it', () => {
   it('writes the format, the person, the sorted queries and the calls by name', () => {
     const tracker = new FrameTracker()
     tracker.sent(
@@ -471,58 +472,44 @@ describe('the recorded set and the id swap', () => {
     expect(() => checkSet(set)).toThrow(message)
   })
 
-  it("puts the replayed person's profile and login wherever the recorder's stood, keys untouched", () => {
-    const set = setOf('mine', [
+  it('keeps the recorded ids, so a person already among the owners is not doubled and the recorder stays where she is data', () => {
+    const set = setOf('roadmap', [
       {
-        udfPath: 'tasks:board',
-        args: {
-          scope: { mine: 'prof-nora' },
-          filters: { owners: ['prof-nora', 'prof-aisha'], search: 'auth-nora' },
-          'prof-nora': 1,
-        },
+        udfPath: 'planning:ownerLoads',
+        args: { org_id: 'org-ns', owner_ids: ['prof-aaa', 'prof-leo', 'prof-nora'] },
         bytes: 10,
       },
+      { udfPath: 'people:byIds', args: { ids: ['prof-leo', 'prof-aisha'] }, bytes: 6 },
       { udfPath: 'workspace:root', args: {}, bytes: 5 },
     ])
-    expect(personQueries(set, LEO)).toEqual([
-      {
-        udfPath: 'tasks:board',
-        args: {
-          scope: { mine: 'prof-leo' },
-          filters: { owners: ['prof-leo', 'prof-aisha'], search: 'auth-leo' },
-          'prof-nora': 1,
-        },
-        bytes: 10,
-      },
-      { udfPath: 'workspace:root', args: {}, bytes: 5 },
-    ])
-    // the recorder replays as recorded
+    const leos = personQueries(set, LEO)
+    expect(leos).toEqual(set.queries)
+    // the first tool's swap gave ['prof-aaa', 'prof-leo', 'prof-leo']
+    expect(leos[0].args.owner_ids).toEqual(['prof-aaa', 'prof-leo', 'prof-nora'])
     expect(personQueries(set, NORA)).toEqual(set.queries)
   })
 
-  it('swaps an organization only when the person names another', () => {
-    expect(
-      swapIds({ org_id: 'org-ns', n: 3, ok: true, none: null }, { 'org-ns': 'org-two' }),
-    ).toEqual({
-      org_id: 'org-two',
-      n: 3,
-      ok: true,
-      none: null,
-    })
-    const set = setOf('inbox', [{ udfPath: 'inbox:page', args: { org_id: 'org-ns' }, bytes: 1 }])
-    expect(personQueries(set, { ...LEO, org_id: undefined })[0].args.org_id).toBe('org-ns')
+  it('refuses My view to anyone but its recorder, and a set to a person of another organization', () => {
+    const mine = setOf('mine', [
+      { udfPath: 'planning:ownerLoads', args: { org_id: 'org-ns', owner_ids: ['prof-nora'] } },
+    ])
+    expect(() => personQueries(mine, LEO)).toThrow('only its recorder replays it')
+    expect(personQueries(mine, NORA)).toEqual(mine.queries)
+    const board = setOf('board', [{ udfPath: 'workspace:root', args: {} }])
+    expect(() => personQueries(board, { ...LEO, org_id: 'org-two' })).toThrow(
+      'recorded in organization org-ns, not in org-two',
+    )
   })
 
-  it("swaps a mirrored organization's ids and leaves out the recorder's other seats", () => {
+  it("leaves out the recorder's other seats for a person with one seat", () => {
     const set = setOf('board', [
       { udfPath: 'tasks:board', args: { org_id: 'org-ns', project_id: 'proj-ns' }, bytes: 9 },
       { udfPath: 'inbox:summary', args: { org_id: 'org-other' }, bytes: 3 },
       { udfPath: 'workspace:root', args: {}, bytes: 5 },
     ])
-    const two = { profile_id: 'prof-ida', auth_user_id: 'auth-ida', org_id: 'org-two' }
-    expect(personQueries(set, two, { more: { 'proj-ns': 'proj-two' }, ownOrg: true })).toEqual([
-      { udfPath: 'tasks:board', args: { org_id: 'org-two', project_id: 'proj-two' }, bytes: 9 },
-      { udfPath: 'workspace:root', args: {}, bytes: 5 },
+    expect(personQueries(set, LEO, { ownOrg: true }).map((query) => query.udfPath)).toEqual([
+      'tasks:board',
+      'workspace:root',
     ])
     // without ownOrg the other seat's read stays, as the recorder holds it
     expect(personQueries(set, LEO).map((query) => query.udfPath)).toContain('inbox:summary')
@@ -1117,9 +1104,9 @@ describe('which client replays what', () => {
     auth_user_id: `auth-${key}`,
     org_id: org,
   })
-  const set = (view, org, queries) => ({
+  const set = (view, org, queries, recorder = 'prof-nora') => ({
     view,
-    person: { profile_id: 'prof-nora', auth_user_id: 'auth-nora', org_id: org },
+    person: { profile_id: recorder, auth_user_id: 'auth-nora', org_id: org },
     queries,
   })
   const northstar = [
@@ -1130,18 +1117,23 @@ describe('which client replays what', () => {
       { udfPath: 'billing:status', args: { org_id: 'org-h' }, bytes: 10 },
     ]),
     set('inbox', 'org-ns', [{ udfPath: 'inbox:page', args: { org_id: 'org-ns' }, bytes: 400 }]),
+    set('mine', 'org-ns', [
+      { udfPath: 'planning:ownerLoads', args: { org_id: 'org-ns', owner_ids: ['prof-nora'] } },
+    ]),
   ]
 
-  it('gives person i view i of one organization, Nora first, and only leaders the leader reads', () => {
+  it('gives person i view i of one organization, Nora first, never My view to another, and only leaders the leader reads', () => {
     const plan = {
-      people: [person('nora', 'org-ns'), person('p1', 'org-ns'), person('p2', 'org-ns')],
+      people: ['nora', 'p1', 'p2', 'p3'].map((key) => person(key, 'org-ns')),
     }
-    const specs = clientSpecs({ clients: 3, orgs: 1 }, plan, [northstar])
+    const specs = clientSpecs({ clients: 4, orgs: 1 }, plan, [northstar])
     expect(specs.map((spec) => [spec.person.key, spec.view, spec.lead, spec.watch])).toEqual([
       ['nora', 'board', true, 'nora'],
       ['p1', 'inbox', false, null],
       ['p2', 'board', true, null],
+      ['p3', 'inbox', false, null],
     ])
+    expect(specs.map((spec) => spec.recorder)).toEqual([true, false, false, false])
     // Nora keeps her other seat's read; a person with one seat holds none
     expect(specs[0].queries.map((query) => query.udfPath)).toContain('billing:status')
     expect(specs[2].queries.map((query) => query.udfPath)).toEqual([
@@ -1151,44 +1143,112 @@ describe('which client replays what', () => {
     ])
     expect(specs[2].queries[0].args.org_id).toBe('org-ns')
     expect(specs[0].recorded_answer_bytes).toBe(981)
-    expect(() => clientSpecs({ clients: 4, orgs: 1 }, plan, [northstar])).toThrow(
+    expect(() => clientSpecs({ clients: 5, orgs: 1 }, plan, [northstar])).toThrow(
       'fewer than its share of --clients',
+    )
+    // sets another profile recorded, such as those of an earlier setup
+    const other = { people: [person('leo', 'org-ns'), person('p1', 'org-ns')] }
+    expect(() => clientSpecs({ clients: 1, orgs: 1 }, other, [northstar])).toThrow(
+      'recorded by another profile than leo',
+    )
+    // with My view alone, nobody but its recorder has a set to replay
+    expect(() => clientSpecs({ clients: 2, orgs: 1 }, plan, [[northstar[2]]])).toThrow(
+      'holds no recorded set another person can replay',
     )
   })
 
-  it("deals clients to the organizations in turn, with Nora's one leading tab in Northstar", () => {
-    const harborBoard = set('board', 'org-h', [
-      { udfPath: 'tasks:board', args: { org_id: 'org-h', project_id: 'proj-h' }, bytes: 300 },
-      { udfPath: 'inbox:feed', args: { after: 1 }, bytes: 50 },
-    ])
-    const plan = {
-      org_slug: 'northstar-labs',
-      people: [person('nora', 'org-ns'), person('p1', 'org-ns')],
-      orgs: [
-        {
-          k: 0,
-          org_slug: 'northstar-labs',
-          people: [person('nora', 'org-ns'), person('p1', 'org-ns')],
-        },
-        {
-          k: 1,
-          org_slug: 'harbor',
-          mirror: { 'org-ns': 'org-h', 'proj-ns': 'proj-h' },
-          people: [person('nora@harbor', 'org-h'), person('o1p1', 'org-h')],
-        },
+  /* Northstar and Harbor as setup writes them: each organization's own
+     ids, and Harbor's sets recorded there by Nora's guest seat. */
+  const northstarOrg = {
+    k: 0,
+    org_id: 'org-ns',
+    org_slug: 'northstar-labs',
+    profile_ids: ['prof-nora', 'prof-p1', 'prof-leo'],
+    projects: [{ id: 'proj-ns', children: [{ id: 'sub-ns' }] }],
+    teams: ['team-ns'],
+    people: [person('nora', 'org-ns'), person('p1', 'org-ns')],
+  }
+  const harborOrg = {
+    k: 1,
+    org_id: 'org-h',
+    org_slug: 'harbor',
+    projects: [{ id: 'proj-h', children: [] }],
+    teams: ['team-h'],
+    owner: person('owner1', 'org-h'),
+    people: [person('nora@harbor', 'org-h'), person('o1p1', 'org-h')],
+  }
+  const harbor = [
+    set(
+      'board',
+      'org-h',
+      [
+        { udfPath: 'tasks:board', args: { org_id: 'org-h', project_id: 'proj-h' }, bytes: 300 },
+        { udfPath: 'inbox:feed', args: { after: 1 }, bytes: 50 },
+        { udfPath: 'billing:status', args: { org_id: 'org-ns' }, bytes: 10 },
       ],
-    }
-    const specs = clientSpecs({ clients: 4, orgs: 2 }, plan, [northstar, [harborBoard]])
+      'prof-nora@harbor',
+    ),
+    set(
+      'inbox',
+      'org-h',
+      [{ udfPath: 'inbox:page', args: { org_id: 'org-h' }, bytes: 200 }],
+      'prof-nora@harbor',
+    ),
+  ]
+
+  it("deals clients to the organizations in turn, each on its own organization's sets, with Nora's one leading tab in Northstar", () => {
+    const plan = { ...northstarOrg, orgs: [northstarOrg, harborOrg] }
+    const specs = clientSpecs({ clients: 4, orgs: 2 }, plan, [northstar, harbor])
     expect(specs.map((spec) => [spec.org, spec.person.key, spec.view, spec.lead])).toEqual([
       ['northstar-labs', 'nora', 'board', true],
       ['harbor', 'nora@harbor', 'board', false],
       ['northstar-labs', 'p1', 'inbox', false],
       ['harbor', 'o1p1', 'inbox', false],
     ])
-    // Nora's Harbor tab does not lead, so it holds no leader read
-    expect(specs[1].queries.map((query) => query.udfPath)).toEqual(['tasks:board'])
-    // Harbor's people replay Northstar's sets with Harbor's ids
-    expect(specs[3].queries[0].args.org_id).toBe('org-h')
+    // Nora's Harbor tab does not lead, so it holds no leader read, and
+    // keeps her Northstar seat's read as she recorded it
+    expect(specs[1].queries.map((query) => query.udfPath)).toEqual([
+      'tasks:board',
+      'billing:status',
+    ])
+    // Harbor's people replay Harbor's own sets, which name no Northstar id
+    expect(specs[3].queries).toEqual(harbor[1].queries)
+    expect(checkSpecs(specs, plan.orgs)).toBe(specs)
+  })
+
+  it("refuses a client that would read another organization's ids or one id twice in a list", () => {
+    const spec = (queries) => ({
+      index: 3,
+      org: 'harbor',
+      view: 'board',
+      person: person('o1p1', 'org-h'),
+      recorder: false,
+      queries,
+    })
+    // a set mirrored from Northstar that keeps a Northstar person
+    const mirrored = spec([
+      { udfPath: 'people:byIds', args: { org_id: 'org-h', ids: ['prof-o1p1', 'prof-leo'] } },
+    ])
+    expect(() => checkSpecs([mirrored], [northstarOrg, harborOrg])).toThrow(
+      'client 3 (o1p1, board) would read people:byIds with prof-leo, an id of northstar-labs',
+    )
+    const nested = spec([
+      { udfPath: 'tasks:board', args: { scope: { org_id: 'org-h', project_id: 'sub-ns' } } },
+    ])
+    expect(() => checkSpecs([nested], [northstarOrg, harborOrg])).toThrow('an id of northstar-labs')
+    const doubled = spec([
+      {
+        udfPath: 'planning:ownerLoads',
+        args: { org_id: 'org-h', owner_ids: ['prof-o1p1', 'prof-x', 'prof-o1p1'] },
+      },
+    ])
+    expect(() => checkSpecs([doubled], [northstarOrg, harborOrg])).toThrow(
+      'with prof-o1p1 twice in one list',
+    )
+    // the recorder replays her own tabs as recorded, her other seats' reads included
+    expect(() =>
+      checkSpecs([{ ...mirrored, recorder: true }], [northstarOrg, harborOrg]),
+    ).not.toThrow()
   })
 })
 

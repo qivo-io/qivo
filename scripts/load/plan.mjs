@@ -1,9 +1,10 @@
 // The combined load benchmark's plan (scripts/benchmark-load.mjs): the
 // organization setup grows and the people.json it writes, the views'
-// addresses and which replayed client acts as whom on which recorded set,
-// kept here so a test can check them without a backend.
+// addresses, which replayed client acts as whom on which recorded set and
+// the check that refuses a client another organization's ids, kept here so
+// a test can check them without a backend.
 import { createHash } from 'node:crypto'
-import { personQueries, withoutLeaderReads } from './frames.mjs'
+import { PERSONAL_VIEWS, personQueries, stringsOf, withoutLeaderReads } from './frames.mjs'
 
 /** The three teams person number `n` that setup adds joins: one of
     `baseTeams`, which are shared with every top-level project, and two of
@@ -154,26 +155,30 @@ export function viewUrls(plan, boardTop = false) {
     added with --orgs. */
 export const orgsOf = (plan) => plan.orgs ?? [{ k: 0, ...plan }]
 
-/** The client specs of a replay: client i acts as one person and
-    subscribes one recorded set with that person's ids. With one
-    organization, person i of people.json takes view i modulo the views.
-    With --orgs, the clients are dealt to the organizations in turn; in
-    each, the first is Nora's seat there, on its Board as recorded there
-    (her one login holds a tab in each organization, item 9), and the
-    others are its people, each on Northstar's set of its view with the
-    organization's mirrored ids swapped in and Nora's other seats' reads
-    left out. One login leads its desktop alerts once (one browser
-    profile), so only Nora's Northstar tab leads among hers; a tab that
-    does not lead holds no leader reads. */
+/**
+ * The client specs of a replay: client i acts as one person and subscribes
+ * one recorded set of that person's organization (`orgSets[k]`, the sets
+ * Nora recorded there). The clients are dealt to the organizations in
+ * turn. In each, the first is the recorder, Nora's seat there, on its
+ * Board as recorded (her one login holds a tab in each organization), and
+ * the others are its people, person j on the organization's set j modulo
+ * the views other than PERSONAL_VIEWS, with Nora's other seats' reads left
+ * out (frames.mjs personQueries). One login leads its desktop alerts once
+ * (one browser profile), so only Nora's Northstar tab leads among hers; a
+ * tab that does not lead holds no leader reads. Throws where an
+ * organization holds too few planted sessions, where its first set was
+ * recorded by someone other than its first person, and where it holds no
+ * set another person can replay.
+ */
 export function clientSpecs(options, plan, orgSets) {
   const orgs = orgsOf(plan).slice(0, options.orgs)
-  const northstar = orgSets[0]
   const viewSet = (sets, view) => sets.find((set) => set.view === view)
   const bytesOf = (set) => set.queries.reduce((all, query) => all + (query.bytes ?? 0), 0)
   const hasFeed = (set) => set.queries.some((query) => query.udfPath === 'inbox:feed')
   return Array.from({ length: options.clients }, (_, index) => {
     const k = index % orgs.length
     const planOrg = orgs[k]
+    const sets = orgSets[k]
     const j = Math.floor(index / orgs.length)
     const person = planOrg.people[j]
     if (!person)
@@ -182,15 +187,21 @@ export function clientSpecs(options, plan, orgSets) {
       )
     let set
     let queries
-    if (orgs.length === 1) {
-      set = northstar[index % northstar.length]
-      queries = personQueries(set, person, { ownOrg: index !== 0 })
-    } else if (j === 0) {
-      set = viewSet(orgSets[k], 'board') ?? orgSets[k][0]
+    if (j === 0) {
+      set = viewSet(sets, 'board') ?? sets[0]
+      if (set.person.profile_id !== person.profile_id)
+        throw new Error(
+          `the ${set.view} set of ${planOrg.org_slug} was recorded by another profile than ${person.key}; run the record part again`,
+        )
       queries = set.queries
     } else {
-      set = northstar[j % northstar.length]
-      queries = personQueries(set, person, { more: planOrg.mirror ?? {}, ownOrg: true })
+      const shared = sets.filter((one) => !PERSONAL_VIEWS.includes(one.view))
+      if (shared.length === 0)
+        throw new Error(
+          `${planOrg.org_slug} holds no recorded set another person can replay; record a view other than ${PERSONAL_VIEWS.join(', ')}`,
+        )
+      set = shared[j % shared.length]
+      queries = personQueries(set, person, { ownOrg: true })
     }
     // Nora's tabs beside her Northstar tab, in one browser profile, do not lead
     const lead = hasFeed(set) && !(orgs.length > 1 && j === 0 && k > 0)
@@ -199,10 +210,71 @@ export function clientSpecs(options, plan, orgSets) {
       org: planOrg.org_slug,
       view: set.view,
       person,
+      recorder: j === 0,
       queries: lead ? queries : withoutLeaderReads(queries),
       lead,
       watch: j === 0 ? `${person.key}` : null,
       recorded_answer_bytes: bytesOf(set),
     }
   })
+}
+
+/** The ids people.json holds for organization `planOrg`: the
+    organization's, its profiles' (`profile_ids`, else the planted
+    people's and the owner's), its projects' and sub-projects' and its
+    teams'. */
+export function idsOfOrg(planOrg) {
+  return new Set(
+    [
+      planOrg.org_id,
+      ...(planOrg.profile_ids ?? []),
+      ...planOrg.people.map((person) => person.profile_id),
+      planOrg.owner?.profile_id,
+      ...(planOrg.projects ?? []).flatMap((project) => [
+        project.id,
+        ...project.children.map((child) => child.id),
+      ]),
+      ...(planOrg.teams ?? []),
+    ].filter((id) => typeof id === 'string'),
+  )
+}
+
+/**
+ * Refuses `specs` (clientSpecs') a replay must not run, before any client
+ * starts: a client other than its organization's recorder whose queries
+ * name an id of another organization of `orgs` (people.json's, idsOfOrg),
+ * such as a person of Northstar in another organization's set, and one
+ * whose queries hold an id list naming one id twice. The recorder's own
+ * clients replay her tabs as recorded, her other seats' reads included.
+ * Throws an Error that names the client, the function and the id.
+ */
+export function checkSpecs(specs, orgs) {
+  const idsBySlug = new Map(orgs.map((planOrg) => [planOrg.org_slug, idsOfOrg(planOrg)]))
+  for (const spec of specs) {
+    if (spec.recorder) continue
+    const foreign = new Map()
+    for (const [slug, ids] of idsBySlug)
+      if (slug !== spec.org) for (const id of ids) foreign.set(id, slug)
+    const name = `client ${spec.index} (${spec.person.key}, ${spec.view})`
+    for (const query of spec.queries) {
+      for (const text of stringsOf(query.args))
+        if (foreign.has(text))
+          throw new Error(
+            `${name} would read ${query.udfPath} with ${text}, an id of ${foreign.get(text)}, not of ${spec.org}`,
+          )
+      const lists = [query.args]
+      while (lists.length > 0) {
+        const value = lists.pop()
+        if (value === null || typeof value !== 'object') continue
+        if (Array.isArray(value)) {
+          const texts = value.filter((item) => typeof item === 'string')
+          const twice = texts.find((text, at) => texts.indexOf(text) !== at)
+          if (twice !== undefined)
+            throw new Error(`${name} would read ${query.udfPath} with ${twice} twice in one list`)
+        }
+        lists.push(...Object.values(value))
+      }
+    }
+  }
+  return specs
 }
