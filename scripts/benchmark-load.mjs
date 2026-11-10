@@ -1543,8 +1543,8 @@ async function replay(options) {
   if (people < options.clients)
     throw new Error(`people.json holds ${people} people, fewer than --clients ${options.clients}`)
   // what each client replays, refused before anything starts when a client
-  // would read another organization's ids
-  const specs = checkSpecs(clientSpecs(options, plan, orgSets), orgs.slice(0, options.orgs))
+  // would read the ids of another organization of people.json, replayed or not
+  const specs = checkSpecs(clientSpecs(options, plan, orgSets), orgs)
   const log = followLog(options)
   // the coordinator's own event loop, which follows the log and writes
   const delay = monitorEventLoopDelay({ resolution: 10 })
