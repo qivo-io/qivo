@@ -102,53 +102,22 @@ import {
  *
  * `reads` caps the request's reads as Convex counts them, the reader's own
  * access rows included (lib/viewReads.ts viewBudget), the same as the
- * Board's (lib/board.ts BOARD.reads), keeping room under Convex's limits for
- * what one step reads past the guard's last look. Measured under
+ * Board's (lib/board.ts BOARD.reads), keeping room under Convex's limits
+ * for what one step reads past the guard's last look.
+ * tests/roadmapRead.test.ts ("real limits") logs what each case reads under
  * convex-test's transaction limits with rows as the app writes them, in
- * ordinary text, data from before the rule of one level
- * (tests/roadmapRead.test.ts, real limits), in ranges, documents and MiB, on
- * 5 November 2026, each case one figure at its design size, or the figures
- * one read takes together at their sum:
+ * ordinary text and data from before the rule of one level, each case one
+ * figure at its design size, or the figures one read takes together at
+ * their sum, such as a project's open and Done tasks. The largest My view
+ * the ceiling allows raises the person's own tasks, a figure without a
+ * design size, to the ceiling that bounds them, and one more answers
+ * over_ceiling from the counts.
  *
- * - A project of 800 open and 200 Done tasks not yet archived, its two
- *   figures at their sum as the read takes both, over 3 sub-projects, one
- *   in ten open tasks a group and two in ten subtasks, three in five dated,
- *   the Done tasks dated over 26 weeks: 1,030, 1,195 and 0.71, in the
- *   default window (758 rows) and in one that holds every Done task (931
- *   rows). A search of it that 7 rows match: 61, 2,050 and 1.20.
- * - A project of 30 sub-projects with 20 open tasks each: 696, 873 and
- *   0.48, 570 rows.
- * - A sub-project of 300 open tasks beside two of 30: 313, 372 and 0.22
- *   for the sub-project, 379, 454 and 0.27 for its project.
- * - 200 Done tasks not yet archived beside 90 open ones over 3
- *   sub-projects: 308, 329 and 0.20 in a window that holds them all (284
- *   rows) and in one that holds none (84 rows).
- * - My view of 400 of the reader's own tasks over the 200 sub-projects
- *   their three teams share: 803, 1,239 and 0.55. A person in 5 teams, each
- *   sharing 20 sub-projects with one task of theirs: 298, 334 and 0.15.
- * - The largest My view the ceiling allows, which raises the person's own
- *   tasks, a figure without a design size, to the ceiling that bounds them:
- *   1,000 of the person's subtasks under 800 parents of others, every other
- *   figure everyday, the person in 3 teams that share 20 projects of 3
- *   sub-projects, 30 open tasks a sub-project: 2,785, 3,181 and 1.84. One
- *   more answers over_ceiling from the counts in 163 ranges.
- *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin's
- * Roadmap read cost the same as a standard user's with the same rows. Both
- * read the same ranges, documents and bytes, counted for the whole call
- * with its sign-in, and their JavaScript times differ only by run-to-run
- * noise. An everyday project read 114, 129 and 0.08 in 16 to 33 ms of
- * JavaScript quiet and at most 83 ms busy. A project of 800 open tasks over
- * 3 sub-projects read 824, 995 and 0.65 in the default window (731 rows),
- * in 37 to 71 ms quiet and at most 143 ms busy, once 572 ms in a further
- * busy session. The Board's largest My view (lib/board.ts BOARD, 1,000
- * subtasks under 1,000 parents over 21 sub-projects shared with 3 teams)
- * read 3,091, 3,196 and 1.87 in 98 to 166 ms quiet, once 769 ms in a
- * further quiet session that had storage stalls. Busy it took 203 to 323 ms
- * in one session and up to 552 ms in another, where Convex stopped one of
- * the standard user's calls at the 1 s it gives a query's own code, and
- * stayed under 0.44 s in a third.
+ * An organization admin's Roadmap read costs the same as a standard user's
+ * with the same rows. Beside busy loops on a local backend, a project of
+ * 800 open tasks and the Board's largest My view (lib/board.ts BOARD) have
+ * each passed 0.5 s of JavaScript, and Convex has stopped such a call at
+ * the 1 s it gives a query's own code.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks, as on the Board, and a group's facts
@@ -181,44 +150,35 @@ export const ROADMAP = {
  * `reads` is the Roadmap's. `tasks` caps the tasks of the parts the read
  * grows, the selected tasks with a span among them; past it Auto-move's
  * inputs answer over_budget, and the arrows between the selection's own
- * tasks stay. Measured as ROADMAP's are (tests/dependencies.test.ts, real
- * limits), at the everyday link share, 5 percent of tasks with a blocks
- * link, half of those to tasks of everyday projects elsewhere in the
- * organization, as the perf seed links its tasks (scripts/perf/server.mjs
- * `links`):
+ * tasks stay. tests/dependencies.test.ts ("real limits") logs what each
+ * case reads, measured as ROADMAP's are, at the everyday link share, 5
+ * percent of tasks with a blocks link, half of those to tasks of everyday
+ * projects elsewhere in the organization, as the perf seed links its tasks
+ * (scripts/perf/server.mjs `links`). Its cases are a project of 800 open
+ * and 200 Done tasks not yet archived over 3 sub-projects, its two figures
+ * at their sum, where the selection's group checks and the two link ranges
+ * of each of its tasks with a span, Done ones included, take most of the
+ * ranges, and My view of 400 of the reader's own tasks over 200
+ * sub-projects. Each task of a part outside the selection costs a few
+ * ranges, for its read by id, its group check, its two link ranges and its
+ * project's access, as the test's chains through everyday projects show.
  *
- * - A project of 800 open and 200 Done tasks not yet archived over 3
- *   sub-projects, its two figures at their sum, every Done task dated. 40
- *   open tasks hold a link, 20 to each other and 20 to tasks of 2 everyday
- *   projects of 90 tasks elsewhere, which hold their own share, and 10 Done
- *   ones, 5 to open tasks of the project and 5 to tasks elsewhere: 2,597,
- *   1,331 and 0.76, parts of 117 tasks. The selection's group checks and
- *   the two link ranges of each of its tasks with a span, Done ones
- *   included, take most of the ranges.
- * - My view of 400 of the reader's own tasks over 200 sub-projects, 20 of
- *   them linked, half to other people's tasks: 1,306, 871 and 0.41.
- * - Each task of a part outside the selection costs about 4.2 ranges, 3.3
- *   documents and 0.0015 MiB, for its read by id, its group check, its two
- *   link ranges and its project's access, measured over chains through 60
- *   and 120 tasks of everyday projects (470 and 721 ranges).
- *
- * So beside a project at its design size the parts may hold about 270
- * tasks outside the selection. A chain of 230 tasks through 6 everyday
- * projects, which brings 273 such tasks with their families, reads 3,577
- * ranges, 2,105 documents and 1.12 MiB whole, and one of 240 answers
- * over_budget. That is the measured size; past it the ranges run out and
- * Auto-move's inputs answer over_budget. `tasks` comes after it inside the
- * design size and bounds the bytes sent.
+ * So beside a project at its design size the parts may hold about 270 tasks
+ * outside the selection. A chain of 230 tasks through 6 everyday projects,
+ * which brings 273 such tasks with their families, answers whole, and one
+ * of 240 answers over_budget. That is the measured size; past it the ranges
+ * run out and Auto-move's inputs answer over_budget. `tasks` comes after it
+ * inside the design size and bounds the bytes sent.
  *
  * The owner chose on 1 November 2026 that a figure that depends on the day
  * or on workloads may answer unavailable past a measured size inside the
  * design size. Auto-move is a scheduling calculation over other tasks'
  * dates, and design-spec §9.2 asks to make such a calculation explicitly
  * unavailable rather than derive it from incomplete inputs, so its inputs
- * answer
- * over_budget past the size above, an agent decision of 5 November 2026
- * that borrows choice 1's measured and documented size. The design size has
- * no link figure, so the measured size uses the perf seed's share. */
+ * answer over_budget past the size above, an agent decision of 5 November
+ * 2026 that borrows choice 1's measured and documented size. The design
+ * size has no link figure, so the measured size uses the perf seed's
+ * share. */
 export const DEPENDENCIES = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   tasks: 2000,

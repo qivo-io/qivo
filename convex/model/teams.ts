@@ -506,14 +506,9 @@ export type TeamPickerAnswer =
  * keys are all written. It reads teams.by_org_name and nothing else: no
  * membership, count, share or profile.
  *
- * Timed on 8 November 2026 at 02fa0e0a on a local backend on Boat (8
- * vCPU), one call at a time, among 50 teams, for an admin and a guest
- * alike. The first batch of 25 read 6 ranges, 28 documents and 0.007 MiB
- * with the sign-in, and the second batch by its cursor read 6 ranges and
- * 27 documents. A search read every team, whether it found one or none, in
- * 5 ranges, 52 documents and 0.012 MiB. JavaScript took 8 to 51 ms quiet
- * and 11 to 65 ms beside eight busy loops. Among an everyday 10 teams it
- * read 5 ranges and 12 documents in 7 to 28 ms quiet and 11 to 56 ms busy.
+ * tests/teamSettings.test.ts ("at the design size") logs what a batch, the
+ * next batch and a search read among 50 teams, for an admin and a guest
+ * alike.
  */
 export async function teamPickerOf(
   ctx: QueryCtx,

@@ -21,17 +21,16 @@
  * nothing else depends on them (betterAuth/oauth.ts deleteSpentTokens), and
  * so do the hashes (REPLAY_HASH_KEEP_MS).
  *
- * Cost, measured on a local backend: a step of 100 expired sessions took
- * about 0.9 seconds, and each deleted session schedules one call that keeps
- * its older months (usage.ts keepSignIn). A step of 1,000 token rows or
- * hashes reads and deletes only those rows. A night with nothing to delete
- * is one call for each job, reading one index entry for sessions and two
- * for tokens and hashes. At 10,000 organizations of about ten people,
- * assuming each person leaves about one session a week to expire and one in
- * five refreshes an MCP connection about ten times a day, a night deletes
- * about 14,000 sessions in 140 steps with 14,000 month calls, and about
- * 400,000 token rows and 200,000 hashes in 600 steps: about 15,000 function
- * calls a night, or 450,000 a month. The hashes then hold about 31 days of
+ * Each deleted session schedules one call that keeps its older months
+ * (usage.ts keepSignIn), and a step of 1,000 token rows or hashes reads and
+ * deletes only those rows. A night with nothing to delete is one call for
+ * each job, reading one index entry for sessions and two for tokens and
+ * hashes. At 10,000 organizations of about ten people, assuming each person
+ * leaves about one session a week to expire and one in five refreshes an
+ * MCP connection about ten times a day, a night deletes about 14,000
+ * sessions in 140 steps with 14,000 month calls, and about 400,000 token
+ * rows and 200,000 hashes in 600 steps, about 15,000 function calls a
+ * night, or 450,000 a month. The hashes then hold about 31 days of
  * refreshes, about 6 million rows, where they grew without end before. */
 
 import { createFunctionHandle, makeFunctionReference } from 'convex/server'

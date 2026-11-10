@@ -90,24 +90,18 @@ export type NorthstarStep =
   | { kind: 'archive' }
   | { kind: 'counts' }
 
-/** The tasks and the comments one step writes at most. Measured on the
- * dataset, a task step of 15 wrote at most 93 documents and a comment step
- * of 15 read at most 268 and wrote at most 57, each with at most 224 index
- * ranges; the whole work in one transaction wrote about 1,400 documents
- * and took up to 2 s on a loaded machine. Comment counts
- * (model/commentLimits.ts) and the notices' inbox items
- * (model/inboxItems.ts), a range, a document read and a write for each
- * item a step touches, add to every step, so a step holds 12 tasks or 13
- * comments. Each seeded task and project also reads and writes its
- * used_ids row (lib/db.ts insertUsed), and a Northstar step's check of the
- * ids it writes reads that row once more (internal/marketingDemo.ts
- * assertReserved), two ranges and a write a task. In convex-test a
- * marketing call of one task step now uses at most 197 ranges, reads 143
- * documents and writes 135, one of a comment step at most 260 ranges, 293
- * documents read and 87 written, and a part of the reserved-id check at
- * most 243 ranges. convex/tests/marketingDemo.test.ts holds every call to
- * 300 index ranges, 350 documents read and 150 written, so a step is a
- * small part of Convex's 1 s mutation limit. */
+/** The tasks and the comments one step writes at most. The whole work in
+ * one transaction passes Convex's 1 s mutation limit on a loaded machine,
+ * so it runs in steps. Comment counts (model/commentLimits.ts) and the
+ * notices' inbox items (model/inboxItems.ts), a range, a document read and
+ * a write for each item a step touches, add to every step, so a step holds
+ * 12 tasks or 13 comments. Each seeded task and project also reads and
+ * writes its used_ids row (lib/db.ts insertUsed), and a Northstar step's
+ * check of the ids it writes reads that row once more
+ * (internal/marketingDemo.ts assertReserved), two ranges and a write a
+ * task. convex/tests/marketingDemo.test.ts holds every call to 300 index
+ * ranges, 350 documents read and 150 written, so a step is a small part of
+ * Convex's 1 s mutation limit. */
 export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */

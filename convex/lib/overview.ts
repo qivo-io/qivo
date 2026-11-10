@@ -150,85 +150,41 @@ export { type Figure, type Missing, WEEK_STARTS } from './viewLoads'
  *
  * `reads` caps each query's reads as Convex counts them, the reader's own
  * access rows included (lib/viewReads.ts viewBudget), the same as the
- * Board's (lib/board.ts BOARD.reads), keeping 4 MiB, 8,000 documents and 496
- * index ranges under Convex's limits for what one step reads past the
- * guard's last look. Measured on 2 November 2026 under convex-test's
- * transaction limits with rows as the app writes them, ordinary titles and
- * names, data from before the rule of one level (tests/overview.test.ts,
- * real limits), in ranges, documents and MiB:
+ * Board's (lib/board.ts BOARD.reads), keeping 4 MiB, 8,000 documents and
+ * 496 index ranges under Convex's limits for what one step reads past the
+ * guard's last look. tests/overview.test.ts ("real limits") logs what the
+ * summary, the projection and the first At-risk and Paused batches read
+ * under convex-test's transaction limits, with rows as the app writes them,
+ * ordinary titles and names and data from before the rule of one level, one
+ * figure at its design size a case. Overdue costs about one range for each
+ * task due before the day, and with `reads.ranges` lowered it stops and
+ * answers unavailable while the counts stay whole.
  *
- * - One sub-project of 300 tasks, every dated one due before the day,
- *   Done ones and groups included: the summary 316, 371 and 0.25, whole.
- *   With `reads.ranges` lowered to 200 its Overdue stops there and answers
- *   unavailable, while its counts stay whole; Overdue costs about one
- *   range for each task due before the day. A first At-risk batch reads
- *   41, 49 and 0.03 there, a first Paused batch 27, 30 and 0.02. On 1
- *   November 2026, at the text caps, 4,000 such tasks stopped Overdue at
- *   the 3,600 ranges and 2,000 answered whole, past the design size.
- * - 600 tasks over a project of 30 sub-projects that a team of the reader
- *   shares: the summary 549, 605 and 0.36, the projection 217, 125 and
- *   0.08, a first At-risk batch 166, 352 and 0.23, a first Paused batch
- *   158, 140 and 0.08.
- * - My view of 400 of the reader's own tasks over the 200 sub-projects
- *   their three teams share: the summary 529, 967 and 0.37, the projection
- *   581, 625 and 0.26, a first At-risk batch 113 ranges and a first Paused
- *   batch 126.
+ * tests/overviewHealth.test.ts ("real limits") logs what the health table
+ * (readHealth) reads the same way, sorted by Delayed and then by Name,
+ * every figure given in each case. Sorted by Name it judges only the rows
+ * it answers.
  *
- * The health table (readHealth), measured on 3 November 2026 the same way
- * (tests/overviewHealth.test.ts, real limits), sorted by Delayed and then
- * by Name, every figure given in each case:
+ * Delayed and Slipping read the loads of the owners the order needs, so, by
+ * the owner's rule of 1 November 2026 for figures that follow workloads,
+ * they answer unavailable past this measured size inside the design size.
+ * An everyday project's 10 owners hold the organization's open tasks, half
+ * of them scheduled. Beside the project's own 90, those tasks are in
+ * sub-projects of 30 open tasks, three to a project, so each owner's
+ * scheduled work spans every sub-project (the on-demand cases of
+ * tests/overviewHealth.test.ts, QIVO_HEALTH_ORG_OPEN=1, which log what each
+ * size reads). Up to 6,000 such tasks answer whole. From 6,100 each owner's
+ * scheduled work is in more than the 200 live projects the owner reader
+ * reads for one owner (lib/ownerLoads.ts OWNER_LOADS.projects), and with
+ * that bound raised the owners' loads pass the reader's room for one
+ * organization's owners there too (OWNER_LOADS.call, 2,000 ranges). The
+ * rows then answer `loads` and the table sorts by name. overview.risk and
+ * the At-risk list read the same loads.
  *
- * - 600 tasks over a project of 30 sub-projects that a team of the reader
- *   shares: 1,133, 1,283 and 0.81 by Delayed, 713, 803 and 0.49 by Name,
- *   which judges only the 10 rows it answers.
- * - A project of 3 sub-projects with 800 open tasks: 1,247, 1,492 and 1.0
- *   either way, as every row is in the answer.
- * - One sub-project of 300 open tasks beside two of 30: 602, 693 and 0.46.
- * - 200 Done tasks not yet archived beside 90 open ones: 410, 410 and 0.27.
- * - My view of 400 of the reader's own tasks over the 200 sub-projects of
- *   67 projects: 1,315, 1,917 and 0.94 by Delayed, 975, 1,917 and 0.94 by
- *   Name.
- * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
- *   422, 282 and 0.15.
- *
- * Delayed and Slipping read the loads of the owners the order needs, so,
- * by the owner's rule of 1 November 2026 for figures that follow
- * workloads, they answer unavailable past this measured size inside the
- * design size. An everyday project's 10 owners hold the organization's
- * open tasks, half of them scheduled. Beside the project's own 90, those
- * tasks are in sub-projects of 30 open tasks, three to a project, so each
- * owner's scheduled work spans every sub-project (the on-demand cases,
- * QIVO_HEALTH_ORG_OPEN=1). 3,000 such tasks read 1,171, 2,183 and 1.39,
- * 5,000 read 1,792, 3,536 and 2.25 and 6,000 read 2,104, 4,216 and 2.69,
- * whole. From 6,100 each owner's scheduled work is in more than the 200
- * live projects the owner reader reads for one owner (lib/ownerLoads.ts
- * OWNER_LOADS.projects), and with that bound raised the owners' loads pass
- * the reader's room for one organization's owners there too
- * (OWNER_LOADS.call, 2,000 ranges). The rows then answer `loads` and the
- * table sorts by name. overview.risk and the At-risk list read the same
- * loads.
- *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, with the Overview
- * suites' task mix (due dates, reviewers, pauses and delay tracking), an
- * organization admin's Overview read cost the same as a standard user's
- * with the same rows. Both read the same ranges, documents and bytes,
- * counted for the whole call with its sign-in, and their JavaScript times
- * differ only by run-to-run noise. An everyday project's summary read 58,
- * 57 and 0.03 in 11 to 31 ms of JavaScript quiet and at most 90 ms busy,
- * and its health table 774, 1,336 and 0.87 in 50 to 161 ms quiet and at
- * most 283 ms busy. A project of 800 open tasks over 3 sub-projects read
- * 205, 212 and 0.14 for the summary, in 20 to 51 ms quiet and at most 78 ms
- * busy, and 1,521, 2,647 and 1.76 for the health table, sorted by Name or
- * by Delayed alike, in 91 to 182 ms quiet, with one of the standard user's
- * calls at 555 ms, and 164 to 316 ms busy. Both health tables pass the 422,
- * 282 and 0.15 and the 1,247, 1,492 and 1.0 above because the same 10
- * people own every open task of the organization, its 1,890 everyday ones
- * included, the shape of the on-demand cases above. The Board's largest My
- * view (lib/board.ts BOARD, 1,000 subtasks under 1,000 parents over 21
- * sub-projects shared with 3 teams) read 300, 395 and 0.19 for the summary
- * and 1,103, 1,228 and 0.72 for the health table, in at most 208 ms quiet
- * and 216 ms busy.
+ * An organization admin's Overview read costs the same as a standard user's
+ * with the same rows. A health table reads more where the same few people
+ * own every open task of the organization, the shape of the on-demand cases
+ * above.
  *
  * `batch` is how many rows a list batch holds, the page's Load more step,
  * and `split` how many a batch with a fixed end may hold before it answers

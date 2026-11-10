@@ -79,45 +79,21 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * `reads` caps the request's reads as Convex counts them, the reader's own
  * access rows included (lib/viewReads.ts viewBudget), and keeps 4 MiB,
  * 8,000 documents and 496 index ranges under Convex's 16 MiB, 32,000 and
- * 4,096 for what one step reads past the guard's last look. Measured under
- * convex-test's transaction limits with rows as the app writes them, each
+ * 4,096 for what one step reads past the guard's last look.
+ * tests/board.test.ts ("real limits") logs what each case reads under
+ * convex-test's transaction limits, with rows as the app writes them, each
  * task with its creator, reporter and status stamp and each team share and
- * membership with its copy of a name key, in ordinary text: titles of about
- * 80 characters and, where the Board reads them, description rows of 390
- * characters, the measured average (tests/board.test.ts, real limits), in
- * ranges, documents and MiB, on 2 November 2026. On 31 October 2026 a real
+ * membership with its copy of a name key, in ordinary text. Its cases are a
+ * project at its design size, under Focus too, My view over two seats, the
+ * largest My view the ceiling allows and a search over a project's 800 open
+ * tasks, and each reads inside these budgets. On 31 October 2026 a real
  * backend, with rows the app's own writers made, read the bytes the tests
- * of that day measured, then at the text caps, to within 1 percent.
+ * of that day measured, at ordinary text and at the text caps.
  *
- * - A project at its design size, 800 open and 200 Done tasks over its 30
- *   sub-projects: 1,093, 1,062 and 0.57, under Focus 923, 862 and 0.46.
- * - My view of 600 and 400 tasks in two seats over four sub-projects:
- *   1,039, 1,023 and 0.60.
- * - The largest My view the ceiling allows, 1,000 of the person's subtasks
- *   under 1,000 parents over 21 sub-projects of 3 projects, each shared
- *   with each of the person's 3 teams, their parents read by id: 3,100,
- *   3,109 and 1.84, under Focus 3,099. One of those projects at its design
- *   size, 800 open and 200 Done tasks over 7 sub-projects with 342 of the
- *   groups among them: 1,072, 1,429 and 0.83, under Focus 872.
- * - A search over a project's 800 open tasks, the design size: 45, 1,629
- *   and 0.91.
- *
- * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
- * in one quiet session and one beside 8 busy loops, an organization admin's
- * Board read cost the same as a standard user's with the same rows. Both
- * read the same ranges, documents and bytes, counted for the whole call
- * with its sign-in, and their JavaScript times differ only by run-to-run
- * noise. An everyday project of 90 open tasks reached through a team share
- * read 108, 116 and 0.07 in 15 to 32 ms of JavaScript quiet and at most
- * 102 ms busy, and a project of 800 open tasks over 3 sub-projects 818, 982
- * and 0.65 in 39 to 65 ms quiet and at most 129 ms busy. The largest My
- * view above (1,000 subtasks under 1,000 parents, 21 sub-projects shared
- * with 3 teams) read 3,087, 3,110 and 1.84 in 118 to 165 ms quiet, once
- * 870 ms in a further quiet session that had storage stalls. In the busy
- * session above and a further busy one its JavaScript passed 0.5 s, the
- * admin's in both and the standard user's in the second, and Convex stopped
- * two of the admin's calls at the 1 s it gives a query's own code. A third
- * busy session kept it under 0.44 s.
+ * An organization admin's Board read costs the same as a standard user's
+ * with the same rows. Beside busy loops on a local backend, the largest My
+ * view above has passed 0.5 s of JavaScript, and Convex has stopped such a
+ * call at the 1 s it gives a query's own code.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
@@ -125,21 +101,19 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * under the rule of one level (lib/viewReads.ts ONE_LEVEL_SINCE); data
  * stored before it gets a check of each such subtask, which a legacy nested
  * group may be, a range each, and the largest My view, whose fixture data
- * predates the rule, comes within 500 of the 3,600 ranges. At its 3.1
- * ranges a card, ranges would run out at about 1,150 cards under as many
- * parents; the ceiling comes before.
+ * predates the rule, comes closest to `reads.ranges`, and at its ranges a
+ * card the ceiling stops such a Board before its ranges run out.
  *
  * Bytes stop a selection whose tasks a filter must read whole: the search,
  * the people filter, Priority and Stale read every task of the selection's
  * ranges before they drop any (`take`), where My tasks and Focus read only
  * their own ranges. At the design size each fits with room to spare, the
- * search over a project's 800 open tasks above in 0.91 of the 12 MiB. Past
- * it, a selection of thousands of tasks or candidates with long texts
- * reaches the budget, and a filter that keeps subtasks under many parents
- * sooner, as it reads each such parent's subtasks again. Each answers
- * over_budget, and the owner chose on 31 October 2026 that the Board then
- * asks the person to narrow. The tests reach those answers by lowering
- * `reads`.
+ * search over a project's 800 open tasks above included. Past it, a
+ * selection of thousands of tasks or candidates with long texts reaches the
+ * budget, and a filter that keeps subtasks under many parents sooner, as it
+ * reads each such parent's subtasks again. Each answers over_budget, and
+ * the owner chose on 31 October 2026 that the Board then asks the person to
+ * narrow. The tests reach those answers by lowering `reads`.
  *
  * `context` caps the groups among the rows and the shown parents together,
  * the rows a Board holds beside its BOARD.ceiling cards. They count in

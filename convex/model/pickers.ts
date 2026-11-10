@@ -700,14 +700,8 @@ const FOLLOWERS_CURSOR =
  * The app reads it once a batch while the Add list is open and never
  * subscribes. The write checks again.
  *
- * Timed on 8 November 2026 at 02fa0e0a on a local backend on Boat (8
- * vCPU), one call at a time, among 1,000 people. A lead's or an admin's
- * first batch of 25 read 44 to 49 ranges, 946 to 956 documents and
- * 0.19 MiB with the sign-in, in 13 to 52 ms of JavaScript quiet and 20 to
- * 80 ms beside eight busy loops. A search that walked all 1,000 people read 18
- * to 19 ranges, 1,912 documents and 0.644 MiB in 23 to 72 ms quiet and 42
- * to 93 ms busy, with totals of 88 to 236 ms. A Viewer is refused after 16
- * ranges and 12 documents.
+ * tests/subscribers.test.ts answers the Add list a batch at a time at the
+ * design size's people.
  */
 export async function followerChoicesOf(
   ctx: QueryCtx,

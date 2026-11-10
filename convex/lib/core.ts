@@ -957,11 +957,10 @@ export async function listCommentsCore(
 /** The names of the people a page of comments names, its authors and
  * editors, each profile read by id once, at most two a comment, never the
  * organization's roster. A profile of another organization is left out, so
- * its name reads null, as a removed person's does. Measured on 6 November
- * 2026 in convex/tests/taskRelated.test.ts ("at the design size"): a REST or
- * MCP page of 50 comments by 50 authors in an organization of 1,000 people
- * reads 66 ranges, 111 documents and 0.03 MB, where the roster read 1,000
- * profiles. */
+ * its name reads null, as a removed person's does.
+ * convex/tests/taskRelated.test.ts ("reads at the design size") logs what a
+ * REST or MCP page of 50 comments by 50 authors reads in an organization of
+ * 1,000 people. */
 export async function commentNames(
   ctx: QueryCtx,
   me: Caller,
@@ -1853,50 +1852,39 @@ export const relatedTooMany = (noun: string): string =>
 
 /** The most rows of one related list a read takes whole before it refuses
  * the list (relatedTooMany): twice the stored limits of links, followers,
- * attachments and an active task's subtasks (LIMITS, 100 each), room for data
- * stored before those limits, as lib/taskWindow.ts TASK_WINDOW's rows hold.
- * Both link ranges count against one bound, as model/links.ts linksFullAt
- * counts them. Such a read takes the whole set to answer one page, every link's
- * other task and every follower's profile included, the documented exception to
- * reading in order (design specification row 432), which the stored limits
- * bound. Measured on 6 November 2026 in convex/tests/taskRelated.test.ts ("at
- * the design size"), each call whole: a list call at limit 200 on a task at the
- * four per-task limits reads at most 117 ranges, 208 documents and 0.08 MB (the
- * links, each other task read by id; the followers 110 ranges and 205
- * documents), and a links page whose 100 other tasks sit in 100 sub-projects
- * the caller reads by grant 406 ranges, 568 documents and 0.16 MB. Tests lower
- * it. */
+ * attachments and an active task's subtasks (LIMITS, 100 each), room for
+ * data stored before those limits, as lib/taskWindow.ts TASK_WINDOW's rows
+ * hold. Both link ranges count against one bound, as model/links.ts
+ * linksFullAt counts them. Such a read takes the whole set to answer one
+ * page, every link's other task and every follower's profile included, the
+ * documented exception to reading in order (design specification row 432),
+ * which the stored limits bound. convex/tests/taskRelated.test.ts ("reads
+ * at the design size") logs what a call reads. Tests lower it. */
 export const RELATED_READ = { rows: 200 }
 
-/** What one page of an archived task's subtasks reads past the call's
- * start (subtasksByNumber): index ranges, documents and bytes as Convex
- * counts them, a subtask the caller may not be shown at
- * lib/limits.ts TASK_ROW_MAX_BYTES, and leaving out the caller's own
- * grants, memberships and team shares, which the request's limits hold
- * (lib/access.ts accessOf shared). Its ranges hold a question of up to six
- * ranges (lib/access.ts OWN_READS) about each of 70 sub-projects, a family's
- * 30 live and 40 archived at the design size, beside the index's. A page
- * reads its first row whatever it says, and one the budget ends carries a
- * cursor. Measured on 6 November 2026 in convex/tests/taskRelated.test.ts
- * ("at the design size"), the call whole: a page at limit 200 of an
- * archived group whose 210 subtasks sit in 70 sub-projects, 30 live and 40
- * archived, reads 145 ranges, 279 documents and 0.12 MB. Tests lower it. */
+/** What one page of an archived task's subtasks reads past the call's start
+ * (subtasksByNumber): index ranges, documents and bytes as Convex counts
+ * them, a subtask the caller may not be shown at lib/limits.ts
+ * TASK_ROW_MAX_BYTES, and leaving out the caller's own grants, memberships
+ * and team shares, which the request's limits hold (lib/access.ts accessOf
+ * shared). Its ranges hold a question of up to six ranges (lib/access.ts
+ * OWN_READS) about each of 70 sub-projects, a family's 30 live and 40
+ * archived at the design size, beside the index's. A page reads its first
+ * row whatever it says, and one the budget ends carries a cursor.
+ * convex/tests/taskRelated.test.ts ("reads at the design size") logs what a
+ * page of an archived group whose subtasks sit in those 70 sub-projects
+ * reads. Tests lower it. */
 export const SUBTASK_PAGE: ReadCeiling = { ranges: 512, documents: 2000, bytes: 4 * MIB }
 
 /** What the first pages of a task's details that the walk does not give
- * read together (taskOut): the followers, the links with their other
- * tasks, the attachments and, for an archived task, its subtasks, counted
- * as SUBTASK_PAGE counts, from before the first of them. A list the
- * details have no room for answers no rows and a cursor at its start,
- * which its list call reads with its own request. So the walk and the
- * delay keep their room whatever the lists hold. Measured on 6 November
- * 2026 in convex/tests/taskRelated.test.ts ("at the design size"), as the
- * difference from a read with no room for them: an active group at the
- * four per-task limits reads 205 ranges, 501 documents and 0.16 MB of it
- * (the whole read 346 ranges, 651 documents and 0.22 MB), and a task whose
- * 100 links reach 100 sub-projects the caller reads by grant 399 ranges,
- * 563 documents and 0.16 MB (the whole read 415 ranges and 571
- * documents). Tests lower it. */
+ * read together (taskOut): the followers, the links with their other tasks,
+ * the attachments and, for an archived task, its subtasks, counted as
+ * SUBTASK_PAGE counts, from before the first of them. A list the details
+ * have no room for answers no rows and a cursor at its start, which its
+ * list call reads with its own request. So the walk and the delay keep
+ * their room whatever the lists hold. convex/tests/taskRelated.test.ts
+ * ("reads at the design size") logs what the first pages read, as the
+ * difference from a read with no room for them. Tests lower it. */
 export const TASK_DETAILS: ReadCeiling = { ranges: 1000, documents: 2000, bytes: 4 * MIB }
 
 /* A list's position: the key and tie of lib/namedPages.ts, compared with
