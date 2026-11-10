@@ -1437,6 +1437,26 @@ describe("a phase's figures", () => {
     // the rename's two answers are the most one change re-sent
     expect(figures.changes.map((change) => change.answers)).toEqual([2, 0])
     expect(figures.asked_at_once).toBe(2)
+    expect(figures.failed_by_kind).toEqual({})
+  })
+
+  it("leaves a refused change out of its kind's re-sends and counts it apart", () => {
+    const figures = {
+      changes: [
+        { id: 0, kind: 'move', error: null },
+        { id: 1, kind: 'move', error: 'This person cannot hold tasks in this project.' },
+      ],
+      _changes: [{ id: 0, per_client: { 0: 700, 1: 700 }, queries: {} }],
+    }
+    attachResends(figures, 2)
+    // the refused move's zero bytes would have halved the spread's p50
+    expect(figures.bytes_per_client_per_change.move).toEqual({
+      count: 2,
+      p50: 700,
+      p99: 700,
+      max: 700,
+    })
+    expect(figures.failed_by_kind).toEqual({ move: 1 })
   })
 
   it('fires the pacing trigger on the modelled hosted load, a call over the line or a slow reconnect, never on a local overload', () => {

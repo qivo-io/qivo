@@ -418,9 +418,12 @@ export function phaseFigures(entries, seconds, reports, extra) {
     re-send updated with the answers they hold, and to the phase the bytes
     per client per change by kind of change and the most answers one change
     re-sent (`asked_at_once`, the change's reruns the pacing trigger's model
-    reads, hostedModel). */
+    reads, hostedModel). A change the server refused (its `error`) re-sent
+    nothing because nothing changed, so it stays out of the kinds' spreads
+    and is counted apart in `failed_by_kind`. */
 export function attachResends(figures, clients) {
   const byKind = {}
+  const failed = {}
   let most = 0
   for (const change of figures.changes) {
     const slots = figures._changes.filter((slot) => slot.id === change.id)
@@ -433,11 +436,13 @@ export function attachResends(figures, clients) {
     change.updated = mergeCounts(slots.map((slot) => slot.queries))
     change.answers = Object.values(change.updated).reduce((all, entry) => all + entry.updates, 0)
     most = Math.max(most, change.answers)
-    byKind[change.kind] = [...(byKind[change.kind] ?? []), ...bytes]
+    if (change.error) failed[change.kind] = (failed[change.kind] ?? 0) + 1
+    else byKind[change.kind] = [...(byKind[change.kind] ?? []), ...bytes]
   }
   figures.bytes_per_client_per_change = Object.fromEntries(
     Object.entries(byKind).map(([kind, bytes]) => [kind, spread(bytes)]),
   )
+  figures.failed_by_kind = failed
   figures.asked_at_once = most
 }
 
@@ -593,7 +598,7 @@ export function tabsIdlePerMinute(idle) {
     ({ index, view, perChange }, perChange a Map from a change's id to the
     { bytes, queries } the tab received after it): each change's per-tab
     re-send, added to the change, and the spread of each tab's and each
-    view's bytes by kind of change. */
+    view's bytes by kind of change, a change the server refused left out. */
 export function tabResends(changes, tabs) {
   const byTab = {}
   const byView = {}
@@ -604,6 +609,8 @@ export function tabResends(changes, tabs) {
       bytes: tab.perChange.get(done.id)?.bytes ?? 0,
       queries: tab.perChange.get(done.id)?.queries ?? {},
     }))
+    // a refused change re-sent nothing, so it stays out of the spreads, as in attachResends
+    if (done.error) continue
     byTab[done.kind] ??= {}
     byView[done.kind] ??= {}
     for (const tab of done.resent_per_tab) {

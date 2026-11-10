@@ -1885,18 +1885,12 @@ async function runChanges(options, plan, boardSet, workers, log) {
     (task) => task.status !== 'done' && !task.has_subtasks && !task.parent_id,
   )
   if (open.length < 2) throw new Error('the recorded Board shows fewer than 2 open tasks to change')
-  const [renamed, moved] = open
+  const org = plan.org_id
+  const [renamed] = open
+  const { task: moved, home, sibling } = await movableTask(writer, plan, open.slice(1))
   // the comments go to other tasks in turn, enough that the comment rule
   // refuses none (changes.mjs commentTargets)
-  const commented = commentTargets(open.slice(2))
-  const home = moved.project_id
-  const sibling = plan.projects
-    .flatMap((project) =>
-      project.children.some((child) => child.id === home) ? project.children : [],
-    )
-    .find((child) => child.id !== home)
-  if (!sibling) throw new Error('the Board sub-project has no sibling to move a task to')
-  const org = plan.org_id
+  const commented = commentTargets(open.filter((task) => task !== renamed && task !== moved))
   const original = { title: renamed.title, status: renamed.status }
   let away = false
   let status = original.status
@@ -2017,6 +2011,66 @@ async function runChanges(options, plan, boardSet, workers, log) {
       }
     }),
   }
+}
+
+/** The first of Board rows `tasks` that the changes phase can move to a
+    sibling sub-project and back, as `writer` (Nora) reads them: one whose
+    assignee and reviewer, where it has them, the sibling's own picker
+    offers (pickers:canOwn on one of the sibling's top-level tasks), since
+    a move refuses a holder who cannot hold tasks in the destination
+    (convex/model/issues.ts assertAssigneeRule), as a person whose only
+    Edit is a team shared with the Board's own sub-project cannot. Answers
+    the task, its sub-project and the sibling. Throws when none can. */
+async function movableTask(writer, plan, tasks) {
+  const org = plan.org_id
+  const siblingOf = (home) =>
+    plan.projects
+      .flatMap((project) =>
+        project.children.some((child) => child.id === home) ? project.children : [],
+      )
+      .find((child) => child.id !== home)
+  // a top-level task of each sibling, whose picker judges a holder there
+  const probes = new Map()
+  const probeOf = async (sibling) => {
+    if (!probes.has(sibling.id)) {
+      const answer = await retry(() =>
+        writer.query(ref('tasks:board'), {
+          scope: { kind: 'project', org_id: org, project_id: sibling.id },
+          filters: BOARD_FILTERS,
+        }),
+      )
+      probes.set(
+        sibling.id,
+        answer.state === 'ok' ? (answer.rows.find((row) => !row.parent_id)?.id ?? null) : null,
+      )
+    }
+    return probes.get(sibling.id)
+  }
+  for (const task of tasks) {
+    const sibling = siblingOf(task.project_id)
+    if (!sibling) continue
+    const holders = [
+      ['assignee', task.assignee_id],
+      ['reviewer', task.reviewer_id],
+    ].filter(([, id]) => typeof id === 'string')
+    let fits = true
+    for (const [field, id] of holders) {
+      const probe = await probeOf(sibling)
+      const answer = probe
+        ? await retry(() =>
+            writer.query(ref('pickers:canOwn'), { org_id: org, issue_id: probe, field, ids: [id] }),
+          )
+        : null
+      if (answer?.state !== 'ready' || answer.rows[0]?.eligible !== true) {
+        fits = false
+        break
+      }
+    }
+    if (fits) return { task, home: task.project_id, sibling }
+  }
+  throw new Error(
+    "no open task of the recorded Board can move to a sibling sub-project and back: the siblings refuse each one's assignee or reviewer, or the Board's sub-project has no sibling",
+  )
 }
 
 /** One real tab of the Board at `url` in the browser, hidden, whose
