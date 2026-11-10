@@ -342,12 +342,14 @@ describe('account appearance preferences', () => {
     await expect(
       owner.caller.query(api.appearance.get, { auth_user_id: other.id } as never),
     ).rejects.toThrow()
+    // a valid name and size, so the client's storage_id is all it refuses
     await expect(
       owner.caller.mutation(api.appearance.createUpload, {
         name: 'Lake.jpg',
+        size: 1024,
         storage_id: 'known-loose-file',
       } as never),
-    ).rejects.toThrow()
+    ).rejects.toThrow('Unexpected field `storage_id`')
     expect(await settings(owner.caller)).toEqual(DEFAULT)
     expect(await settings(other.caller)).toEqual(DEFAULT)
     await noLibraryChanges(t)
