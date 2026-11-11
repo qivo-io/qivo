@@ -114,10 +114,7 @@ import {
  * over_ceiling from the counts.
  *
  * An organization admin's Roadmap read costs the same as a standard user's
- * with the same rows. Beside busy loops on a local backend, a project of
- * 800 open tasks and the Board's largest My view (lib/board.ts BOARD) have
- * each passed 0.5 s of JavaScript, and Convex has stopped such a call at
- * the 1 s it gives a query's own code.
+ * with the same rows.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks, as on the Board, and a group's facts

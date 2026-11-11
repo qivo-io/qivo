@@ -532,7 +532,8 @@ says to keep Qivo open, then checks over REST that all 26 are live. It
 deletes a sub-project of its own in the app, finds it among the deleted
 projects without a scope, and deletes it for good once **Delete now**
 counts no earlier items (`ui/deleted-items`). The
-cleanup deletes the 26 tasks again with its project. Against a backend from
+cleanup deletes the 26 tasks again with its project, and then deletes that
+project's Deleted item for good with them. Against a backend from
 before v0.1.131 that step fails.
 Next it makes a task of its own and deletes it over REST, then, with a file
 of the browser's origin private file system standing in for the save
@@ -553,7 +554,8 @@ in the archive, or, when it failed before it read the archive, in
 **Deleted items** searched by the task's tagged title, once the search
 answered and only as the one row with the task's key and title, so it never
 deletes another item. A purge that is refused or fails, or that finds no
-such row, is a NOTE, and the item then stays 30 days. Against a backend before the release after v0.1.161, whose record
+such row, is a NOTE, and the item then goes with the run project's own
+Deleted item in the cleanup. Against a backend before the release after v0.1.161, whose record
 takes no export id, that step fails.
 It makes a sub-project of its own under the run project, led by Leo
 Martins, with a task in it, picks the task's assignee (the run's Standard
@@ -635,9 +637,16 @@ run could not make its archived tasks.
 Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
-projects and tasks then wait in Deleted items for 30 days, where an admin can
-delete them for good, and OAuth client registrations stay, because they
-cannot be deleted. Run it from the application checkout through the private
+projects and tasks go to Deleted items, where it then deletes them for good
+as Nora, an organization admin, in **Settings → Projects → Deleted items**
+with **All projects** of her organization chosen, projects first and tasks
+after them, and checks that the page lists nothing with its tag
+(`cleanup/app/purge-deleted`). It deletes only rows whose shown name starts
+with the tag and leaves a row that shows no name. A deployment whose app
+has no Deleted items it can read reports that step as `SKIP`, and its
+deleted projects and tasks then stay until the deployment's own expiry.
+OAuth client registrations stay, because they cannot be deleted. Run it
+from the application checkout through the private
 staging helper, which supplies the deployment, the fixture credentials and
 the protection bypass:
 
@@ -686,8 +695,13 @@ set, because Playwright's and Node's debug output would bypass that. If a
 run is killed before it cleans up, `--cleanup --run <hex>` with the six digits
 of its tag removes what it left, and `--cleanup` alone removes every run's
 leftovers, including the records of a run that is still going, so use it
-only while no other run is active. Cleanup removes the run's tokens, agent
-keys and OAuth connections first, through the app alone, so they go even when
+only while no other run is active. Both delete the tag's Deleted items for
+good after its projects and tasks went, and the last check for leftovers
+reads Deleted items too. A `--cleanup` that meets more Deleted items than
+it can delete in ten minutes stops there with `FAIL cleanup/sweep`, and
+the next `--cleanup` goes on where it stopped. Cleanup removes the run's
+tokens, agent keys and OAuth connections first, through the app alone, so
+they go even when
 the REST API fails, and it reports `FAIL cleanup/sweep` with what is left
 whenever anything remains. If the browser closed during the run, the cleanup
 opens it and signs in again first. Its temporary cleanup token ends after a

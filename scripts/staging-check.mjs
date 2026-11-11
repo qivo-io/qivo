@@ -297,7 +297,10 @@
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
  * refused, and removes everything it made, also after a failure
- * (try/finally, and --cleanup for a later sweep).
+ * (try/finally, and --cleanup for a later sweep). The projects and tasks it
+ * deletes go to Deleted items, where it deletes them for good as Nora, an
+ * organization admin, and checks that Deleted items lists nothing with its
+ * tag (cleanup/app/purge-deleted); the sweep does the same.
  *
  * The billing pause checks need an organization whose billing pauses
  * editing. Staging runs without billing, so they report SKIP there. A local
@@ -2191,6 +2194,366 @@ export async function appBatches(what, read) {
   return fail(`the app listed more than ${APP_BATCHES_MAX} batches of ${what}`)
 }
 
+/** How long one deletion of Deleted items for good (purgeDeleted) and one
+ *  look for what is left there (deletedLeft) may take, from opening the
+ *  page to its last call. A sweep of every run's leftovers that meets
+ *  more items than fit stops there and says so, and the next --cleanup
+ *  goes on where it stopped. */
+export const DELETED_PURGE_MS = 10 * 60_000
+
+/** What one page of Settings › Projects › Deleted items holds for `tag` (a
+ *  run's tag, or TAG_ANY), from `rows` as the page shows them, each
+ *  `{ id, hit, kind, key, title, state, menu }`: its item id (null for a
+ *  line the page lists inside another item), whether it is such a line,
+ *  its kind, its task or project key, its title or name (null when the row
+ *  shows none, as for a task whose project the admin cannot read), its
+ *  state and whether its menu offers Delete now. A row counts as the tag's
+ *  only by its shown name (hasTag), never by the search that listed it.
+ *  It answers
+ *  - `purge`, the tag's rows Delete now takes now, ready or stuck, once
+ *    each;
+ *  - `waiting`, the tag's rows that still move into Deleted items or
+ *    restore, which Delete now refuses until they are ready;
+ *  - `blocked`, the tag's rows whose menu offers no Delete now, as in an
+ *    organization that is read-only;
+ *  - `inside`, the tag's lines the page lists inside another item, with
+ *    or without the tag, which only that item's own deletion takes;
+ *  - `unnamed`, the rows that show no name, which nobody can tell from
+ *    another run's or a person's, so nothing deletes them. */
+export function deletedRowsOf(rows, tag) {
+  const out = { purge: [], waiting: [], blocked: [], inside: [], unnamed: [] }
+  const seen = new Set()
+  for (const row of rows) {
+    if (row.hit) {
+      if (hasTag(tag, row.title)) out.inside.push(row)
+      continue
+    }
+    if (!row.id || typeof row.title !== 'string') {
+      out.unnamed.push(row)
+      continue
+    }
+    if (!hasTag(tag, row.title) || seen.has(row.id)) continue
+    seen.add(row.id)
+    if (row.state === 'moving' || row.state === 'restoring') out.waiting.push(row)
+    else if ((row.state === 'ready' || row.state === 'stuck') && row.menu) out.purge.push(row)
+    else out.blocked.push(row)
+  }
+  return out
+}
+
+/** What one Delete now of the ids `sent` did, from the store's answer
+ *  `outcome` (P.purgeDeletedItems): `done`, the ids deleted for good,
+ *  `again`, those refused while they move or restore, which go again once
+ *  they are ready, `gone`, those the server no longer holds, and `problem`,
+ *  a line that is safe to print for anything else, or null. */
+export function purgeAnswerOf(outcome, sent) {
+  if (!outcome || !Array.isArray(outcome.done))
+    return { done: [], again: [], gone: [], problem: 'the app gave no answer to Delete now' }
+  const done = new Set(outcome.done)
+  const again = []
+  const gone = []
+  const refused = []
+  for (const { id, reason } of outcome.refused ?? []) {
+    if (reason === 'moving' || reason === 'restoring') again.push(id)
+    else if (reason === 'not_found') gone.push(id)
+    else refused.push(reason)
+  }
+  const answered = new Set([...done, ...again, ...gone])
+  const unanswered = sent.filter(
+    (id) => !answered.has(id) && !(outcome.refused ?? []).some((r) => r.id === id),
+  )
+  let problem = null
+  if (outcome.error) problem = `Delete now answered “${outcome.error}”`
+  else if (refused.length)
+    problem = `Delete now refused ${refused.length} item(s): ${refused.join(', ')}`
+  else if (unanswered.length) problem = `Delete now did not answer for ${unanswered.length} item(s)`
+  return { done: sent.filter((id) => done.has(id)), again, gone, problem }
+}
+
+/** A Deleted items row's name in a line: a task's key and title, a
+ *  project's name. */
+const deletedName = (row) =>
+  row.kind === 'task' ? `task ${row.key} ${row.title}` : `project ${row.title}`
+
+/** Opens Settings › Projects › Deleted items as Nora with All projects of
+ *  her home organization as its scope, kind `kind` (All, Projects or Tasks)
+ *  and `search`, and waits for its answer. It answers null once the page
+ *  shows them, or the reason, safe to print, why this deployment has no
+ *  such page to read: an app without Delete now in its store, or a page
+ *  whose rows carry no title marks (before the release after v0.1.161),
+ *  whose rows nobody could tell apart. Fails when the page does not show
+ *  or does not take the scope, since an app that has Delete now has the
+ *  page, and a page that fails to load is no missing feature. */
+async function openDeletedItems(kind, search) {
+  const m = DELETED_ITEMS_MARKS
+  if (!(await evaluate(app, () => typeof window.PLANNER?.purgeDeletedItems === 'function')))
+    return 'the app has no Delete now'
+  await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
+    waitUntil: 'domcontentloaded',
+  })
+  expect(
+    await app
+      .locator(`[${m.page}]`)
+      .waitFor({ timeout: 60_000 })
+      .then(
+        () => true,
+        () => false,
+      ),
+    'the Deleted items page did not show within a minute',
+  )
+  const org = await evaluate(app, () => window.PLANNER.homeOrg)
+  const trigger = app.locator(`[${m.scope}]`)
+  await settledPicker(trigger)
+  await trigger.click()
+  const all = app.locator(`[data-project-pick-all="${org}"]`)
+  await all.waitFor({ timeout: 30_000 })
+  if ((await all.getAttribute('aria-checked')) !== 'true') await all.click()
+  const field = app.locator('[data-project-picker-search]')
+  if ((await field.count()) > 0) await field.press('Escape')
+  await field.waitFor({ state: 'detached', timeout: 10_000 })
+  await app.getByRole('radio', { name: kind, exact: true }).click()
+  await app.locator(`[${m.search}]`).fill(search)
+  // the page sends a search once typing rests, and a new filter opens its
+  // first page afresh, so what shows after that is the search's answer
+  await sleep(1000)
+  const page = await deletedPageNow()
+  expect(
+    ((await trigger.textContent()) ?? '').trim().startsWith('All projects') && !page.unscoped,
+    'Deleted items did not take All projects as its scope',
+  )
+  if (page.rows.some((row) => !row.hit) && !page.marked)
+    return 'its Deleted items rows carry no title marks'
+  return null
+}
+
+/** The page of Deleted items on screen once it has answered and no move
+ *  runs, with every folded run shown (Show all): its rows as
+ *  deletedRowsOf reads them, its end (lib/pagedList.ts PageEnd, `end` when
+ *  the page shows no end line), whether Next shows, whether its end line
+ *  offers Retry, whether it answered without a scope, and whether any row
+ *  carries a title mark. Fails when
+ *  the page does not settle within a minute. */
+async function deletedPageNow() {
+  const m = DELETED_ITEMS_MARKS
+  const read = () =>
+    evaluate(
+      app,
+      (m) => {
+        const list = document.querySelector(`[${m.state}]`)
+        const busy = document.querySelector(
+          `[${m.next}][aria-disabled], [${m.previous}][aria-disabled]`,
+        )
+        const endMark = document.querySelector(`[${m.end}]`)
+        const end = endMark?.getAttribute(m.end) ?? 'end'
+        // a page whose roles failed shows no end line
+        if (list?.getAttribute(m.state) === 'failed')
+          return {
+            rows: [],
+            end: 'failed',
+            next: false,
+            retry: true,
+            unscoped: false,
+            marked: true,
+          }
+        if (list?.getAttribute(m.state) !== 'ok' || busy || end === 'loading') return null
+        const folds = document.querySelectorAll(`[${m.showAll}]`)
+        if (folds.length > 0) {
+          for (const fold of folds) fold.click()
+          return null
+        }
+        const rows = [...document.querySelectorAll(`[${m.line}]`)].map((el) => {
+          const hit = el.getAttribute(m.hit)
+          const key = el.querySelector(`[${m.key}]`)
+          return {
+            id: el.getAttribute(m.row),
+            hit: hit !== null,
+            kind: key === null ? 'project' : 'task',
+            key: key?.textContent?.trim() ?? null,
+            title: el.querySelector(`[${m.title}]`)?.textContent?.trim() ?? null,
+            state: el.getAttribute(m.rowState),
+            menu: el.querySelector(`[${m.menu}]`) !== null,
+          }
+        })
+        return {
+          rows,
+          end,
+          next: document.querySelector(`[${m.next}]`) !== null,
+          retry: document.querySelector(`[${m.end}] [${m.retry}]`) !== null,
+          unscoped: document.querySelector(`[${m.note}="scope"]`) !== null,
+          marked: document.querySelector(`[${m.title}], [${m.hidden}]`) !== null,
+        }
+      },
+      m,
+    )
+  let page = null
+  expect(
+    await until(async () => {
+      page = await read()
+      return page !== null
+    }, 60_000),
+    'Deleted items did not settle within a minute',
+  )
+  return page
+}
+
+/** What `page` (deletedPageNow) says is wrong, in a line that is safe to
+ *  print, or null for a page that answered and can be read on from: a
+ *  failed read, an answer that holds no rows, a read that stopped without
+ *  moving, and a move to another page that failed. After a failed move
+ *  the page keeps its rows and its end, shows Retry and takes its Next
+ *  button away (src/components/pageFold.tsx), so a page that says more
+ *  follows and offers no Next, or one that offers Retry, is no end of the
+ *  list. */
+export function deletedPageProblem(page) {
+  const said = {
+    failed: 'Deleted items could not load',
+    held: 'Deleted items could not list this scope',
+    stuck: 'Deleted items could not check part of the list',
+  }[page.end]
+  if (said) return said
+  if (page.retry || (page.end === 'more' && !page.next))
+    return 'Deleted items could not load another page'
+  return null
+}
+
+/** Deletes for good, as Nora, an organization admin, in the signed-in app,
+ *  every item Settings › Projects › Deleted items shows with `tag` (a
+ *  run's tag, or TAG_ANY) at the start of its name, by the rule of
+ *  deletedRowsOf, with All projects of her home organization as its scope
+ *  and the tag as its search. Project items go first: deleting one also
+ *  deletes the items deleted from its projects earlier
+ *  (convex/model/deletedItems.ts beginPurge, phase purge_dependents), so
+ *  the task items are read only after them, on a page of their own. It
+ *  works a page at a time, at most 25 items one Delete now
+ *  (P.purgeDeletedItems on the store's runner), and stays on a page until
+ *  it holds nothing more of the tag to delete, then goes Next. An item
+ *  that still moves into Deleted items or restores is waited for and sent
+ *  again. It never deletes a row whose shown name lacks the tag, nor one
+ *  that shows no name; those, a row Delete now is not offered for and
+ *  anything left at DELETED_PURGE_MS become problem lines. `noted` hears
+ *  of each item it deleted, in a line that names it (deletedName). Answers
+ *  `{ absent }`, why this deployment has no Deleted items to read, which
+ *  only its first page decides, or `{ problems }`, each one line that is
+ *  safe to print. */
+async function purgeDeleted(tag, noted) {
+  const end = Date.now() + DELETED_PURGE_MS
+  const problems = []
+  for (const kind of ['Projects', 'Tasks']) {
+    const absent = await openDeletedItems(kind, searchOf(tag))
+    // the first page decides whether the app has Deleted items to read; a
+    // later one that says so keeps what the passes before it found
+    if (absent !== null && kind === 'Projects') return { absent }
+    if (absent !== null) {
+      problems.push(`Deleted items could not be read for its ${kind.toLowerCase()}: ${absent}`)
+      break
+    }
+    for (;;) {
+      if (Date.now() > end) {
+        problems.push(
+          `Deleted items still listed ${kind.toLowerCase()} with the tag after ${DELETED_PURGE_MS / 60_000} minutes; run --cleanup again`,
+        )
+        return { problems }
+      }
+      const page = await deletedPageNow()
+      const said = deletedPageProblem(page)
+      if (said) {
+        problems.push(said)
+        break
+      }
+      const rows = deletedRowsOf(page.rows, tag)
+      if (rows.purge.length > 0) {
+        // the store refuses a second action while one runs
+        await until(
+          async () =>
+            !(await evaluate(app, () => window.PLANNER.deletedAction?.state === 'running')),
+          60_000,
+        )
+        const ids = rows.purge.map((row) => row.id)
+        const outcome = await evaluate(
+          app,
+          (ids) =>
+            window.PLANNER.purgeDeletedItems(
+              ids.map((id) => ({ id, org_id: window.PLANNER.homeOrg })),
+            ),
+          ids,
+          120_000,
+        )
+        const answer = purgeAnswerOf(outcome, ids)
+        for (const id of answer.done)
+          noted(`${deletedName(rows.purge.find((row) => row.id === id))} in Deleted items`)
+        if (answer.problem) {
+          problems.push(answer.problem)
+          return { problems }
+        }
+        // the live page drops what went and fills itself from the next one
+        const left = [...answer.done, ...answer.gone]
+        await until(
+          async () =>
+            await evaluate(
+              app,
+              ([attr, ids]) => ids.every((id) => !document.querySelector(`[${attr}="${id}"]`)),
+              [DELETED_ITEMS_MARKS.row, left],
+            ),
+          60_000,
+        )
+        if (answer.again.length > 0) await sleep(2000)
+        continue
+      }
+      if (rows.waiting.length > 0) {
+        await sleep(2000)
+        continue
+      }
+      if (rows.blocked.length > 0)
+        problems.push(
+          `Delete now is not offered for ${rows.blocked.map(deletedName).join(', ')} in Deleted items`,
+        )
+      if (rows.unnamed.length > 0)
+        problems.push(
+          `Deleted items lists ${rows.unnamed.length} row(s) without a name for the search, which it left`,
+        )
+      if (!page.next) break
+      await app.locator(`[${DELETED_ITEMS_MARKS.next}]`).click()
+      await sleep(500)
+    }
+  }
+  return { problems }
+}
+
+/** What Settings › Projects › Deleted items still lists with `tag` at the
+ *  start of a name, read as Nora with All projects of her home
+ *  organization, kind All and the tag as its search, every page to its
+ *  end: `{ absent }` as purgeDeleted answers it, or `{ left }`, the lines
+ *  that are safe to print, one for each kind of row it found (deletedRowsOf
+ *  but `blocked`, which counts with the rest), empty when nothing is left. */
+async function deletedLeft(tag) {
+  const absent = await openDeletedItems('All', searchOf(tag))
+  if (absent !== null) return { absent }
+  const end = Date.now() + DELETED_PURGE_MS
+  const found = { items: 0, inside: 0, unnamed: 0 }
+  for (;;) {
+    const page = await deletedPageNow()
+    const said = deletedPageProblem(page)
+    if (said) return { left: [said] }
+    const rows = deletedRowsOf(page.rows, tag)
+    found.items += rows.purge.length + rows.waiting.length + rows.blocked.length
+    found.inside += rows.inside.length
+    found.unnamed += rows.unnamed.length
+    if (!page.next) break
+    if (Date.now() > end) return { left: ['Deleted items did not end within the time it has'] }
+    await app.locator(`[${DELETED_ITEMS_MARKS.next}]`).click()
+    await sleep(500)
+  }
+  return {
+    left: [
+      [found.items, 'Deleted item(s)'],
+      [found.inside, 'task(s) with the tag inside a Deleted item'],
+      [found.unnamed, 'Deleted items row(s) without a name'],
+    ]
+      .filter(([n]) => n > 0)
+      .map(([n, what]) => `${n} ${what}`),
+  }
+}
+
 /** Finds and removes everything whose name carries `tag` (a run's tag, or
  *  TAG_ANY for every run), in phases that each run whatever an earlier one
  *  did:
@@ -2205,12 +2568,18 @@ export async function appBatches(what, read) {
  *     elsewhere and teams, deleted with the name REST gives; then, with
  *     or without that token, labels, which only the app deletes, found
  *     through the label picker's read (labels.picker), as the store holds
- *     no label;
+ *     no label, and then the Deleted items with the tag, which it deletes
+ *     for good in the app (purgeDeleted), the projects and tasks just
+ *     deleted and those the run deleted itself;
  *  3. the agents, each confirmed gone, over REST with the token, else by
  *     a mention search that no longer lists it;
  *  4. the temporary token, then a fresh read of every list, Settings'
- *     project lists included, to prove that nothing with the tag is
- *     left.
+ *     project lists and Deleted items included (deletedLeft), to prove
+ *     that nothing with the tag is left.
+ *
+ *  A deployment whose app has no Deleted items to read (openDeletedItems)
+ *  gets a NOTE instead, and its deleted projects and tasks stay there
+ *  until the deployment's own expiry.
  *
  *  OAuth client registrations cannot be deleted and stay. Answers how many
  *  records it removed and the problems it met, each one line that is safe
@@ -2219,6 +2588,8 @@ async function sweep(tag, label) {
   const matches = (name) => hasTag(tag, name)
   let removed = 0
   const problems = []
+  // why the deployment has no Deleted items to read, once purgeDeleted said
+  let deletedAbsent = null
   const note = (what) => {
     removed++
     say('NOTE', `${label}/removed`, what)
@@ -2460,6 +2831,17 @@ async function sweep(tag, label) {
         })
     })
 
+    // the projects and tasks deleted above, and those the run deleted
+    // itself, which wait in Deleted items until an admin deletes them for
+    // good, through the app alone, so they go without the token too
+    await step('Deleted items', async () => {
+      const done = await purgeDeleted(tag, note)
+      if (done.absent) {
+        deletedAbsent = done.absent
+        say('NOTE', `${label}/deleted-items`, `${done.absent}, so nothing went from Deleted items`)
+      } else for (const problem of done.problems) problems.push(`Deleted items: ${problem}`)
+    })
+
     // 3. the agents, whose keys went in phase 1. The app removes an agent
     // in the background, so each removal is confirmed on the server.
     await step('agents', async () => {
@@ -2514,18 +2896,6 @@ async function sweep(tag, label) {
           `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`,
         )
       })
-    if (cleaner) {
-      // A deployment with Deleted items keeps deleted projects and tasks
-      // there, where only an admin's Delete now in the app removes them early.
-      const catalogue = await mcp(cleaner, 'tools/list', {}).catch(() => null)
-      const deleteTask = catalogue?.json?.result?.tools?.find((t) => t.name === 'delete_task')
-      if (deleteTask?.description?.includes('Deleted items'))
-        say(
-          'NOTE',
-          `${label}/deleted-items`,
-          `this deployment keeps the deleted projects and tasks in Deleted items for 30 days; an admin can delete the ones named ${tag instanceof RegExp ? `${TAG_PREFIX}…` : tag} for good there`,
-        )
-    }
   } finally {
     // 4. the temporary token, then a fresh look at every app list
     if (minted?.id)
@@ -2550,14 +2920,20 @@ async function sweep(tag, label) {
     const keys = (await agentKeysOf(agents)).filter((k) => agentIds.has(k.agentId))
     // the projects Nora only manages, which no REST list holds
     const managed = [...(await managedLive()), ...(await managedArchived())]
+    // Deleted items, read afresh, unless the deployment has none to read
+    const deleted = deletedAbsent === null ? await deletedLeft(tag) : { left: [] }
     const left = [
       [tokens.length, 'personal token'],
       [connections.length, 'OAuth connection'],
       [agents.length, 'agent'],
       [keys.length, 'agent key'],
       [managed.length, 'managed project'],
-    ].filter(([n]) => n > 0)
-    expect(!left.length, `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`)
+    ]
+      .filter(([n]) => n > 0)
+      .map(([n, what]) => `${n} ${what}(s)`)
+    // a second look that could not read Deleted items proves nothing
+    left.push(...(deleted.absent ? [`Deleted items unread (${deleted.absent})`] : deleted.left))
+    expect(!left.length, `still there: ${left.join(', ')}`)
   })
   return { removed, problems }
 }
@@ -10082,6 +10458,18 @@ export const DELETED_ITEMS_MARKS = {
   // its own item (exportItemOf)
   key: 'data-deleted-key',
   title: 'data-deleted-title',
+  // what the cleanup's own reads of the page tell rows apart by
+  // (deletedPageNow): every line, a task found inside another item, a
+  // row's state, a row that shows no title, and the page's notes
+  previous: 'data-deleted-page-previous',
+  line: 'data-line',
+  hit: 'data-deleted-hit',
+  rowState: 'data-state',
+  hidden: 'data-hidden-row',
+  note: 'data-deleted-note',
+  // the end line's Retry after a failed read or move
+  // (src/components/pageFold.tsx)
+  retry: 'data-page-retry',
 }
 
 /** The class of the app's visible toasts (src/App.tsx ToastHost). */
@@ -10120,8 +10508,9 @@ export const DELETED_ITEMS_EXPECTED = {
  *  scope, searches the sub-project's name until it is the one row listed,
  *  opens Delete now… from its
  *  menu, waits until the window counts no earlier items, and deletes it
- *  for good, after which its row is gone. The 26 tasks go in the cleanup
- *  with M and the sweep finds them by their tag. It needs a backend from
+ *  for good, after which its row is gone. The 26 tasks go to Deleted
+ *  items with M in the cleanup, which then deletes M's item for good with
+ *  them (cleanup/app/purge-deleted). It needs a backend from
  *  v0.1.131 on. */
 async function deletedItemsCheck() {
   const w = run.creds.writeToken
@@ -10321,7 +10710,8 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  Deleted items searched by the task's tagged title, once the search
  *  answered and only as the one row of the task's key and title. A purge
  *  that is refused, fails or finds no such row is a NOTE, since the item
- *  then stays 30 days (purgeExportItem). It
+ *  then goes with M's own Deleted item in the run's cleanup
+ *  (cleanup/app/purge-deleted), or in the sweep's (purgeExportItem). It
  *  writes on t0's organization what an admin's export writes: a job with
  *  its parts for four hours and its rows for 30 days, the end of an
  *  earlier ready archive, and the organization's last saved export
@@ -10459,7 +10849,8 @@ async function orgExportCheck() {
  *  the one row Settings › Projects › Deleted items lists with the task's
  *  key and tagged `title` under the run's project M (deletedTaskItem). It
  *  purges no other id. Says a NOTE when it finds no such item, or when
- *  Delete now is refused or fails, since the item then stays 30 days, and
+ *  Delete now is refused or fails, since the item then goes with M's own
+ *  Deleted item in the run's cleanup or the sweep's (purgeDeleted), and
  *  never fails the step itself. */
 async function purgeExportItem(itemId, gone, title) {
   const label = `${ORG_EXPORT_STEP}/deleted-item`
@@ -10469,7 +10860,7 @@ async function purgeExportItem(itemId, gone, title) {
       say(
         'NOTE',
         label,
-        `deleted nothing, as ${found.why}; ${gone.key}'s Deleted item stays in Deleted items for 30 days`,
+        `deleted nothing, as ${found.why}; ${gone.key}'s Deleted item goes with M's in the cleanup`,
       )
       return
     }
@@ -10484,7 +10875,7 @@ async function purgeExportItem(itemId, gone, title) {
       say(
         'NOTE',
         label,
-        `Delete now of ${gone.key}'s Deleted item was not done (${short(JSON.stringify(outcome))}); an admin can delete it in Deleted items`,
+        `Delete now of ${gone.key}'s Deleted item was not done (${short(JSON.stringify(outcome))}); it goes with M's in the cleanup`,
       )
   } catch (error) {
     say(
@@ -12358,6 +12749,36 @@ async function authorize(clientId, clientName, allowChanges) {
   return tokens.body
 }
 
+/** The run's cleanup step that deletes its own Deleted items for good
+ *  (purgeDeletedCheck). */
+export const PURGE_DELETED_STEP = 'cleanup/app/purge-deleted'
+
+/** Deletes the run's own Deleted items for good once its projects and
+ *  tasks went (purgeDeleted), then checks with a fresh look that Deleted
+ *  items lists nothing with the run's tag (deletedLeft), so the sweep after
+ *  a completed run finds nothing there. A deployment whose app has no
+ *  Deleted items to read reports SKIP. */
+async function purgeDeletedCheck() {
+  const removed = []
+  let done
+  let failure = null
+  try {
+    done = await purgeDeleted(run.tag, (what) => removed.push(what))
+  } catch (error) {
+    failure = error
+  }
+  if (done?.absent)
+    return skip(PURGE_DELETED_STEP, `${done.absent}, so nothing went from Deleted items`)
+  await check(PURGE_DELETED_STEP, async () => {
+    if (failure) throw failure
+    expect(!done.problems.length, done.problems.join('; '))
+    const seen = await deletedLeft(run.tag)
+    expect(!seen.absent, `the second look found ${seen.absent}`)
+    expect(!seen.left.length, `still in Deleted items: ${seen.left.join(', ')}`)
+    return `deleted ${removed.length} item(s) for good, and Deleted items lists nothing with ${run.tag}`
+  })
+}
+
 async function main() {
   const c = run.creds
   // every credential: identity and reads
@@ -12550,6 +12971,8 @@ async function main() {
   await check('cleanup/rest/no-tagged-tasks', async () => {
     eq((await findTasks(c.writeToken, run.tag)).length, 0, 'tasks with this run tag')
   })
+  // the projects and tasks it deleted, which wait in Deleted items
+  await purgeDeletedCheck()
   // revoke everything in the app; the next call is refused
   await check('read-token/ui/revoke', () => revokeTokenInUi(c.readToken.name))
   await checkRevoked(

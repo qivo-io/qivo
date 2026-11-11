@@ -437,8 +437,9 @@ const keyOf = (a: Asked): Promise<string> =>
 /** One seat the page reads, with its sight of its organization. `admin`
  * decides the management parts, since an organization admin keeps every
  * item, which are the organization's ranges, heldFor, the admin's assignee
- * index and olderRows' probe. Which tasks the seat reads is its view of
- * each item (model/deletedItems.ts viewOf), an admin's included. */
+ * index, olderRows' probe and a project entry's names in a search
+ * (projectEntry). Which tasks the seat reads is its view of each item
+ * (model/deletedItems.ts viewOf), an admin's included. */
 type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
@@ -1048,29 +1049,42 @@ function take(run: Run, part: Part, pending: Pending[]): boolean {
 
 /* ------------------------------------------------------- judging items */
 
-/** The names and keys a project entry's row shows: the root's, and those
- * of the projects the viewer's view holds, with the names they carry now,
- * as rowOf shows them. */
-function projectNames(seat: Seat, item: Item, view: ItemView): string {
+/** The names and keys a project entry's row shows for `projects` of the
+ * item: the root's, and those of `projects`, with the names they carry
+ * now, as rowOf shows them. */
+function projectNames(seat: Seat, item: Item, projects: Item['projects']): string {
   const names = [item.name, item.key ?? '']
-  for (const p of view.projects) {
+  for (const p of projects) {
     const live = seat.sight.projects.get(p.id)
     names.push(sameReference(live, item) ? `${live.name} ${live.key}` : `${p.name} ${p.key}`)
   }
   return names.join(' ')
 }
 
-/** A project entry for an item the seat sees whose names hold every term. */
+/** Whether the names of `projects` of the item hold every term of the
+ * search. */
+const namesMatch = (run: Run, seat: Seat, item: Item, projects: Item['projects']): boolean =>
+  matchesTerms(run.a.terms, { title: projectNames(seat, item, projects), description: '' })
+
+/** A project entry for an item the seat sees whose names hold every term.
+ * An organization admin's view of a project item holds every project of
+ * the item (model/deletedItems.ts adminView), so their search compares the
+ * names first and passes over an item that cannot match without the reads
+ * of its view, which a search that matches little would otherwise make for
+ * every project item of the organization. Anyone else's view may leave
+ * projects out, so theirs is read first and only its names count, and what
+ * the page reads and spends for them never depends on a name they may not
+ * see. */
 const projectEntry =
   (run: Run): Judge =>
   async (seat, item) => {
     const last = itemAt(item)
+    const searching = run.a.terms.length > 0
+    if (searching && seat.admin && !namesMatch(run, seat, item, item.projects))
+      return { pending: [], last }
     const view = await viewOf(spending(run.ctx, run.call), seat.sight.memo, seat.me, item)
     if (view === null || item.state === 'purging') return { pending: [], last }
-    if (run.a.terms.length > 0) {
-      const fields = { title: projectNames(seat, item, view), description: '' }
-      if (!matchesTerms(run.a.terms, fields)) return { pending: [], last }
-    }
+    if (searching && !namesMatch(run, seat, item, view.projects)) return { pending: [], last }
     return { pending: [{ seat, item, view, at: last, tasks: [] }], last }
   }
 

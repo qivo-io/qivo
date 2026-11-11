@@ -46,6 +46,8 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   DESCRIPTION_IMAGES_STEP,
+  deletedPageProblem,
+  deletedRowsOf,
   deleteOutcome,
   directoryGroups,
   evaluate,
@@ -130,6 +132,7 @@ import {
   PROJECTS_PART,
   PROJECTS_PART_MARKS,
   PROJECTS_PART_STEP,
+  PURGE_DELETED_STEP,
   pace,
   parseArgs,
   peoplePagesMax,
@@ -137,6 +140,7 @@ import {
   projectDeleteRoute,
   projectPagesMax,
   projectsPartProblems,
+  purgeAnswerOf,
   querySetChanges,
   RATE_BUDGET,
   REGROUP_WAIT,
@@ -1262,12 +1266,20 @@ describe('staging check REST contract', () => {
     expect(DELETED_ITEMS_STEP).toBe('ui/deleted-items')
     // the page's end line names its marks after the page's hook
     // (src/components/pageFold.tsx)
-    const fromHook = [DELETED_ITEMS_MARKS.next, DELETED_ITEMS_MARKS.end]
+    const fromHook = [
+      DELETED_ITEMS_MARKS.next,
+      DELETED_ITEMS_MARKS.previous,
+      DELETED_ITEMS_MARKS.end,
+    ]
+    // and its Retry is the end line's own
+    const fold = readFileSync(new URL('../src/components/pageFold.tsx', import.meta.url), 'utf8')
     for (const mark of Object.values(DELETED_ITEMS_MARKS))
       if (fromHook.includes(mark)) expect(page).toContain('hook="deleted-page"')
+      else if (mark === DELETED_ITEMS_MARKS.retry) expect(fold).toContain(`${mark}=""`)
       else expect(page).toContain(mark)
     expect(DELETED_ITEMS_MARKS.next).toBe('data-deleted-page-next')
     expect(DELETED_ITEMS_MARKS.end).toBe('data-deleted-page-end')
+    expect(DELETED_ITEMS_MARKS.previous).toBe('data-deleted-page-previous')
     // the step waits for the page's own sentence for a search that matches
     // nothing
     const [before, after] = DELETED_ITEMS_EXPECTED.none('WORDS').split('WORDS')
@@ -2610,6 +2622,181 @@ describe('run tags', () => {
     expect(hasTag(TAG_ANY, 'stgchk-00ff99 cleanup token')).toBe(true)
     for (const name of ['stgchk-00ff9 x', 'stgchk-00ff99x', 'stgchk-00FF99 x', 'x stgchk-00ff99 y'])
       expect(hasTag(TAG_ANY, name)).toBe(false)
+  })
+})
+
+describe("the cleanup's Deleted items", () => {
+  const row = (over = {}) => ({
+    id: 'item-1',
+    hit: false,
+    kind: 'project',
+    key: 'SC',
+    title: 'stgchk-1a2b3c Project',
+    state: 'ready',
+    menu: true,
+    ...over,
+  })
+  const ids = (rows) => rows.map((r) => r.id)
+
+  it("takes only the tag's own rows by their shown name, ready or stuck, once each", () => {
+    const rows = [
+      row(),
+      row({ id: 'item-2', kind: 'task', key: 'QN-7', title: 'stgchk-1a2b3c Deleted 1' }),
+      row({ id: 'item-3', state: 'stuck' }),
+      // the same item twice goes once
+      row(),
+    ]
+    expect(ids(deletedRowsOf(rows, 'stgchk-1a2b3c').purge)).toEqual(['item-1', 'item-2', 'item-3'])
+    expect(ids(deletedRowsOf(rows, TAG_ANY).purge)).toEqual(['item-1', 'item-2', 'item-3'])
+  })
+
+  it('never takes a row whose shown name lacks the tag, whatever the search listed', () => {
+    for (const title of [
+      'Northstar Launch',
+      'Notes on stgchk-1a2b3c Project',
+      'stgchk-1a2b3cd Project',
+      'stgchk-1a2b3c',
+      'Stgchk-1a2b3c Project',
+    ]) {
+      const out = deletedRowsOf([row({ title })], 'stgchk-1a2b3c')
+      expect(Object.values(out).flat(), title).toEqual([])
+    }
+    // another run's row is not this run's, but is every run's
+    const other = row({ title: 'stgchk-00ff99 Project' })
+    expect(deletedRowsOf([other], 'stgchk-1a2b3c').purge).toEqual([])
+    expect(ids(deletedRowsOf([other], TAG_ANY).purge)).toEqual(['item-1'])
+    expect(deletedRowsOf([row({ title: 'x stgchk-00ff99 y' })], TAG_ANY).purge).toEqual([])
+  })
+
+  it('leaves a row that shows no name, and says so, rather than tell it apart by its search', () => {
+    // a task whose project the admin cannot read, and an app without the
+    // title mark
+    const hidden = row({ kind: 'task', key: 'QN-9', title: null })
+    const unmarked = row({ id: 'item-4', title: null })
+    const out = deletedRowsOf([hidden, unmarked, row({ id: null })], TAG_ANY)
+    expect(out.purge).toEqual([])
+    expect(out.unnamed).toHaveLength(3)
+  })
+
+  it('waits for a row that moves or restores, and names one Delete now is not offered for', () => {
+    const out = deletedRowsOf(
+      [
+        row({ id: 'm', state: 'moving', menu: false }),
+        row({ id: 'r', state: 'restoring', menu: false }),
+        row({ id: 'p', menu: false }),
+      ],
+      'stgchk-1a2b3c',
+    )
+    expect(ids(out.waiting)).toEqual(['m', 'r'])
+    expect(ids(out.blocked)).toEqual(['p'])
+    expect(out.purge).toEqual([])
+  })
+
+  it('takes no line found inside another item, only counts a tagged one', () => {
+    const inside = row({ id: null, hit: true, kind: 'task', key: 'QN-3' })
+    const out = deletedRowsOf([inside, { ...inside, title: 'Plain task' }], 'stgchk-1a2b3c')
+    expect(out.purge).toEqual([])
+    expect(out.inside).toEqual([inside])
+  })
+
+  it('reads a page whose move failed as a problem, never as the end of the list', () => {
+    const page = (over) => ({ rows: [], end: 'end', next: false, retry: false, ...over })
+    // a page that answered: the last one, and one with more to read
+    expect(deletedPageProblem(page({}))).toBeNull()
+    expect(deletedPageProblem(page({ end: 'more', next: true }))).toBeNull()
+    // after a failed Next the page keeps its rows and its end, shows Retry
+    // and takes Next away
+    expect(deletedPageProblem(page({ end: 'more', retry: true }))).toBe(
+      'Deleted items could not load another page',
+    )
+    expect(deletedPageProblem(page({ end: 'more' }))).toBe(
+      'Deleted items could not load another page',
+    )
+    // after a failed Previous on the last page too
+    expect(deletedPageProblem(page({ retry: true }))).toBe(
+      'Deleted items could not load another page',
+    )
+    expect(deletedPageProblem(page({ end: 'failed', retry: true }))).toBe(
+      'Deleted items could not load',
+    )
+    expect(deletedPageProblem(page({ end: 'held' }))).toBe(
+      'Deleted items could not list this scope',
+    )
+    expect(deletedPageProblem(page({ end: 'stuck', retry: true }))).toBe(
+      'Deleted items could not check part of the list',
+    )
+  })
+
+  it("reads Delete now's answer: deleted, sent again once ready, gone, or a problem", () => {
+    const answer = (over) => ({
+      done: [],
+      stepping: [],
+      refused: [],
+      deferred: [],
+      failed: [],
+      unsent: [],
+      unknown: [],
+      error: null,
+      paused: false,
+      ...over,
+    })
+    expect(
+      purgeAnswerOf(
+        answer({
+          done: ['a'],
+          refused: [
+            { id: 'b', reason: 'moving' },
+            { id: 'c', reason: 'restoring' },
+            { id: 'd', reason: 'not_found' },
+          ],
+        }),
+        ['a', 'b', 'c', 'd'],
+      ),
+    ).toEqual({ done: ['a'], again: ['b', 'c'], gone: ['d'], problem: null })
+    // a refusal for another reason, an error, an id left unanswered and no
+    // answer at all are problems
+    expect(
+      purgeAnswerOf(answer({ refused: [{ id: 'a', reason: 'read_only' }] }), ['a']).problem,
+    ).toBe('Delete now refused 1 item(s): read_only')
+    expect(purgeAnswerOf(answer({ failed: ['a'], error: 'Qivo is busy.' }), ['a']).problem).toBe(
+      'Delete now answered “Qivo is busy.”',
+    )
+    expect(purgeAnswerOf(answer({ done: ['a'] }), ['a', 'b']).problem).toBe(
+      'Delete now did not answer for 1 item(s)',
+    )
+    expect(purgeAnswerOf(null, ['a'])).toEqual({
+      done: [],
+      again: [],
+      gone: [],
+      problem: 'the app gave no answer to Delete now',
+    })
+    // an id the answer names that was never sent is not counted as done
+    expect(purgeAnswerOf(answer({ done: ['a', 'z'] }), ['a']).done).toEqual(['a'])
+  })
+
+  it("deletes the run's Deleted items after its projects went, and the sweep after its own deletes", () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(PURGE_DELETED_STEP).toBe('cleanup/app/purge-deleted')
+    const main = script.slice(script.indexOf('async function main() {'))
+    expect(main.indexOf('await purgeDeletedCheck()')).toBeGreaterThan(
+      main.indexOf("check('cleanup/app/delete-project'"),
+    )
+    // before the credentials go, as it needs only the signed-in app
+    expect(main.indexOf('await purgeDeletedCheck()')).toBeLessThan(
+      main.indexOf("check('read-token/ui/revoke'"),
+    )
+    const sweep = script.slice(
+      script.indexOf('async function sweep('),
+      script.indexOf('async function removeTokenInApp('),
+    )
+    const purge = sweep.indexOf('await purgeDeleted(tag, note)')
+    for (const before of ["step('projects'", "step('tasks'", "step('labels'"])
+      expect(purge, before).toBeGreaterThan(sweep.indexOf(before))
+    // the last look reads Deleted items afresh, and no NOTE says they stay
+    expect(sweep.indexOf('await deletedLeft(tag)')).toBeGreaterThan(
+      sweep.indexOf("step('the check for leftovers in the app'"),
+    )
+    expect(script).not.toContain('Deleted items for 30 days')
   })
 })
 
