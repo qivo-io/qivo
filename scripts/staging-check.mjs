@@ -8329,8 +8329,9 @@ async function loadUntil(section, row, what) {
  *  until Past's disclosure is pressed, and then show the past milestone. A
  *  fresh load of My view's Overview must ask the section with `mine` and
  *  no projects, show the milestone among Upcoming's rows (pressing Load
- *  more, as Nora's other projects' milestones can come first) with M's
- *  name on it, and drop it once the run deleted it over REST. It deletes
+ *  more, as Nora's other projects' milestones can come first), then M's
+ *  name on it, which the project cache reads after the row shows, and drop
+ *  it once the run deleted it over REST. It deletes
  *  the past milestone and the task at the end, and the cleanup that
  *  deletes M removes whatever a failure left. It runs while M is active,
  *  after ui/roadmap-milestones, and leaves the saved view on M's Board. */
@@ -8410,7 +8411,12 @@ async function overviewMilestonesCheck() {
       )
       const mine = upcoming.locator(`[data-overview-milestone="${made.id}"]`)
       await loadUntil(upcoming, mine, made.name)
-      expect((await mine.innerText()).includes(M.name), `My view's row does not name ${M.name}`)
+      // the row shows first and M's name after it, once the project cache
+      // has read the projects the section's answer names
+      expect(
+        await until(async () => (await mine.innerText()).includes(M.name), 30_000),
+        `My view's row does not name ${M.name}`,
+      )
       await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${made.id}`)
       await mine.waitFor({ state: 'detached', timeout: 60_000 })
       return `showed ${made.name} in ${M.key}'s Upcoming and ${past.name} only once Past was expanded, from the deployment's section read, and in My view from a read with mine and no projects, with ${M.key}'s name, until it was deleted over REST`
