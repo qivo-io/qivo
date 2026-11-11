@@ -2216,8 +2216,8 @@ export const DELETED_PURGE_MS = 10 * 60_000
  *    restore, which Delete now refuses until they are ready;
  *  - `blocked`, the tag's rows whose menu offers no Delete now, as in an
  *    organization that is read-only;
- *  - `inside`, the tag's lines the page lists inside an item without the
- *    tag, which only that item's own deletion would take;
+ *  - `inside`, the tag's lines the page lists inside another item, with
+ *    or without the tag, which only that item's own deletion takes;
  *  - `unnamed`, the rows that show no name, which nobody can tell from
  *    another run's or a person's, so nothing deletes them. */
 export function deletedRowsOf(rows, tag) {
@@ -2279,10 +2279,11 @@ const deletedName = (row) =>
  *  her home organization as its scope, kind `kind` (All, Projects or Tasks)
  *  and `search`, and waits for its answer. It answers null once the page
  *  shows them, or the reason, safe to print, why this deployment has no
- *  such page to read: an app without Delete now in its store or without
- *  the page, or a page whose rows carry no title marks (before the release
- *  after v0.1.161), whose rows nobody could tell apart. Fails when the
- *  page does not take the scope. */
+ *  such page to read: an app without Delete now in its store, or a page
+ *  whose rows carry no title marks (before the release after v0.1.161),
+ *  whose rows nobody could tell apart. Fails when the page does not show
+ *  or does not take the scope, since an app that has Delete now has the
+ *  page, and a page that fails to load is no missing feature. */
 async function openDeletedItems(kind, search) {
   const m = DELETED_ITEMS_MARKS
   if (!(await evaluate(app, () => typeof window.PLANNER?.purgeDeletedItems === 'function')))
@@ -2290,11 +2291,16 @@ async function openDeletedItems(kind, search) {
   await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
     waitUntil: 'domcontentloaded',
   })
-  try {
-    await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
-  } catch {
-    return 'the app shows no Deleted items page'
-  }
+  expect(
+    await app
+      .locator(`[${m.page}]`)
+      .waitFor({ timeout: 60_000 })
+      .then(
+        () => true,
+        () => false,
+      ),
+    'the Deleted items page did not show within a minute',
+  )
   const org = await evaluate(app, () => window.PLANNER.homeOrg)
   const trigger = app.locator(`[${m.scope}]`)
   await settledPicker(trigger)
@@ -2323,8 +2329,9 @@ async function openDeletedItems(kind, search) {
 /** The page of Deleted items on screen once it has answered and no move
  *  runs, with every folded run shown (Show all): its rows as
  *  deletedRowsOf reads them, its end (lib/pagedList.ts PageEnd, `end` when
- *  the page shows no end line), whether Next shows, whether it answered
- *  without a scope, and whether any row carries a title mark. Fails when
+ *  the page shows no end line), whether Next shows, whether its end line
+ *  offers Retry, whether it answered without a scope, and whether any row
+ *  carries a title mark. Fails when
  *  the page does not settle within a minute. */
 async function deletedPageNow() {
   const m = DELETED_ITEMS_MARKS
@@ -2340,7 +2347,14 @@ async function deletedPageNow() {
         const end = endMark?.getAttribute(m.end) ?? 'end'
         // a page whose roles failed shows no end line
         if (list?.getAttribute(m.state) === 'failed')
-          return { rows: [], end: 'failed', next: false, unscoped: false, marked: true }
+          return {
+            rows: [],
+            end: 'failed',
+            next: false,
+            retry: true,
+            unscoped: false,
+            marked: true,
+          }
         if (list?.getAttribute(m.state) !== 'ok' || busy || end === 'loading') return null
         const folds = document.querySelectorAll(`[${m.showAll}]`)
         if (folds.length > 0) {
@@ -2364,6 +2378,7 @@ async function deletedPageNow() {
           rows,
           end,
           next: document.querySelector(`[${m.next}]`) !== null,
+          retry: document.querySelector(`[${m.end}] [${m.retry}]`) !== null,
           unscoped: document.querySelector(`[${m.note}="scope"]`) !== null,
           marked: document.querySelector(`[${m.title}], [${m.hidden}]`) !== null,
         }
@@ -2381,15 +2396,25 @@ async function deletedPageNow() {
   return page
 }
 
-/** What a page that ended as `end` says is wrong, or null for a page that
- *  answered: a failed read, an answer that holds no rows or a read that
- *  stopped without moving. */
-const deletedEndProblem = (end) =>
-  ({
+/** What `page` (deletedPageNow) says is wrong, in a line that is safe to
+ *  print, or null for a page that answered and can be read on from: a
+ *  failed read, an answer that holds no rows, a read that stopped without
+ *  moving, and a move to another page that failed. After a failed move
+ *  the page keeps its rows and its end, shows Retry and takes its Next
+ *  button away (src/components/pageFold.tsx), so a page that says more
+ *  follows and offers no Next, or one that offers Retry, is no end of the
+ *  list. */
+export function deletedPageProblem(page) {
+  const said = {
     failed: 'Deleted items could not load',
     held: 'Deleted items could not list this scope',
     stuck: 'Deleted items could not check part of the list',
-  })[end] ?? null
+  }[page.end]
+  if (said) return said
+  if (page.retry || (page.end === 'more' && !page.next))
+    return 'Deleted items could not load another page'
+  return null
+}
 
 /** Deletes for good, as Nora, an organization admin, in the signed-in app,
  *  every item Settings › Projects › Deleted items shows with `tag` (a
@@ -2406,15 +2431,22 @@ const deletedEndProblem = (end) =>
  *  again. It never deletes a row whose shown name lacks the tag, nor one
  *  that shows no name; those, a row Delete now is not offered for and
  *  anything left at DELETED_PURGE_MS become problem lines. `noted` hears
- *  of each item it deleted, in a line that names it (deletedName). Answers `{ absent }`, why this
- *  deployment has no Deleted items to read, or `{ problems }`, each one
- *  line that is safe to print. */
+ *  of each item it deleted, in a line that names it (deletedName). Answers
+ *  `{ absent }`, why this deployment has no Deleted items to read, which
+ *  only its first page decides, or `{ problems }`, each one line that is
+ *  safe to print. */
 async function purgeDeleted(tag, noted) {
   const end = Date.now() + DELETED_PURGE_MS
   const problems = []
   for (const kind of ['Projects', 'Tasks']) {
     const absent = await openDeletedItems(kind, searchOf(tag))
-    if (absent !== null) return { absent }
+    // the first page decides whether the app has Deleted items to read; a
+    // later one that says so keeps what the passes before it found
+    if (absent !== null && kind === 'Projects') return { absent }
+    if (absent !== null) {
+      problems.push(`Deleted items could not be read for its ${kind.toLowerCase()}: ${absent}`)
+      break
+    }
     for (;;) {
       if (Date.now() > end) {
         problems.push(
@@ -2423,7 +2455,7 @@ async function purgeDeleted(tag, noted) {
         return { problems }
       }
       const page = await deletedPageNow()
-      const said = deletedEndProblem(page.end)
+      const said = deletedPageProblem(page)
       if (said) {
         problems.push(said)
         break
@@ -2500,7 +2532,7 @@ async function deletedLeft(tag) {
   const found = { items: 0, inside: 0, unnamed: 0 }
   for (;;) {
     const page = await deletedPageNow()
-    const said = deletedEndProblem(page.end)
+    const said = deletedPageProblem(page)
     if (said) return { left: [said] }
     const rows = deletedRowsOf(page.rows, tag)
     found.items += rows.purge.length + rows.waiting.length + rows.blocked.length
@@ -2514,7 +2546,7 @@ async function deletedLeft(tag) {
   return {
     left: [
       [found.items, 'Deleted item(s)'],
-      [found.inside, 'task(s) inside a Deleted item without the tag'],
+      [found.inside, 'task(s) with the tag inside a Deleted item'],
       [found.unnamed, 'Deleted items row(s) without a name'],
     ]
       .filter(([n]) => n > 0)
@@ -2899,7 +2931,8 @@ async function sweep(tag, label) {
     ]
       .filter(([n]) => n > 0)
       .map(([n, what]) => `${n} ${what}(s)`)
-    left.push(...(deleted.left ?? []))
+    // a second look that could not read Deleted items proves nothing
+    left.push(...(deleted.absent ? [`Deleted items unread (${deleted.absent})`] : deleted.left))
     expect(!left.length, `still there: ${left.join(', ')}`)
   })
   return { removed, problems }
@@ -10434,6 +10467,9 @@ export const DELETED_ITEMS_MARKS = {
   rowState: 'data-state',
   hidden: 'data-hidden-row',
   note: 'data-deleted-note',
+  // the end line's Retry after a failed read or move
+  // (src/components/pageFold.tsx)
+  retry: 'data-page-retry',
 }
 
 /** The class of the app's visible toasts (src/App.tsx ToastHost). */

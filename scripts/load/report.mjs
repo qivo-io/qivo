@@ -225,7 +225,7 @@ export function mostAtOnce(intervals) {
 export const JS_LINE_MS = 500
 
 /** The functions of `stats` (functionStats') whose slowest JavaScript time
-    passed `line`, each with that time. */
+    reached `line`, each with that time. */
 export function overLine(stats, line = JS_LINE_MS) {
   return Object.entries(stats.functions)
     .filter(([, figures]) => (figures.js_ms.max ?? 0) >= line)
@@ -299,7 +299,7 @@ export function rungReport({ rung, recorded, match, phases, subscriptions, notRu
       event_loop_lag:
         "Each process's monitorEventLoopDelay over the phase, past its 10 ms resolution.",
       pacing_trigger:
-        "A model, not a hosted measurement: a phase whose clients asked more than hosted Professional's 256 queries at one moment (every subscription at startup, the re-subscriptions at the reconnect, the answers one change re-sent), a call whose JavaScript passed the 0.5 s line, or a client whose time to current after the reconnect passed ten times the lone client's. The local backend's overload closes (1013) are its own saturation, listed as test_bed_saturated, and fire nothing. A trigger that did not fire is null, unknown, where a phase's log coverage is incomplete (log_incomplete) or a phase failed, lost a worker or had no lone client's time to compare with (unmeasured); fires_outside_noisy_phases counts timings only from phases with noisy false.",
+        "A model, not a hosted measurement: a phase whose clients asked more than hosted Professional's 256 queries at one moment (every subscription at startup, the re-subscriptions at the reconnect, the answers one change re-sent), a call whose JavaScript reached 0.5 s (JS_LINE_MS), or a client whose time to current after the reconnect passed ten times the lone client's. The local backend's overload closes (1013) are its own saturation, listed as test_bed_saturated, and fire nothing. A trigger that did not fire is null, unknown, where a phase's log coverage is incomplete (log_incomplete) or a phase failed, lost a worker or had no lone client's time to compare with (unmeasured); fires_outside_noisy_phases counts timings only from phases with noisy false.",
     },
     recorded,
     match,

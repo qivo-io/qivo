@@ -46,6 +46,7 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   DESCRIPTION_IMAGES_STEP,
+  deletedPageProblem,
   deletedRowsOf,
   deleteOutcome,
   directoryGroups,
@@ -1270,8 +1271,11 @@ describe('staging check REST contract', () => {
       DELETED_ITEMS_MARKS.previous,
       DELETED_ITEMS_MARKS.end,
     ]
+    // and its Retry is the end line's own
+    const fold = readFileSync(new URL('../src/components/pageFold.tsx', import.meta.url), 'utf8')
     for (const mark of Object.values(DELETED_ITEMS_MARKS))
       if (fromHook.includes(mark)) expect(page).toContain('hook="deleted-page"')
+      else if (mark === DELETED_ITEMS_MARKS.retry) expect(fold).toContain(`${mark}=""`)
       else expect(page).toContain(mark)
     expect(DELETED_ITEMS_MARKS.next).toBe('data-deleted-page-next')
     expect(DELETED_ITEMS_MARKS.end).toBe('data-deleted-page-end')
@@ -2693,6 +2697,34 @@ describe("the cleanup's Deleted items", () => {
     const out = deletedRowsOf([inside, { ...inside, title: 'Plain task' }], 'stgchk-1a2b3c')
     expect(out.purge).toEqual([])
     expect(out.inside).toEqual([inside])
+  })
+
+  it('reads a page whose move failed as a problem, never as the end of the list', () => {
+    const page = (over) => ({ rows: [], end: 'end', next: false, retry: false, ...over })
+    // a page that answered: the last one, and one with more to read
+    expect(deletedPageProblem(page({}))).toBeNull()
+    expect(deletedPageProblem(page({ end: 'more', next: true }))).toBeNull()
+    // after a failed Next the page keeps its rows and its end, shows Retry
+    // and takes Next away
+    expect(deletedPageProblem(page({ end: 'more', retry: true }))).toBe(
+      'Deleted items could not load another page',
+    )
+    expect(deletedPageProblem(page({ end: 'more' }))).toBe(
+      'Deleted items could not load another page',
+    )
+    // after a failed Previous on the last page too
+    expect(deletedPageProblem(page({ retry: true }))).toBe(
+      'Deleted items could not load another page',
+    )
+    expect(deletedPageProblem(page({ end: 'failed', retry: true }))).toBe(
+      'Deleted items could not load',
+    )
+    expect(deletedPageProblem(page({ end: 'held' }))).toBe(
+      'Deleted items could not list this scope',
+    )
+    expect(deletedPageProblem(page({ end: 'stuck', retry: true }))).toBe(
+      'Deleted items could not check part of the list',
+    )
   })
 
   it("reads Delete now's answer: deleted, sent again once ready, gone, or a problem", () => {
