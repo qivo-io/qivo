@@ -198,8 +198,8 @@ import { taskFields } from './workspaceParts'
  * a member's rare word over a project of 800 open tasks, as those cases
  * build them, beside a rare word over the catalogue's 700 live projects for
  * an organization admin, who then read every project, which no caller
- * inside the design size reads since the admin access split. If the slowest
- * call's JavaScript passes 0.5 s, lower `scan`.
+ * inside the design size reads since the admin access split. `scan` is the
+ * figure to lower if these reads must cost less.
  */
 export const RELATION_PICKER = {
   rows: 25,

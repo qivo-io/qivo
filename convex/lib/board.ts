@@ -91,9 +91,7 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * of that day measured, at ordinary text and at the text caps.
  *
  * An organization admin's Board read costs the same as a standard user's
- * with the same rows. Beside busy loops on a local backend, the largest My
- * view above has passed 0.5 s of JavaScript, and Convex has stopped such a
- * call at the 1 s it gives a query's own code.
+ * with the same rows.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the

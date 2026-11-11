@@ -218,8 +218,10 @@ export function mostAtOnce(intervals) {
   return most
 }
 
-/** The JavaScript time `line` (milliseconds) a call may take at the
-    everyday values, the owner's 0.5 s line (design specification §9.1). */
+/** The JavaScript time (milliseconds) from which the report lists a call,
+    half of the 1 s Convex gives a query's or a mutation's own code. It is
+    this report's signal for pacing under a combined load and no limit. The
+    design specification's section 9.1 has the rule for timing one read. */
 export const JS_LINE_MS = 500
 
 /** The functions of `stats` (functionStats') whose slowest JavaScript time
@@ -523,8 +525,8 @@ export function hostedModel(phases) {
  * query limit (hostedModel) rather than the local backend's overload, as
  * the later-work entry on the combined load of 9 November 2026 in
  * qivo-internal asks: a phase whose modelled load asked more than
- * HOSTED_QUERY_SLOTS queries at once, a call whose JavaScript passed the
- * 0.5 s line and a client whose time to current after the reconnect passed
+ * HOSTED_QUERY_SLOTS queries at once, a call whose JavaScript reached
+ * JS_LINE_MS and a client whose time to current after the reconnect passed
  * ten times the lone client's, each with what showed it. The local
  * backend's overload closes (1013) are the test bed's saturation, listed
  * by phase under `test_bed_saturated`, and fire nothing, since they say
