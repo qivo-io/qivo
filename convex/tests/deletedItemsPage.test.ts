@@ -902,6 +902,57 @@ describe('search', () => {
     expect(inside.items.map((r) => r.id)).toEqual([item])
   })
 
+  it("passes over a project item whose names cannot match an admin's search without the reads of its view", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    const read = (search?: string) =>
+      as(t, f.admin).query(async (ctx) => {
+        const spend: PageSpend = {}
+        const answer = await pageFor(ctx, new Map([[org_id, f.admin]]), { search }, spend)
+        return { ids: answer.entries.map((e) => e.item_id), ranges: spend.call?.ranges ?? 0 }
+      })
+    const items: string[] = []
+    const plant = async (name: string) => {
+      const made = await tree(t, f, name, f.user, [{ name: `${name} lab` }, { name: `${name} site` }])
+      await deleteProject(t, f.user, made.top.id)
+      items.unshift((await itemFor(t, made.top.id)).id)
+      later()
+    }
+    await plant('Wind tunnel')
+    const one = { none: await read('gearbox'), all: await read(), found: await read('tunnel') }
+    for (const name of ['Drop tower', 'Salt spray', 'Shaker table']) await plant(name)
+    const four = { none: await read('gearbox'), all: await read(), found: await read('tunnel') }
+    // a search that matches no name reads no more ranges for more items,
+    // where a browse reads each item's view
+    expect(one.none.ids).toEqual([])
+    expect(four.none).toEqual(one.none)
+    expect(four.all.ids).toEqual(items)
+    expect(four.all.ranges).toBeGreaterThan(one.all.ranges)
+    // and the one that matches still reads its view, as before
+    expect(four.found.ids).toEqual([items[3]])
+    expect(four.found.ranges).toBe(one.found.ranges)
+    // a name of a sub-project finds its item for the admin, who keeps every name
+    expect((await read('salt spray site')).ids).toEqual([items[1]])
+  })
+
+  it("finds a project item for a sub-project's lead by the names they see, never by a sibling's", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const trial = await tree(t, f, 'Field trial', f.admin, [
+      { name: 'Lab', key: 'LAB', lead: f.user },
+      { name: 'Quarry', key: 'QRY' },
+    ])
+    await deleteProject(t, f.admin, trial.top.id)
+    const item = (await itemFor(t, trial.top.id)).id
+    for (const search of ['lab', 'LAB', 'field trial lab'])
+      expect((await page(t, f.user, { search })).entries, search).toEqual([{ item_id: item }])
+    for (const search of ['quarry', 'QRY', 'lab quarry'])
+      expect((await page(t, f.user, { search })).entries, search).toEqual([])
+    // the admin keeps every name of the item
+    expect((await page(t, f.admin, { search: 'quarry' })).entries).toEqual([{ item_id: item }])
+  })
+
   it('counts a task item once with its first matching subtask, and each task of a project item once with one row', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
