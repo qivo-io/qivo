@@ -914,7 +914,10 @@ describe('search', () => {
       })
     const items: string[] = []
     const plant = async (name: string) => {
-      const made = await tree(t, f, name, f.user, [{ name: `${name} lab` }, { name: `${name} site` }])
+      const made = await tree(t, f, name, f.user, [
+        { name: `${name} lab` },
+        { name: `${name} site` },
+      ])
       await deleteProject(t, f.user, made.top.id)
       items.unshift((await itemFor(t, made.top.id)).id)
       later()
