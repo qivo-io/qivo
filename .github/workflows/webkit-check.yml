@@ -159,7 +159,7 @@ jobs:
             echo
             echo '```'
             if [ -f "$STACK/out/staging-check.log" ]; then
-              grep -E '^(FAIL|SKIP|DONE)|^NOTE +(browser|users-search)' "$STACK/out/staging-check.log" | cut -c1-400 \
+              grep -E '^(FAIL|SKIP|DONE)|^NOTE +(browser|search-lost)' "$STACK/out/staging-check.log" | cut -c1-400 \
                 || echo "The check printed no result line."
             else
               echo "The check did not start."

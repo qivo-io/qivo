@@ -168,6 +168,7 @@ import {
   request,
   resolveConfig,
   results,
+  SEARCH_LOST,
   SETTINGS_PROJECTS_MARKS,
   SETTINGS_PROJECTS_STEP,
   SETTINGS_USERS_EXPECTED,
@@ -197,6 +198,7 @@ import {
   TOAST_HOST,
   taskPages,
   threadFitsBudget,
+  typeSearch,
   UPLOAD_STEP,
   WAITS,
   WORKLOAD_PAGE,
@@ -1387,7 +1389,9 @@ describe('staging check REST contract', () => {
     // the search is answered before the scope and the selection, since a
     // changed search clears the selection
     const answered = step.indexOf('=== none')
-    expect(answered).toBeGreaterThan(step.indexOf('.fill(words)'))
+    const typed = step.indexOf('await typeSearch(app.locator(`[')
+    expect(typed).toBeGreaterThan(-1)
+    expect(answered).toBeGreaterThan(typed)
     // the scope goes through pickProject, which waits until the picker has
     // closed, since the open picker lies over the kinds
     const scoped = step.indexOf('await pickProject(app.locator(')
@@ -2538,6 +2542,84 @@ describe('what a timeout waited for', () => {
     ).toBe('')
     expect(waitedFor(new Error("x\n  - waiting for locator('a')"))).toBe('')
     expect(waitedFor(undefined)).toBe('')
+  })
+})
+
+describe('a search that lost its typed text', () => {
+  /** A stand-in field, whose `page` can replace or empty it. */
+  const fieldOf = () => {
+    const page = { el: { value: '' }, fills: 0 }
+    return {
+      page,
+      fill: async (text) => {
+        page.fills++
+        page.el.value = text
+      },
+      evaluate: async (fn) => fn(page.el),
+    }
+  }
+  const notes = () => {
+    const lines = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((line) => lines.push(String(line)))
+    return { lines, done: () => spy.mockRestore() }
+  }
+
+  it('holds while the field keeps the text, without a NOTE', async () => {
+    const seen = notes()
+    try {
+      const field = fieldOf()
+      const holds = await typeSearch(field, 'Nora Berg', 'the Users search')
+      expect(field.page.el.value).toBe('Nora Berg')
+      expect(await holds()).toBe(true)
+      expect(await holds()).toBe(true)
+      expect(field.page.fills).toBe(1)
+      expect(seen.lines).toEqual([])
+    } finally {
+      seen.done()
+    }
+  })
+  it('types again once, says whether the field is the same, and fails a second loss', async () => {
+    const seen = notes()
+    try {
+      const field = fieldOf()
+      const holds = await typeSearch(field, 'Nora Berg', "a picker's search")
+      // emptied in place
+      field.page.el.value = ''
+      expect(await holds()).toBe(false)
+      expect(field.page.fills).toBe(2)
+      expect(await holds()).toBe(true)
+      expect(seen.lines).toEqual([
+        `NOTE ${SEARCH_LOST}  a picker's search lost its text, in the same field, and the step typed it again`,
+      ])
+      field.page.el.value = ''
+      await expect(holds()).rejects.toThrow("a picker's search lost its typed text twice")
+      // made anew by the page
+      const other = fieldOf()
+      const again = await typeSearch(other, 'Nora Berg', "Deleted items' search")
+      other.page.el = { value: '' }
+      expect(await again()).toBe(false)
+      expect(seen.lines[1]).toBe(
+        `NOTE ${SEARCH_LOST}  Deleted items' search lost its text, in a field the page made anew, and the step typed it again`,
+      )
+    } finally {
+      seen.done()
+    }
+  })
+  it('guards the Users search, the searched pickers and the Deleted items search, and the workflow lists its NOTE', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(SEARCH_LOST).toBe('search-lost')
+    expect(script.match(/await typeSearch\(/g)).toHaveLength(3)
+    for (const use of [
+      "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
+      'typeSearch(search, text, "a picker\'s search")',
+      'words, "Deleted items\' search")',
+    ])
+      expect(script, use).toContain(use)
+    const workflow = readFileSync(
+      new URL('../.github/workflows/webkit-check.yml', import.meta.url),
+      'utf8',
+    )
+    expect(workflow).toContain(`^NOTE +(browser|${SEARCH_LOST})`)
   })
 })
 

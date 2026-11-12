@@ -2034,16 +2034,16 @@ async function openUsers() {
   await app.locator('[data-org-users][data-users-state="ok"]').waitFor({ timeout: 45_000 })
 }
 
-/** Searches Settings › Users for `text` and waits for the page the
- *  deployment answers for it, whose every row names the text, or whose end
- *  says nothing matches. The search goes to the server once typing rests.
- *  In some runs the field is empty again a moment after the typing, in
- *  Chromium and in WebKit, for a cause not found. The step
- *  then types again, once, and says so in a NOTE, with whether the field
- *  is still the element it typed into, so each time leaves its evidence.
- *  A field that loses its text a second time fails the step. */
-async function searchUsers(text) {
-  const field = app.locator('[data-users-search]')
+/** Types `text` into the search `field`, which `what` names, and answers
+ *  `holds`, a check for the waits that follow. In some runs a search field
+ *  is empty again a moment after the typing, in Chromium and in WebKit, on
+ *  Settings › Users, in a team's Add member picker and on Deleted items,
+ *  for a cause not found. `holds` answers whether the field still holds
+ *  the text. When it does not, it types the text again, once, and says so
+ *  in a NOTE, with whether the field is still the element it typed into,
+ *  so each time leaves its evidence. A field that loses its text a second
+ *  time fails the step. */
+export async function typeSearch(field, text, what) {
   let retyped = false
   const type = async () => {
     await field.fill(text)
@@ -2052,23 +2052,33 @@ async function searchUsers(text) {
     })
   }
   await type()
+  return async () => {
+    const now = await field.evaluate((el) => ({ value: el.value, same: el.stgchkTyped === true }))
+    if (now.value === text) return true
+    expect(!retyped, `${what} lost its typed text twice`)
+    retyped = true
+    say(
+      'NOTE',
+      SEARCH_LOST,
+      `${what} lost its text, ${now.same ? 'in the same field' : 'in a field the page made anew'}, and the step typed it again`,
+    )
+    await type()
+    return false
+  }
+}
+
+/** The NOTE a step prints when a search field lost its typed text
+ *  (typeSearch). The WebKit workflow's summary lists these lines. */
+export const SEARCH_LOST = 'search-lost'
+
+/** Searches Settings › Users for `text` and waits for the page the
+ *  deployment answers for it, whose every row names the text, or whose end
+ *  says nothing matches. The search goes to the server once typing rests. */
+async function searchUsers(text) {
+  const holds = await typeSearch(app.locator('[data-users-search]'), text, 'the Users search')
   expect(
     await until(async () => {
-      const now = await field.evaluate((el) => ({
-        value: el.value,
-        same: el.stgchkTyped === true,
-      }))
-      if (now.value !== text) {
-        expect(!retyped, 'the Users search lost its typed text twice')
-        retyped = true
-        say(
-          'NOTE',
-          'users-search',
-          `the search field lost its text, ${now.same ? 'in the same field' : 'in a field the page made anew'}, and the step typed it again`,
-        )
-        await type()
-        return false
-      }
+      if (!(await holds())) return false
       return evaluate(
         app,
         (want) => {
@@ -2111,9 +2121,12 @@ export const listAnswers = (texts, text) => {
  *  the search is answered, such as the Board's Assignee menu, needs no such
  *  wait, since a press waits for its row to be on. */
 async function pressSearched(search, text, rows, choice) {
-  await search.fill(text)
+  const holds = await typeSearch(search, text, "a picker's search")
   expect(
-    await until(async () => listAnswers(await rows.allTextContents(), text), 30_000),
+    await until(
+      async () => (await holds()) && listAnswers(await rows.allTextContents(), text),
+      30_000,
+    ),
     `the picker's list did not settle on its search for ${text}`,
   )
   await choice.click({ timeout: 30_000 })
@@ -10896,12 +10909,16 @@ async function deletedItemsCheck() {
     // was typed, and a changed search clears the selection, so the step
     // waits until the page answers it, matching nothing without projects.
     const words = `${run.tag} Deleted`
-    await app.locator(`[${m.search}]`).fill(words)
+    const holds = await typeSearch(app.locator(`[${m.search}]`), words, "Deleted items' search")
     const end = app.locator(`[${m.end}]`)
     const none = DELETED_ITEMS_EXPECTED.none(words)
+    // the end line shows only once a search is answered, so its text is
+    // read without a wait of its own
+    const ended = async () =>
+      (await end.count()) > 0 ? ((await end.first().textContent()) ?? '').trim() : ''
     expect(
-      await until(async () => ((await end.textContent()) ?? '').trim() === none, 60_000),
-      `the page without projects ends "${((await end.textContent()) ?? '').trim()}", not "${none}"`,
+      await until(async () => (await holds()) && (await ended()) === none, 60_000),
+      `the page without projects ends "${await ended()}", not "${none}"`,
     )
     // the run's project, from the shared picker's search. The picker must
     // close before the kinds, which lie under it. One Escape only clears a

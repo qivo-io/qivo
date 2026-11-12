@@ -749,9 +749,10 @@ With `--shots <directory>` each failed step leaves a picture of the app's
 page there as `failed-<step>.png`, with each `/` of the step as `-`, such as
 `failed-ui-org-export.png`, never while a secret or a password field is on
 screen. A step that timed out waiting for an element names that element in
-its `FAIL` line. The Users search types its text again, once, when the field
-is empty a moment after the typing, and says so in a `NOTE users-search`
-line.
+its `FAIL` line. A search field is sometimes empty again a moment after the
+check typed into it, for a cause not found. The Users search, a searched
+picker and the Deleted items search then type their text again, once, and say
+so in a `NOTE search-lost` line. A second loss fails the step.
 
 Nobody on the project has Safari. **WebKit check on macOS**
 (`.github/workflows/webkit-check.yml`), run by hand from the Actions page or
@@ -760,7 +761,7 @@ of Safari the project has. On a macOS runner it builds the app as a release
 does, starts a disposable local Convex backend there, deploys the branch's
 functions to it, seeds Northstar and runs the local check with
 `--browser webkit`. Its summary lists the browser's version and every
-`FAIL`, `SKIP` and `NOTE users-search` line, and its artifact holds the
+`FAIL`, `SKIP` and `NOTE search-lost` line, and its artifact holds the
 check's log and a screenshot of each failed step for 7 days. The run uses no secret and reaches no hosted
 deployment. The backend's keys and the fixture logins are made on the runner
 and go with it.
