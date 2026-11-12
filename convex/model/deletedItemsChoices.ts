@@ -254,10 +254,10 @@ async function adminDeleters(w: Walk): Promise<boolean> {
       .withIndex('by_org_deleter', (q) => q.eq('org_id', w.me.org_id).gt('deleted_by', from))
     let who: string | undefined
     for await (const item of theirs) {
+      if (!(await w.guard.document(item))) return false
       // the range runs on into the next deleter's items
       if (who !== undefined && item.deleted_by !== who) break
       who = item.deleted_by
-      if (!(await w.guard.document(item))) return false
       if (item.state !== 'purging' && named(w, who, item)) {
         w.found.add(who)
         break

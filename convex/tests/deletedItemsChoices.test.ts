@@ -872,7 +872,8 @@ describe('reads at the design size', () => {
     return ids
   }
 
-  /* `n` task items of Firmware, as each delete of a task without subtasks
+  /* `n` task items spread evenly over `subs`, sub-projects of TBED
+   * (Firmware alone by default), as each delete of a task without subtasks
    * stores one item and one task row, deleted by `deleters` and held by
    * `holders` in turn. */
   async function taskItems(
@@ -881,9 +882,11 @@ describe('reads at the design size', () => {
     n: number,
     deleters: readonly string[],
     holders: readonly string[],
+    subs: readonly Doc<'projects'>[] = [f.sub],
   ) {
     await t.run(async (ctx) => {
       for (let i = 0; i < n; i++) {
+        const sub = subs[i % subs.length]
         const item = uuid()
         const task = uuid()
         const at = new Date(START - i * 60_000).toISOString()
@@ -896,14 +899,14 @@ describe('reads at the design size', () => {
           name: 'Replace the fan controller on the bench rig',
           status: 'todo',
           archived: false,
-          project_id: f.sub.id,
+          project_id: sub.id,
           parent_project_id: f.meta.id,
-          path: ['Testbed platform', 'Firmware'],
+          path: ['Testbed platform', sub.name],
           projects: [
             {
-              id: f.sub.id,
-              name: 'Firmware',
-              key: 'FW',
+              id: sub.id,
+              name: sub.name,
+              key: sub.key,
               type: 'project',
               tasks: 1,
               archived_tasks: 0,
@@ -921,12 +924,12 @@ describe('reads at the design size', () => {
           task_id: task,
           num: 9_000 + i,
           title: 'Replace the fan controller on the bench rig',
-          project_id: f.sub.id,
+          project_id: sub.id,
           archived: false,
           assignee_id: holders[i % holders.length],
           deleted_at: at,
           deleted_by: deleters[i % deleters.length],
-          item_project_id: f.sub.id,
+          item_project_id: sub.id,
           item_parent_id: f.meta.id,
         })
       }
@@ -965,9 +968,11 @@ describe('reads at the design size', () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     // a project's 800 open tasks with all its sub-projects, each deleted on
-    // its own, here all in Firmware
+    // its own, spread over TBED's two sub-projects and a third, the
+    // everyday three, so none holds more than a sub-project's 300
+    const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const ids = await labPeople(t, f, 25)
-    await taskItems(t, f, 800, ids.slice(0, 10), ids.slice(10, 25))
+    await taskItems(t, f, 800, ids.slice(0, 10), ids.slice(10, 25), [f.sub, f.sub2, third])
     await bothLists(t, f.admin, '800 task items', { deleters: 10, assignees: 15 })
     await bothLists(t, f.user, 'the same, for the project lead', { deleters: 10, assignees: 15 })
   }, 60_000)
@@ -976,11 +981,17 @@ describe('reads at the design size', () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     const ids = await labPeople(t, f, 25)
-    // 500 sub-project items under TBED, each sub-project deleted on its own,
-    // with its stored project row, which names the user as its lead
+    // 20 top-level projects the user leads, each with 25 of the 500, so
+    // none holds more than a project's 30 live sub-projects
+    const tops: Doc<'projects'>[] = []
+    for (let i = 0; i < 20; i++)
+      tops.push(await plantProject(t, { org_id: f.org.id, lead_id: f.user.id }))
+    // 500 sub-project items, each sub-project deleted on its own, with its
+    // stored project row, which names the user as its lead
     await t.run(async (ctx) => {
       for (let i = 0; i < 500; i++) {
         const target = uuid()
+        const top = tops[i % tops.length]
         const item: WithoutSystemFields<Item> = {
           id: uuid(),
           org_id: f.org.id,
@@ -991,8 +1002,8 @@ describe('reads at the design size', () => {
           key: `BR${i}`,
           archived: false,
           project_id: target,
-          parent_project_id: f.meta.id,
-          path: ['Testbed platform'],
+          parent_project_id: top.id,
+          path: [top.name],
           projects: [
             {
               id: target,
@@ -1015,7 +1026,7 @@ describe('reads at the design size', () => {
           ...stored,
           row: {
             ...stored.row,
-            doc: { ...stored.row.doc, type: 'project' as const, parent_id: f.meta.id },
+            doc: { ...stored.row.doc, type: 'project' as const, parent_id: top.id },
           },
         })
       }
