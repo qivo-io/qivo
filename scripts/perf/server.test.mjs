@@ -907,14 +907,15 @@ describe('the benchmark server', () => {
     expect((await read('labelpicker=byids-loading', 'labels:byIds', { ids: far })).answer).toBe(
       'none',
     )
-    // the view filter's people and the mention suggestions over every
-    // person, 8 at a time, with no email
-    const people = await read('people=1000', 'pickers:orgPeople')
+    // the mention suggestions over every person, 8 at a time, with no
+    // email, and the view filter's people all at once
+    const people = await read('people=1000', 'pickers:mentions', { issue_id: 'a-task' })
     expect(people.answer).toMatchObject({ state: 'ready', stopped: false })
     expect(people.answer.rows).toHaveLength(8)
     expect(Object.keys(people.answer.rows[0]).sort()).toEqual(['color', 'id', 'initials', 'name'])
-    const offered = await read('people=1000', 'pickers:mentions', { issue_id: 'a-task' })
-    expect(offered.answer.rows).toEqual(people.answer.rows)
+    const owners = await read('people=1000', 'pickers:viewOwners', { project_id: 'a-project' })
+    expect(owners.answer).toMatchObject({ state: 'ready', next: null, stopped: false })
+    expect(owners.answer.rows.slice(0, 8)).toEqual(people.answer.rows)
     const zoe = await read('', 'pickers:mentions', { issue_id: 'a-task', search: 'zoë' })
     expect(zoe.answer.rows.every((row) => row.name.startsWith('Zoë'))).toBe(true)
     expect(

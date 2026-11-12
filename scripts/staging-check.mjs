@@ -8948,7 +8948,7 @@ export const REMOVED_PARTS = ['workspace:people', 'workspace:catalog']
 /** The queries the step's menus read their rows from. */
 export const ROSTER_READS = {
   teams: 'teams:picker',
-  people: 'pickers:orgPeople',
+  people: 'pickers:viewOwners',
   followers: 'pickers:taskFollowers',
   board: 'tasks:board',
 }
@@ -8958,9 +8958,11 @@ export const ROSTER_READS = {
  *  REMOVED_PARTS on its sync socket, and the store holds Nora's own seats
  *  alone (P.users). Team sync's scope menu finds the run's team by its
  *  tag through teams.picker, a pick names it on the trigger, and the
- *  agenda answers for its scope. M's Board's Assignee menu finds
- *  OWNER_PICKERS_PERSON through pickers.orgPeople, a pick sends the
- *  Board's read with his id in its owners, and the filter's × clears it.
+ *  agenda answers for its scope. M's Board's Assignee menu lists the
+ *  owners of M's tasks alone, through pickers.viewOwners: it finds a
+ *  person REST says holds a task of M that is not In review, and not
+ *  OWNER_PICKERS_PERSON, who holds none there. A pick sends the Board's
+ *  read with the holder's id in its owners, and the filter's × clears it.
  *  The follower Add list offers only people who see the task's project,
  *  so the step gives him Viewer on Alpha, run.t0's sub-project, which the
  *  run otherwise shares with its agents alone, and run.t0's follower
@@ -9005,13 +9007,30 @@ async function rosterPartsCheck() {
       }))
       same(seats.users, seats.mine, "the store's people")
 
-      // the Board's Assignee menu finds Leo on the server, and a pick sends
-      // the Board's read with him among its owners
+      // the Board's Assignee menu lists the owners of M's tasks alone: a
+      // person who holds one, whom a pick sends the Board's read for, and
+      // not Leo, who holds none there
+      const held = (await restTasks(w, `/tasks?project=${M.id}&limit=200`)).find(
+        (task) => task.assignee_id && task.assignee_id !== leo.id && task.status !== 'review',
+      )
+      expect(held, `${M.key} holds no assigned task to filter by`)
+      const holder = await restOk(w, 'GET', `/users/${held.assignee_id}`)
       await app.locator('[data-filter-assignee-menu]').first().click()
-      await app.locator('[data-filter-assignee-search]').fill(OWNER_PICKERS_PERSON)
-      const choice = app.locator(`[data-filter-assignee="${leo.id}"]`).first()
+      const search = app.locator('[data-filter-assignee-search]')
+      await search.fill(holder.name)
+      const choice = app.locator(`[data-filter-assignee="${holder.id}"]`).first()
       await choice.waitFor({ timeout: 30_000 })
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.people)).length > 0, true, 'the menu read')
+      await search.fill(OWNER_PICKERS_PERSON)
+      await choice.waitFor({ state: 'detached', timeout: 30_000 })
+      await app.getByText('No matching people.').first().waitFor({ timeout: 30_000 })
+      eq(
+        await app.locator(`[data-filter-assignee="${leo.id}"]`).count(),
+        0,
+        `${leo.name} is listed`,
+      )
+      await search.fill(holder.name)
+      await choice.waitFor({ timeout: 30_000 })
       const before = sent.length
       await choice.click()
       filtered = true
@@ -9019,9 +9038,11 @@ async function rosterPartsCheck() {
         await until(async () =>
           sent
             .slice(before)
-            .some((f) => addsQueryFor(f, ROSTER_READS.board, leo.id) || isOneShotFor(f, leo.id)),
+            .some(
+              (f) => addsQueryFor(f, ROSTER_READS.board, holder.id) || isOneShotFor(f, holder.id),
+            ),
         ),
-        `the Board did not read ${leo.name}'s tasks`,
+        `the Board did not read ${holder.name}'s tasks`,
       )
       await app.keyboard.press('Escape')
       await app.locator('[data-filter-x="assignee"]').first().click()
@@ -9087,7 +9108,7 @@ async function rosterPartsCheck() {
         ),
         "the agenda was not read for the team's scope",
       )
-      return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${leo.name} in its Assignee menu and by his name in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
+      return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${holder.name}, who holds a task there, and not ${leo.name} in its Assignee menu, ${leo.name} by his name in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
     } finally {
       // a failure leaves the Board's filter and Team sync's scope as they
       // were: the filter's × on M's Board, and M's meeting by its address

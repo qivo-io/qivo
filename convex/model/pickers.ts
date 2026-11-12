@@ -4,8 +4,8 @@
  * named people could be chosen in one of those pickers now (canOwnOf).
  * The editor's @ mention popup reads the people who have access to its
  * task's project, behind the same gate (mentionsOf), and the view filter's
- * Assignee menu reads every person of the organization with no task, gate
- * or rule (orgPeopleOf), both without an email. The REST and MCP project
+ * Assignee menu reads the owners of the tasks of the project its view
+ * selects (viewOwnersOf), both without an email. The REST and MCP project
  * user list (lib/core.ts
  * projectUserPage) asks the owner rule's helpers for one project, without
  * a task, within the rule's share (withinRule).
@@ -49,6 +49,7 @@
  * Nothing here reads a task's title, description, comments or files, and
  * nothing writes. */
 
+import { compareValues } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
@@ -57,6 +58,7 @@ import {
   canSeeProject,
   canSeeProjectFor,
   inMetaTree,
+  isAccessUnchecked,
   keepsInbox,
   levelRank,
   type ProjectLevelReads,
@@ -64,9 +66,10 @@ import {
   projectLevelReads,
 } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
+import { BOARD } from '../lib/board'
 import { byId } from '../lib/db'
-import { badRequest } from '../lib/functions'
-import { BY_IDS_MAX, LIST_BATCH, MENTION_BATCH, MIB } from '../lib/limits'
+import { badRequest, rule } from '../lib/functions'
+import { BY_IDS_MAX, LIMITS, LIST_BATCH, MENTION_BATCH, MIB, overText } from '../lib/limits'
 import {
   indexAfter,
   type ListBatch,
@@ -79,7 +82,16 @@ import {
   readGuard,
 } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
+import { taskOwnerId } from '../lib/review'
 import { allWordsMatcher, searchWords } from '../lib/search'
+import {
+  byIdSteps,
+  isOverBudget,
+  projectSelection,
+  selectionTasks,
+  viewAccess,
+  viewBudget,
+} from '../lib/viewReads'
 import { ancestorsFrom, hasSubtasks, NO_WRITE_ACCESS, REVIEWER_ON_GROUP } from './issues'
 import { idTieOf, nameKeysReady, profileIndex, profileRoleIndex } from './nameKeys'
 import { shownAvatarColor } from './people'
@@ -555,21 +567,23 @@ export type MentionBatch =
   | { state: 'over_budget' }
   | ({ state: 'ready' } & ListBatch<MentionRow>)
 
-/** What the view filter's Assignee menu's read answers: `not_ready` until
- * the organization's names are keyed, or one batch of people in name
- * order. */
-export type OrgPeopleBatch = { state: 'not_ready' } | ({ state: 'ready' } & ListBatch<MentionRow>)
+/** What the view filter's Assignee menu's read answers: `unavailable`
+ * alike for every project the caller's views do not select, `over_budget`
+ * when the project's tasks could not be read within VIEW_OWNERS.reads, or
+ * every owner in name order, as a list's one batch that ends it
+ * (lib/namedPages.ts ListBatch, `next` null and never `stopped`). */
+export type ViewOwnersAnswer =
+  | { state: 'unavailable' }
+  | { state: 'over_budget' }
+  | ({ state: 'ready' } & ListBatch<MentionRow>)
 
-/** The list names the cursors are sealed with. */
+/** The list name the mention cursors are sealed with. */
 const MENTIONS = 'pickers.mentions'
-const ORG_PEOPLE = 'pickers.orgPeople'
 
-/* The refusals of a cursor that is not one of the list's for the same
+/* The refusal of a cursor that is not one of the suggestions' for the same
  * arguments and search. */
 const MENTIONS_CURSOR =
   'after and through must be cursors from an earlier answer of these suggestions, for the same task and search; start again from the first batch'
-const ORG_PEOPLE_CURSOR =
-  'after and through must be cursors from an earlier answer of this list, with the same search; start again from the first batch'
 
 /**
  * pickers.mentions for `me`: one batch of MENTION_BATCH people the editor's
@@ -643,49 +657,79 @@ export async function mentionsOf(
   return { state: 'ready', ...batch }
 }
 
+/** What the Assignee menu's read may read, the Board's own budget
+ * (lib/board.ts BOARD.reads), since it reads the tasks a Board of the
+ * project reads without a filter, and then one profile an owner. Tests
+ * lower it. */
+export const VIEW_OWNERS: { reads: typeof BOARD.reads } = { reads: { ...BOARD.reads } }
+
+/** What the Assignee menu is asked: the project its view selects and a
+ * search. */
+export type ViewOwnersArgs = { project_id: string; search?: string }
+
 /**
- * pickers.orgPeople for `me`: one batch of MENTION_BATCH people of the
- * organization the view filter's Assignee menu offers, in name order. It
- * walks every profile of the organization in name key order, ties by id
- * (profileIndex), after the cursor, people, agents, switched-off people,
- * unclaimed seats and the caller alike, as the menu has always listed
- * them, since a filter may name anyone whose tasks the caller sees. It
- * keeps each whose name and initials hold every word of the search, by
- * mentionsOf's match. The arguments, readiness and stops are mentionsOf's,
- * with a cursor's scope of the organization and the search.
+ * pickers.viewOwners for `me`: the people the view filter's Assignee menu
+ * offers above the Board or the Roadmap of project `a.project_id`, who are
+ * the owners of that selection's tasks and nobody else (the owner's
+ * decision of 12 November 2026). In order:
  *
- * No task, project, grant or team is read, so the read cannot widen access
- * to work, and any active seat of the organization may read it, guests and
- * viewers too. That every seat reads every name here is an agent decision
- * of 12 November 2026 that waits for the owner, who that day took the
- * email out of both lists and narrowed the mention popup to the task's
- * project. With `through` a batch holds every match up to it and stops
- * past four batches (lib/namedPages.ts listBatch); the app reads without
- * it, once a batch, and never subscribes. A kept row reads nothing more,
- * so a batch costs one document a person walked.
- * tests/mentionSuggestions.test.ts ("the list inside Convex's limits")
- * logs what a batch reads among 1,000 people, without the login's own
- * reads. NAMED_READ's documents hold the longest walk several times over.
+ * 1. The arguments: a search past LIMITS.search is refused with that
+ *    limit's sentence.
+ * 2. The selection, as a Board of the project reads it (lib/viewReads.ts
+ *    projectSelection): a sub-project, or a top-level project's
+ *    sub-projects that are live and that the caller can see. `unavailable`
+ *    alike for an unknown project, one of another organization, an
+ *    archived one and one the caller cannot see.
+ * 3. Every active task of those sub-projects (selectionTasks), the tasks
+ *    the views filter, Done ones not yet archived included. Each gives its
+ *    owner by the rule the filter matches by (lib/review.ts taskOwnerId):
+ *    the reviewer while the task is In review and has one, else the
+ *    assignee. A group stays with its assignee in the filter whatever its
+ *    status; the write refuses a reviewer on a group, so a group In review
+ *    with a reviewer is legacy data, and its reviewer is listed in the
+ *    assignee's place.
+ * 4. Each owner's profile by id, those of the caller's organization kept,
+ *    as rows of id, name, initials and color, never an email, whose name
+ *    and initials hold every word of the search (mentionsOf's match), in
+ *    name key order, ties by id.
+ *
+ * It answers every owner at once, with no cursor, since a list of owners
+ * is as long as the people who hold the project's tasks. Past
+ * VIEW_OWNERS.reads it answers `over_budget` with no row, and a check a
+ * bound of the caller's own access reads stopped answers `over_budget`
+ * too, never a shorter list. The app reads it once while the menu is open
+ * and never subscribes. tests/viewOwners.test.ts holds it, with its reads
+ * at the design size.
  */
-export async function orgPeopleOf(
+export async function viewOwnersOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  a: ListArgs,
-): Promise<OrgPeopleBatch> {
-  const ask = await orderedListAsk(ORG_PEOPLE, [me.org_id, searchWords(a.search ?? '')], a, {
-    tieOf: idTieOf,
-    refusal: ORG_PEOPLE_CURSOR,
-  })
-  if (!(await nameKeysReady(ctx, me.org_id))) return NOT_READY
-  const matches = allWordsMatcher(ask.search)
-  const batch = await listBatch(ctx, ask, {
-    stream: indexAfter(profileIndex(ctx, me.org_id), ask.after),
-    keep: async (profile: Doc<'profiles'>) =>
-      matches(mentionText(profile)) ? mentionRow(profile) : null,
-    limit: MENTION_BATCH,
-    ceiling: await namedCeiling(ctx),
-  })
-  return { state: 'ready', ...batch }
+  a: ViewOwnersArgs,
+): Promise<ViewOwnersAnswer> {
+  const search = (a.search ?? '').trim()
+  if (overText(LIMITS.search, search)) throw rule(LIMITS.search.refusal)
+  const matches = allWordsMatcher(searchWords(search))
+  try {
+    const guard = viewBudget(ctx, VIEW_OWNERS.reads)
+    const selection = await projectSelection(ctx, guard, viewAccess(ctx, guard, me), a.project_id)
+    if (selection === null) return UNAVAILABLE
+    const owners = new Set<string>()
+    for await (const step of selectionTasks(ctx, guard, selection.subProjects))
+      for (const task of step) {
+        const owner = taskOwnerId(task)
+        if (owner !== undefined) owners.add(owner)
+      }
+    const profiles = await byIdSteps(guard, [...owners], (id) => byId(ctx, 'profiles', id))
+    const rows = profiles
+      .filter((p): p is Doc<'profiles'> => p !== null && p.org_id === me.org_id)
+      .filter((p) => matches(mentionText(p)))
+      .sort((x, y) => compareValues([nameKey(x.name), x.id], [nameKey(y.name), y.id]))
+      .map(mentionRow)
+    return { state: 'ready', rows, next: null, stopped: false }
+  } catch (e) {
+    if (isOverBudget(e) || isAccessUnchecked(e)) return OVER_BUDGET
+    throw e
+  }
 }
 
 /* ---------------------------------------------------------- the followers */
@@ -759,9 +803,10 @@ const FOLLOWERS_CURSOR =
  * 3. `not_ready` until the organization's names are keyed.
  * 4. The rule within PICKERS.rule, else `over_budget`.
  * 5. The walk over every profile of the organization in name order
- *    (profileIndex), keeping each person the rule lets in whose name or
- *    email holds every word of the search in any order, ignoring case and
- *    accents, and whose follow of the task one lookup finds missing. Past
+ *    (profileIndex), keeping each person the rule lets in whose name
+ *    holds every word of the search in any order, ignoring case and
+ *    accents, never their email (the owner's decision of 12 November
+ *    2026), and whose follow of the task one lookup finds missing. Past
  *    NAMED_READ it stops and says so.
  *
  * The app reads it once a batch while the Add list is open and never
@@ -795,7 +840,7 @@ export async function followerChoicesOf(
     keep: async (profile: Doc<'profiles'>, guard): Promise<FollowerRow | null> => {
       if (profile.id === me.id || !profile.active || !keepsInbox(profile) || !sees(profile))
         return null
-      if (!matches(`${nameKey(profile.name)}\n${nameKey(profile.email ?? '')}`)) return null
+      if (!matches(nameKey(profile.name))) return null
       const follows = await guard.lookup(() =>
         ctx.db
           .query('issue_subscriptions')

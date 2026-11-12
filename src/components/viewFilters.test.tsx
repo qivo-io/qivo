@@ -3,8 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MENTION_BATCH } from '../../convex/lib/limits'
-import { mentionStandIn } from '../store/mentionStandIn.setup'
+import { viewOwnersStandIn } from '../store/mentionStandIn.setup'
 import { peopleSettingsStandIn } from '../store/peopleSettingsStandIn.setup'
 import type { IssueFilters } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -12,9 +11,9 @@ import { TooltipProvider } from './ui/tooltip'
 
 /* The view filter's Assignee menu on the real store, among the design
    size's 1,000 people. The store holds nobody but the signed-in person, so
-   the menu lists the organization's people from the server
-   (pickers.orgPeople through its stand-in), MENTION_BATCH a batch with the
-   server's search and Load more, and the people already chosen first,
+   the menu lists the owners of the scope's tasks from the server
+   (pickers.viewOwners through its stand-in, where OWNERS own them), all at
+   once with the server's search, and the people already chosen first,
    named by id (people.byIds), also one a filter carried from a project of
    the login's other organization chose there. */
 
@@ -32,13 +31,15 @@ vi.mock('../lib/auth', () => ({
 }))
 
 const person = (n: number) => `person-${String(n).padStart(4, '0')}`
+/** the people who own the scope's tasks, 12 of the organization's 1,000 */
+const OWNERS = Array.from({ length: 12 }, (_, i) => person(80 * (i + 1) + 36))
 
 let snap: Snapshot
 let store: typeof import('../store/planner')
 let ui: typeof import('./viewFilters')
 let container: HTMLDivElement
 let root: Root
-/** every pickers:orgPeople read's arguments, oldest first */
+/** every pickers:viewOwners read's arguments, oldest first */
 let asked: Record<string, unknown>[]
 let shown: IssueFilters
 
@@ -65,9 +66,9 @@ async function load({
   extra?.(snap)
   asked = []
   network.query.mockImplementation(async (ref, args) => {
-    if (getFunctionName(ref) !== 'pickers:orgPeople') return null
+    if (getFunctionName(ref) !== 'pickers:viewOwners') return null
     asked.push(args)
-    return mentionStandIn(snap, args)
+    return viewOwnersStandIn(snap, args, { owners: OWNERS })
   })
   network.onUpdate.mockImplementation((ref, args, next) => {
     if (getFunctionName(ref) === 'people:byIds')
@@ -182,18 +183,16 @@ afterEach(async () => {
 describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000 }, () => {
   beforeEach(() => load())
 
-  it('lists the server’s people a batch at a time, never the store’s, and searches them on the server', async () => {
+  it('lists the owners of the scope’s tasks from the server, nobody else, and searches them there', async () => {
     // the store holds the signed-in person alone
     expect(store.P.users).toHaveLength(1)
     await render()
     expect(asked).toEqual([])
     await openMenu()
-    expect(asked).toEqual([{ org_id: snap.orgs[0].id }])
-    expect(listed()).toHaveLength(MENTION_BATCH)
-    await act(async () => loadMore()?.click())
-    await settle()
-    expect(listed()).toHaveLength(2 * MENTION_BATCH)
-    expect(asked[1]).toHaveProperty('after')
+    expect(asked).toEqual([{ org_id: snap.orgs[0].id, project_id: snap.projects[0].id }])
+    // every owner at once, and none of the organization's other people
+    expect(listed()).toEqual(OWNERS)
+    expect(loadMore()).toBeUndefined()
     // the server's search over names and initials, never an address
     await typeSearch('0996 pe')
     expect(asked.at(-1)).toMatchObject({ search: '0996 pe' })
@@ -201,30 +200,34 @@ describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000
     await typeSearch('person996@example')
     expect(asked.at(-1)).toMatchObject({ search: 'person996@example' })
     expect(listed()).toEqual([])
+    // a person who owns no task here is not offered, whatever is typed
+    await typeSearch('Person 0500')
+    expect(listed()).toEqual([])
+    expect(document.body.textContent).toContain('No matching people.')
   })
 
   it('picks a person into the filter, shows the chosen first by name, and takes them back off', async () => {
     await render()
     await openMenu()
-    await typeSearch('Person 0500')
+    await typeSearch('Person 0516')
     await act(async () =>
-      document.querySelector<HTMLElement>(`[data-filter-assignee="${person(500)}"]`)?.click(),
+      document.querySelector<HTMLElement>(`[data-filter-assignee="${person(516)}"]`)?.click(),
     )
     await settle()
-    expect(shown.assignees).toEqual([person(500)])
+    expect(shown.assignees).toEqual([person(516)])
     // the chosen person leads the list, named by id, and is listed once,
     // also while the batch for the search still holds them
-    expect(chosenRows()).toEqual([person(500)])
-    expect(listed().filter((id) => id === person(500))).toHaveLength(1)
+    expect(chosenRows()).toEqual([person(516)])
+    expect(listed().filter((id) => id === person(516))).toHaveLength(1)
     await typeSearch('')
-    expect(chosenRows()).toEqual([person(500)])
-    expect(listed().filter((id) => id === person(500))).toHaveLength(1)
+    expect(chosenRows()).toEqual([person(516)])
+    expect(listed().filter((id) => id === person(516))).toHaveLength(1)
     await vi.waitFor(() =>
       expect(
         document.querySelector(
-          `[data-filter-assignee-chosen][data-filter-assignee="${person(500)}"]`,
+          `[data-filter-assignee-chosen][data-filter-assignee="${person(516)}"]`,
         )?.textContent,
-      ).toContain('Person 0500'),
+      ).toContain('Person 0516'),
     )
     await act(async () =>
       document.querySelector<HTMLElement>(`[data-filter-assignee-chosen]`)?.click(),
