@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { BOARD } from '../lib/board'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { VIEW_OWNERS, type ViewOwnersAnswer, viewOwnersOf } from '../model/pickers'
@@ -202,6 +203,10 @@ describe("the Assignee menu's states", () => {
       }),
       'forbidden',
     )
+  })
+
+  it("reads within the Board's own budget", () => {
+    expect(VIEW_OWNERS.reads).toEqual(BOARD.reads)
   })
 
   it('answers over_budget, with no row, past a lowered VIEW_OWNERS.reads', async () => {

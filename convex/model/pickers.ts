@@ -66,7 +66,6 @@ import {
   projectLevelReads,
 } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
-import { BOARD } from '../lib/board'
 import { byId } from '../lib/db'
 import { badRequest, rule } from '../lib/functions'
 import { BY_IDS_MAX, LIMITS, LIST_BATCH, MENTION_BATCH, MIB, overText } from '../lib/limits'
@@ -658,10 +657,14 @@ export async function mentionsOf(
 }
 
 /** What the Assignee menu's read may read, the Board's own budget
- * (lib/board.ts BOARD.reads), since it reads the tasks a Board of the
- * project reads without a filter, and then one profile an owner. Tests
- * lower it. */
-export const VIEW_OWNERS: { reads: typeof BOARD.reads } = { reads: { ...BOARD.reads } }
+ * (lib/board.ts BOARD.reads, which tests/viewOwners.test.ts holds it
+ * equal to), since it reads the tasks a Board of the project reads without
+ * a filter, and then one profile an owner. Its figures are written out
+ * here, as lib/board.ts loads after this module where a view imports
+ * both. Tests lower it. */
+export const VIEW_OWNERS = {
+  reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
+}
 
 /** What the Assignee menu is asked: the project its view selects and a
  * search. */
