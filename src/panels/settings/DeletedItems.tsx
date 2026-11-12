@@ -184,7 +184,7 @@ const PEOPLE_WORDS: ChoiceWords = {
   failed: "Couldn't load people.",
   stopped: 'Showing the people found so far.',
   empty: 'No one else is on these deleted items.',
-  none: 'No one matches.',
+  none: 'No one else matches.',
 }
 
 export function DeletedItemsPage() {
@@ -1324,14 +1324,18 @@ function PeopleChoices({
             )}
           </MenuItem>
         ))}
-        {end === 'partial' ? (
+        {tooLong ? (
+          <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PEOPLE_WORDS} />
+        ) : end === 'partial' ? (
           // the server's walk ended on its read budget, so more may follow
           <p data-picker-stopped="" className="px-2 py-1 text-sm text-text-2">
             {PEOPLE_WORDS.stopped}
           </p>
         ) : leftOut && end === 'end' ? (
+          // the only rows are ones a fixed row stands for: under a search
+          // nobody else matches it, and without one nobody else is there
           <p data-picker-empty="" className="px-2 py-1 text-sm text-text-2">
-            {PEOPLE_WORDS.empty}
+            {settled !== '' ? PEOPLE_WORDS.none : PEOPLE_WORDS.empty}
           </p>
         ) : (
           <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PEOPLE_WORDS} />

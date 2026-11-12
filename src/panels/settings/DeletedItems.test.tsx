@@ -4,6 +4,7 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import {
   type DeletedFixture,
@@ -687,6 +688,28 @@ describe('the filters', () => {
     await click(find('[data-deleted-people-fixed="you"]'))
     expect(pageReads()[0].args).toEqual({ deleted_by: ME })
     expect(text('[data-deleted-by]')).toBe('Deleted by you')
+  })
+
+  it('says who is left out in the words of what was asked: nobody else there, nobody else matching, and the limit of a search', async () => {
+    await load(world())
+    // only the signed-in person deleted anything, and the You row is theirs
+    for (const item of fx.items) item.deleted_by = ME
+    await open(undefined, undefined, true)
+    await click(find('[data-deleted-by]'))
+    expect(text('[data-deleted-people]')).toContain('No one else is on these deleted items.')
+    await type('[data-deleted-people-search]', 'nora')
+    await settle()
+    expect(text('[data-deleted-people]')).toContain('No one else matches.')
+    expect(text('[data-deleted-people]')).not.toContain('No one else is on these deleted items.')
+    // a stopped list still says a search is too long
+    force.peopleStopped = 0
+    await type('[data-deleted-people-search]', 'daniel')
+    await settle()
+    expect(text('[data-deleted-people]')).toContain('Showing the people found so far.')
+    await type('[data-deleted-people-search]', 'x'.repeat(LIMITS.search.max + 1))
+    await settle()
+    expect(text('[data-deleted-people]')).not.toContain('Showing the people found so far.')
+    expect(text('[data-deleted-people]')).toContain('Search for fewer words.')
   })
 
   it('reads the people only while a popover is open, and says a stopped list as such', async () => {

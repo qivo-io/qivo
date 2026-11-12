@@ -19,7 +19,7 @@ import type { ReadCeiling } from '../lib/archivedTasks'
 import { byId } from '../lib/db'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, MIB } from '../lib/limits'
-import { namedCeiling, readGuard } from '../lib/namedPages'
+import { namedCeiling, type ReadGuard, readGuard } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
 import {
@@ -28,6 +28,7 @@ import {
   namesProfile,
   newMemo,
   orgReadOnly,
+  type Sight,
   sameReference,
   seesItem,
   sightOf,
@@ -119,16 +120,29 @@ async function roleOf(ctx: QueryCtx, me: Profile): Promise<DeletedRole['role']> 
 /**
  * What one read of the people may read past what the call read before it
  * (lib/namedPages.ts namedCeiling), checked with the transaction's metrics
- * as it reads (readGuard): the seat's sight, as a page of the list reads it
- * (model/deletedItems.ts sightOf), every item of the organization, and for
- * the assignees a range for each assignee of each item the seat sees. Past
- * it the read answers the people it found, marked as stopped early, never
- * as the whole list. tests/deletedItemsChoices.test.ts ("reads at the
+ * as it reads (readGuard). The read is made once and never subscribed to,
+ * so the share takes most of what Convex gives one query (4,096 ranges,
+ * 32,000 documents, 16 MiB) and leaves the rest for what one item reads
+ * past the guard's last look. It pays for the seat's sight, as a page of
+ * the list reads it (model/deletedItems.ts sightOf), and then:
+ *
+ * - an admin's deleters: one range a deleter, since an admin sees every
+ *   item that is not being purged;
+ * - anyone else's deleters, and every seat's assignees: each item of the
+ *   organization, a task item at no further range and a project item at
+ *   the ranges its judging reads (viewOf's stored levels, about five for a
+ *   person in three teams);
+ * - the assignees besides: one range for a task item's tasks, and for a
+ *   project item one range an assignee, with that assignee's other tasks
+ *   only where the seat reads some of the item's projects and not others.
+ *
+ * Past it the read answers the people it found, marked as stopped early,
+ * never as the whole list. tests/deletedItemsChoices.test.ts ("reads at the
  * design size") logs what the read takes. A mutable object, so tests can
  * lower it; replace `read` whole rather than change its fields.
  */
 export const DELETED_PEOPLE: { read: ReadCeiling } = {
-  read: { ranges: 2_400, documents: 20_000, bytes: 10 * MIB },
+  read: { ranges: 3_600, documents: 28_000, bytes: 13 * MIB },
 }
 
 /** One person or agent of the list, as model/projectSettings.ts personRow
@@ -172,12 +186,11 @@ const showsTask = (view: ItemView, task: Doc<'deleted_tasks'>): boolean =>
  *
  * A search longer than LIMITS.search is refused first, then an
  * organization where the login holds no active seat answers an empty list,
- * as the page answers one, before any read of the organization. It walks
- * the organization's items newest first (deleted_items.by_org_deleted) and
- * judges each as the page does. For the assignees it reads each seen
- * item's first task of each assignee (deleted_tasks.by_item_assignee), and
- * the others of an assignee only until one is in a readable project. Reads
- * within DELETED_PEOPLE, and answers `stopped` past it.
+ * as the page answers one, before any read of the organization. An admin's
+ * deleters come from one range a deleter (adminDeleters). Every other list
+ * walks the organization's items newest first and judges each as the page
+ * does (deletersOf, assigneesOf). Reads within DELETED_PEOPLE, whose
+ * docstring says what each walk costs, and answers `stopped` past it.
  */
 export async function peopleOf(
   ctx: QueryCtx,
@@ -190,73 +203,149 @@ export async function peopleOf(
   const guard = readGuard(ctx, await namedCeiling(ctx, DELETED_PEOPLE.read))
   const sight = await sightOf(ctx, me)
   const found = new Set<string>()
-  /* whether `id` still names the profile `item` named */
-  const named = (id: string | undefined, item: Item): id is string =>
-    id !== undefined && sameReference(sight.profiles.get(id), item)
-  let stopped = !(await guard.settle())
-  const items = ctx.db
-    .query('deleted_items')
-    .withIndex('by_org_deleted', (q) => q.eq('org_id', a.org_id))
-    .order('desc')
-  if (!stopped)
-    walk: for await (const item of items) {
-      const view = await viewOf(ctx, sight.memo, me, item)
-      // the item, and what judging it read
-      if (!(await guard.document(item)) || !(await guard.settle())) {
-        stopped = true
-        break
-      }
-      if (view === null) continue
-      if (a.of === 'deleters') {
-        if (named(item.deleted_by, item)) found.add(item.deleted_by)
-        continue
-      }
-      // each assignee of the item's tasks once, in the order of their ids
-      for (let after = ''; ; ) {
-        const from = after
-        if (!(await guard.range())) {
-          stopped = true
-          break walk
-        }
-        const first = await ctx.db
-          .query('deleted_tasks')
-          .withIndex('by_item_assignee', (q) => q.eq('item_id', item.id).gt('assignee_id', from))
-          .first()
-        if (first === null || first.assignee_id === undefined) break
-        const who = first.assignee_id
-        after = who
-        if (!(await guard.document(first))) {
-          stopped = true
-          break walk
-        }
-        if (found.has(who) || !named(who, item)) continue
-        if (showsTask(view, first)) {
-          found.add(who)
-          continue
-        }
-        // a task of theirs in a project the seat reads, if the item has one
-        const others = ctx.db
-          .query('deleted_tasks')
-          .withIndex('by_item_assignee', (q) => q.eq('item_id', item.id).eq('assignee_id', who))
-        for await (const task of others) {
-          if (showsTask(view, task)) {
-            found.add(who)
-            break
-          }
-          if (!(await guard.document(task))) {
-            stopped = true
-            break walk
-          }
-        }
-      }
-    }
+  const walk: Walk = { ctx, me, sight, guard, found }
+  const whole =
+    (await guard.settle()) &&
+    (a.of === 'assignees'
+      ? await assigneesOf(walk)
+      : me.org_role === 'admin'
+        ? await adminDeleters(walk)
+        : await deletersOf(walk))
   const matches = allWordsMatcher(nameKey(search))
   const rows = [...found]
     .flatMap((id) => sight.profiles.get(id) ?? [])
     .filter((profile) => matches(nameKey(profile.name)))
     .sort((x, y) => compareValues([nameKey(x.name), x.id], [nameKey(y.name), y.id]))
     .map((profile) => ({ ...personRow(profile), you: profile.id === me.id }))
-  return { state: 'ready', rows, next: null, stopped }
+  return { state: 'ready', rows, next: null, stopped: !whole }
+}
+
+/* What one read of the people walks with: the seat, its sight, the guard
+ * of its read share and the people found so far. Each walk answers whether
+ * it reached its end, false where the guard stopped it. */
+type Walk = {
+  ctx: QueryCtx
+  me: Profile
+  sight: Sight
+  guard: ReadGuard
+  found: Set<string>
+}
+
+/* Whether `id` still names the profile `item` named. */
+const named = (w: Walk, id: string | undefined, item: Item): id is string =>
+  id !== undefined && sameReference(w.sight.profiles.get(id), item)
+
+/* The organization's items, newest first. */
+const itemsOf = (w: Walk) =>
+  w.ctx.db
+    .query('deleted_items')
+    .withIndex('by_org_deleted', (q) => q.eq('org_id', w.me.org_id))
+    .order('desc')
+
+/* An admin's deleters: each deleter of the organization once, in the order
+ * of their ids (deleted_items.by_org_deleter), kept when one of their
+ * items is not being purged, which is every item an admin sees (viewOf). */
+async function adminDeleters(w: Walk): Promise<boolean> {
+  for (let after = ''; ; ) {
+    const from = after
+    if (!(await w.guard.range())) return false
+    const theirs = w.ctx.db
+      .query('deleted_items')
+      .withIndex('by_org_deleter', (q) => q.eq('org_id', w.me.org_id).gt('deleted_by', from))
+    let who: string | undefined
+    for await (const item of theirs) {
+      // the range runs on into the next deleter's items
+      if (who !== undefined && item.deleted_by !== who) break
+      who = item.deleted_by
+      if (!(await w.guard.document(item))) return false
+      if (item.state !== 'purging' && named(w, who, item)) {
+        w.found.add(who)
+        break
+      }
+    }
+    if (who === undefined) return true
+    after = who
+  }
+}
+
+/* The deleters of the items anyone but an admin sees. */
+async function deletersOf(w: Walk): Promise<boolean> {
+  for await (const item of itemsOf(w)) {
+    const view = await viewOf(w.ctx, w.sight.memo, w.me, item)
+    // the item, and what judging it read
+    if (!(await w.guard.document(item)) || !(await w.guard.settle())) return false
+    if (view !== null && named(w, item.deleted_by, item)) w.found.add(item.deleted_by)
+  }
+  return true
+}
+
+/* The holders of the deleted tasks the seat may read, item by item. */
+async function assigneesOf(w: Walk): Promise<boolean> {
+  for await (const item of itemsOf(w)) {
+    const view = await viewOf(w.ctx, w.sight.memo, w.me, item)
+    if (!(await w.guard.document(item)) || !(await w.guard.settle())) return false
+    // an item none of whose projects the seat reads names nobody
+    if (view === null || view.readable.length === 0) continue
+    const whole =
+      item.kind === 'task' ? await taskItemHolders(w, item, view) : await holders(w, item, view)
+    if (!whole) return false
+  }
+  return true
+}
+
+/* The holders of a task item's tasks, its root and subtasks, which one
+ * range reads whole (deleted_tasks.by_item). */
+async function taskItemHolders(w: Walk, item: Item, view: ItemView): Promise<boolean> {
+  if (!(await w.guard.range())) return false
+  const tasks = w.ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_item', (q) => q.eq('item_id', item.id))
+  for await (const task of tasks) {
+    if (!(await w.guard.document(task))) return false
+    if (showsTask(view, task) && named(w, task.assignee_id, item)) w.found.add(task.assignee_id)
+  }
+  return true
+}
+
+/* The holders of a project item's tasks, which may be thousands: each
+ * assignee once, in the order of their ids (deleted_tasks.by_item_assignee),
+ * by their first task, and by their later tasks only until one is in a
+ * project the seat reads. */
+async function holders(w: Walk, item: Item, view: ItemView): Promise<boolean> {
+  // where the seat reads every project of the item, the first task tells
+  const all = item.projects.every((p) => view.readable.some((r) => r.id === p.id))
+  for (let after = ''; ; ) {
+    const from = after
+    if (!(await w.guard.range())) return false
+    const first = await w.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item_assignee', (q) => q.eq('item_id', item.id).gt('assignee_id', from))
+      .first()
+    if (first === null || first.assignee_id === undefined) return true
+    const who = first.assignee_id
+    after = who
+    if (!(await w.guard.document(first))) return false
+    if (w.found.has(who) || !named(w, who, item)) continue
+    if (showsTask(view, first)) {
+      w.found.add(who)
+      continue
+    }
+    if (all) continue
+    // a later task of theirs in a project the seat reads, if there is one
+    if (!(await w.guard.range())) return false
+    const later = w.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item_assignee', (q) =>
+        q.eq('item_id', item.id).eq('assignee_id', who).gt('num', first.num),
+      )
+    for await (const task of later) {
+      if (!(await w.guard.document(task))) return false
+      if (showsTask(view, task)) {
+        w.found.add(who)
+        break
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------- Delete now's summary */

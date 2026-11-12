@@ -34,7 +34,7 @@
    Its cursors are plain JSON of the arguments and the position, refused
    with bad_request for other arguments. It reads no read budget, so
    too_wide, both `missing` notes, `legacy`, a stopped page, hidden rows,
-   people not ready or stopped, a failing read, slow, refused and paused
+   people stopped, a failing read, slow, refused and paused
    restore calls and deferred items answer only when `force` asks for
    them. It imports nothing the benchmark's worker cannot load. */
 
@@ -403,8 +403,9 @@ export function deletedPeopleOf(
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     })
     .map(({ org_id: _org, ...person }) => ({ ...person, you: person.id === seat.me }))
-  const size = force.peopleStopped ?? all.length
-  return { state: 'ready', rows: all.slice(0, size), next: null, stopped: all.length > size }
+  // the server's walk stops whatever the search, which it applies after
+  const size = force.peopleStopped ?? named.size
+  return { state: 'ready', rows: all.slice(0, size), next: null, stopped: named.size > size }
 }
 
 /** The items that wait for item `id`, and those that wait for them in

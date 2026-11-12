@@ -18,13 +18,7 @@ import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
-import {
-  DELETED_PEOPLE,
-  type PeopleArgs,
-  PURGE_ALONG,
-  peopleOf,
-  purgeSummaryOf,
-} from '../model/deletedItemsChoices'
+import { DELETED_PEOPLE, PURGE_ALONG, peopleOf, purgeSummaryOf } from '../model/deletedItemsChoices'
 import { DELETED_PAGE, type DeletedPage } from '../model/deletedItemsPage'
 import {
   as,
@@ -37,6 +31,7 @@ import {
   plantSeat,
   type T,
   uuid,
+  withOrg,
   withReadingAdmin,
 } from './helpers.setup'
 import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
@@ -361,6 +356,63 @@ describe('deletedItems.people', () => {
     }
   })
 
+  it('offers an admin who reads no project the deleters of every item, and the holder of no task', async () => {
+    const t = newT()
+    // withOrg's admin holds no lead, grant or team share
+    const f = await withOrg(t)
+    const ann = await person(t, f.org.id, 'Ann Assignee')
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: ann.id,
+    })
+    await deleteTask(t, f.user, task.id)
+    await runSteps(t)
+    expect(await offered(t, f.admin, 'deleters')).toEqual([f.user.id])
+    expect(await offered(t, f.admin, 'assignees')).toEqual([])
+    expect(await offered(t, f.user, 'assignees')).toEqual([ann.id])
+  })
+
+  it('offers the holder of a task the seat may read in an item it reads in part, and nobody for the rest', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const xena = await person(t, f.org.id, 'Xena Cross')
+    const yuri = await person(t, f.org.id, 'Yuri Root')
+    // Lin leads Board rev alone
+    const lin = await person(t, f.org.id, 'Lin Park')
+    await patch(t, 'projects', f.sub2.id, { lead_id: lin.id })
+    // a task of Firmware with a subtask there and one in Board rev: Xena
+    // holds both subtasks, the Firmware one first by number, Yuri the task
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: yuri.id,
+    })
+    const inFirmware = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: parent.id,
+      assignee_id: xena.id,
+    })
+    const inBoard = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      assignee_id: xena.id,
+    })
+    expect(inFirmware.num).toBeLessThan(inBoard.num)
+    await deleteTask(t, f.user, parent.id, { subtask_ids: [inFirmware.id, inBoard.id] })
+    await runSteps(t)
+    // the lead of the whole project reads every task of the item
+    expect([...(await offered(t, f.user, 'assignees'))].sort()).toEqual([xena.id, yuri.id].sort())
+    // Lin reads the Board rev subtask alone: Xena through it, and not Yuri
+    expect(await offered(t, lin, 'assignees')).toEqual([xena.id])
+    const found = await page(t, lin, { scope: { org_id: f.org.id, all: true }, assignee: xena.id })
+    expect(found.entries.length).toBeGreaterThan(0)
+    const none = await page(t, lin, { scope: { org_id: f.org.id, all: true }, assignee: yuri.id })
+    expect(none.entries).toEqual([])
+  })
+
   it('answers person rows with you, in name order with ties by id, and keeps every word of a search', async () => {
     const { t, f, dana } = await scene()
     const first = await person(t, f.org.id, 'Sam Lee')
@@ -438,20 +490,37 @@ describe('deletedItems.people', () => {
 
   it('answers the people found so far as stopped past a lowered read share, never as the whole list', async () => {
     const { t, f } = await scene()
-    const whole = await people(t, f.user, { org_id: f.org.id, of: 'assignees' })
-    expect(whole).toMatchObject({ stopped: false })
-    expect(whole.rows).toHaveLength(3)
-    const states: boolean[] = []
-    for (let documents = 1; documents <= 400; documents += 3) {
-      DELETED_PEOPLE.read = { ...DEFAULT_PEOPLE.read, documents }
-      const answer = await people(t, f.user, { org_id: f.org.id, of: 'assignees' })
-      states.push(answer.stopped)
-      // a list that is not stopped is the whole list
-      if (!answer.stopped) expect(answer.rows, String(documents)).toEqual(whole.rows)
-      else expect(answer.rows.length, String(documents)).toBeLessThanOrEqual(3)
+    // each list for the lead and for the admin, whose deleters take another walk
+    for (const [who, of] of [
+      [f.user, 'assignees'],
+      [f.user, 'deleters'],
+      [f.admin, 'deleters'],
+      [f.admin, 'assignees'],
+    ] as const) {
+      DELETED_PEOPLE.read = { ...DEFAULT_PEOPLE.read }
+      const whole = await people(t, who, { org_id: f.org.id, of })
+      expect(whole, `${who.name} ${of}`).toMatchObject({ stopped: false })
+      expect(whole.rows, `${who.name} ${of}`).toHaveLength(3)
+      // each bound of the share stops the walk in its turn
+      for (const [bound, steps] of [
+        ['documents', Array.from({ length: 134 }, (_, i) => 1 + 3 * i)],
+        ['ranges', Array.from({ length: 80 }, (_, i) => 1 + i)],
+        ['bytes', Array.from({ length: 80 }, (_, i) => 500 * (i + 1))],
+      ] as const) {
+        const states: boolean[] = []
+        for (const value of steps) {
+          DELETED_PEOPLE.read = { ...DEFAULT_PEOPLE.read, [bound]: value }
+          const answer = await people(t, who, { org_id: f.org.id, of })
+          states.push(answer.stopped)
+          const what = `${who.name} ${of} ${bound} ${value}`
+          // a list that is not stopped is the whole list
+          if (!answer.stopped) expect(answer.rows, what).toEqual(whole.rows)
+          else expect(answer.rows.length, what).toBeLessThanOrEqual(3)
+        }
+        expect(states[0], `${who.name} ${of} ${bound}`).toBe(true)
+        expect(states.at(-1), `${who.name} ${of} ${bound}`).toBe(false)
+      }
     }
-    expect(states[0]).toBe(true)
-    expect(states.at(-1)).toBe(false)
   })
 })
 
@@ -778,13 +847,11 @@ function record(what: string, figures: { ranges: number; documents: number; mib:
 }
 
 describe('reads at the design size', () => {
-  it('reads the people on 300 deleted tasks of one sub-project, deleted by 30 people and held by 50, among 1,000 people', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    // with withOrg's five, 995 people with ordinary names
+  /* `n` people with ordinary names, planted raw, and their ids. */
+  async function labPeople(t: T, f: OrgFixture, n: number): Promise<string[]> {
     const ids: string[] = []
     await t.run(async (ctx) => {
-      for (let i = 0; i < 995; i++) {
+      for (let i = 0; i < n; i++) {
         const id = uuid()
         ids.push(id)
         await ctx.db.insert('profiles', {
@@ -802,10 +869,21 @@ describe('reads at the design size', () => {
         })
       }
     })
-    // 300 task items of Firmware, a sub-project's open tasks, as each
-    // delete of a task without subtasks stores one item and one task row
+    return ids
+  }
+
+  /* `n` task items of Firmware, as each delete of a task without subtasks
+   * stores one item and one task row, deleted by `deleters` and held by
+   * `holders` in turn. */
+  async function taskItems(
+    t: T,
+    f: OrgFixture,
+    n: number,
+    deleters: readonly string[],
+    holders: readonly string[],
+  ) {
     await t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < n; i++) {
         const item = uuid()
         const task = uuid()
         const at = new Date(START - i * 60_000).toISOString()
@@ -833,7 +911,7 @@ describe('reads at the design size', () => {
           ],
           counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
           deleted_at: at,
-          deleted_by: ids[i % 30],
+          deleted_by: deleters[i % deleters.length],
           state: 'ready',
           purge_after: START + 30 * 86_400_000,
         })
@@ -845,32 +923,129 @@ describe('reads at the design size', () => {
           title: 'Replace the fan controller on the bench rig',
           project_id: f.sub.id,
           archived: false,
-          assignee_id: ids[100 + (i % 50)],
+          assignee_id: holders[i % holders.length],
           deleted_at: at,
-          deleted_by: ids[i % 30],
+          deleted_by: deleters[i % deleters.length],
           item_project_id: f.sub.id,
           item_parent_id: f.meta.id,
         })
       }
     })
-    const seats = new Map([[f.admin.org_id, f.admin]])
-    const read = (a: PeopleArgs) => metered(t, f.admin, (ctx) => peopleOf(ctx, seats, a))
-    const deleters = await read({ org_id: f.org.id, of: 'deleters' })
-    record('300 task items among 1,000 people, the deleters', deleters.figures)
-    expect(deleters.answer).toMatchObject({ stopped: false })
-    expect(deleters.answer.rows).toHaveLength(30)
-    const assignees = await read({ org_id: f.org.id, of: 'assignees' })
-    record('300 task items among 1,000 people, the assignees', assignees.figures)
-    expect(assignees.answer).toMatchObject({ stopped: false })
-    expect(assignees.answer.rows).toHaveLength(50)
-    // the lead of the project reads the same people
-    const lead = new Map([[f.user.org_id, f.user]])
-    const led = await metered(t, f.user, (ctx) =>
-      peopleOf(ctx, lead, { org_id: f.org.id, of: 'assignees' }),
+  }
+
+  /* Both lists read by `who`, measured, with how many people each must
+   * hold. */
+  async function bothLists(
+    t: T,
+    who: Profile,
+    what: string,
+    expected: { deleters: number; assignees: number },
+  ) {
+    const seats = new Map([[who.org_id, who]])
+    for (const of of ['deleters', 'assignees'] as const) {
+      const read = await metered(t, who, (ctx) => peopleOf(ctx, seats, { org_id: who.org_id, of }))
+      record(`${what}, the ${of}`, read.figures)
+      expect(read.answer, `${what} ${of}`).toMatchObject({ stopped: false })
+      expect(read.answer.rows, `${what} ${of}`).toHaveLength(expected[of])
+    }
+  }
+
+  it('reads the people on the deleted items of an organization of 1,000 people', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
+    // with withOrg's five, 995 people, and a sub-project's everyday 30
+    // tasks deleted by 3 of them and held by 5
+    const ids = await labPeople(t, f, 995)
+    await taskItems(t, f, 30, ids.slice(0, 3), ids.slice(100, 105))
+    await bothLists(t, f.admin, '1,000 people, 30 task items', { deleters: 3, assignees: 5 })
+    await bothLists(t, f.user, 'the same, for the project lead', { deleters: 3, assignees: 5 })
+  }, 60_000)
+
+  it("reads the people on a project's 800 deleted tasks", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
+    // a project's 800 open tasks with all its sub-projects, each deleted on
+    // its own, here all in Firmware
+    const ids = await labPeople(t, f, 25)
+    await taskItems(t, f, 800, ids.slice(0, 10), ids.slice(10, 25))
+    await bothLists(t, f.admin, '800 task items', { deleters: 10, assignees: 15 })
+    await bothLists(t, f.user, 'the same, for the project lead', { deleters: 10, assignees: 15 })
+  }, 60_000)
+
+  it("reads the deleters of an organization's 500 deleted sub-projects", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
+    const ids = await labPeople(t, f, 25)
+    // 500 sub-project items under TBED, each sub-project deleted on its own,
+    // with its stored project row, which names the user as its lead
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 500; i++) {
+        const target = uuid()
+        const item: WithoutSystemFields<Item> = {
+          id: uuid(),
+          org_id: f.org.id,
+          kind: 'project',
+          target_id: target,
+          num: 700 + i,
+          name: `Bench rig ${i}`,
+          key: `BR${i}`,
+          archived: false,
+          project_id: target,
+          parent_project_id: f.meta.id,
+          path: ['Testbed platform'],
+          projects: [
+            {
+              id: target,
+              name: `Bench rig ${i}`,
+              key: `BR${i}`,
+              type: 'project',
+              tasks: 0,
+              archived_tasks: 0,
+            },
+          ],
+          counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+          deleted_at: new Date(START - i * 60_000).toISOString(),
+          deleted_by: ids[i % 10],
+          state: 'ready',
+          purge_after: START + 30 * 86_400_000,
+        }
+        await ctx.db.insert('deleted_items', item)
+        const stored = storedLead(item, f.user.id)
+        await ctx.db.insert('deleted_rows', {
+          ...stored,
+          row: {
+            ...stored.row,
+            doc: { ...stored.row.doc, type: 'project' as const, parent_id: f.meta.id },
+          },
+        })
+      }
+    })
+    // an admin's deleters take one range a deleter
+    const admin = await metered(t, f.admin, (ctx) =>
+      peopleOf(ctx, new Map([[f.org.id, f.admin]]), { org_id: f.org.id, of: 'deleters' }),
     )
-    record('the same, for the project lead', led.figures)
-    expect(led.answer.rows).toHaveLength(50)
-    expect(led.answer.stopped).toBe(false)
+    record("500 sub-project items, an admin's deleters", admin.figures)
+    expect(admin.answer).toMatchObject({ stopped: false })
+    expect(admin.answer.rows).toHaveLength(10)
+    expect(admin.figures.ranges).toBeLessThan(100)
+    // the lead's walk judges each item
+    const lead = await metered(t, f.user, (ctx) =>
+      peopleOf(ctx, new Map([[f.org.id, f.user]]), { org_id: f.org.id, of: 'deleters' }),
+    )
+    record("the same, the top-level project lead's deleters", lead.figures)
+    expect(lead.answer).toMatchObject({ stopped: false })
+    expect(lead.answer.rows).toHaveLength(10)
+  }, 60_000)
+
+  it("reads the people on a sub-project's 300 deleted tasks", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
+    // 300 task items of Firmware, deleted by 10 people and held by 15,
+    // among the fixture's people and 25 more
+    const ids = await labPeople(t, f, 25)
+    await taskItems(t, f, 300, ids.slice(0, 10), ids.slice(10, 25))
+    await bothLists(t, f.admin, '300 task items', { deleters: 10, assignees: 15 })
+    await bothLists(t, f.user, 'the same, for the project lead', { deleters: 10, assignees: 15 })
   }, 60_000)
 
   it("counts Delete now's summary of a project item that stores 30 live and 40 archived sub-projects", async () => {
