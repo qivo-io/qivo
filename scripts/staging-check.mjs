@@ -1767,11 +1767,9 @@ async function shot(page, name) {
     return
   }
   mkdirSync(cfg.shots, { recursive: true })
-  await within(
-    page.screenshot({ path: join(cfg.shots, `${name}.png`) }),
-    SHOT_MS,
-    'the page gave no picture',
-  ).catch(() => {})
+  // with Playwright's own timeout, which ends the picture, so none is
+  // taken later of a page the next step has changed
+  await page.screenshot({ path: join(cfg.shots, `${name}.png`), timeout: SHOT_MS }).catch(() => {})
 }
 
 async function signIn(account) {
@@ -9673,7 +9671,8 @@ async function projectDialogsCheck() {
     await pressSearched(
       search,
       team.name,
-      app.locator('[data-project-access-team-option]'),
+      // each team's label: the option is its checkbox, which holds no text
+      app.locator('label:has([data-project-access-team-option])'),
       app.locator(`[data-project-access-team-option="${team.id}"]`),
     )
     await app
@@ -11051,6 +11050,20 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
 /** How long the step waits for a started download of the archive to end. */
 export const ORG_EXPORT_DOWNLOAD_MS = 2 * 60_000
 
+/** The id of the export a download's address serves, the last part of its
+ *  /exports/ path (convex/http.ts), or null for another address. The
+ *  address is a signed link, so it stays in memory and is never printed. */
+export function exportOfLink(url) {
+  try {
+    const { pathname } = new URL(url)
+    const at = pathname.lastIndexOf('/exports/')
+    const id = at < 0 ? '' : pathname.slice(at + '/exports/'.length)
+    return id !== '' && !id.includes('/') ? id : null
+  } catch {
+    return null
+  }
+}
+
 /** How a page saves an export (src/lib/orgExport.ts exportWay, outside the
  *  desktop app): into a chosen file in a secure context that has a save
  *  picker, else by its download link. */
@@ -11071,8 +11084,9 @@ export const exportWayOf = ({ secure, picker }) => (secure && picker ? 'file' : 
  *  then until that job is ready (ORG_EXPORT_READY_MS for both, the time
  *  it took in its note). By the link the browser must then start a
  *  download and the section say it was sent, and the step reads the
- *  downloaded file, the last the page started and ended within
- *  ORG_EXPORT_DOWNLOAD_MS. The app cannot confirm a download, so the
+ *  downloaded file, the one whose address names this export
+ *  (exportOfLink), ended within ORG_EXPORT_DOWNLOAD_MS. The app cannot
+ *  confirm a download, so the
  *  step checks that no saved line or record mark shows and that the
  *  record line is as before. Into a file it waits
  *  for the saved line and the recorded mark and reads the file back from the
@@ -11135,11 +11149,13 @@ async function orgExportCheck() {
       eq(await section.getAttribute(m.delivery), way, 'how the page saves an export')
       // by the link the browser downloads the archive once it is ready
       if (way === 'link') app.on('download', onDownload)
+      // the record line comes with an answer of its own, after the section's
       const lastExport = async () => {
         const line = app.locator(`[${m.lastExport}]`)
-        return (await line.count()) > 0 ? ((await line.first().textContent()) ?? '').trim() : ''
+        await line.waitFor({ timeout: 60_000 })
+        return ((await line.textContent()) ?? '').trim()
       }
-      const recordedBefore = await lastExport()
+      const recordedBefore = way === 'link' ? await lastExport() : null
       const before = await section.getAttribute(m.state)
       if (before === 'collecting')
         throw new Error('an export of the organization is already being prepared')
@@ -11171,13 +11187,15 @@ async function orgExportCheck() {
           await until(async () => (await app.locator(`[${m.sent}]`).count()) > 0, 60_000),
           'the page never said that the browser is downloading the export',
         )
+        // this job's download, by the export's id in its address. An
+        // earlier job's, started as the page opened, is another export's.
+        const ownId = await section.getAttribute(m.id)
+        const mine = () => downloads.find((each) => exportOfLink(each.url()) === ownId)
         expect(
-          await until(() => downloads.length > 0, 60_000),
+          await until(() => mine() !== undefined, 60_000),
           'the browser started no download of the ready export',
         )
-        // the last one: an earlier job's download, started as the page
-        // opened, comes before this job is ready
-        const download = downloads[downloads.length - 1]
+        const download = mine()
         try {
           zip = new Uint8Array(
             readFileSync(
@@ -11265,7 +11283,12 @@ async function orgExportCheck() {
       return `prepared t0's organization's export in ${took} s, saved ${bytes} bytes into the chosen file, recorded it, and found ${run.t0.key} and the deleted ${gone.key} in the archive`
     } finally {
       app.off('download', onDownload)
-      for (const download of downloads) await download.delete().catch(() => {})
+      // a download that still runs is stopped first, since its delete would
+      // wait for it to end. A finished one takes no harm from the cancel.
+      for (const download of downloads) {
+        await download.cancel().catch(() => {})
+        await within(download.delete(), SHOT_MS, 'the download was not deleted').catch(() => {})
+      }
       await evaluate(
         app,
         async ([flag, name]) => {

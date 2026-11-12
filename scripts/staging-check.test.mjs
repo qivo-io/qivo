@@ -53,6 +53,7 @@ import {
   directoryGroups,
   evaluate,
   exportItemOf,
+  exportOfLink,
   exportWayOf,
   FIXTURE_STATUS,
   FORMERLY_BARE,
@@ -1255,6 +1256,12 @@ describe('staging check REST contract', () => {
     // the download's file is waited for with a bound and cancelled past it
     expect(link).toMatch(/await within\(\s*download\.path\(\),\s*ORG_EXPORT_DOWNLOAD_MS,/)
     expect(link).toContain('await download.cancel()')
+    // every download the page started is stopped before its file goes
+    const cleanup = step.slice(step.lastIndexOf('} finally {'))
+    expect(cleanup.indexOf('await download.cancel()')).toBeGreaterThan(-1)
+    expect(cleanup.indexOf('await download.cancel()')).toBeLessThan(
+      cleanup.indexOf('within(download.delete(),'),
+    )
     // nothing may record a save the app could not confirm
     for (const none of [
       "m.recorded}]`).count(), 0, 'record marks after a download')",
@@ -1264,6 +1271,22 @@ describe('staging check REST contract', () => {
       expect(link, none).toContain(none)
     // Chromium never passes over the file way
     expect(step).toContain("if (cfg.browser === 'chromium') eq(way, 'file',")
+    // the download is this job's, by the export's id in its address
+    expect(link).toContain('exportOfLink(each.url()) === ownId')
+    expect(link).not.toContain('downloads[downloads.length - 1]')
+    expect(exportOfLink('http://127.0.0.1:3237/exports/k57abc?e=1&m=2&t=3')).toBe('k57abc')
+    expect(exportOfLink('https://x.convex.site/api/exports/k57abc?t=3')).toBe('k57abc')
+    for (const other of [
+      'http://127.0.0.1:3237/files/k57abc',
+      'http://127.0.0.1:3237/exports/',
+      'http://127.0.0.1:3237/exports/k57abc/part',
+      'not an address',
+    ])
+      expect(exportOfLink(other), other).toBeNull()
+    // the record line is waited for before its text is the baseline
+    expect(step).toMatch(
+      /const lastExport = async \(\) => \{\s+const line = [^\n]+\s+await line\.waitFor\(/,
+    )
     expect(exportWayOf({ secure: true, picker: true })).toBe('file')
     expect(exportWayOf({ secure: true, picker: false })).toBe('link')
     expect(exportWayOf({ secure: false, picker: true })).toBe('link')
@@ -2531,6 +2554,16 @@ describe('a wait with a bound', () => {
 })
 
 describe("a failed step's picture", () => {
+  it("ends with Playwright's own timeout, so none is taken of a later page", () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const shot = script.slice(
+      script.indexOf('async function shot(page, name) {'),
+      script.indexOf('async function signIn('),
+    )
+    expect(shot).toContain('timeout: SHOT_MS }).catch(() => {})')
+    expect(shot).not.toContain('within(\n    page.screenshot(')
+    expect(shot).toContain('page.isClosed()')
+  })
   it('is named after the step, with each / as -', () => {
     expect(failedShot('ui/org-export')).toBe('failed-ui-org-export')
     expect(failedShot('standard-agent/ui/remove')).toBe('failed-standard-agent-ui-remove')
@@ -2642,7 +2675,7 @@ describe('a picker list that shows its search', () => {
     const calls = script.split('await pressSearched(').slice(1)
     expect(calls).toHaveLength(7)
     const rows = calls.map(
-      (call) => /app\.locator\('(\[data-[^']+)'\),\n\s+app\.locator\(`/.exec(call)?.[1],
+      (call) => /app\.locator\('([^']+)'\),\n\s+app\.locator\(`/.exec(call)?.[1],
     )
     expect(rows).toEqual([
       '[data-team-member-choice]',
@@ -2650,7 +2683,8 @@ describe('a picker list that shows its search', () => {
       '[data-reassign-choice]:not([data-reassign-choice=""])',
       '[data-project-access-choice]',
       '[data-lead-choice]',
-      '[data-project-access-team-option]',
+      // each team's label, since the option is a checkbox without text
+      'label:has([data-project-access-team-option])',
       '[data-new-subproject-parent-choice]',
       '[data-lead-choice]',
     ])
