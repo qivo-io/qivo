@@ -66,18 +66,6 @@ import { PICKER_CAPS } from '../lib/pickerCaps'
 import { type MentionChoice, type MentionChoices, P } from '../store/planner'
 import { MENTION_WORDS } from './pickerWords'
 
-/** Resolves once the server took `task`'s create (P.createOnItsWay). The
-    popup says Searching… meanwhile, as for any answer on its way, and
-    lists the task's people once it is saved. */
-const created = (task: string) =>
-  new Promise<void>((resolve) => {
-    const stop = P.subscribe(() => {
-      if (P.createOnItsWay(task)) return
-      stop()
-      resolve()
-    })
-  })
-
 /** How long typing rests before the popup reads. Shorter than a picker's
     search box (lib/pagedList.ts SEARCH_DELAY_MS), since the popup has no
     box of its own and answered every keystroke at once while it filtered
@@ -144,6 +132,8 @@ export const mentionSuggestion: Omit<
     const owner = `mention:${++popups}`
     let pictures = ''
     let stopWatch: (() => void) | null = null
+    // the reads that wait for the task's create, each by the way to end it
+    const waits = new Set<() => void>()
 
     const list = onceList<MentionChoices, MentionChoice>(
       () => ({
@@ -152,7 +142,8 @@ export const mentionSuggestion: Omit<
           kind: 'once',
           read: (at): Promise<MentionChoices | null> => {
             if (task === '') return Promise.resolve({ state: 'unavailable' })
-            const read = () => P.mentionChoices({ org, task }, openWords, at.after)
+            const words = openWords
+            const read = () => P.mentionChoices({ org, task }, words, at.after)
             // the server cannot read a task it does not hold yet
             return P.createOnItsWay(task) ? created(task).then(read) : read()
           },
@@ -163,6 +154,31 @@ export const mentionSuggestion: Omit<
       }),
       () => landed(),
     )
+
+    /** Resolves once the server took `task`'s create (P.createOnItsWay).
+        The popup says Searching… meanwhile, as for any answer on its way,
+        and lists the task's people once it is saved. A wait that
+        `dropWaits` ended never resolves, so a text that was replaced and
+        a popup that closed read nothing. */
+    function created(task: string): Promise<void> {
+      return new Promise((resolve) => {
+        const end = () => {
+          stop()
+          waits.delete(end)
+        }
+        const stop = P.subscribe(() => {
+          if (P.createOnItsWay(task)) return
+          end()
+          resolve()
+        })
+        waits.add(end)
+      })
+    }
+
+    /** Ends every wait for a create, as a new text and leaving do. */
+    function dropWaits() {
+      for (const end of waits) end()
+    }
 
     /** Whether the typed text is known to match nobody without a read. */
     const knownNone = () =>
@@ -243,6 +259,7 @@ export const mentionSuggestion: Omit<
     function reset() {
       if (timer !== null) clearTimeout(timer)
       timer = null
+      dropWaits()
       list.stop()
       P.namePeople(owner, [])
       pictures = ''
@@ -293,6 +310,7 @@ export const mentionSuggestion: Omit<
       selected = 0
       // a Load more of the text before has no place in this list
       moreFrom = null
+      dropWaits()
       list.open(openKey)
     }
 

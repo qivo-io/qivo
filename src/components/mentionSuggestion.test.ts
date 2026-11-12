@@ -425,11 +425,38 @@ describe('the mention popup', () => {
     expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
     // the server took the create, which the store tells its listeners
     store.creating.clear()
-    for (const listener of [...store.listeners]) listener()
+    for (const listener of store.listeners) listener()
     await rest(0)
     expect(store.reads.at(-1)).toMatchObject({ task: 'task-1', search: 'anna' })
     await answer()
     expect(ids(p)).toEqual(['anna'])
+  })
+
+  it('reads once, for the newest text, when the task is saved, and nothing after leaving', async () => {
+    store.creating.add('task-1')
+    const p = popup()
+    p.start('anna')
+    await rest()
+    p.type('erik')
+    await rest()
+    store.creating.clear()
+    for (const listener of store.listeners) listener()
+    await rest(0)
+    expect(store.reads.map((read) => read.search)).toEqual(['erik'])
+    await answer()
+    expect(ids(p)).toEqual(['erik'])
+    p.exit()
+    // a popup that closed while its read waited reads nothing later
+    store.reads.length = 0
+    store.creating.add('task-1')
+    const again = popup()
+    again.start('anna')
+    await rest()
+    again.exit()
+    store.creating.clear()
+    for (const listener of store.listeners) listener()
+    await rest(0)
+    expect(store.reads).toHaveLength(0)
   })
 
   it("says the task's gate and rule states in the task pickers' words", async () => {
