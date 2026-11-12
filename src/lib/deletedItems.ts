@@ -29,7 +29,7 @@ export type Deleter = DeletedRow['deleter']
 export type BlockDetail = NonNullable<DeletedRow['blocked']>
 /** One seat's role in Deleted items (deletedItems.roles). */
 export type DeletedRole = FunctionReturnType<typeof api.deletedItems.roles>[number]
-/** One batch of an organization's people (deletedItems.people). */
+/** The people of one of Deleted items' two filters (deletedItems.people). */
 export type DeletedPeople = FunctionReturnType<typeof api.deletedItems.people>
 export type DeletedPerson = Extract<DeletedPeople, { state: 'ready' }>['rows'][number]
 /** What Delete now deletes with a project item (deletedItems.purgeSummary). */

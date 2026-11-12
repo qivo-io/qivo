@@ -429,8 +429,8 @@
 //                        whatever the items say: too-wide, missing-reads,
 //                        missing-matches, legacy, stopped (each page stops
 //                        after ten entries), hidden (an admin's task rows
-//                        hidden), people-not-ready, people-stopped (each
-//                        batch stops after five people), error (every read
+//                        hidden), people-stopped (the people's list stops
+//                        after five people), error (every read
 //                        fails), slow (each restore or purge waits 1.5 s),
 //                        refuse-at-2 (the second write is refused whole),
 //                        pause-at-2 (the second meets the pause), deferred
@@ -1152,7 +1152,6 @@ const forcedDeleted = (() => {
   if (deletedStates.has('legacy')) force.legacy = true
   if (deletedStates.has('stopped')) force.stopped = 10
   if (deletedStates.has('hidden')) force.hidden = true
-  if (deletedStates.has('people-not-ready')) force.peopleNotReady = true
   if (deletedStates.has('people-stopped')) force.peopleStopped = 5
   if (deletedStates.has('error'))
     force.fail = DELETED_READS.map((n) => n.slice('deletedItems:'.length))

@@ -134,8 +134,7 @@ export type ForcedDeleted = {
   stopped?: number
   /** an admin's task rows show hidden */
   hidden?: boolean
-  peopleNotReady?: boolean
-  /** each people batch stops after this many rows */
+  /** the people's list stops after this many rows, as a read budget ends it */
   peopleStopped?: number
   /** the reads that fail, by name without the module */
   fail?: readonly string[]
@@ -372,48 +371,40 @@ export const deletedRolesOf = (fx: DeletedFixture): DeletedRole[] =>
     can_purge: s.can_purge,
   }))
 
-/** The people batch's size, PEOPLE_BATCH. */
-const PEOPLE = 25
-
-/** deletedItems.people over `fx`: an organization's people in name key
-    order, ties by id, 25 a batch, with a search of every word of the name. */
+/** deletedItems.people over `fx`, whose items are those the seat sees: the
+    people who deleted one of the organization's items (`of` 'deleters') or
+    hold one of their stored tasks ('assignees'), in name key order, ties
+    by id, all at once, with a search of every word of the name. */
 export function deletedPeopleOf(
   fx: DeletedFixture,
-  args: { org_id: string; search?: string; cursor?: string },
+  args: { org_id: string; of: 'deleters' | 'assignees'; search?: string },
   force: ForcedDeleted = {},
 ): DeletedPeople {
   const search = (args.search ?? '').trim()
   if (overText(LIMITS.search, search))
     throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
-  const scope = JSON.stringify([args.org_id, nameKey(search)])
-  const from = openCursor(
-    args.cursor,
-    scope,
-    'cursor must come from an earlier batch of these people, for the same organization and search',
-  )
   const seat = fx.seats.find((s) => s.org_id === args.org_id)
   if (seat === undefined) return { state: 'ready', rows: [], next: null, stopped: false }
-  if (force.peopleNotReady) return { state: 'not_ready' }
+  const named = new Set<string>()
+  for (const item of fx.items) {
+    if (item.row.org_id !== args.org_id || item.row.state === ('purging' as string)) continue
+    if (args.of === 'deleters') {
+      if (item.deleted_by !== undefined) named.add(item.deleted_by)
+    } else
+      for (const task of item.tasks) if (task.assignee_id !== undefined) named.add(task.assignee_id)
+  }
   const matches = allWordsMatcher(nameKey(search))
   const all = fx.people
-    .filter((p) => p.org_id === args.org_id && matches(nameKey(p.name)))
+    .filter((p) => p.org_id === args.org_id && named.has(p.id) && matches(nameKey(p.name)))
     .sort((a, b) => {
       const ka = nameKey(a.name)
       const kb = nameKey(b.name)
       if (ka !== kb) return ka < kb ? -1 : 1
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     })
-  const size = force.peopleStopped ?? PEOPLE
-  const rows = all
-    .slice(from, from + size)
     .map(({ org_id: _org, ...person }) => ({ ...person, you: person.id === seat.me }))
-  const end = from + size >= all.length
-  return {
-    state: 'ready',
-    rows,
-    next: end ? null : JSON.stringify([scope, from + size]),
-    stopped: force.peopleStopped !== undefined && !end,
-  }
+  const size = force.peopleStopped ?? all.length
+  return { state: 'ready', rows: all.slice(0, size), next: null, stopped: all.length > size }
 }
 
 /** The items that wait for item `id`, and those that wait for them in
@@ -466,7 +457,11 @@ export function deletedStandIn(
     case 'deletedItems:roles':
       return deletedRolesOf(fx)
     case 'deletedItems:people':
-      return deletedPeopleOf(fx, args as { org_id: string }, force)
+      return deletedPeopleOf(
+        fx,
+        args as { org_id: string; of: 'deleters' | 'assignees'; search?: string },
+        force,
+      )
     case 'deletedItems:purgeSummary': {
       if (force.purge === 'failed') throw new Error('deletedItems.purgeSummary failed')
       const summary = deletedPurgeSummaryOf(fx, String(args.id))

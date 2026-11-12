@@ -65,7 +65,7 @@ import {
   type DeletedPeople,
   type DeletedRole,
   type PurgeSummary,
-  peopleBatch,
+  peopleOf,
   purgeSummaryOf,
   rolesFor,
 } from './model/deletedItemsChoices'
@@ -143,19 +143,21 @@ export const roles = authedQuery({
 })
 
 /* ----------------------------------------------------------------- people
- * One batch of at most 25 of an organization's people and agents in name
- * order, for the Deleted by choices and the assignee filter
- * (model/deletedItemsChoices.ts peopleBatch), for any active seat of the
- * login there. `search` keeps those whose name holds every word of it,
- * ignoring case and accents, and `cursor` is an earlier batch's `next` for
- * the same organization and search. An organization without the caller's
- * seat answers an empty last batch; `not_ready` waits for the name keys,
- * and `stopped` says the read budget ended the batch early. Refuses a
- * search longer than LIMITS.search and a cursor of another organization or
- * search. */
+ * The people Deleted by or the assignee filter (`of`) offers the login's
+ * seat in an organization: only those who appear, as deleter or as the
+ * holder of a deleted task the seat may read, on an item the seat sees
+ * (model/deletedItemsChoices.ts peopleOf), all at once in name order.
+ * `search` keeps those whose name holds every word of it, ignoring case
+ * and accents. An organization without the caller's seat answers an empty
+ * list, and `stopped` says the read budget ended the walk early. Refuses a
+ * search longer than LIMITS.search. */
 export const people = authedQuery({
-  args: { org_id: v.string(), search: v.optional(v.string()), cursor: v.optional(v.string()) },
-  handler: async (ctx, a): Promise<DeletedPeople> => await peopleBatch(ctx, ctx.myProfiles, a),
+  args: {
+    org_id: v.string(),
+    of: v.union(v.literal('deleters'), v.literal('assignees')),
+    search: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<DeletedPeople> => await peopleOf(ctx, ctx.myProfiles, a),
 })
 
 /* ----------------------------------------------------------- purgeSummary

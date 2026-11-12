@@ -20,10 +20,9 @@ import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import {
   DELETED_PEOPLE,
-  type DeletedPeople,
   type PeopleArgs,
   PURGE_ALONG,
-  peopleBatch,
+  peopleOf,
   purgeSummaryOf,
 } from '../model/deletedItemsChoices'
 import { DELETED_PAGE, type DeletedPage } from '../model/deletedItemsPage'
@@ -40,7 +39,6 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { keyOrg } from './nameKeys.setup'
 import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
 
 installTrashTimers()
@@ -118,23 +116,21 @@ const deleteProject = (t: T, who: Profile, id: string) =>
 /** Moves the clock on, so the next delete sorts after the last. */
 const later = () => vi.setSystemTime(Date.now() + 60_000)
 
-/** `answer` when it is a ready batch, else a failure. */
-function ready(answer: DeletedPeople) {
-  if (answer.state !== 'ready') throw new Error('the people are not ready')
-  return answer
-}
-
-/** Every batch for `who` and `args` to the one whose next is null. */
-async function batches(t: T, who: Profile, args: FunctionArgs<typeof api.deletedItems.people>) {
-  const out: ReturnType<typeof ready>[] = []
-  let cursor: string | undefined
-  for (let i = 0; i < 100; i++) {
-    const batch = ready(await people(t, who, cursor === undefined ? args : { ...args, cursor }))
-    out.push(batch)
-    if (batch.next === null) break
-    cursor = batch.next
-  }
-  return out
+/** The ids of the people `who` is offered for `of`, in the order answered,
+ * which must be the whole list. */
+async function offered(
+  t: T,
+  who: Profile,
+  of: 'deleters' | 'assignees',
+  search?: string,
+): Promise<string[]> {
+  const answer = await people(t, who, {
+    org_id: who.org_id,
+    of,
+    ...(search === undefined ? {} : { search }),
+  })
+  expect(answer).toMatchObject({ state: 'ready', next: null, stopped: false })
+  return answer.rows.map((r) => r.id)
 }
 
 /** Every page for `who` and `args` to the one whose next_cursor is null. */
@@ -311,155 +307,151 @@ describe('deletedItems.roles', () => {
 })
 
 describe('deletedItems.people', () => {
-  it('answers every profile in name order with ties by id, as person rows with pending and you', async () => {
+  /* withReadingAdmin, whose `user` leads TBED and whose admin reads it:
+   * Dana deleted a task in Firmware that Ann held, the user one that Bo
+   * held, and the admin one in Board rev that Cy held. Eve holds no
+   * deleted task and deleted nothing. */
+  async function scene() {
     const t = newT()
     const f = await withReadingAdmin(t)
+    const dana = await person(t, f.org.id, 'Dana Deleter')
+    await grant(t, f.sub.id, dana.id, 'user')
+    const ann = await person(t, f.org.id, 'Ann Assignee')
+    const bo = await person(t, f.org.id, 'Bo Assignee')
+    const cy = await person(t, f.org.id, 'Cy Assignee')
+    const eve = await person(t, f.org.id, 'Eve Elsewhere')
+    const task = (project: Doc<'projects'>, assignee: Profile) =>
+      plantIssue(t, { org_id: f.org.id, project_id: project.id, assignee_id: assignee.id })
+    await deleteTask(t, dana, (await task(f.sub, ann)).id)
+    later()
+    await deleteTask(t, f.user, (await task(f.sub, bo)).id)
+    later()
+    await deleteTask(t, f.admin, (await task(f.sub2, cy)).id)
+    await runSteps(t)
+    return { t, f, dana, ann, bo, cy, eve }
+  }
+
+  it('offers only the people on the items the seat sees: every delete for an admin, the led projects for a lead, their own for anyone else', async () => {
+    const { t, f, dana, ann, bo, cy, eve } = await scene()
+    const sorted = (ids: string[]) => [...ids].sort()
+    // an admin sees every delete of the organization
+    expect(sorted(await offered(t, f.admin, 'deleters'))).toEqual(
+      sorted([dana.id, f.user.id, f.admin.id]),
+    )
+    expect(sorted(await offered(t, f.admin, 'assignees'))).toEqual(sorted([ann.id, bo.id, cy.id]))
+    // the lead of the top-level project sees every item and reads every task
+    expect(sorted(await offered(t, f.user, 'assignees'))).toEqual(sorted([ann.id, bo.id, cy.id]))
+    expect(sorted(await offered(t, f.user, 'deleters'))).toEqual(
+      sorted([dana.id, f.user.id, f.admin.id]),
+    )
+    // Dana sees her own delete alone, and nobody who is on no item of hers
+    expect(await offered(t, dana, 'deleters')).toEqual([dana.id])
+    expect(await offered(t, dana, 'assignees')).toEqual([ann.id])
+    // someone who deleted nothing and leads nothing is offered nobody
+    expect(await offered(t, eve, 'deleters')).toEqual([])
+    expect(await offered(t, eve, 'assignees')).toEqual([])
+    expect(await offered(t, f.guest, 'deleters')).toEqual([])
+    // what the list offers is what the page then finds
+    for (const who of [ann, bo, cy]) {
+      const found = await page(t, f.user, {
+        scope: { org_id: f.org.id, all: true },
+        assignee: who.id,
+      })
+      expect(found.entries.length, who.name).toBeGreaterThan(0)
+    }
+  })
+
+  it('answers person rows with you, in name order with ties by id, and keeps every word of a search', async () => {
+    const { t, f, dana } = await scene()
     const first = await person(t, f.org.id, 'Sam Lee')
     const second = await person(t, f.org.id, 'Sam Lee', 'user', { auth_user_id: 'auth_sam_two' })
-    const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Pending', org_role: 'user' })
-    const ivy = await person(t, f.org.id, 'Ivy Off', 'user', { active: false })
-    // before the name keys, the batch waits
-    expect(await people(t, f.user, { org_id: f.org.id })).toEqual({ state: 'not_ready' })
-    await keyOrg(t, f.org.id)
-    const batch = ready(await people(t, f.user, { org_id: f.org.id }))
-    expect(batch).toMatchObject({ next: null, stopped: false })
+    for (const sam of [first, second]) {
+      await grant(t, f.sub.id, sam.id, 'user')
+      later()
+      await deleteTask(t, sam, (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id)
+    }
+    await runSteps(t)
+    const answer = await people(t, f.admin, { org_id: f.org.id, of: 'deleters' })
     const ties = [first, second].sort((a, b) => (a.id < b.id ? -1 : 1)).map((p) => p.id)
-    expect(batch.rows.map((r) => [r.name, r.id])).toEqual([
+    expect(answer.rows.map((r) => [r.name, r.id])).toEqual([
       ['admin', f.admin.id],
-      ['guest', f.guest.id],
-      ['Ivy Off', ivy.id],
-      ['Pat Pending', pat.id],
-      ['Relay', f.agent.id],
+      ['Dana Deleter', dana.id],
       ['Sam Lee', ties[0]],
       ['Sam Lee', ties[1]],
       ['user', f.user.id],
-      ['viewer', f.viewer.id],
     ])
-    const row = (id: string) => batch.rows.find((r) => r.id === id)
-    expect(row(f.user.id)).toEqual({
-      id: f.user.id,
-      name: 'user',
-      org_role: 'user',
+    expect(answer.rows.find((r) => r.id === f.admin.id)).toEqual({
+      id: f.admin.id,
+      name: 'admin',
+      org_role: 'admin',
       kind: 'person',
       active: true,
       pending: false,
       you: true,
     })
-    expect(row(f.agent.id)).toMatchObject({ kind: 'agent', pending: false, you: false })
-    expect(row(pat.id)).toMatchObject({ kind: 'person', pending: true, you: false })
-    expect(row(ivy.id)).toMatchObject({ active: false, pending: false })
-    expect(row(f.admin.id)).toMatchObject({ org_role: 'admin', you: false })
-  })
-
-  it('keeps every word of a search ignoring case and accents, 25 a batch, with cursors sealed to the organization and search', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 30; i++)
-        await ctx.db.insert('profiles', {
-          id: uuid(),
-          org_id: f.org.id,
-          name: `Émile Durand ${String(i).padStart(2, '0')}`,
-          initials: 'ED',
-          color: '#7a7ad0',
-          org_role: 'user',
-          active: true,
-          kind: 'person',
-          created_at: NOW,
-        })
-    })
-    await keyOrg(t, f.org.id)
-    await keyOrg(t, f.otherOrg.id)
-    const one = ready(await people(t, f.viewer, { org_id: f.org.id, search: 'DURAND emile 07' }))
-    expect(one.rows.map((r) => r.name)).toEqual(['Émile Durand 07'])
-    expect(
-      ready(await people(t, f.viewer, { org_id: f.org.id, search: 'durand zed' })).rows,
-    ).toEqual([])
-    const all = await batches(t, f.viewer, { org_id: f.org.id, search: 'émile' })
-    expect(all.map((b) => b.rows.length)).toEqual([25, 5])
-    expect(all.flatMap((b) => b.rows).at(-1)?.name).toBe('Émile Durand 29')
-    // the same name key opens the same cursor
-    const cursor = all[0].next ?? ''
-    expect(
-      ready(await people(t, f.viewer, { org_id: f.org.id, search: 'EMILE', cursor })).rows,
-    ).toHaveLength(5)
-    // another search or organization does not
-    const refused = /cursor must come from an earlier batch of these people/
+    expect(await offered(t, f.admin, 'deleters', 'DELETER dana')).toEqual([dana.id])
+    expect(await offered(t, f.admin, 'deleters', 'dana zed')).toEqual([])
     await expectRefusal(
-      people(t, f.viewer, { org_id: f.org.id, search: 'durand', cursor }),
-      'bad_request',
-      refused,
-    )
-    await expectRefusal(
-      people(t, f.otherAdmin, { org_id: f.otherOrg.id, search: 'émile', cursor }),
-      'bad_request',
-      refused,
-    )
-    await expectRefusal(
-      people(t, f.viewer, { org_id: f.org.id, cursor: 'not a cursor' }),
-      'bad_request',
-      refused,
-    )
-    await expectRefusal(
-      people(t, f.viewer, { org_id: f.org.id, search: 'x'.repeat(LIMITS.search.max + 1) }),
+      people(t, f.admin, {
+        org_id: f.org.id,
+        of: 'deleters',
+        search: 'x'.repeat(LIMITS.search.max + 1),
+      }),
       'rule',
       /Search for fewer words\.$/,
     )
   })
 
-  it('answers an organization without an active seat of the caller as an empty last batch, after it refuses its arguments', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await keyOrg(t, f.org.id)
-    await keyOrg(t, f.otherOrg.id)
-    const empty = { state: 'ready', rows: [], next: null, stopped: false }
-    expect(await people(t, f.user, { org_id: f.otherOrg.id })).toEqual(empty)
-    expect(await people(t, f.user, { org_id: uuid() })).toEqual(empty)
-    // an inactive seat is no seat
-    await patch(t, 'profiles', f.guest.id, { active: false })
-    expect(await people(t, f.guest, { org_id: f.org.id })).toEqual(empty)
-    // the search and the cursor are judged first, as the page's are
-    await expectRefusal(
-      people(t, f.user, { org_id: f.otherOrg.id, search: 'x'.repeat(LIMITS.search.max + 1) }),
-      'rule',
-    )
-    await expectRefusal(people(t, f.user, { org_id: f.otherOrg.id, cursor: 'junk' }), 'bad_request')
+  it('keeps a person who left, and offers nobody for an id a new seat reuses', async () => {
+    const { t, f, dana, ann } = await scene()
+    await patch(t, 'profiles', dana.id, { active: false })
+    expect(await offered(t, f.admin, 'deleters')).toContain(dana.id)
+    // Ann's seat is removed and a new one takes her id after the delete
+    await removeProfile(t, ann.id)
+    expect(await offered(t, f.admin, 'assignees')).not.toContain(ann.id)
+    await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'New Seat',
+      id: ann.id,
+      created_at: new Date(Date.now() + 86_400_000).toISOString(),
+    })
+    expect(await offered(t, f.admin, 'assignees')).not.toContain(ann.id)
   })
 
-  it('stops a batch at a lowered candidate bound or read share with a cursor that pages on to the end', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 12; i++)
-        await ctx.db.insert('profiles', {
-          id: uuid(),
-          org_id: f.org.id,
-          name: `Bench person ${String(i).padStart(2, '0')}`,
-          initials: 'BP',
-          color: '#7a7ad0',
-          org_role: 'user',
-          active: true,
-          kind: 'person',
-          created_at: NOW,
-        })
-    })
-    await keyOrg(t, f.org.id)
-    // 'viewer' sorts last, after every bench person
-    const args = { org_id: f.org.id, search: 'viewer' }
-    expect(await batches(t, f.user, args)).toHaveLength(1)
-    DELETED_PEOPLE.candidates = 3
-    const capped = await batches(t, f.user, args)
-    expect(capped[0]).toMatchObject({ rows: [], stopped: true })
-    expect(capped.length).toBeGreaterThan(3)
-    expect(capped.flatMap((b) => b.rows.map((r) => r.name))).toEqual(['viewer'])
-    expect(capped.at(-1)).toMatchObject({ next: null })
-    Object.assign(DELETED_PEOPLE, DEFAULT_PEOPLE)
-    // a read share of a few documents past the call's own reads
-    DELETED_PEOPLE.read = { ...DEFAULT_PEOPLE.read, documents: 4 }
-    const shared = await batches(t, f.user, args)
-    expect(shared[0]).toMatchObject({ rows: [], stopped: true })
-    expect(shared.length).toBeGreaterThan(2)
-    expect(shared.flatMap((b) => b.rows.map((r) => r.name))).toEqual(['viewer'])
+  it('answers an organization without an active seat of the caller as an empty list, after it refuses its search', async () => {
+    const { t, f } = await scene()
+    const empty = { state: 'ready', rows: [], next: null, stopped: false }
+    expect(await people(t, f.user, { org_id: f.otherOrg.id, of: 'deleters' })).toEqual(empty)
+    expect(await people(t, f.user, { org_id: uuid(), of: 'assignees' })).toEqual(empty)
+    // an inactive seat is no seat
+    await patch(t, 'profiles', f.guest.id, { active: false })
+    expect(await people(t, f.guest, { org_id: f.org.id, of: 'deleters' })).toEqual(empty)
+    await expectRefusal(
+      people(t, f.user, {
+        org_id: f.otherOrg.id,
+        of: 'deleters',
+        search: 'x'.repeat(LIMITS.search.max + 1),
+      }),
+      'rule',
+    )
+  })
+
+  it('answers the people found so far as stopped past a lowered read share, never as the whole list', async () => {
+    const { t, f } = await scene()
+    const whole = await people(t, f.user, { org_id: f.org.id, of: 'assignees' })
+    expect(whole).toMatchObject({ stopped: false })
+    expect(whole.rows).toHaveLength(3)
+    const states: boolean[] = []
+    for (let documents = 1; documents <= 400; documents += 3) {
+      DELETED_PEOPLE.read = { ...DEFAULT_PEOPLE.read, documents }
+      const answer = await people(t, f.user, { org_id: f.org.id, of: 'assignees' })
+      states.push(answer.stopped)
+      // a list that is not stopped is the whole list
+      if (!answer.stopped) expect(answer.rows, String(documents)).toEqual(whole.rows)
+      else expect(answer.rows.length, String(documents)).toBeLessThanOrEqual(3)
+    }
+    expect(states[0]).toBe(true)
+    expect(states.at(-1)).toBe(false)
   })
 })
 
@@ -761,7 +753,7 @@ describe("the page's via", () => {
 async function metered<R>(
   t: T,
   me: Profile,
-  read: (ctx: Parameters<typeof peopleBatch>[0]) => Promise<R>,
+  read: (ctx: Parameters<typeof peopleOf>[0]) => Promise<R>,
 ) {
   return await as(t, me).query(async (ctx) => {
     const answer = await read(ctx)
@@ -786,17 +778,19 @@ function record(what: string, figures: { ranges: number; documents: number; mib:
 }
 
 describe('reads at the design size', () => {
-  it('reads the people of an organization of 1,000, with no search and with one whose matches sit last', async () => {
+  it('reads the people on 300 deleted tasks of one sub-project, deleted by 30 people and held by 50, among 1,000 people', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    // with withOrg's five, 995 people with ordinary names, the last three
-    // after every other name
+    // with withOrg's five, 995 people with ordinary names
+    const ids: string[] = []
     await t.run(async (ctx) => {
-      for (let i = 0; i < 995; i++)
+      for (let i = 0; i < 995; i++) {
+        const id = uuid()
+        ids.push(id)
         await ctx.db.insert('profiles', {
-          id: uuid(),
+          id,
           org_id: f.org.id,
-          name: i < 992 ? `Person ${String(i).padStart(3, '0')} of the lab` : `Zora Quill ${i}`,
+          name: `Person ${String(i).padStart(3, '0')} of the lab`,
           initials: 'PL',
           color: '#7a7ad0',
           org_role: 'user',
@@ -806,28 +800,78 @@ describe('reads at the design size', () => {
           created_at: NOW,
           email: `person${i}@testbed.test`,
         })
+      }
     })
-    await keyOrg(t, f.org.id)
-    const seats = new Map([[f.user.org_id, f.user]])
-    const batch = (a: PeopleArgs) => metered(t, f.user, (ctx) => peopleBatch(ctx, seats, a))
-    const plain = await batch({ org_id: f.org.id })
-    record('1,000 people, the first batch', plain.figures)
-    expect(ready(plain.answer)).toMatchObject({ stopped: false })
-    expect(ready(plain.answer).rows).toHaveLength(25)
-    const sparse = await batch({ org_id: f.org.id, search: 'quill' })
-    record('1,000 people, a search whose matches sit last, the first batch', sparse.figures)
-    expect(ready(sparse.answer)).toMatchObject({ rows: [], stopped: true })
-    // it pages on to the matches
-    let cursor = ready(sparse.answer).next ?? undefined
-    const rows: string[] = []
-    for (let i = 0; i < 10 && cursor !== undefined; i++) {
-      const next = await batch({ org_id: f.org.id, search: 'quill', cursor })
-      record(`the same, batch ${i + 2}`, next.figures)
-      rows.push(...ready(next.answer).rows.map((r) => r.name))
-      cursor = ready(next.answer).next ?? undefined
-    }
-    expect(rows).toEqual(['Zora Quill 992', 'Zora Quill 993', 'Zora Quill 994'])
-  })
+    // 300 task items of Firmware, a sub-project's open tasks, as each
+    // delete of a task without subtasks stores one item and one task row
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++) {
+        const item = uuid()
+        const task = uuid()
+        const at = new Date(START - i * 60_000).toISOString()
+        await ctx.db.insert('deleted_items', {
+          id: item,
+          org_id: f.org.id,
+          kind: 'task',
+          target_id: task,
+          num: 9_000 + i,
+          name: 'Replace the fan controller on the bench rig',
+          status: 'todo',
+          archived: false,
+          project_id: f.sub.id,
+          parent_project_id: f.meta.id,
+          path: ['Testbed platform', 'Firmware'],
+          projects: [
+            {
+              id: f.sub.id,
+              name: 'Firmware',
+              key: 'FW',
+              type: 'project',
+              tasks: 1,
+              archived_tasks: 0,
+            },
+          ],
+          counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+          deleted_at: at,
+          deleted_by: ids[i % 30],
+          state: 'ready',
+          purge_after: START + 30 * 86_400_000,
+        })
+        await ctx.db.insert('deleted_tasks', {
+          org_id: f.org.id,
+          item_id: item,
+          task_id: task,
+          num: 9_000 + i,
+          title: 'Replace the fan controller on the bench rig',
+          project_id: f.sub.id,
+          archived: false,
+          assignee_id: ids[100 + (i % 50)],
+          deleted_at: at,
+          deleted_by: ids[i % 30],
+          item_project_id: f.sub.id,
+          item_parent_id: f.meta.id,
+        })
+      }
+    })
+    const seats = new Map([[f.admin.org_id, f.admin]])
+    const read = (a: PeopleArgs) => metered(t, f.admin, (ctx) => peopleOf(ctx, seats, a))
+    const deleters = await read({ org_id: f.org.id, of: 'deleters' })
+    record('300 task items among 1,000 people, the deleters', deleters.figures)
+    expect(deleters.answer).toMatchObject({ stopped: false })
+    expect(deleters.answer.rows).toHaveLength(30)
+    const assignees = await read({ org_id: f.org.id, of: 'assignees' })
+    record('300 task items among 1,000 people, the assignees', assignees.figures)
+    expect(assignees.answer).toMatchObject({ stopped: false })
+    expect(assignees.answer.rows).toHaveLength(50)
+    // the lead of the project reads the same people
+    const lead = new Map([[f.user.org_id, f.user]])
+    const led = await metered(t, f.user, (ctx) =>
+      peopleOf(ctx, lead, { org_id: f.org.id, of: 'assignees' }),
+    )
+    record('the same, for the project lead', led.figures)
+    expect(led.answer.rows).toHaveLength(50)
+    expect(led.answer.stopped).toBe(false)
+  }, 60_000)
 
   it("counts Delete now's summary of a project item that stores 30 live and 40 archived sub-projects", async () => {
     const t = newT({ transactionLimits: true })

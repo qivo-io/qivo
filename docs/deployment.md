@@ -1054,6 +1054,11 @@ later backend. A tab that was open at the deploy does so too, until it
 reloads. Its **+ Add** list under **Subscribers** still loads, and no
 longer finds a person by an email address.
 
+The app up to v0.1.166 reads Deleted items' **Deleted by** and **Assigned
+to** people through `deletedItems.people` without `of`, which the release
+after v0.1.166 refuses, so both menus say **Couldn't load people.** against
+a later backend, until the tab reloads.
+
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
 backend to a commit before it makes active lists answer an array again,
@@ -2473,6 +2478,19 @@ against this backend says the same in both, as
 on, never return the backend to a commit before it while its app is
 served; roll forward instead. The release changes no table, field or index
 and has no backfill and no release step.
+
+From the release after v0.1.166, **Deleted by** and **Assigned to** on
+Deleted items list only the people who appear on a deleted item the seat
+sees, as its deleter or as the holder of a deleted task it may read, and
+nobody else of the organization (owner decision, 12 November 2026).
+`deletedItems.people` takes which of the two lists it answers (`of`), no
+cursor any more, and answers every such person at once, or the people found
+so far with `stopped` when its read budget ends first. The app of that
+release sends `of`, so that release is the backend's floor for its app. An
+app from it, against a backend before it, and an earlier app against this
+backend, such as a tab left open, say **Couldn't load people.** in both
+menus until the tab reloads or the backend rolls forward. The release changes
+no table, field or index and has no backfill and no release step.
 
 ## Node.js version
 

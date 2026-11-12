@@ -2731,9 +2731,9 @@ async function deletedLeft(tag) {
  *
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
- *     the agents come from Deleted items' people read
- *     (deletedItems.people), whose rows tell an agent from a person, as
- *     the store holds nobody but Nora;
+ *     the agents come from API access's person filter (apiAccess.people),
+ *     an organization admin's read whose rows tell an agent from a person,
+ *     as the store holds nobody but Nora;
  *  2. with a temporary token for REST reads, projects (with their tasks,
  *     comments, files, grants and milestones), those REST lists and those
  *     Nora only manages, live and archived, from Settings' lists, tasks
@@ -2810,22 +2810,22 @@ async function sweep(tag, label) {
         ),
       )
     ).filter((p) => !p.under && matches(p.name))
-  /** The agents with the tag in Nora's organization, from Deleted items'
-   *  people read (P.deletedPeople, deletedItems.people), whose rows tell
-   *  an agent from a person, a batch at a time, as the store holds nobody
-   *  but Nora; a failed read is a failure. */
+  /** The agents with the tag in Nora's organization, from API access's
+   *  person filter (P.apiAccessPeople, apiAccess.people), which Nora reads
+   *  as an organization admin and whose rows tell an agent from a person,
+   *  a batch at a time, as the store holds nobody but Nora; a failed read
+   *  is a failure. */
   const taggedAgents = async () => {
     const org = await evaluate(app, () => window.PLANNER.homeOrg)
     return (
       await appBatches('agents', (cursor) =>
-        evaluate(app, ([o, search, after]) => window.PLANNER.deletedPeople(o, search, after), [
-          org,
+        evaluate(app, ([search, after]) => window.PLANNER.apiAccessPeople(search, after), [
           searchOf(tag),
           cursor,
         ]),
       )
     )
-      .filter((p) => p.kind === 'agent' && matches(p.name))
+      .filter((p) => p.agent && matches(p.name))
       .map((p) => ({ id: p.id, name: p.name, org }))
   }
   /** The keys of `agents`, read once in each agent's organization
@@ -3023,8 +3023,8 @@ async function sweep(tag, label) {
           // in the agent's own organization, which the server removes it from
           await evaluate(app, (a) => window.PLANNER.removeUser(a.id, { orgId: a.org }), agent)
           await settled()
-          // over REST with the token, else by Deleted items' people
-          // search, which no longer lists a removed agent
+          // over REST with the token, else by API access's person
+          // filter, which no longer lists a removed agent
           expect(
             await until(async () =>
               cleaner

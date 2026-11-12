@@ -3589,10 +3589,11 @@ describe('task list pages', () => {
       check.indexOf('async function removeTokenInApp('),
     )
     // the store holds nobody but Nora and no label, so the agents come from
-    // Deleted items' people read, whose rows tell an agent from a person, and
-    // the labels from the label picker's, both without the cleanup token
-    expect(sweep).toContain('window.PLANNER.deletedPeople(o, search, after)')
-    expect(sweep).toContain(".filter((p) => p.kind === 'agent' && matches(p.name))")
+    // API access's person filter, an admin's read whose rows tell an agent
+    // from a person, and the labels from the label picker's, both without
+    // the cleanup token
+    expect(sweep).toContain('window.PLANNER.apiAccessPeople(search, after)')
+    expect(sweep).toContain('.filter((p) => p.agent && matches(p.name))')
     expect(sweep).toContain(
       'window.PLANNER.labelChoices({ org: window.PLANNER.homeOrg, search, cursor: after })',
     )
