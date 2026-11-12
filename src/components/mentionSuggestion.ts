@@ -14,7 +14,9 @@
    match: every word of the text in the name or the initials, in any
    order, ignoring case but not accents. It sends no email, and a row
    shows the name alone, for everyone (the owner's decision of 12 November
-   2026). An editor that names no task reads nothing and lists nobody.
+   2026). An editor that names no task reads nothing and lists nobody,
+   and a read for the person's own new task waits until the server took
+   its create.
    The renderer reads
    through the shared paged list's `once` engine (lib/pagedList.ts
    onceList), so TipTap's own fetch (`items`) answers nothing and can never
@@ -63,6 +65,18 @@ import { listEnd, onceList } from '../lib/pagedList'
 import { PICKER_CAPS } from '../lib/pickerCaps'
 import { type MentionChoice, type MentionChoices, P } from '../store/planner'
 import { MENTION_WORDS } from './pickerWords'
+
+/** Resolves once the server took `task`'s create (P.createOnItsWay). The
+    popup says Searching… meanwhile, as for any answer on its way, and
+    lists the task's people once it is saved. */
+const created = (task: string) =>
+  new Promise<void>((resolve) => {
+    const stop = P.subscribe(() => {
+      if (P.createOnItsWay(task)) return
+      stop()
+      resolve()
+    })
+  })
 
 /** How long typing rests before the popup reads. Shorter than a picker's
     search box (lib/pagedList.ts SEARCH_DELAY_MS), since the popup has no
@@ -136,10 +150,12 @@ export const mentionSuggestion: Omit<
         key: openKey,
         source: {
           kind: 'once',
-          read: async (at) =>
-            task === ''
-              ? { state: 'unavailable' as const }
-              : P.mentionChoices({ org, task }, openWords, at.after),
+          read: (at): Promise<MentionChoices | null> => {
+            if (task === '') return Promise.resolve({ state: 'unavailable' })
+            const read = () => P.mentionChoices({ org, task }, openWords, at.after)
+            // the server cannot read a task it does not hold yet
+            return P.createOnItsWay(task) ? created(task).then(read) : read()
+          },
         },
         batch: (answer) => (answer.state === 'ready' ? answer : null),
         id: (row) => row.id,

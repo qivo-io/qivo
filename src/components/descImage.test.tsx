@@ -106,7 +106,12 @@ async function render(text: string, saved: string) {
         <div data-read>
           <Markdown text={text} />
         </div>
-        <DescEditor issueKey="task-1" value={saved} ariaLabel="Task description" />
+        <DescEditor
+          issueKey="task-1"
+          task="task-uuid-1"
+          value={saved}
+          ariaLabel="Task description"
+        />
       </TooltipProvider>,
     ),
   )
@@ -155,6 +160,11 @@ const sources = (editor: NonNullable<TiptapEditorHTMLElement['editor']>) => {
 const readHtml = () => (document.querySelector('[data-read]') as Element).innerHTML
 
 describe('pasting a copy of a rendered description into its editor', () => {
+  it('names its task on the editor, which the @ mention popup reads its people for', async () => {
+    const editor = await render('', '')
+    expect(editor.view.dom.getAttribute('data-qivo-task')).toBe('task-uuid-1')
+  })
+
   it('pastes an image still out of reach, which shows only its placeholder, back as its attachment', async () => {
     const text = `Rig ![Bench photo](att:${OWN}) done`
     const editor = await render(text, text)

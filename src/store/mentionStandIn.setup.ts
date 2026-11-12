@@ -19,10 +19,12 @@
    gray), never an email.
 
    Asked with a task (`issue_id`), as the mention popup asks, it answers
-   the same people. The workspace holds no access rows, so it runs neither
-   the server's gate nor its rule, which convex/tests/mentionAccess.test.ts
-   holds; `force.only` narrows its people to the ids a test names, and
-   `force.state` answers one of the gate's states.
+   the same people without the switched-off ones, and refuses a cursor
+   with the suggestions' sentence. The workspace holds no access rows, so
+   it runs neither the server's gate nor its rule, which
+   convex/tests/mentionAccess.test.ts holds; `force.only` narrows its
+   people to the ids a test names, and `force.state` answers one of the
+   gate's states.
 
    Its cursors are plain JSON of the list, the organization, the task if
    any, the search as the match reads it (searchWords), its name key and
@@ -69,8 +71,12 @@ type Profile = Whole['profiles'][number]
 /* A place in the list, just after the profile with this name key and id. */
 type Position = { key: string; id: string }
 
-const NOT_A_CURSOR =
-  'after and through must be cursors from an earlier answer of this list, with the same search; start again from the first batch'
+const NOT_A_CURSOR = {
+  orgPeople:
+    'after and through must be cursors from an earlier answer of this list, with the same search; start again from the first batch',
+  mentions:
+    'after and through must be cursors from an earlier answer of these suggestions, for the same task and search; start again from the first batch',
+}
 
 /* -1, 0 or 1 as position `a` sorts before, with or after `b`. */
 function compare(a: Position, b: Position): number {
@@ -93,8 +99,8 @@ const rowOf = (profile: Profile): MentionRow => ({
 /**
  * What pickers.orgPeople answers for `args` while the server holds
  * `workspace`, read by the caller the workspace belongs to, and what
- * pickers.mentions answers a caller for whose task every profile passes
- * its rule. Throws as the server refuses: a login without an active seat
+ * pickers.mentions answers a caller for whose task every active profile
+ * passes its rule. Throws as the server refuses: a login without an active seat
  * in the organization, a search past LIMITS.search and a cursor the list
  * did not give for the organization, task and search.
  */
@@ -112,7 +118,8 @@ export function mentionStandIn(
   const search = (args.search ?? '').trim()
   if (overText(LIMITS.search, search))
     throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
-  const LIST = args.issue_id === undefined ? 'pickers.orgPeople' : 'pickers.mentions'
+  const mentions = args.issue_id !== undefined
+  const LIST = mentions ? 'pickers.mentions' : 'pickers.orgPeople'
   const scope = [args.org_id, args.issue_id ?? null, searchWords(search), nameKey(search)]
   const seal = (at: Position) => JSON.stringify([LIST, scope, [at.key, at.id]])
   const open = (text: string | undefined): Position | null => {
@@ -131,7 +138,10 @@ export function mentionStandIn(
       typeof key !== 'string' ||
       typeof id !== 'string'
     )
-      throw new ConvexError({ code: 'bad_request', message: NOT_A_CURSOR })
+      throw new ConvexError({
+        code: 'bad_request',
+        message: mentions ? NOT_A_CURSOR.mentions : NOT_A_CURSOR.orgPeople,
+      })
     return { key, id }
   }
   const after = open(args.after)
@@ -147,6 +157,8 @@ export function mentionStandIn(
 
   const people = workspace.profiles
     .filter((p) => p.org_id === args.org_id && (force.only?.includes(p.id) ?? true))
+    // the mention popup's rule keeps active profiles alone
+    .filter((p) => !mentions || p.active !== false)
     .sort((a, b) => compare(positionOf(a), positionOf(b)))
   const matches = allWordsMatcher(search)
   const size = force.batch ?? MENTION_BATCH

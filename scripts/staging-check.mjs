@@ -3022,8 +3022,8 @@ async function sweep(tag, label) {
           // in the agent's own organization, which the server removes it from
           await evaluate(app, (a) => window.PLANNER.removeUser(a.id, { orgId: a.org }), agent)
           await settled()
-          // over REST with the token, else by the mention popup's search,
-          // which no longer lists a removed agent
+          // over REST with the token, else by Deleted items' people
+          // search, which no longer lists a removed agent
           expect(
             await until(async () =>
               cleaner

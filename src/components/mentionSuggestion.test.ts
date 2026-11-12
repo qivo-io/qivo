@@ -30,12 +30,15 @@ const store = vi.hoisted(() => ({
   // what each popup names (P.namePeople), by its key
   named: new Map<string, { org: string; id: string }[]>(),
   listeners: new Set<() => void>(),
+  // the tasks whose create the server has not taken yet
+  creating: new Set<string>(),
 }))
 vi.mock('../store/planner', () => ({
   P: {
     homeOrg: 'org-home',
     mentionChoices: (o: { org: string; task: string }, search: string, cursor: string | null) =>
       new Promise((resolve) => store.reads.push({ ...o, search, cursor, resolve })),
+    createOnItsWay: (task: string) => store.creating.has(task),
     person: (id: string) => ({ state: 'ok', id, picture: store.pictures.get(id) ?? null }),
     namePeople: (owner: string, people: { org: string; id: string }[]) => {
       if (people.length === 0) store.named.delete(owner)
@@ -184,6 +187,7 @@ beforeEach(() => {
   store.pictures.clear()
   store.named.clear()
   store.listeners.clear()
+  store.creating.clear()
 })
 
 afterEach(() => {
@@ -411,6 +415,23 @@ describe('the mention popup', () => {
     ])
   })
 
+  it("waits for the person's own new task to be saved, then lists its people", async () => {
+    store.creating.add('task-1')
+    const p = popup()
+    p.start('anna')
+    await rest()
+    await rest(0)
+    expect(store.reads).toHaveLength(0)
+    expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
+    // the server took the create, which the store tells its listeners
+    store.creating.clear()
+    for (const listener of [...store.listeners]) listener()
+    await rest(0)
+    expect(store.reads.at(-1)).toMatchObject({ task: 'task-1', search: 'anna' })
+    await answer()
+    expect(ids(p)).toEqual(['anna'])
+  })
+
   it("says the task's gate and rule states in the task pickers' words", async () => {
     const p = popup()
     p.start('anna')
@@ -423,15 +444,6 @@ describe('the mention popup', () => {
     expect([state(p), lines(p)]).toEqual([
       'held',
       ["Qivo couldn't check who can be mentioned on this task."],
-    ])
-    p.type('mira')
-    await rest()
-    await answer(undefined, {
-      state: { state: 'refused', message: 'you do not have write access to this project' },
-    })
-    expect([state(p), lines(p)]).toEqual([
-      'held',
-      ['You do not have write access to this project.'],
     ])
   })
 

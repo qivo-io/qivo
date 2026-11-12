@@ -260,8 +260,8 @@ instead ([Search palette](#search-palette)).
 
 **Assignee** supports multiple people and stays open while you choose. It
 lists the people of the project's organization 8 at a time, with a search
-over names, initials and email and **Load more**, and the people you chose
-first.
+over names and initials and **Load more**, and the people you chose
+first. It shows and searches no email address.
 **Me only** applies the same filter as **My tasks**; **Anyone** removes the
 people restriction. My tasks and selected assignees are mutually exclusive.
 Both match the reviewer while a task is In Review with one ([Task ownership](./how-work-is-organized.md#the-task)).

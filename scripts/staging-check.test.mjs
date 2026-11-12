@@ -306,7 +306,7 @@ describe('staging check REST contract', () => {
     expect(REMOVED_PARTS).toEqual(['workspace:people', 'workspace:catalog'])
     // the reads the menus take their rows from
     expect(read('../convex/teams.ts')).toContain('export const picker =')
-    expect(read('../convex/pickers.ts')).toContain('export const mentions =')
+    expect(read('../convex/pickers.ts')).toContain('export const orgPeople =')
     expect(read('../convex/pickers.ts')).toContain('export const taskFollowers =')
     expect(ROSTER_READS).toEqual({
       teams: 'teams:picker',

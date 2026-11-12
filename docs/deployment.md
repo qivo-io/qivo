@@ -370,8 +370,9 @@ mention popup (`pickers.mentions`) with Enter, then clears the draft so nothing 
 (`ui/label-mention-pickers`). Each label change is checked over REST, and
 the step deletes both labels in the app before it returns, also after a
 failure, so the later `ui/settings-labels` search for the run tag finds
-only its own label. Against a backend from before the mention suggestions'
-release the mention part fails. It then
+only its own label. Against a backend from before the release after
+v0.1.165, which gave the mention suggestions their task, the mention part
+fails. It then
 makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
@@ -432,7 +433,8 @@ only people who see the task's project), closes it without adding him and
 takes the grant away again, and finds the run's team by its tag in
 Team sync's scope menu (`teams.picker`), whose pick names it on the
 trigger and reads the team's agenda (`ui/roster-parts`). Against a backend
-from before the release after v0.1.160 that step fails. When it fails after
+from before the release after v0.1.165, which added `pickers.orgPeople`,
+that step fails. When it fails after
 it sent Leo's grant, it removes the grant once more as a check of its own
 (`ui/roster-parts/revoke`), so a grant it could not remove is among the
 run's failures. It then searches **Settings → Users** for its
@@ -2450,8 +2452,8 @@ From the release after v0.1.165, the @ mention popup offers only the people
 who have access to the project of the task whose description or comment
 holds the **@**, by name alone, and no list of people that any seat reads
 sends or matches an email (owner decision, 12 November 2026).
-`pickers.mentions` takes the task (`issue_id`), runs the task pickers' gate
-before it reads anyone, and answers the active people and agents who see
+`pickers.mentions` takes the task (`issue_id`), answers nobody for a task
+the caller cannot see, and answers the active people and agents who see
 the task's project, the caller too, with the name, initials and color. The
 **Assignee** filter's menu reads the new `pickers.orgPeople`, every person
 of the organization with the same fields. Both match names and initials,
@@ -2461,7 +2463,8 @@ floor for its app. An app from it, against a backend before it, says
 **Couldn't load people.** in every mention popup and in the Assignee menu,
 until the backend rolls forward. An earlier app against this backend says
 the same in both, as [Rollback and hotfixes](#rollback-and-hotfixes) lists.
-The release changes no table, field or index and has no backfill and no
+From that release on, never return the backend to a commit before it
+while its app is served; roll forward instead. The release changes no table, field or index and has no backfill and no
 release step.
 
 ## Node.js version

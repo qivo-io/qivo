@@ -44,10 +44,11 @@
  * - mentions: the people the editor's @ mention popup offers in a text of
  *   a task, 8 at a time in name order, with the popup's match over names
  *   and initials (src/components/mentionSuggestion.ts reads it once a
- *   batch while the popup is open). Its gate is the pickers', and it
+ *   batch while the popup is open). Its gate is the pickers' without the
+ *   Edit check, since a comment's author may edit it as a Viewer, and it
  *   offers the active profiles, people and agents, who have access to the
  *   task's project, the caller too, by the sight the mention fan-out
- *   notifies by (the owner's decision of 12 November 2026). Its rows hold
+ *   asks of a recipient (the owner's decision of 12 November 2026). Its rows hold
  *   the initials and color and no email (model/pickers.ts mentionsOf).
  * - orgPeople: the people the view filter's Assignee menu offers, 8 at a
  *   time in name order, with the same match and rows
@@ -144,8 +145,8 @@ export const taskFollowers = orgQuery({
  * agents, who have access to the task's project, the caller too, whose
  * name and initials hold every word of the search in any order, ignoring
  * case but not accents (model/pickers.ts mentionsOf). Answers
- * `unavailable` for a task the caller cannot write a text in, `refused`
- * for a caller below User on its project, `not_ready`, `over_budget`, or
+ * `unavailable` for a task the caller cannot see or that is archived,
+ * `not_ready`, `over_budget`, or
  * `ready` with rows of id, name, initials and color, never an email,
  * `next` and `stopped` (lib/namedPages.ts ListBatch). */
 export const mentions = orgQuery({

@@ -54,6 +54,7 @@ vi.mock('../store/planner', () => ({
       return read
     },
     // nobody's picture is held, and the popup's names go nowhere
+    createOnItsWay: () => false,
     person: () => null,
     namePeople: () => {},
     subscribe: () => () => {},

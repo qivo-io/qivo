@@ -204,7 +204,9 @@ type PickerTask = { task: Doc<'issues'>; project: Doc<'projects'>; top: Doc<'pro
  *    the rule behind canSeeProject), `unavailable` when there is none, and
  *    `refused` with NO_WRITE_ACCESS, the write gate's sentence, when it is
  *    below User, a verdict navigation never changes since it only ever
- *    adds Viewer;
+ *    adds Viewer; the mention popup's read (`mention`) asks for sight
+ *    alone and refuses nobody, since a comment's author may edit it with
+ *    any level (model/comments.ts assertCommentEditor);
  * 4. for a reviewer, a task with an active subtask in a live project
  *    (model/issues.ts hasSubtasks) is `refused` with REVIEWER_ON_GROUP.
  * Its reads are the write's own: the task, two projects and the caller's
@@ -218,7 +220,7 @@ async function pickerTask(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issueId: string,
-  field: PickerField,
+  field: PickerField | 'mention',
 ): Promise<{ state: 'unavailable' } | { state: 'refused'; message: string } | PickerTask> {
   const task = await byId(ctx, 'issues', issueId)
   if (task === null || task.org_id !== me.org_id) return UNAVAILABLE
@@ -230,6 +232,7 @@ async function pickerTask(
   if ([task, project, top].some((row) => row.archived_at !== undefined)) return UNAVAILABLE
   const level = await projectLevel(ctx, me, project)
   if (level === null) return UNAVAILABLE
+  if (field === 'mention') return { task, project, top }
   if (levelRank(level) < levelRank('user')) return refused(NO_WRITE_ACCESS)
   if (field === 'reviewer' && (await hasSubtasks(ctx, task))) return refused(REVIEWER_ON_GROUP)
   return { task, project, top }
@@ -541,14 +544,13 @@ const mentionText = (profile: Doc<'profiles'>) => `${profile.name}\n${profile.in
  * and a list's search and cursors. */
 export type MentionsArgs = ListArgs & { issue_id: string }
 
-/** What the mention popup's read answers: the task pickers' gate states,
- * `not_ready` until the organization's names are keyed, `over_budget` when
- * its rule could not be worked out within PICKERS.rule, or one batch of
- * people in name order (lib/namedPages.ts ListBatch: rows, next,
- * stopped). */
+/** What the mention popup's read answers: `unavailable` alike for every
+ * task the caller cannot see or that takes no text, `not_ready` until the
+ * organization's names are keyed, `over_budget` when its rule could not be
+ * worked out within PICKERS.rule, or one batch of people in name order
+ * (lib/namedPages.ts ListBatch: rows, next, stopped). */
 export type MentionBatch =
   | { state: 'unavailable' }
-  | { state: 'refused'; message: string }
   | { state: 'not_ready' }
   | { state: 'over_budget' }
   | ({ state: 'ready' } & ListBatch<MentionRow>)
@@ -575,8 +577,11 @@ const ORG_PEOPLE_CURSOR =
  * one of its comments, in name order. It offers only the people who have
  * access to the task's project (the owner's decision of 12 November 2026):
  * an active profile that sees the project, navigation included
- * (lib/access.ts canSeeProjectFor, the rule the mention fan-out notifies
- * by), a person or an agent, the caller too. A switched-off profile and
+ * (lib/access.ts canSeeProjectFor, the sight the mention fan-out asks of
+ * a recipient), a person or an agent, the caller too. An agent without an
+ * inbox (lib/access.ts keepsInbox), such as a Viewer agent, is offered
+ * too and can be named in a text, and the fan-out neither notifies nor
+ * subscribes it, as before. A switched-off profile and
  * anyone without a level on the project are left out, an organization
  * admin without one included. In order:
  *
@@ -588,9 +593,12 @@ const ORG_PEOPLE_CURSOR =
  *    "Café" and "cafe", which match different people here, never share a
  *    cursor.
  * 2. The gate (pickerTask), before any person is read: `unavailable` alike
- *    for every task the caller cannot write a text in, and `refused` with
- *    NO_WRITE_ACCESS for a caller below User on its project, since a
- *    description and a comment both need Edit.
+ *    for an unknown task, one of another organization, an archived one,
+ *    one in an archived project and one in a project the caller cannot
+ *    see. A caller who sees the project is answered whatever their level,
+ *    since the author of a comment may edit it as a Viewer
+ *    (model/comments.ts assertCommentEditor), and what they read is who
+ *    has access to a project they have access to themselves.
  * 3. `not_ready` until the organization's names are keyed.
  * 4. The rule within PICKERS.rule, else `over_budget`, with no row.
  * 5. The walk over every profile of the organization in name key order,
@@ -616,8 +624,9 @@ export async function mentionsOf(
     tieOf: idTieOf,
     refusal: MENTIONS_CURSOR,
   })
-  const gate = await pickerTask(ctx, me, a.issue_id, 'recipient')
-  if (!('task' in gate)) return gate
+  const gate = await pickerTask(ctx, me, a.issue_id, 'mention')
+  // the mention gate refuses nobody
+  if (!('task' in gate)) return UNAVAILABLE
   if (!(await nameKeysReady(ctx, me.org_id))) return NOT_READY
   const sees = await withinRule(ctx, (guard) =>
     canSeeProjectFor(ctx, gate.project, { guard, reads: projectLevelReads() }),

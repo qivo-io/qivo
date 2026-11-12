@@ -3021,7 +3021,7 @@ try {
             throw new Error(`The people read answered ${found?.state ?? 'nothing'}`)
           if (found.rows.some((row) => row.id === agent)) return true
           if (found.next === null) return false
-          if (batches >= 40) throw new Error('The mention read did not end within 40 batches')
+          if (batches >= 40) throw new Error('The people read did not end within 40 batches')
           cursor = found.next
         }
       }

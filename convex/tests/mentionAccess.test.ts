@@ -13,8 +13,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { MENTION_BATCH } from '../lib/limits'
+import { NAMED_READ } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
-import { NO_WRITE_ACCESS } from '../model/issues'
 import { type MentionBatch, PICKERS } from '../model/pickers'
 import {
   as,
@@ -30,8 +30,10 @@ import {
 import { keyOrg } from './nameKeys.setup'
 
 const DEFAULT_RULE = structuredClone(PICKERS.rule)
+const DEFAULT_READ = structuredClone(NAMED_READ)
 afterEach(() => {
   Object.assign(PICKERS.rule, DEFAULT_RULE)
+  Object.assign(NAMED_READ, DEFAULT_READ)
 })
 
 type Ready = Extract<MentionBatch, { state: 'ready' }>
@@ -174,6 +176,21 @@ describe('who the mention popup offers', () => {
     expect(ids).toContain(invited.id)
   })
 
+  it('offers an agent that sees the project also when it keeps no inbox', async () => {
+    const b = await base()
+    const { t, f } = b
+    // a Viewer agent can be named in a text; the fan-out tells it nothing
+    const reader = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Read Bot',
+      kind: 'agent',
+      org_role: 'viewer',
+    })
+    await b.grant(f.sub, reader, 'viewer')
+    await b.keyed()
+    expect((await listAll(t, f.user, b.firmware.id)).map((r) => r.id)).toContain(reader.id)
+  })
+
   it('counts whoever reaches a sub-project for a task stored on the top-level project', async () => {
     const b = await base()
     const { t, f } = b
@@ -232,7 +249,7 @@ describe("the mention popup's rows and match", () => {
 })
 
 describe("the mention popup's gate", () => {
-  it('answers unavailable alike for a task the caller cannot write a text in, before any person', async () => {
+  it('answers unavailable alike for a task the caller cannot see or that is archived, before any person', async () => {
     const b = await base()
     const { t, f } = b
     const archived = await b.task(f.sub, { archived_at: NOW })
@@ -250,18 +267,16 @@ describe("the mention popup's gate", () => {
       expect(await mentions(t, caller, issue), issue).toEqual({ state: 'unavailable' })
   })
 
-  it('refuses a caller below User with the write gate’s sentence, and answers a guest with User', async () => {
+  it('answers a caller who sees the project whatever their level, as a comment’s author may edit it as a Viewer', async () => {
     const b = await base()
     const { t, f } = b
     await b.keyed()
-    // the viewer's grant says User, and the organization role caps it
-    expect(await mentions(t, f.viewer, b.firmware.id)).toEqual({
-      state: 'refused',
-      message: NO_WRITE_ACCESS,
-    })
-    expect(idsOf(ready(await mentions(t, f.guest, b.firmware.id)).rows)).toEqual(
-      idsOf([f.user, f.guest, f.viewer]),
-    )
+    // the viewer's grant says User and the organization role caps it at
+    // Viewer, the level a comment's author may still edit their comment with
+    for (const caller of [f.viewer, f.guest])
+      expect(idsOf(ready(await mentions(t, caller, b.firmware.id)).rows)).toEqual(
+        idsOf([f.user, f.guest, f.viewer]),
+      )
   })
 
   it('refuses a login without a seat in the organization', async () => {
@@ -279,9 +294,46 @@ describe("the mention popup's gate", () => {
 })
 
 describe('readiness and the rule’s budget', () => {
-  it('answers not_ready, with no row, until the names are keyed', async () => {
+  it('answers not_ready, with no row, until the names are keyed, and the gate first', async () => {
     const b = await base()
     expect(await mentions(b.t, b.f.user, b.firmware.id)).toEqual({ state: 'not_ready' })
+    // a caller the gate holds back learns nothing of the names' state
+    expect(await mentions(b.t, b.f.guest, b.skunk.id)).toEqual({ state: 'unavailable' })
+  })
+
+  it('stops within a lowered NAMED_READ with a cursor, and pages on to exactly the people with access', async () => {
+    const b = await base()
+    const { t, f } = b
+    const granted: Doc<'profiles'>[] = []
+    for (let i = 0; i < 20; i++) {
+      const who = await b.person(`Member ${String(i).padStart(2, '0')}`)
+      if (i % 7 === 3) {
+        await b.grant(f.sub, who)
+        granted.push(who)
+      }
+    }
+    await b.keyed()
+    // the request's own reads, the gate's and the rule's come first, so a
+    // small document budget stops the walk partway
+    NAMED_READ.documents = 6
+    const batches: Ready[] = []
+    let after: string | undefined
+    for (let round = 0; round < 200; round++) {
+      const batch = ready(
+        await mentions(t, f.user, b.firmware.id, {
+          search: 'member',
+          ...(after === undefined ? {} : { after }),
+        }),
+      )
+      batches.push(batch)
+      // a stopped batch never answers an end it did not reach
+      if (batch.stopped) expect(batch.next).not.toBeNull()
+      if (batch.next === null) break
+      after = batch.next
+    }
+    expect(batches.at(-1)?.next).toBeNull()
+    expect(batches.some((batch) => batch.stopped)).toBe(true)
+    expect(idsOf(batches.flatMap((batch) => batch.rows))).toEqual(idsOf(granted))
   })
 
   it('answers over_budget, with no row, when the rule passes a lowered PICKERS.rule', async () => {

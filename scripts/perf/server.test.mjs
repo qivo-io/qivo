@@ -915,14 +915,22 @@ describe('the benchmark server', () => {
     expect(Object.keys(people.answer.rows[0]).sort()).toEqual(['color', 'id', 'initials', 'name'])
     const offered = await read('people=1000', 'pickers:mentions', { issue_id: 'a-task' })
     expect(offered.answer.rows).toEqual(people.answer.rows)
-    const zoe = await read('', 'pickers:mentions', { search: 'zoë' })
+    const zoe = await read('', 'pickers:mentions', { issue_id: 'a-task', search: 'zoë' })
     expect(zoe.answer.rows.every((row) => row.name.startsWith('Zoë'))).toBe(true)
-    expect((await read('mentions=not-ready', 'pickers:mentions')).answer).toEqual({
+    expect(
+      (await read('mentions=not-ready', 'pickers:mentions', { issue_id: 'a-task' })).answer,
+    ).toEqual({
       state: 'not_ready',
     })
-    expect((await read('mentions=stopped', 'pickers:mentions')).answer.stopped).toBe(true)
-    expect((await read('mentions=small', 'pickers:mentions')).answer.rows).toHaveLength(3)
-    expect((await read('mentions=error', 'pickers:mentions')).answer.error).toContain('fail')
+    expect(
+      (await read('mentions=stopped', 'pickers:mentions', { issue_id: 'a-task' })).answer.stopped,
+    ).toBe(true)
+    expect(
+      (await read('mentions=small', 'pickers:mentions', { issue_id: 'a-task' })).answer.rows,
+    ).toHaveLength(3)
+    expect(
+      (await read('mentions=error', 'pickers:mentions', { issue_id: 'a-task' })).answer.error,
+    ).toContain('fail')
   }, 60_000)
 
   it("answers a task's owner lists, its Mention window and its checks, with the states and unheld people the page asks for", async () => {
