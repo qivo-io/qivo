@@ -762,9 +762,15 @@ does, starts a disposable local Convex backend there, deploys the branch's
 functions to it, seeds Northstar and runs the local check with
 `--browser webkit`. Its summary lists the browser's version and every
 `FAIL`, `SKIP` and `NOTE search-lost` line, and its artifact holds the
-check's log and a screenshot of each failed step for 7 days. The run uses no secret and reaches no hosted
-deployment. The backend's keys and the fixture logins are made on the runner
-and go with it.
+check's log and a screenshot of each failed step for 7 days. The run uses no
+secret and reaches no hosted deployment. The backend's keys and the fixture
+logins are made on the runner and go with it.
+
+By the owner's decision of 12 November 2026 it runs with each release.
+Whoever runs the staging check for a release starts this job from main at
+the same time, while main is at the release's commit, and reports its
+`FAIL`, `SKIP` and `NOTE search-lost` lines with the release. They hold no
+release.
 
 Playwright's WebKit is built for macOS from the engine Safari uses, with
 macOS's own text, graphics and network layers. It is not Safari, so Safari's

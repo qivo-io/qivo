@@ -77,9 +77,11 @@ import { LIMITS } from '../../convex/lib/limits'
     press stays under 100 ms under Comments and under All, and never less
     than 150, which holds the live window, the live page and one more page.
     The closing review's sweep, with the window's comment rows memoized,
-    found no candidate that meets it, so the figure is the rule's floor,
-    which the owner decides on. Design specification row 441 holds the
-    budget and the rule. Tests lower it and restore it. */
+    found no candidate that meets it, so the figure is the rule's floor.
+    The owner kept that floor on 12 November 2026 and accepted the frames
+    over the rule that the app then shows after a delivered comment.
+    Design specification row 441 holds the budget and the rule. Tests
+    lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of

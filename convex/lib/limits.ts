@@ -227,8 +227,8 @@ export const INBOX_PAGE_ROWS = 50
  * task (threadRows), held by src/lib/threadBudget.ts THREAD_KEEP, whose
  * docstring states the rule the browser benchmark's thread phase
  * (scripts/benchmark-browser.mjs --thread) checks it by. It is the rule's
- * floor, which the owner decides on. Design specification row 441 holds
- * it and the rule. */
+ * floor, which the owner kept on 12 November 2026. Design specification
+ * row 441 holds it and the rule. */
 export const THREAD_ROWS = 150
 
 /** Days a read inbox message is kept when the person has not chosen. */
