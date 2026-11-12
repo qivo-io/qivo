@@ -723,6 +723,53 @@ restores `BILLING_ENABLED` only while it is still the `true` the run set,
 and otherwise removes just the mark, so a setting someone changed since
 stays. Run one local run per backend at a time.
 
+### Other browsers, and the WebKit check on macOS
+
+A staging run drives Chromium. A local run drives Chromium too, or the
+Playwright browser `--browser firefox` or `--browser webkit` names, once
+`npx playwright install` has fetched it. The steps are the same in each
+browser, with three differences that follow the browser:
+
+- `ui/org-export` saves the export into a chosen file where the browser has
+  a save picker, which is Chromium, and by the download link where it has
+  none, which is Firefox and WebKit, as in Safari. By the link the step
+  reads the file the browser downloaded and expects no record of the save,
+  since the app cannot confirm a download.
+- `ui/inbox-feed` and `ui/notification-delivery` report `SKIP` in a browser
+  whose pages do not get the notification permission the run grants, which
+  is Playwright's WebKit, because only a page with that permission leads
+  the alerts.
+
+One step, `ui/phone-selects`, reads every closed dropdown of the Board, the
+Overviews, the Roadmap and two Settings pages at phone size and fails when
+one does not show its chosen text, which Playwright's WebKit once drew as
+empty fields.
+
+With `--shots <directory>` each failed step leaves a picture of the app's
+page there as `failed-<step>.png`, never while a secret or a password field
+is on screen. A step that timed out waiting for an element names that
+element in its `FAIL` line.
+
+Nobody on the project has Safari. **WebKit check on macOS**
+(`.github/workflows/webkit-check.yml`), run by hand from the Actions page or
+with `gh workflow run webkit-check.yml --ref <branch>`, is the nearest check
+of Safari the project has. On a macOS runner it builds the app as a release
+does, starts a disposable local Convex backend there, deploys the branch's
+functions to it, seeds Northstar and runs the local check with
+`--browser webkit`. Its summary lists the browser's version and every `FAIL`
+and `SKIP` line, and its artifact holds the check's log and a screenshot of
+each failed step for 7 days. The run uses no secret and reaches no hosted
+deployment. The backend's keys and the fixture logins are made on the runner
+and go with it.
+
+Playwright's WebKit is built for macOS from the engine Safari uses, with
+macOS's own text, graphics and network layers. It is not Safari, so Safari's
+own features, such as its tracking prevention and its permission prompts, are
+not checked, and it is not an iPhone, whose Safari differs again in its
+toolbars, its keyboard and real touch. The run pins the local backend's
+release and its archive's SHA-256 in the workflow. Move both together when a
+newer backend is needed, after a local run of the check on that release.
+
 ### A large organization on a local backend
 
 To check the Board at scale by hand, grow that local Northstar copy with

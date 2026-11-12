@@ -37,6 +37,7 @@ import {
   BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
+  BROWSERS,
   byIdsProblems,
   CREATE_ANSWER_STEP,
   CREATE_MUTATION,
@@ -83,6 +84,7 @@ import {
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
+  listAnswers,
   MCP_ACCESS_EXPECTED,
   MCP_ACCESS_LISTS_STEP,
   MCP_ACCESS_MARKS,
@@ -116,6 +118,7 @@ import {
   OWNER_PICKERS_STEP,
   PEOPLE_PAGE,
   PEOPLE_REFUSALS,
+  PHONE_SELECTS_STEP,
   PICKER_EXPECTED,
   PICKER_STEP,
   PROJECT_BY_IDS_STEP,
@@ -136,6 +139,7 @@ import {
   pace,
   parseArgs,
   peoplePagesMax,
+  phoneSelectPages,
   pressSettled,
   projectDeleteRoute,
   projectPagesMax,
@@ -170,6 +174,7 @@ import {
   STARTUP_SELECTION_STEP,
   searchOf,
   selectedCreatorsStarts,
+  selectProblems,
   send,
   sentMutation,
   syncsWith,
@@ -194,6 +199,7 @@ import {
   WORKLOAD_PEOPLE,
   WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
+  waitedFor,
   weekOf,
   wholeBatchNames,
   withQuery,
@@ -1210,8 +1216,8 @@ describe('staging check REST contract', () => {
     expect(finder).not.toContain('getAttribute(m.row)')
     // the stand-in answers a file only under its flag, else the browser's
     // own picker stays
-    const stand = (flag) => {
-      const picker = () => 'native'
+    const stand = (flag, native = true) => {
+      const picker = native ? () => 'native' : undefined
       const page = {
         sessionStorage: { getItem: (name) => (name === ORG_EXPORT_PICKER_FLAG ? flag : null) },
         navigator: {
@@ -1232,6 +1238,13 @@ describe('staging check REST contract', () => {
     }
     expect(stand(null)()).toBe('native')
     expect(await stand('1')()).toEqual({ name: ORG_EXPORT_FILE, options: { create: true } })
+    // a browser without a save picker gets none, so its page keeps the link
+    expect(stand('1', false)).toBeUndefined()
+    // by the link the step reads the browser's download, which nothing records
+    const link = step.slice(step.indexOf("if (way === 'link') {"), step.indexOf('} else {'))
+    expect(link).toContain('await download.path()')
+    expect(link).toContain('m.sent')
+    expect(link).not.toContain('m.recorded')
   })
 
   it("takes the export step's Deleted item only from an answered search, as the one row of the task's key and title", () => {
@@ -1329,7 +1342,13 @@ describe('staging check REST contract', () => {
     // changed search clears the selection
     const answered = step.indexOf('=== none')
     expect(answered).toBeGreaterThan(step.indexOf('.fill(words)'))
-    expect(answered).toBeLessThan(step.indexOf('[data-project-picker-search]'))
+    // the scope goes through pickProject, which waits until the picker has
+    // closed, since the open picker lies over the kinds
+    const scoped = step.indexOf('await pickProject(app.locator(')
+    expect(answered).toBeLessThan(scoped)
+    expect(scoped).toBeLessThan(step.indexOf("getByRole('radio', { name: 'Tasks', exact: true })"))
+    expect(step.slice(scoped, scoped + 80)).toContain('m.scope}]`), run.tag, M.id)')
+    expect(step).not.toContain('[data-project-picker-search]')
     expect(answered).toBeLessThan(step.indexOf('m.selectAll}]`).click()'))
     expect(step).toMatch(
       /\.locator\(`\.\$\{TOAST_HOST\}`\)\s*\.getByText\(DELETED_ITEMS_EXPECTED\.toast\)/,
@@ -2389,6 +2408,13 @@ describe('staging check arguments', () => {
     expect(parseArgs(['--staging', '--cleanup', '--run', 'a1b2c3']).run).toBe('a1b2c3')
     expect([...parseArgs(['--local', '--require', 'all']).require]).toEqual(['billing-pause-leave'])
   })
+  it('drives Chromium unless a local run names another browser', () => {
+    expect(parseArgs(['--staging']).browser).toBe('chromium')
+    expect(parseArgs(['--local']).browser).toBe('chromium')
+    for (const browser of BROWSERS)
+      expect(parseArgs(['--local', '--browser', browser]).browser).toBe(browser)
+    expect(BROWSERS).toEqual(['chromium', 'firefox', 'webkit'])
+  })
   it('refuses unknown arguments, values that could be secrets and odd combinations', () => {
     for (const argv of [
       [],
@@ -2403,6 +2429,10 @@ describe('staging check arguments', () => {
       ['--staging', '--require', 'task-delay'],
       ['--staging', '--force', 'billing-pause-leave'],
       ['--staging', '--invert', 'everything'],
+      // staging is checked in Chromium alone
+      ['--staging', '--browser', 'webkit'],
+      ['--local', '--browser', 'safari'],
+      ['--local', '--browser'],
     ])
       expect(() => parseArgs(argv)).toThrow()
   })
@@ -2412,6 +2442,7 @@ describe('staging check arguments', () => {
       ['--staging', secret],
       ['--staging', '--require', secret],
       ['--staging', '--invert', `read-token,${secret}`],
+      ['--local', '--browser', secret],
     ])
       expect(() => parseArgs(argv)).toThrow(
         expect.objectContaining({
@@ -2419,6 +2450,112 @@ describe('staging check arguments', () => {
         }),
       )
     expect(() => parseArgs(['--staging', '--tokn'])).toThrow('Unknown argument --tokn.')
+  })
+})
+
+describe('what a timeout waited for', () => {
+  const timeout = (message) => Object.assign(new Error(message), { name: 'TimeoutError' })
+
+  it('names the element and the last reason it could not be used', () => {
+    const error = timeout(
+      [
+        'locator.click: Timeout 30000ms exceeded.',
+        'Call log:',
+        "  - waiting for locator('[data-deleted-select-all]')",
+        '    - locator resolved to <button data-deleted-select-all>Select all</button>',
+        '  - attempting click action',
+        '    - element is not stable',
+        '    - retrying click action',
+        '    - <div data-floating-surface>…</div> intercepts pointer events',
+      ].join('\n'),
+    )
+    expect(waitedFor(error)).toBe(
+      "waiting for locator('[data-deleted-select-all]'), another element intercepts pointer events",
+    )
+    expect(
+      waitedFor(
+        timeout(
+          "locator.click: Timeout\n  - waiting for getByRole('button')\n    - element is not enabled",
+        ),
+      ),
+    ).toBe("waiting for getByRole('button'), element is not enabled")
+  })
+  it('takes nothing from a navigation, whose address can hold a secret, or from another error', () => {
+    expect(
+      waitedFor(
+        timeout(
+          'page.goto: Timeout\n  - navigating to "https://x.test/cb?code=abc", waiting until "load"',
+        ),
+      ),
+    ).toBe('')
+    expect(waitedFor(new Error("x\n  - waiting for locator('a')"))).toBe('')
+    expect(waitedFor(undefined)).toBe('')
+  })
+})
+
+describe('a picker list that shows its search', () => {
+  it('holds rows that all name the search, whatever the case', () => {
+    expect(listAnswers(['Nora Berg'], 'nora berg')).toBe(true)
+    expect(
+      listAnswers(
+        ['stgchk-1 Standard agentagent', 'stgchk-1 Standard agent 2'],
+        'stgchk-1 Standard agent',
+      ),
+    ).toBe(true)
+  })
+  it('is not the list a picker opened with, nor an empty one', () => {
+    expect(listAnswers(['Aisha Rahman', 'Nora Berg'], 'Nora Berg')).toBe(false)
+    expect(listAnswers([], 'Nora Berg')).toBe(false)
+  })
+  it('is what every searched press of a person or a parent waits for', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    for (const search of [
+      'data-team-member-picker-search',
+      'data-reassign-search',
+      'data-project-access-picker-search',
+      'data-lead-picker-search',
+      'data-new-subproject-parent-search',
+    ])
+      expect(script, search).not.toContain(`[${search}]').fill(`)
+    expect(script.match(/await pressSearched\(/g)).toHaveLength(6)
+  })
+})
+
+describe('the phone dropdowns step', () => {
+  const row = (over = {}) => ({
+    label: 'Sort by',
+    text: 'Name',
+    shown: null,
+    paints: true,
+    ...over,
+  })
+
+  it('passes dropdowns that show their chosen text', () => {
+    expect(PHONE_SELECTS_STEP).toBe('ui/phone-selects')
+    expect(selectProblems('the Board', [row(), row({ shown: ' Name ' })])).toEqual([])
+    // nothing chosen to show
+    expect(selectProblems('the Board', [row({ text: '', paints: false })])).toEqual([])
+  })
+  it('reports a field that paints no text, a label with another text and a page without a dropdown', () => {
+    expect(selectProblems('the Board', [row({ paints: false })])).toEqual([
+      'the Board\'s dropdown Sort by shows no text for "Name"',
+    ])
+    expect(selectProblems('the Board', [row({ label: '', shown: '' })])).toEqual([
+      'the Board\'s dropdown (unnamed) shows "" for "Name"',
+    ])
+    expect(selectProblems('the Board', [])).toEqual(['the Board shows no dropdown'])
+  })
+  it("reads the run project's pages", () => {
+    const pages = phoneSelectPages(12)
+    expect(pages.map((page) => page.path)).toEqual([
+      'board/p/12',
+      'overview/mine',
+      'overview/p/12',
+      'roadmap/p/12',
+      'settings/org-users',
+      'settings/org-general',
+    ])
+    expect(pages.every((page) => page.name.length > 0)).toBe(true)
   })
 })
 
