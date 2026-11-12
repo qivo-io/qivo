@@ -51,6 +51,11 @@ Website, docs and app changes all ship the same way.
 1. Merge the reviewed pull request to main. CI runs, then **Deploy staging**
    updates `preview.qivo.io`, normally within five minutes.
 2. Review the change at `https://preview.qivo.io` with a synthetic account.
+   For a release, also run the
+   [end-to-end check](#end-to-end-api-check) against staging and start the
+   [WebKit check](#other-browsers-and-the-webkit-check-on-macos) from main at
+   the same time. The WebKit check's lines go with the release and hold no
+   release.
 3. In GitHub Actions, run **Prepare release** from main. Leave the version
    empty for the next patch version, or enter one such as `v1.2.0`. It refuses
    until staging has verified the current main commit. If **Deploy staging**
@@ -770,7 +775,10 @@ By the owner's decision of 12 November 2026 it runs with each release.
 Whoever runs the staging check for a release starts this job from main at
 the same time, while main is at the release's commit, and reports its
 `FAIL`, `SKIP` and `NOTE search-lost` lines with the release. They hold no
-release.
+release. The job's summary names the commit it ran, which must be the
+release's commit before its lines are reported for that release. When main
+has moved past that commit, start the job on the release's tag once the
+release is published, with `gh workflow run webkit-check.yml --ref vX.Y.Z`.
 
 Playwright's WebKit is built for macOS from the engine Safari uses, with
 macOS's own text, graphics and network layers. It is not Safari, so Safari's
