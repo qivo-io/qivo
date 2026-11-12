@@ -2608,7 +2608,9 @@ describe('a search that lost its typed text', () => {
   it('guards the Users search, the searched pickers and the Deleted items search, and the workflow lists its NOTE', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(SEARCH_LOST).toBe('search-lost')
-    expect(script.match(/await typeSearch\(/g)).toHaveLength(3)
+    // Deleted items types twice, each time right after the page opened
+    expect(script.match(/await typeSearch\(/g)).toHaveLength(4)
+    expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
       'typeSearch(search, text, "a picker\'s search")',

@@ -2038,7 +2038,8 @@ async function openUsers() {
  *  `holds`, a check for the waits that follow. In some runs a search field
  *  is empty again a moment after the typing, in Chromium and in WebKit, on
  *  Settings › Users, in a team's Add member picker and on Deleted items,
- *  for a cause not found. `holds` answers whether the field still holds
+ *  for a cause not found. It was seen where the step types as soon as a
+ *  page or a picker shows. `holds` answers whether the field still holds
  *  the text. When it does not, it types the text again, once, and says so
  *  in a NOTE, with whether the field is still the element it typed into,
  *  so each time leaves its evidence. A field that loses its text a second
@@ -10983,7 +10984,11 @@ async function deletedItemsCheck() {
       await restOk(w, 'POST', '/tasks', { project: sub.id, title })
     await deleteProjectInApp(w, sub)
     await open()
-    await app.locator(`[${m.search}]`).fill(`${run.tag} Deleted sub`)
+    const subHolds = await typeSearch(
+      app.locator(`[${m.search}]`),
+      `${run.tag} Deleted sub`,
+      "Deleted items' search",
+    )
     // an item's id is its own, so the row is found by the sub-project's name.
     // The page first shows its rows without the search, the newest delete
     // among them, and an answered search leaves that row alone. Until then a
@@ -10991,7 +10996,10 @@ async function deletedItemsCheck() {
     const row = app.locator(`[${m.row}]`, { hasText: sub.name })
     const listed = app.locator(`[${m.row}]`)
     expect(
-      await until(async () => (await listed.count()) === 1 && (await row.count()) === 1, 60_000),
+      await until(
+        async () => (await subHolds()) && (await listed.count()) === 1 && (await row.count()) === 1,
+        60_000,
+      ),
       `the search for ${sub.name} lists ${await listed.count()} rows`,
     )
     // the row lists the sub-project while its tasks still move into Deleted
