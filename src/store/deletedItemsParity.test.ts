@@ -265,22 +265,20 @@ describe('the Deleted items stand-in against the real reads', () => {
     expect(held.get(15)?.entries).toBe(2)
   })
 
-  it('holds the roles and the first people batches to the server’s', async () => {
+  it('holds the roles and the people of both filters to the server’s', async () => {
     const { t, f } = await world()
     for (const who of [f.admin, f.user, f.guest]) {
       const fx = await fixtureFor(t, f, who)
       expect(deletedRolesOf(fx), who.name).toEqual(
         await as(t, who).query(api.deletedItems.roles, {}),
       )
-      for (const search of [undefined, 'us', 'relay']) {
-        const args = { org_id: f.org.id, ...(search === undefined ? {} : { search }) }
-        const real = await as(t, who).query(api.deletedItems.people, args)
-        const stand = deletedPeopleOf(fx, args)
-        expect(stand.state, `${who.name} ${search}`).toBe(real.state)
-        if (stand.state !== 'ready' || real.state !== 'ready') continue
-        expect(stand.rows, `${who.name} ${search}`).toEqual(real.rows)
-        expect(stand.next === null).toBe(real.next === null)
-      }
+      for (const of of ['deleters', 'assignees'] as const)
+        for (const search of [undefined, 'us', 'relay']) {
+          const args = { org_id: f.org.id, of, ...(search === undefined ? {} : { search }) }
+          expect(deletedPeopleOf(fx, args), `${who.name} ${of} ${search}`).toEqual(
+            await as(t, who).query(api.deletedItems.people, args),
+          )
+        }
     }
   })
 })

@@ -2221,14 +2221,14 @@ try {
   // Northstar has no permanent agent credential. Mint only this run's key;
   // its secret stays in the browser and cleanup revokes/deletes the row.
   // the store holds nobody but the signed-in person, so Atlas is found
-  // through Deleted items' people read, whose rows tell an agent from a
-  // person
+  // through API access's person filter, an admin's read whose rows tell an
+  // agent from a person
   const atlasId = await pageA.evaluate(async (name) => {
     const P = window.PLANNER
-    const found = await P.deletedPeople(P.homeOrg, 'Atlas', null)
+    const found = await P.apiAccessPeople('Atlas', null)
     const atlas =
       found?.state === 'ready'
-        ? found.rows.find((row) => row.name === 'Atlas' && row.kind === 'agent')
+        ? found.rows.find((row) => row.name === 'Atlas' && row.agent)
         : undefined
     if (!atlas) throw new Error('Northstar has no Atlas profile')
     const key = await window.PLANNER.createAgentKey(atlas.id, name)
@@ -3012,11 +3012,11 @@ try {
         (await convex.query('taskWindow:task', { org_id: P.org.id, ref: id }))?.state ===
         'unavailable'
       // the store holds nobody but the signed-in person, so the agent is
-      // looked for through Deleted items' people read
-      // (deletedItems.people) by its run-unique name, every batch of it
+      // looked for through API access's person filter (apiAccess.people)
+      // by its run-unique name, every batch of it
       const agentListed = async () => {
         for (let cursor = null, batches = 0; ; batches++) {
-          const found = await P.deletedPeople(P.org.id, agentName, cursor)
+          const found = await P.apiAccessPeople(agentName, cursor)
           if (found?.state !== 'ready')
             throw new Error(`The people read answered ${found?.state ?? 'nothing'}`)
           if (found.rows.some((row) => row.id === agent)) return true

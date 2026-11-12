@@ -7,8 +7,9 @@
    All projects in it, and only then are deleted tasks read. The kind
    control, the search, Deleted by (a person and the way they deleted, or
    Someone) and Assigned to go to the server as the page's filters, their
-   people read 25 at a time from deletedItems.people while a popover is
-   open. The subtitle and whether Deleted by shows come from each seat's
+   people read from deletedItems.people while a popover is open, only
+   those who deleted an item the seat sees or hold a deleted task it may
+   read. The subtitle and whether Deleted by shows come from each seat's
    role (deletedItems.roles), whose answer drops a Deleted by choice once it
    takes the control away, and Delete now's count from
    deletedItems.purgeSummary. The page never sorts, filters, groups or
@@ -182,8 +183,8 @@ const PEOPLE_WORDS: ChoiceWords = {
   held: (held) => heldLine(held, true),
   failed: "Couldn't load people.",
   stopped: 'Showing the people found so far.',
-  empty: 'No one else to choose.',
-  none: 'No one matches.',
+  empty: 'No one else is on these deleted items.',
+  none: 'No one else matches.',
 }
 
 export function DeletedItemsPage() {
@@ -900,6 +901,7 @@ export function DeletedItemsPage() {
                   hook="data-deleted-by"
                   label={byLabel(by, way)}
                   org={listOrg}
+                  of="deleters"
                   why={listOrg === null ? 'Choose projects to filter by who deleted.' : null}
                   fixed={[
                     { id: 'anyone', label: 'Deleted by anyone', on: by.kind === 'anyone' },
@@ -963,6 +965,7 @@ export function DeletedItemsPage() {
                     : `Assigned to ${assignee.you ? 'you' : assignee.name}`
                 }
                 org={scope === undefined ? null : scope.org_id}
+                of="assignees"
                 why={
                   scope === undefined
                     ? 'Choose projects to filter by assignee.'
@@ -1181,17 +1184,18 @@ type FixedChoice = { id: string; label: string; on: boolean }
 
 /**
  * Deleted by or Assigned to: a trigger naming the choice and a popover of
- * fixed rows and organization `org`'s people from deletedItems.people, 25
- * a batch with a search and Load more, read once a batch and only while
- * open. `keep` leaves rows out of the batches, the login's own seat, which
- * a fixed You row stands for, and for Deleted by the seats nobody has
- * claimed, which deleted nothing. With `why` the trigger takes no press and
+ * fixed rows and the people of organization `org` that deletedItems.people
+ * offers for it (`of`): those who deleted an item the seat sees, or who
+ * hold a deleted task it may read, all at once with a search, read only
+ * while open. `keep` leaves rows out of the list, the login's own seat,
+ * which a fixed You row stands for. With `why` the trigger takes no press and
  * says why in its tooltip.
  */
 function PeoplePicker({
   hook,
   label,
   org,
+  of,
   why,
   fixed,
   chosen,
@@ -1202,6 +1206,8 @@ function PeoplePicker({
   hook: `data-${string}`
   label: string
   org: string | null
+  /** which of the two lists the popover reads */
+  of: 'deleters' | 'assignees'
   why: string | null
   fixed: FixedChoice[]
   chosen: string | null
@@ -1241,6 +1247,7 @@ function PeoplePicker({
       {(close) => (
         <PeopleChoices
           org={org}
+          of={of}
           fixed={fixed}
           chosen={chosen}
           keep={keep}
@@ -1253,10 +1260,11 @@ function PeoplePicker({
 }
 
 /* The open people popover: its fixed rows, a search and the server's
-   people with Load more. A batch whose rows `keep` leaves out says so,
-   never that nobody is there. */
+   people. A list whose rows `keep` leaves out says so, never that nobody
+   is there. */
 function PeopleChoices({
   org,
+  of,
   fixed,
   chosen,
   keep,
@@ -1264,6 +1272,7 @@ function PeopleChoices({
   onPerson,
 }: {
   org: string
+  of: 'deleters' | 'assignees'
   fixed: FixedChoice[]
   chosen: string | null
   keep: (person: DeletedPerson) => boolean
@@ -1273,8 +1282,8 @@ function PeopleChoices({
   const [text, setText] = useState('')
   const { tooLong, settled } = useSettledSearch(text, LIMITS.search)
   const list = usePagedList({
-    key: JSON.stringify([org, settled]),
-    source: { kind: 'once', read: (at) => P.deletedPeople(org, settled, at.after) },
+    key: JSON.stringify([org, of, settled]),
+    source: { kind: 'once', read: () => P.deletedPeople(org, of, settled) },
     batch: (answer: DeletedPeople) => (answer.state === 'ready' ? answer : null),
     id: (person: DeletedPerson) => person.id,
     most: ACCESS_CAPS.choices,
@@ -1315,14 +1324,18 @@ function PeopleChoices({
             )}
           </MenuItem>
         ))}
-        {leftOut && end === 'more' && (
-          <p className="px-2 py-1 text-sm text-text-2">
-            No one else to choose in this part. Load more continues.
+        {tooLong ? (
+          <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PEOPLE_WORDS} />
+        ) : end === 'partial' ? (
+          // the server's walk ended on its read budget, so more may follow
+          <p data-picker-stopped="" className="px-2 py-1 text-sm text-text-2">
+            {PEOPLE_WORDS.stopped}
           </p>
-        )}
-        {leftOut && end === 'end' ? (
+        ) : leftOut && end === 'end' ? (
+          // the only rows are ones a fixed row stands for: under a search
+          // nobody else matches it, and without one nobody else is there
           <p data-picker-empty="" className="px-2 py-1 text-sm text-text-2">
-            {PEOPLE_WORDS.empty}
+            {settled !== '' ? PEOPLE_WORDS.none : PEOPLE_WORDS.empty}
           </p>
         ) : (
           <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PEOPLE_WORDS} />

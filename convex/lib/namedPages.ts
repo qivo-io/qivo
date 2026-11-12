@@ -5,9 +5,8 @@
  * a project's sub-projects and the directory's name search across a
  * person's projects and sub-projects (model/projectNavReads.ts), Settings ›
  * Projects with its search and sub-projects and the archived sub-projects
- * of an archived project (model/projectSettingsLists.ts), Deleted items'
- * people for Deleted by and the assignee filter
- * (model/deletedItemsChoices.ts peopleBatch), the removal window's
+ * of an archived project (model/projectSettingsLists.ts), the removal
+ * window's
  * Reassign picker (model/removalPreview.ts reassignChoicesOf), a task's
  * owner pickers, Team sync's mention recipients and the editor's mention
  * suggestions (model/pickers.ts),

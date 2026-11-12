@@ -259,11 +259,12 @@ projects chosen, search finds tasks by the words of their title or
 description. Every word must match a whole word, the last one also by its
 start, and accents count. Search does not match who deleted an item, the
 credential, the reason or the organization, which **Deleted by** covers.
-**Deleted by** lists the organization's people 25 at a time with a search,
-with **Someone no longer in the organization**, and under a person the way
-they deleted, in the app, through a personal token or through a connected
-app. **Assigned to** lists the tasks assigned to one person and needs
-projects chosen. In a login with seats in several organizations, **Deleted
+**Deleted by** lists the people who deleted an item you can see here, with a
+search, with **Someone no longer in the organization**, and under a person
+the way they deleted, in the app, through a personal token or through a
+connected app. **Assigned to** lists the tasks assigned to one person and
+needs projects chosen. It offers the people who hold a deleted task you may
+read. Neither lists anyone else of the organization. In a login with seats in several organizations, **Deleted
 by** needs projects chosen too. A search always notes that matching tasks
 might not be listed. Tasks deleted on or before 5 November 2026 are found by
 their key only, and **Assigned to** may miss them, which a note says while such

@@ -3000,9 +3000,16 @@ describe('Deleted items on the benchmark page', () => {
     expect(await read('deletedItems:roles')).toEqual([
       { org_id: org, org_name: 'Testbed Labs', role: 'admin', can_purge: true },
     ])
-    const people = await read('deletedItems:people', { org_id: org })
-    expect(people).toMatchObject({ state: 'ready', stopped: false })
-    expect(people.rows).toHaveLength(25)
+    // the people on the seat's items alone, all at once
+    const people = await read('deletedItems:people', { org_id: org, of: 'deleters' })
+    expect(people).toMatchObject({ state: 'ready', next: null, stopped: false })
+    expect(people.rows.length).toBeGreaterThan(0)
+    expect(people.rows.length).toBeLessThan(25)
+    expect(await read('deletedItems:people', { org_id: org, of: 'assignees' })).toMatchObject({
+      state: 'ready',
+      next: null,
+      stopped: false,
+    })
     // anyone but an admin sees their own deletes only
     const mine = await deleted('deleted=30')
     const own = await mine.read('deletedItems:page', { scope: { org_id: mine.org, all: true } })

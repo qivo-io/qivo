@@ -4,6 +4,7 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import {
   type DeletedFixture,
@@ -643,8 +644,13 @@ describe('the filters', () => {
     expect(button('Projects').hasAttribute('disabled')).toBe(true)
   })
 
-  it('offers Deleted by with You and Someone first, no unclaimed seat, and a way for a person only', async () => {
-    await open()
+  it('offers Deleted by with You and Someone first, only the people who deleted an item, and a way for a person only', async () => {
+    await load(world())
+    // Daniel and the agent each deleted an item; Mira deleted nothing
+    const [first, second] = fx.items
+    first.deleted_by = DANIEL
+    second.deleted_by = RELAY
+    await open(undefined, undefined, true)
     await click(find('[data-deleted-by]'))
     expect(all('[data-deleted-people-fixed]').map((el) => el.textContent)).toEqual([
       'Deleted by anyone',
@@ -654,10 +660,10 @@ describe('the filters', () => {
     const people = all('[data-deleted-person]').map((el) => el.dataset.deletedPerson)
     expect(people).toContain(DANIEL)
     expect(people).toContain(RELAY)
-    // Mira never joined, and the person is You
+    // Mira deleted nothing, and the person is You
     expect(people).not.toContain(MIRA)
     expect(people).not.toContain(ME)
-    expect(peopleAsked).toEqual([{ org_id: ORG }])
+    expect(peopleAsked).toEqual([{ org_id: ORG, of: 'deleters' }])
     await click(find(`[data-deleted-person="${DANIEL}"]`))
     expect(pageReads()[0].args).toEqual({ deleted_by: DANIEL })
     expect(text('[data-deleted-by]')).toBe('Deleted by Daniel Berg')
@@ -684,9 +690,31 @@ describe('the filters', () => {
     expect(text('[data-deleted-by]')).toBe('Deleted by you')
   })
 
-  it('reads the people only while a popover is open, and says a stopped batch as such', async () => {
+  it('says who is left out in the words of what was asked: nobody else there, nobody else matching, and the limit of a search', async () => {
     await load(world())
-    force.peopleStopped = 2
+    // only the signed-in person deleted anything, and the You row is theirs
+    for (const item of fx.items) item.deleted_by = ME
+    await open(undefined, undefined, true)
+    await click(find('[data-deleted-by]'))
+    expect(text('[data-deleted-people]')).toContain('No one else is on these deleted items.')
+    await type('[data-deleted-people-search]', 'nora')
+    await settle()
+    expect(text('[data-deleted-people]')).toContain('No one else matches.')
+    expect(text('[data-deleted-people]')).not.toContain('No one else is on these deleted items.')
+    // a stopped list still says a search is too long
+    force.peopleStopped = 0
+    await type('[data-deleted-people-search]', 'daniel')
+    await settle()
+    expect(text('[data-deleted-people]')).toContain('Showing the people found so far.')
+    await type('[data-deleted-people-search]', 'x'.repeat(LIMITS.search.max + 1))
+    await settle()
+    expect(text('[data-deleted-people]')).not.toContain('Showing the people found so far.')
+    expect(text('[data-deleted-people]')).toContain('Search for fewer words.')
+  })
+
+  it('reads the people only while a popover is open, and says a stopped list as such', async () => {
+    await load(world())
+    force.peopleStopped = 0
     await open(undefined, undefined, true)
     expect(peopleAsked).toEqual([])
     await click(find('[data-deleted-by]'))
@@ -733,6 +761,7 @@ describe('the filters', () => {
   it('drops a Deleted by choice once the roles take Deleted by away, and keeps it while they read again', async () => {
     await load(world({ role: 'user' }))
     fx.seats[0].role = 'lead'
+    fx.items[0].deleted_by = DANIEL
     await open(undefined, undefined, true)
     await click(find('[data-deleted-by]'))
     await click(find(`[data-deleted-person="${DANIEL}"]`))

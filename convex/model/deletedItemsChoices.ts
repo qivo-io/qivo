@@ -1,9 +1,9 @@
 /* What the Deleted items page shows beside its entries, read on the server
  * so that it needs neither the workspace's roster nor a loaded list
  * (design 6.2): each seat's role, for the page's subtitle and whether
- * Deleted by shows (rolesFor, deletedItems.roles); the people of one
- * organization a batch at a time, for the Deleted by choices and the
- * assignee filter (peopleBatch, deletedItems.people); and how many items
+ * Deleted by shows (rolesFor, deletedItems.roles); the people who appear
+ * on the items the seat sees, for the Deleted by choices and the assignee
+ * filter (peopleOf, deletedItems.people); and how many items
  * Delete now deletes with a project item (purgeSummaryOf,
  * deletedItems.purgeSummary). The page's `someone` and its `via` of a
  * credential kind (model/deletedItemsPage.ts deletedAsAsked) complete the
@@ -11,30 +11,30 @@
  * answer is the login's seat's in the organization it speaks of, as
  * model/deletedItems.ts viewOf judges each item, and none names a task. */
 
+import { compareValues } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { canLeadProjects } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
 import { byId } from '../lib/db'
-import { badRequest } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, MIB } from '../lib/limits'
-import {
-  indexAfter,
-  type NamedAt,
-  type NamedReads,
-  type NamedStream,
-  namedCeiling,
-  namedCursor,
-  openNamedCursor,
-  readBatch,
-  STOPPED,
-} from '../lib/namedPages'
+import { namedCeiling, type ReadGuard, readGuard } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
-import { dependentRanges, namesProfile, newMemo, orgReadOnly, seesItem } from './deletedItems'
+import {
+  dependentRanges,
+  type ItemView,
+  namesProfile,
+  newMemo,
+  orgReadOnly,
+  type Sight,
+  sameReference,
+  seesItem,
+  sightOf,
+  viewOf,
+} from './deletedItems'
 import { type Reads, spending, spent } from './deletedItemsRows'
-import { type IdTie, nameKeysReady, profileIndex } from './nameKeys'
 import { type PersonRow, personRow } from './projectSettings'
 
 type Item = Doc<'deleted_items'>
@@ -117,141 +117,235 @@ async function roleOf(ctx: QueryCtx, me: Profile): Promise<DeletedRole['role']> 
 
 /* -------------------------------------------------------------- people */
 
-/* The list a people cursor names (lib/namedPages.ts namedCursor). */
-const PEOPLE_LIST = 'deletedItems.people'
-
-/** The most people one batch answers. A page size, not a limit on what the
- * organization holds. */
-export const PEOPLE_BATCH = 25
-
 /**
- * What one batch of the people may read, at most `candidates` profiles and
- * `read` past what the call read before the batch (lib/namedPages.ts
- * namedCeiling), checked with the transaction's metrics as it reads
- * (readGuard). The profiles come from one or two index ranges, a few
- * hundred bytes each with ordinary text, so `candidates` stops a batch
- * first and `read` only one over unusually large rows. Past either, the
- * batch answers what it found with a cursor, marked as stopped early.
- * tests/deletedItemsChoices.test.ts ("reads at the design size") logs what
- * a batch reads in an organization of 1,000 people with ordinary names,
- * without the login's own reads. A search whose only matches sit last in
- * name order reads to `candidates` a batch and answers them in its third
- * batch. A mutable object, so tests can lower it; replace `read` whole
- * rather than change its fields.
+ * What one read of the people may read past what the call read before it
+ * (lib/namedPages.ts namedCeiling), checked with the transaction's metrics
+ * as it reads (readGuard). The read is made once and never subscribed to,
+ * so the share takes most of what Convex gives one query (4,096 ranges,
+ * 32,000 documents, 16 MiB) and leaves the rest for what one item reads
+ * past the guard's last look. It pays for the seat's sight, as a page of
+ * the list reads it (model/deletedItems.ts sightOf), and then:
+ *
+ * - an admin's deleters: one range a deleter, since an admin sees every
+ *   item that is not being purged;
+ * - anyone else's deleters, and every seat's assignees: each item of the
+ *   organization, a task item at no further range and a project item at
+ *   the ranges its judging reads (viewOf's stored levels, about five for a
+ *   person in three teams);
+ * - the assignees besides: one range for a task item's tasks, and for a
+ *   project item one range an assignee, with that assignee's other tasks
+ *   only where the seat reads some of the item's projects and not others.
+ *
+ * Past it the read answers the people it found, marked as stopped early,
+ * never as the whole list. tests/deletedItemsChoices.test.ts ("reads at the
+ * design size") logs what the read takes. A mutable object, so tests can
+ * lower it; replace `read` whole rather than change its fields.
  */
-export const DELETED_PEOPLE: { candidates: number; read: ReadCeiling } = {
-  candidates: 400,
-  read: { ranges: 256, documents: 2_000, bytes: 2 * MIB },
+export const DELETED_PEOPLE: { read: ReadCeiling } = {
+  read: { ranges: 3_600, documents: 28_000, bytes: 13 * MIB },
 }
 
-/** One person or agent of the batch, as model/projectSettings.ts personRow
- * gives it, with `pending` for a person nobody has claimed yet, who can
- * hold work but has deleted nothing, and `you` for the caller's own seat. A
- * public demo's seeded seats have no login either and read as pending here;
- * the app keeps its demo exception (src/store/viewModels.ts). */
+/** One person or agent of the list, as model/projectSettings.ts personRow
+ * gives it, with `you` for the caller's own seat. */
 export type DeletedPerson = PersonRow & { you: boolean }
 
-/** One batch of the people (deletedItems.people), or `not_ready` while the
- * organization's name keys are not all written (model/nameKeys.ts
- * nameKeysReady). */
-export type DeletedPeople =
-  | { state: 'not_ready' }
-  | { state: 'ready'; rows: DeletedPerson[]; next: string | null; stopped: boolean }
+/** The people of one filter (deletedItems.people), all at once, as a list's
+ * one batch that ends it: `next` is always null, and `stopped` says the
+ * read budget ended the walk before the last item, so more people may
+ * follow. */
+export type DeletedPeople = {
+  state: 'ready'
+  rows: DeletedPerson[]
+  next: null
+  stopped: boolean
+}
 
-/** What the people are asked (deletedItems.people). */
-export type PeopleArgs = { org_id: string; search?: string; cursor?: string }
+/** What the people are asked (deletedItems.people): the organization, the
+ * filter they are for, and a search. */
+export type PeopleArgs = { org_id: string; of: 'deleters' | 'assignees'; search?: string }
+
+/** Whether `view` lets its viewer read the project of `task`
+ * (model/deletedItemsPage.ts shows). */
+const showsTask = (view: ItemView, task: Doc<'deleted_tasks'>): boolean =>
+  view.readable.some((p) => p.id === task.project_id)
 
 /**
- * One batch of at most PEOPLE_BATCH of organization `org_id`'s profiles in
- * name order, ties by id (profiles.by_org_name), people, agents, switched
- * off and unclaimed seats alike, the names the workspace's people part gave
- * every seat before it was removed. It is the one picker of the app left
- * that names every person of the organization to any seat, as the REST and
- * MCP user lists do (lib/core.ts userPage), an agent decision that waits
- * for the owner, who narrowed the mention popup and the view filter's
- * people on 12 November 2026. The client builds Deleted by from it, "You" first and
- * unclaimed seats left out, and the assignee filter from every row.
+ * The people Deleted by (`of: 'deleters'`) or Assigned to (`'assignees'`)
+ * offers the login's seat in organization `org_id`: only those who appear
+ * on a deleted item the seat sees, and nobody else of the organization
+ * (the owner's decision of 12 November 2026). The deleters are the people
+ * who deleted an item the seat's viewOf shows. The assignees are the
+ * people who hold a deleted task in a project that view lets the seat read
+ * (ItemView readable), the tasks the assignee filter itself lists. A
+ * profile counts only while it is the one the item named
+ * (model/deletedItems.ts sameReference), so a seat that reuses a removed
+ * person's id is not offered for their items. Rows are person rows in name
+ * key order, ties by id, people, agents and switched-off seats alike.
  * `search` keeps those whose name holds every whitespace-separated
- * fragment of it, ignoring case and accents. `cursor` is an earlier
- * batch's `next` for the same organization and search, sealed with the
- * list's name, so it opens for nothing else.
+ * fragment of it, ignoring case and accents.
  *
- * A search longer than LIMITS.search and a cursor that does not open are
- * refused first, then an organization where the login holds no active seat
- * answers an empty last batch, as the page answers one, before any read of
- * the organization, and an organization whose name keys are not ready
- * answers `not_ready`. Reads within DELETED_PEOPLE. The batches are cursor
- * only, for the client's paged list read once (src/lib/pagedList.ts); a
- * live list kept between two cursors would need the `after` and `through`
- * of model/projectSettings.ts listAsk.
+ * A search longer than LIMITS.search is refused first, then an
+ * organization where the login holds no active seat answers an empty list,
+ * as the page answers one, before any read of the organization. An admin's
+ * deleters come from one range a deleter (adminDeleters). Every other list
+ * walks the organization's items newest first and judges each as the page
+ * does (deletersOf, assigneesOf). Reads within DELETED_PEOPLE, whose
+ * docstring says what each walk costs, and answers `stopped` past it.
  */
-export async function peopleBatch(
+export async function peopleOf(
   ctx: QueryCtx,
   seats: Map<string, Profile>,
   a: PeopleArgs,
 ): Promise<DeletedPeople> {
   const search = limitedText(LIMITS.search, a.search ?? '')
-  const scope = [a.org_id, nameKey(search)]
-  let after: NamedAt<IdTie> | null = null
-  if (a.cursor !== undefined) {
-    const at = await openNamedCursor(a.cursor, PEOPLE_LIST, scope)
-    const id = at?.tie[0]
-    if (at === null || at.tie.length !== 1 || typeof id !== 'string')
-      throw badRequest(
-        'cursor must come from an earlier batch of these people, for the same organization and search',
-      )
-    after = { key: at.key, tie: [id] }
-  }
   const me = seats.get(a.org_id)
   if (me === undefined) return { state: 'ready', rows: [], next: null, stopped: false }
-  if (!(await nameKeysReady(ctx, a.org_id))) return { state: 'not_ready' }
+  const guard = readGuard(ctx, await namedCeiling(ctx, DELETED_PEOPLE.read))
+  const sight = await sightOf(ctx, me)
+  const found = new Set<string>()
+  const walk: Walk = { ctx, me, sight, guard, found }
+  const whole =
+    (await guard.settle()) &&
+    (a.of === 'assignees'
+      ? await assigneesOf(walk)
+      : me.org_role === 'admin'
+        ? await adminDeleters(walk)
+        : await deletersOf(walk))
   const matches = allWordsMatcher(nameKey(search))
-  // the profiles the batch has looked at, each a candidate
-  let seen = 0
-  const batch = await readBatch(ctx, {
-    stream: upTo(
-      indexAfter(profileIndex(ctx, a.org_id), after),
-      () => seen < DELETED_PEOPLE.candidates,
-    ),
-    keep: async (profile: Profile) => {
-      seen += 1
-      return matches(nameKey(profile.name))
-        ? { ...personRow(profile), you: profile.id === me.id }
-        : null
-    },
-    limit: PEOPLE_BATCH,
-    through: null,
-    ceiling: await namedCeiling(ctx, DELETED_PEOPLE.read),
-    after,
-  })
-  return {
-    state: 'ready',
-    rows: batch.rows,
-    next: batch.ended ? null : await namedCursor(PEOPLE_LIST, scope, batch.at),
-    stopped: batch.stopped,
+  const rows = [...found]
+    .flatMap((id) => sight.profiles.get(id) ?? [])
+    .filter((profile) => matches(nameKey(profile.name)))
+    .sort((x, y) => compareValues([nameKey(x.name), x.id], [nameKey(y.name), y.id]))
+    .map((profile) => ({ ...personRow(profile), you: profile.id === me.id }))
+  return { state: 'ready', rows, next: null, stopped: !whole }
+}
+
+/* What one read of the people walks with: the seat, its sight, the guard
+ * of its read share and the people found so far. Each walk answers whether
+ * it reached its end, false where the guard stopped it. */
+type Walk = {
+  ctx: QueryCtx
+  me: Profile
+  sight: Sight
+  guard: ReadGuard
+  found: Set<string>
+}
+
+/* Whether `id` still names the profile `item` named. */
+const named = (w: Walk, id: string | undefined, item: Item): id is string =>
+  id !== undefined && sameReference(w.sight.profiles.get(id), item)
+
+/* The organization's items, newest first. */
+const itemsOf = (w: Walk) =>
+  w.ctx.db
+    .query('deleted_items')
+    .withIndex('by_org_deleted', (q) => q.eq('org_id', w.me.org_id))
+    .order('desc')
+
+/* An admin's deleters: each deleter of the organization once, in the order
+ * of their ids (deleted_items.by_org_deleter), kept when one of their
+ * items is not being purged, which is every item an admin sees (viewOf). */
+async function adminDeleters(w: Walk): Promise<boolean> {
+  for (let after = ''; ; ) {
+    const from = after
+    if (!(await w.guard.range())) return false
+    const theirs = w.ctx.db
+      .query('deleted_items')
+      .withIndex('by_org_deleter', (q) => q.eq('org_id', w.me.org_id).gt('deleted_by', from))
+    let who: string | undefined
+    for await (const item of theirs) {
+      if (!(await w.guard.document(item))) return false
+      // the range runs on into the next deleter's items
+      if (who !== undefined && item.deleted_by !== who) break
+      who = item.deleted_by
+      if (item.state !== 'purging' && named(w, who, item)) {
+        w.found.add(who)
+        break
+      }
+    }
+    if (who === undefined) return true
+    after = who
   }
 }
 
-/** `stream` ending with STOPPED in place of a row once `more` answers
- * false, as when DELETED_PEOPLE.candidates run out. Its first row always
- * passes, so a batch moves on. A batch reads one row past a full one; a cut
- * there only leaves the end unknown. */
-function upTo<Row>(
-  stream: (reads: NamedReads) => NamedStream<Row>,
-  more: () => boolean,
-): (reads: NamedReads) => NamedStream<Row> {
-  return (reads) =>
-    (async function* () {
-      let handed = 0
-      for await (const step of stream(reads)) {
-        if (step !== STOPPED && handed > 0 && !more()) {
-          yield STOPPED
-          return
-        }
-        if (step !== STOPPED) handed += 1
-        yield step
+/* The deleters of the items anyone but an admin sees. */
+async function deletersOf(w: Walk): Promise<boolean> {
+  for await (const item of itemsOf(w)) {
+    const view = await viewOf(w.ctx, w.sight.memo, w.me, item)
+    // the item, and what judging it read
+    if (!(await w.guard.document(item)) || !(await w.guard.settle())) return false
+    if (view !== null && named(w, item.deleted_by, item)) w.found.add(item.deleted_by)
+  }
+  return true
+}
+
+/* The holders of the deleted tasks the seat may read, item by item. */
+async function assigneesOf(w: Walk): Promise<boolean> {
+  for await (const item of itemsOf(w)) {
+    const view = await viewOf(w.ctx, w.sight.memo, w.me, item)
+    if (!(await w.guard.document(item)) || !(await w.guard.settle())) return false
+    // an item none of whose projects the seat reads names nobody
+    if (view === null || view.readable.length === 0) continue
+    const whole =
+      item.kind === 'task' ? await taskItemHolders(w, item, view) : await holders(w, item, view)
+    if (!whole) return false
+  }
+  return true
+}
+
+/* The holders of a task item's tasks, its root and subtasks, which one
+ * range reads whole (deleted_tasks.by_item). */
+async function taskItemHolders(w: Walk, item: Item, view: ItemView): Promise<boolean> {
+  if (!(await w.guard.range())) return false
+  const tasks = w.ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_item', (q) => q.eq('item_id', item.id))
+  for await (const task of tasks) {
+    if (!(await w.guard.document(task))) return false
+    if (showsTask(view, task) && named(w, task.assignee_id, item)) w.found.add(task.assignee_id)
+  }
+  return true
+}
+
+/* The holders of a project item's tasks, which may be thousands: each
+ * assignee once, in the order of their ids (deleted_tasks.by_item_assignee),
+ * by their first task, and by their later tasks only until one is in a
+ * project the seat reads. */
+async function holders(w: Walk, item: Item, view: ItemView): Promise<boolean> {
+  // where the seat reads every project of the item, the first task tells
+  const all = item.projects.every((p) => view.readable.some((r) => r.id === p.id))
+  for (let after = ''; ; ) {
+    const from = after
+    if (!(await w.guard.range())) return false
+    const first = await w.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item_assignee', (q) => q.eq('item_id', item.id).gt('assignee_id', from))
+      .first()
+    if (first === null || first.assignee_id === undefined) return true
+    const who = first.assignee_id
+    after = who
+    if (!(await w.guard.document(first))) return false
+    if (w.found.has(who) || !named(w, who, item)) continue
+    if (showsTask(view, first)) {
+      w.found.add(who)
+      continue
+    }
+    if (all) continue
+    // a later task of theirs in a project the seat reads, if there is one
+    if (!(await w.guard.range())) return false
+    const later = w.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item_assignee', (q) =>
+        q.eq('item_id', item.id).eq('assignee_id', who).gt('num', first.num),
+      )
+    for await (const task of later) {
+      if (!(await w.guard.document(task))) return false
+      if (showsTask(view, task)) {
+        w.found.add(who)
+        break
       }
-    })()
+    }
+  }
 }
 
 /* ------------------------------------------------- Delete now's summary */

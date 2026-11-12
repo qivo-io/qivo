@@ -15397,17 +15397,17 @@ export const PLANNER = {
     }
   },
 
-  /** One batch of Deleted items' people (deletedItems.people) for Deleted by
-      and Assigned to: organization `orgId`'s people and agents in name
-      order, matching `search`, from `cursor`, an earlier batch's `next`, or
-      from the start. Read once a batch, never subscribed to and kept out
-      of the workspace; null when the read failed. */
-  deletedPeople: async (orgId: string, search: string, cursor: string | null) => {
+  /** The people Deleted items offers in organization `orgId` for Deleted
+      by (`of` 'deleters') or Assigned to ('assignees'), matching `search`
+      (deletedItems.people): only those who appear on a deleted item the
+      seat sees, all at once in name order. Read once, never subscribed to
+      and kept out of the workspace; null when the read failed. */
+  deletedPeople: async (orgId: string, of: 'deleters' | 'assignees', search: string) => {
     try {
       return await convex.query(api.deletedItems.people, {
         org_id: orgId,
+        of,
         ...(search === '' ? {} : { search }),
-        ...(cursor === null ? {} : { cursor }),
       })
     } catch (e) {
       console.error('[qivo] Deleted items people failed:', e)
