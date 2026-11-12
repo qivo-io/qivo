@@ -80,8 +80,7 @@ import { LIMITS } from '../../convex/lib/limits'
     found no candidate that meets it, so the figure is the rule's floor.
     The owner kept that floor on 12 November 2026 and accepted, for now,
     the frames over the rule that the app then shows after a delivered
-    comment and after a Show earlier press. No budget changes the press's
-    frame, since the press draws a page of 50 new rows.
+    comment and after a Show earlier press.
     Design specification row 441 holds the budget and the rule. Tests
     lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
