@@ -53,7 +53,7 @@ const FOLLOWER_WORDS: ChoiceWords = {
     row's initials and color with the picture the store holds; it names
     the followers while open, so their pictures load. A lead's **+ Add**
     reads the people who may follow the task a batch at a time from the
-    server (pickers.taskFollowers), with a search over names and email, and
+    server (pickers.taskFollowers), with a search over names, and
     names none of them, so opening it loads no one's face. */
 export function IssueSubscribers({
   issue,
@@ -352,7 +352,7 @@ export function IssueSubscribers({
 
 /* The people the follower popover's Add list offers, a batch at a time from
    the server (pickers.taskFollowers, P.followerChoices) while the list is
-   open and the page shows, with the server's search over names and email,
+   open and the page shows, with the server's search over names,
    Load more and the list's end lines, at most PICKER_CAPS.owners kept. A
    person who follows the task since the batch was read leaves the list
    from the roster's live answer (`following`). Each portrait comes from the

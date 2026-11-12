@@ -691,10 +691,10 @@ people:get query public {"type":"object","value":{"id":{"fieldType":{"type":"str
 people:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:mentions query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-pickers:orgPeople query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskFollowers query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:viewOwners query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:ownerLoads query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 prefs:get query public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":true}}}
@@ -1226,17 +1226,18 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // once a batch, never subscribed. The editor's mention suggestions take
   // the task and offer the people with access to its project, behind the
   // same gate, by name alone (the owner's decision of 12 November 2026);
-  // the view filter's people (orgPeople) take the organization alone, for
-  // any seat there, with every name and no email, as the people part gave
-  // them before it was removed; the follower popover's Add list takes the
-  // task and runs the follow write's gate and rule.
+  // the view filter's people (viewOwners) take the project a Board or a
+  // Roadmap selects and are the owners of its tasks, for a caller whose
+  // views select it; the follower popover's Add list takes the task and
+  // runs the follow write's gate and rule. No picker lists every person
+  // of the organization.
   pickers: {
     canOwn: 'orgQuery',
     mentions: 'orgQuery',
-    orgPeople: 'orgQuery',
     syncRecipients: 'orgQuery',
     taskFollowers: 'orgQuery',
     taskOwners: 'orgQuery',
+    viewOwners: 'orgQuery',
   },
   // Removing a person's or team's access stays open to org admins during a
   // billing pause; giving or changing access does not. A restore schedules

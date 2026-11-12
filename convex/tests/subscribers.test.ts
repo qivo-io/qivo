@@ -337,7 +337,7 @@ describe('task subscriber popover', () => {
     expect((await roster(f.user)).subscribers).toContain(f.user.id)
   })
 
-  it('searches the Add list by name or email, in any case, without accents, over every person', async () => {
+  it('searches the Add list by name, in any case, without accents, over every person, never by email', async () => {
     const { t, f, candidates } = await fixture()
     const zoe = await plantSeat(t, {
       org_id: f.org.id,
@@ -354,8 +354,10 @@ describe('task subscriber popover', () => {
     })
     await keyOrg(t, f.org.id)
     expect(await candidates(f.user, undefined, 'ZOE')).toEqual([zoe.id])
-    expect(await candidates(f.user, undefined, 'studio.test')).toEqual([zoe.id])
-    expect(await candidates(f.user, undefined, 'quill zq@')).toEqual([zoe.id])
+    expect(await candidates(f.user, undefined, 'quill zo')).toEqual([zoe.id])
+    // an address finds nobody, whole or as a word beside a name word
+    for (const search of ['zq@studio.test', 'studio.test', 'quill zq@'])
+      expect(await candidates(f.user, undefined, search), search).toEqual([])
     expect(await candidates(f.user, undefined, 'nobody')).toEqual([])
   })
 

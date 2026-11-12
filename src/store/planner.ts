@@ -8718,11 +8718,15 @@ export type LabelChoices =
   | ({ state: 'ready' } & LabelPickerBatch)
   | { state: 'refused'; message: string }
 /** One answer of the editor's mention popup's read (P.mentionChoices,
-    pickers.mentions) or of the view filter's Assignee menu's
-    (P.orgPeopleChoices, pickers.orgPeople), or a refusal with the server's
-    sentence. */
+    pickers.mentions), or a refusal with the server's sentence. */
 export type MentionChoices =
   | FunctionReturnType<typeof api.pickers.mentions>
+  | { state: 'refused'; message: string }
+/** The answer of the view filter's Assignee menu's read
+    (P.viewOwnerChoices, pickers.viewOwners), or a refusal with the server's
+    sentence. Its people are rows as the mention popup's. */
+export type ViewOwnerChoices =
+  | FunctionReturnType<typeof api.pickers.viewOwners>
   | { state: 'refused'; message: string }
 /** A person the mention popup offers. */
 export type MentionChoice = Extract<MentionChoices, { state: 'ready' }>['rows'][number]
@@ -11292,7 +11296,7 @@ export const PLANNER = {
      organization: a task's owner lists and Team sync's Mention window
      (P.ownerChoices, P.recipientChoices and P.ownerChecks), the editor's @
      mention popup (P.mentionChoices), the view filter's Assignee menu
-     (P.orgPeopleChoices),
+     (P.viewOwnerChoices),
      the follower popover's Add list (P.followerChoices) and Settings' and
      the dialogs' people pickers. `user` names one of those seats. */
   /** Where the project cache stands on a project moveFamily needs facts of
@@ -13495,20 +13499,21 @@ export const PLANNER = {
       }),
     ),
 
-  /** One batch of the view filter's Assignee menu for organization `org`
-      (pickers.orgPeople), read and answered as P.mentionChoices: every
-      person of the organization whose name and initials hold every word
-      of `search`. */
-  orgPeopleChoices: (
-    org: string,
+  /** The people the view filter's Assignee menu offers above the Board
+      or the Roadmap of project `project` in organization `org`
+      (pickers.viewOwners), read once and never subscribed to: the owners
+      of that project's tasks whose name and initials hold every word of
+      `search`, all at once. A search past its limit answers `refused` with
+      the server's sentence, and a failed read null. */
+  viewOwnerChoices: (
+    o: { org: string; project: string },
     search: string,
-    cursor: string | null,
-  ): Promise<MentionChoices | null> =>
+  ): Promise<ViewOwnerChoices | null> =>
     pickerRead('people filter', () =>
-      convex.query(api.pickers.orgPeople, {
-        org_id: org,
+      convex.query(api.pickers.viewOwners, {
+        org_id: o.org,
+        project_id: o.project,
         ...(search === '' ? {} : { search }),
-        ...(cursor === null ? {} : { after: cursor }),
       }),
     ),
 
@@ -13533,7 +13538,7 @@ export const PLANNER = {
   /** One batch of the people the follower popover's Add list offers for
       task `task` (pickers.taskFollowers), read once as P.ownerChoices
       reads its batches: those who may follow it and do not yet, whose name
-      or email holds every word of `search`. */
+      holds every word of `search`. */
   followerChoices: (o: {
     task: { uuid: string; org: string }
     search: string

@@ -306,11 +306,11 @@ describe('staging check REST contract', () => {
     expect(REMOVED_PARTS).toEqual(['workspace:people', 'workspace:catalog'])
     // the reads the menus take their rows from
     expect(read('../convex/teams.ts')).toContain('export const picker =')
-    expect(read('../convex/pickers.ts')).toContain('export const orgPeople =')
+    expect(read('../convex/pickers.ts')).toContain('export const viewOwners =')
     expect(read('../convex/pickers.ts')).toContain('export const taskFollowers =')
     expect(ROSTER_READS).toEqual({
       teams: 'teams:picker',
-      people: 'pickers:orgPeople',
+      people: 'pickers:viewOwners',
       followers: 'pickers:taskFollowers',
       board: 'tasks:board',
     })
@@ -357,6 +357,13 @@ describe('staging check REST contract', () => {
     expect(title).toBeLessThan(step.indexOf(`'[data-task-subscribe]'`))
     // no step opens a task at /task/, which the router does not parse
     expect(check).not.toContain(`/app/\${ORG_SLUG}/task/`)
+    // the Assignee menu lists the owners of the Board's tasks alone: the
+    // step gives Nora a task there, picks her, and checks that Leo, who
+    // holds none, is not offered
+    expect(step).toContain('assignee_id: run.nora.id,')
+    expect(step).toContain('run.created.push(held)')
+    expect(step).toContain("app.getByText('No matching people.')")
+    expect(step).toContain('addsQueryFor(f, ROSTER_READS.board, holder.id)')
     // the Add list offers only people who see the task's project, so Leo
     // gets Viewer on Alpha before the search. The grant goes once the
     // follower half is done, a refusal failing the step, and again in the

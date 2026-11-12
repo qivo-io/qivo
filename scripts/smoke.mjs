@@ -3012,11 +3012,11 @@ try {
         (await convex.query('taskWindow:task', { org_id: P.org.id, ref: id }))?.state ===
         'unavailable'
       // the store holds nobody but the signed-in person, so the agent is
-      // looked for through the view filter's people read
-      // (pickers.orgPeople) by its run-unique name, every batch of it
+      // looked for through Deleted items' people read
+      // (deletedItems.people) by its run-unique name, every batch of it
       const agentListed = async () => {
         for (let cursor = null, batches = 0; ; batches++) {
-          const found = await P.orgPeopleChoices(P.org.id, agentName, cursor)
+          const found = await P.deletedPeople(P.org.id, agentName, cursor)
           if (found?.state !== 'ready')
             throw new Error(`The people read answered ${found?.state ?? 'nothing'}`)
           if (found.rows.some((row) => row.id === agent)) return true

@@ -1,20 +1,31 @@
 /* The mention stand-in (store/mentionStandIn.setup.ts) against the real
- * query (convex/pickers.ts orgPeople) on convex-test, as
+ * query (convex/pickers.ts mentions) on convex-test, as
  * labelPagesParity.test.ts holds the label stand-ins to theirs. Over
  * Northstar's people as Nora, with planted names whose UTF-8 byte order
- * differs from localeCompare and an agent without an email, it compares
- * every batch from the start to the end for a list of searches, a batch
- * kept between two cursors, and the refusals. Cursors are compared by
- * where they lead, as the server seals its own. */
+ * differs from localeCompare, an agent and a switched-off person, in a
+ * task of a sub-project every profile of the organization holds a grant
+ * on, so the server's rule keeps every active profile, as the stand-in
+ * does. It compares every batch from the start to the end for a list of
+ * searches, a batch kept between two cursors, and the refusals. Cursors
+ * are compared by where they lead, as the server seals its own. */
 
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { MentionBatch } from '../../convex/model/pickers'
-import { as, NOW, newT, plantSeat, type T, wholeOf } from '../../convex/tests/helpers.setup'
+import {
+  as,
+  NOW,
+  newT,
+  plantIssue,
+  plantProject,
+  plantSeat,
+  type T,
+  wholeOf,
+} from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
-import { type MentionArgs, mentionStandIn } from './mentionStandIn.setup'
+import { type MentionArgs, mentionStandIn, viewOwnersStandIn } from './mentionStandIn.setup'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -27,10 +38,17 @@ const PLANTED = ['Zulu Andersen', 'Émile Roux', 'Øystein Berg', '😀 Lab Bot'
 /* Ordinary names, so the list holds three batches. */
 const MORE = ['Ada Lindqvist', 'Bo Nyström', 'Cleo Park', 'Dag Holm', 'Eva Sund', 'Fia Ek']
 
-type Fixture = { t: T; org: Doc<'organizations'>; nora: Doc<'profiles'> }
+type Fixture = {
+  t: T
+  org: Doc<'organizations'>
+  nora: Doc<'profiles'>
+  issue: string
+  /** the sub-project every profile holds a grant on */
+  sub: string
+}
 
-/** Northstar with the planted people, keyed, and an agent without an
-    email. */
+/** Northstar with the planted people, an agent and a switched-off person,
+    keyed, and a task in a sub-project each of them holds a grant on. */
 async function northstar(): Promise<Fixture> {
   const t = newT()
   const { org, profiles } = await plantNorthstar(t)
@@ -45,8 +63,24 @@ async function northstar(): Promise<Fixture> {
       accepted_at: NOW,
     })
   await plantSeat(t, { org_id: org.id, name: 'Relay Agent', initials: 'RA', kind: 'agent' })
+  await plantSeat(t, { org_id: org.id, name: 'Olof Off', initials: 'OO', active: false })
   await keyOrg(t, org.id)
-  return { t, org, nora }
+  const top = await plantProject(t, { org_id: org.id, lead_id: nora.id })
+  const sub = await plantProject(t, { org_id: org.id, type: 'project', parent_id: top.id })
+  await t.run(async (ctx) => {
+    const everyone = await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect()
+    for (const profile of everyone)
+      await ctx.db.insert('project_access', {
+        project_id: sub.id,
+        profile_id: profile.id,
+        level: 'viewer',
+      })
+  })
+  const issue = await plantIssue(t, { org_id: org.id, project_id: sub.id })
+  return { t, org, nora, issue: issue.id, sub: sub.id }
 }
 
 /** What both answer, with each cursor replaced by whether it is there. */
@@ -61,8 +95,12 @@ async function both(f: Fixture, search: string) {
   const stand: MentionBatch[] = []
   let at: { server?: string; stand?: string } = {}
   for (let round = 0; round < 50; round++) {
-    const args: MentionArgs = { org_id: f.org.id, ...(search ? { search } : {}) }
-    const s = await as(f.t, f.nora).query(api.pickers.orgPeople, {
+    const args: MentionArgs = {
+      org_id: f.org.id,
+      issue_id: f.issue,
+      ...(search ? { search } : {}),
+    }
+    const s = await as(f.t, f.nora).query(api.pickers.mentions, {
       ...args,
       ...(at.server ? { after: at.server } : {}),
     })
@@ -86,7 +124,7 @@ function refusal(read: () => unknown): string | null {
 }
 
 describe("the mention suggestions' stand-in", () => {
-  it('answers every batch of every search as pickers.orgPeople does', async () => {
+  it('answers every batch of every search as pickers.mentions does', async () => {
     const f = await northstar()
     const all = await both(f, '')
     expect(all.server.length).toBeGreaterThan(2)
@@ -106,11 +144,16 @@ describe("the mention suggestions' stand-in", () => {
     if (standOne?.state !== 'ready' || standTwo?.state !== 'ready') throw new Error('not ready')
     const ws = await wholeOf(f.t, f.nora)
     if (!ws) throw new Error('no workspace')
-    const kept = await as(f.t, f.nora).query(api.pickers.orgPeople, {
+    const kept = await as(f.t, f.nora).query(api.pickers.mentions, {
       org_id: f.org.id,
+      issue_id: f.issue,
       through: two.next ?? '',
     })
-    const standKept = mentionStandIn(ws, { org_id: f.org.id, through: standTwo.next ?? '' })
+    const standKept = mentionStandIn(ws, {
+      org_id: f.org.id,
+      issue_id: f.issue,
+      through: standTwo.next ?? '',
+    })
     expect(shape(standKept)).toEqual(shape(kept))
     expect(kept.state === 'ready' && kept.rows).toEqual([...one.rows, ...two.rows])
     // names, initials, an email's words, which match nobody, case, accents
@@ -129,21 +172,50 @@ describe("the mention suggestions' stand-in", () => {
     const [server, stand] = [first.server[0], first.stand[0]]
     if (server?.state !== 'ready' || stand?.state !== 'ready') throw new Error('not ready')
     await expect(
-      as(f.t, f.nora).query(api.pickers.orgPeople, {
+      as(f.t, f.nora).query(api.pickers.mentions, {
         org_id: f.org.id,
+        issue_id: f.issue,
         search: 'berg',
         after: server.next ?? '',
       }),
     ).rejects.toMatchObject({ data: { code: 'bad_request' } })
     expect(
       refusal(() =>
-        mentionStandIn(ws, { org_id: f.org.id, search: 'berg', after: stand.next ?? '' }),
+        mentionStandIn(ws, {
+          org_id: f.org.id,
+          issue_id: f.issue,
+          search: 'berg',
+          after: stand.next ?? '',
+        }),
       ),
     ).toBe('bad_request')
     const long = 'x'.repeat(201)
     await expect(
-      as(f.t, f.nora).query(api.pickers.orgPeople, { org_id: f.org.id, search: long }),
+      as(f.t, f.nora).query(api.pickers.mentions, {
+        org_id: f.org.id,
+        issue_id: f.issue,
+        search: long,
+      }),
     ).rejects.toMatchObject({ data: { code: 'rule' } })
-    expect(refusal(() => mentionStandIn(ws, { org_id: f.org.id, search: long }))).toBe('rule')
+    expect(
+      refusal(() => mentionStandIn(ws, { org_id: f.org.id, issue_id: f.issue, search: long })),
+    ).toBe('rule')
+  })
+
+  it("answers the view filter's people as pickers.viewOwners does, for the owners a test names", async () => {
+    const f = await northstar()
+    const ws = await wholeOf(f.t, f.nora)
+    if (!ws) throw new Error('no workspace')
+    // the planted people, whose names sort apart by bytes, each hold a task
+    const holders = ws.profiles.filter((p) => PLANTED.includes(p.name) || p.name === 'Olof Off')
+    expect(holders).toHaveLength(PLANTED.length + 1)
+    for (const holder of holders)
+      await plantIssue(f.t, { org_id: f.org.id, project_id: f.sub, assignee_id: holder.id })
+    for (const search of ['', 'berg', 'émile', 'emile', 'northstar.test', 'nobody']) {
+      const args = { org_id: f.org.id, project_id: f.sub, ...(search ? { search } : {}) }
+      expect(viewOwnersStandIn(ws, args, { owners: holders.map((p) => p.id) }), search).toEqual(
+        await as(f.t, f.nora).query(api.pickers.viewOwners, args),
+      )
+    }
   })
 })

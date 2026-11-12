@@ -17,10 +17,10 @@ import { useViewVisibility } from '../lib/viewVisibility'
 import {
   type IssueFilters,
   type MentionChoice,
-  type MentionChoices,
   P,
   type PersonView,
   type ScopeInfo,
+  type ViewOwnerChoices,
 } from '../store/planner'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, heldLine } from './pickerWords'
@@ -59,12 +59,16 @@ const firstNameOf = (person: PersonView | undefined) => {
   return person?.state === 'gone' ? 'Unknown user' : 'Loading…'
 }
 
-/** The words of the Assignee menu's list of people. */
+/** The words of the Assignee menu's list of people, the owners of the
+    view's tasks. */
 const ASSIGNEE_WORDS: ChoiceWords = {
-  held: (held) => heldLine(held, true),
+  held: (held) =>
+    held?.state === 'over_budget'
+      ? "Qivo couldn't list who holds this project's tasks."
+      : heldLine(held, true),
   failed: "Couldn't load people.",
   stopped: 'Showing the people found so far.',
-  empty: 'No people yet.',
+  empty: 'No one holds a task here.',
   none: 'No matching people.',
 }
 
@@ -193,21 +197,22 @@ function FilterSearch({
    because a row is a different thing from the button that opens it: the hooks
    and the writes live here, the label and the lit state live on the trigger. */
 
-/* "Me only", "Anyone", the chosen people and the scope organization's
-   people. Mutually exclusive: picking a person clears it, and "Anyone" —
+/* "Me only", "Anyone", the chosen people and the people who own the
+   scope's tasks. Mutually exclusive: picking a person clears it, and "Anyone" —
    which means no people filter at all — clears both.
 
-   The people come from the server (pickers.orgPeople, P.orgPeopleChoices), 8
-   a batch in name order with a search over names and initials, read
-   once a batch while the menu is open and the page shows, with Load more
-   and the list's end lines, at most PICKER_CAPS.owners kept: every profile
-   of the organization, agents and switched-off people included, as the
-   menu has always listed. The chosen people come first, checked and named
-   (useChosenPeople, also one a filter carried from another organization's
-   project chose there), whatever a batch holds; the listed rows are drawn from
-   their own initials and color and named by no one, so opening the menu
-   loads no face or picture. A pick toggles, and the Board's and the
-   Roadmap's reads filter by the ids on the server (`owners`).
+   The people come from the server (pickers.viewOwners, P.viewOwnerChoices):
+   the owners of the tasks of the project the view selects, the reviewer
+   of a task In review and else its assignee, and nobody else of the
+   organization (the owner's decision of 12 November 2026), all at once in
+   name order, with a search over names and initials, read once while the
+   menu is open and the page shows. The chosen people come first, checked
+   and named (useChosenPeople, also one a filter carried from another
+   project chose there, who may own no task here), whatever the answer
+   holds; the listed rows are drawn from their own initials and color and
+   named by no one, so opening the menu loads no face or picture. A pick
+   toggles, and the Board's and the Roadmap's reads filter by the ids on
+   the server (`owners`).
 
    It says "Me ONLY" because that is what distinguishes it from the roster
    underneath, where your own name would be one pick among several: this row
@@ -227,19 +232,22 @@ function PeopleRows({
   filters,
   setFilters,
   org,
+  project,
 }: {
   filters: IssueFilters
   setFilters: SetFilters
   org: string
+  /** the project the view selects, whose tasks' owners the menu lists */
+  project: string
 }) {
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
   const { visible } = useViewVisibility()
-  const list = usePagedList<MentionChoices, MentionChoice>({
-    key: visible && org ? `${org}\n${search.settled}` : null,
+  const list = usePagedList<ViewOwnerChoices, MentionChoice>({
+    key: visible && org && project ? `${org}\n${project}\n${search.settled}` : null,
     source: {
       kind: 'once',
-      read: (at) => P.orgPeopleChoices(org, search.settled, at.after),
+      read: () => P.viewOwnerChoices({ org, project }, search.settled),
     },
     batch: (answer) => (answer.state === 'ready' ? answer : null),
     id: (row) => row.id,
@@ -522,7 +530,7 @@ function ViewFilters({
           >
             {() => (
               <div className="max-h-[min(70vh,520px)] overflow-y-auto">
-                <PeopleRows filters={filters} setFilters={setFilters} org={org} />
+                <PeopleRows filters={filters} setFilters={setFilters} org={org} project={info.id} />
               </div>
             )}
           </Popover>

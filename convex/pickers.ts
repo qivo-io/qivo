@@ -34,7 +34,7 @@
  * comments or files, and none writes.
  *
  * - taskFollowers: the people the follower popover's Add list offers for a
- *   task, 25 at a time in name order, with a search over names and email
+ *   task, 25 at a time in name order, with a search over names
  *   (src/components/IssueSubscribers.tsx reads it once a batch while the
  *   list is open). Its gate is issues.subscribers' and its rule
  *   issues.setSubscriber's, so a caller who may not manage the task's
@@ -50,13 +50,12 @@
  *   task's project, the caller too, by the sight the mention fan-out
  *   asks of a recipient (the owner's decision of 12 November 2026). Its rows hold
  *   the initials and color and no email (model/pickers.ts mentionsOf).
- * - orgPeople: the people the view filter's Assignee menu offers, 8 at a
- *   time in name order, with the same match and rows
- *   (src/components/viewFilters.tsx PeopleRows). It is the exception to
- *   the rules above. It takes the organization and no task, runs no gate
- *   or rule, and offers every profile of the organization to any active
- *   seat there, guests and viewers included, since a filter may name
- *   anyone (model/pickers.ts orgPeopleOf). */
+ * - viewOwners: the people the view filter's Assignee menu offers above a
+ *   Board or a Roadmap, the owners of the tasks of the project the view
+ *   selects, with the same match and rows, all at once
+ *   (src/components/viewFilters.tsx PeopleRows). It takes the project and
+ *   no task, and answers nobody for a project the caller's views do not
+ *   select (model/pickers.ts viewOwnersOf). */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'
@@ -66,12 +65,12 @@ import {
   followerChoicesOf,
   type MentionBatch,
   mentionsOf,
-  type OrgPeopleBatch,
   type OwnerChecks,
-  orgPeopleOf,
   type PeopleBatch,
   syncRecipientsOf,
   taskOwnersOf,
+  type ViewOwnersAnswer,
+  viewOwnersOf,
 } from './model/pickers'
 
 /** The arguments every list takes: an optional search, and the cursors of
@@ -128,8 +127,8 @@ export const canOwn = orgQuery({
 /** One batch, in name order, of the people the follower popover's Add
  * list offers for task `issue_id` (model/pickers.ts followerChoicesOf):
  * the active people and Standard user agents who see the task's project
- * and do not follow it yet, the caller left out, whose name or email holds
- * every word of the search. Answers `unavailable` for a task the caller
+ * and do not follow it yet, the caller left out, whose name holds every
+ * word of the search, never their email. Answers `unavailable` for a task the caller
  * cannot see, `refused` for a caller who may not manage its followers,
  * `not_ready`, `over_budget`, or `ready` with rows of id, name, initials,
  * color and active, `next` and `stopped` (lib/namedPages.ts ListBatch).
@@ -154,14 +153,15 @@ export const mentions = orgQuery({
   handler: (ctx, a): Promise<MentionBatch> => mentionsOf(ctx, ctx.me, a),
 })
 
-/** One batch, in name order, of the people of the organization the view
- * filter's Assignee menu offers: every profile, people, agents,
- * switched-off people, unclaimed seats and the caller alike, whose name
- * and initials hold every word of the search, by mentions' match
- * (model/pickers.ts orgPeopleOf). Any active seat of the organization may
- * read it. Answers `not_ready`, or `ready` with rows of id, name, initials
- * and color, never an email, `next` and `stopped`. */
-export const orgPeople = orgQuery({
-  args: vListArgs,
-  handler: (ctx, a): Promise<OrgPeopleBatch> => orgPeopleOf(ctx, ctx.me, a),
+/** The people the view filter's Assignee menu offers above the Board or
+ * the Roadmap of project `project_id`: the owners of the active tasks of
+ * that selection, the reviewer of a task In review and else its assignee,
+ * whose name and initials hold every word of the search, by mentions'
+ * match, in name order (model/pickers.ts viewOwnersOf). Answers
+ * `unavailable` for a project the caller's views do not select,
+ * `over_budget`, or `ready` with every such owner as rows of id, name,
+ * initials and color, never an email, `next` null and `stopped` false. */
+export const viewOwners = orgQuery({
+  args: { project_id: v.string(), search: v.optional(v.string()) },
+  handler: (ctx, a): Promise<ViewOwnersAnswer> => viewOwnersOf(ctx, ctx.me, a),
 })

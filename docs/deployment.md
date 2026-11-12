@@ -424,16 +424,18 @@ agent and deletes the team from the list (`ui/settings-teams`). Against a
 backend from before the release whose app reads the team pages from the
 server that step fails. Next it loads the run project's Board, whose sync
 socket must subscribe neither `workspace.people` nor `workspace.catalog`,
-with Nora's own seats alone in the store, finds Leo Martins in the Board's
-**Assignee** menu (`pickers.orgPeople`), whose pick reads the Board with
-him among its owners and whose **×** clears it, gives him Viewer on the
+with Nora's own seats alone in the store, gives Nora a task in the run's
+Alpha sub-project and finds her in the Board's **Assignee** menu
+(`pickers.viewOwners`), which lists the owners of the Board's tasks alone
+and so does not offer Leo Martins, who holds none there. A pick reads the
+Board with Nora among its owners, and **×** clears it. The step then gives Leo Viewer on the
 run's Alpha sub-project, finds him by his name under **+ Add** in the
 follower popover of a task there (`pickers.taskFollowers`, which offers
 only people who see the task's project), closes it without adding him and
 takes the grant away again, and finds the run's team by its tag in
 Team sync's scope menu (`teams.picker`), whose pick names it on the
 trigger and reads the team's agenda (`ui/roster-parts`). Against a backend
-from before the release after v0.1.165, which added `pickers.orgPeople`,
+from before the release after v0.1.165, which added `pickers.viewOwners`,
 that step fails. When it fails after
 it sent Leo's grant, it removes the grant once more as a check of its own
 (`ui/roster-parts/revoke`), so a grant it could not remove is among the
@@ -1049,7 +1051,8 @@ The app up to v0.1.165 reads its @ mention popup and the **Assignee**
 filter's people through `pickers.mentions` without a task, which the release
 after v0.1.165 refuses, so both say **Couldn't load people.** against a
 later backend. A tab that was open at the deploy does so too, until it
-reloads.
+reloads. Its **+ Add** list under **Subscribers** still loads, and no
+longer finds a person by an email address.
 
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
@@ -2448,24 +2451,28 @@ floor in either direction. Returning the backend alone to v0.1.162 is safe,
 because the app reads nothing these changes removed. The release needs no
 backfill and no release step.
 
-From the release after v0.1.165, the @ mention popup offers only the people
-who have access to the project of the task whose description or comment
-holds the **@**, by name alone, and no list of people that any seat reads
-sends or matches an email (owner decision, 12 November 2026).
-`pickers.mentions` takes the task (`issue_id`), answers nobody for a task
-the caller cannot see, and answers the active people and agents who see
-the task's project, the caller too, with the name, initials and color. The
-**Assignee** filter's menu reads the new `pickers.orgPeople`, every person
-of the organization with the same fields. Both match names and initials,
-and neither matches an address any more. The app of that release sends
-`issue_id` and calls `pickers.orgPeople`, so that release is the backend's
-floor for its app. An app from it, against a backend before it, says
-**Couldn't load people.** in every mention popup and in the Assignee menu,
-until the backend rolls forward. An earlier app against this backend says
-the same in both, as [Rollback and hotfixes](#rollback-and-hotfixes) lists.
-From that release on, never return the backend to a commit before it
-while its app is served; roll forward instead. The release changes no table, field or index and has no backfill and no
-release step.
+From the release after v0.1.165, no list of people that any seat reads
+sends or matches an email, and two lists are narrower (owner decisions, 12
+November 2026). The @ mention popup offers only the people who have access
+to the project of the task whose description or comment holds the **@**, by
+name alone. `pickers.mentions` takes the task (`issue_id`), answers nobody
+for a task the caller cannot see, and answers the active people and agents
+who see the task's project, the caller too, with the name, initials and
+color. The **Assignee** filter above the Board and the Roadmap lists only
+the people who hold a task of the selected project, through the new
+`pickers.viewOwners`, which takes the project, reads its active tasks
+within the Board's read budget and answers their owners with the same
+fields, all at once. Both match names and initials. The **+ Add** list
+under **Subscribers** (`pickers.taskFollowers`) matches names alone. The
+app of that release sends `issue_id` and calls `pickers.viewOwners`, so
+that release is the backend's floor for its app. An app from it, against a
+backend before it, says **Couldn't load people.** in every mention popup
+and in the Assignee menu, until the backend rolls forward. An earlier app
+against this backend says the same in both, as
+[Rollback and hotfixes](#rollback-and-hotfixes) lists. From that release
+on, never return the backend to a commit before it while its app is
+served; roll forward instead. The release changes no table, field or index
+and has no backfill and no release step.
 
 ## Node.js version
 

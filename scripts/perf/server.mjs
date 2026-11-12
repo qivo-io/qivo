@@ -211,8 +211,7 @@
 //                        byids-loading (a read by id never answers);
 //                        several joined by commas
 //   mentions             states the editor's @ mention suggestions
-//                        (pickers:mentions) and the view filter's people
-//                        (pickers:orgPeople) answer whatever the people say,
+//                        (pickers:mentions) answer whatever the people say,
 //                        for screenshots of states a seeded backend cannot
 //                        reach: stopped (an open batch stops after four
 //                        people), small (batches of three), error (every
@@ -623,10 +622,11 @@
 // through the same stand-ins, for any seat, with can_create true for an
 // admin and a user and false for a Viewer, and the editor's @ mention
 // suggestions (pickers:mentions) and the view filter's people
-// (pickers:orgPeople), through src/store/mentionStandIn.setup.ts, over
+// (pickers:viewOwners), through src/store/mentionStandIn.setup.ts, over
 // every person of the organization with the lists' match and no email,
-// without the server's rule that narrows the suggestions to the people
-// with access to the task's project. So are a task's owner lists and Team sync's
+// without the server's rules that narrow the suggestions to the people
+// with access to the task's project and the filter's people to the owners
+// of the project's tasks. So are a task's owner lists and Team sync's
 // Mention window (pickers:taskOwners, syncRecipients and canOwn), through
 // src/store/ownerPickersStandIn.setup.ts, which offers the organization's
 // active admins, users and guests as owners and its active people but the
@@ -734,7 +734,7 @@ import {
   labelSettingsStandIn,
   labelsByIdsStandIn,
 } from '../../src/store/labelPagesStandIn.setup'
-import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
+import { mentionStandIn, viewOwnersStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { createNotificationsStandIn } from '../../src/store/notificationsStandIn.setup'
 import { orgExportStandIn } from '../../src/store/orgExportStandIn.setup'
@@ -2513,8 +2513,9 @@ const read = (name, args = {}) => {
       })
     // the editor's @ mention suggestions and the view filter's people
     case 'pickers:mentions':
-    case 'pickers:orgPeople':
       return mentionStandIn(snapshot, args, { force: forcedMentions })
+    case 'pickers:viewOwners':
+      return viewOwnersStandIn(snapshot, args)
     // a task's owner lists and Team sync's Mention window, over every
     // person the server holds
     case 'pickers:taskOwners':

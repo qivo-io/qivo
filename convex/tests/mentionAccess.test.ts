@@ -5,8 +5,8 @@
  * gate that runs before any person is read, the rule, the rows and the
  * match, the cursors, readiness and the rule's read budget.
  * tests/pickers.test.ts measures its reads at the design size beside the
- * other task pickers', and tests/mentionSuggestions.test.ts holds the view
- * filter's list of every person. */
+ * other task pickers', and tests/viewOwners.test.ts holds the view
+ * filter's people, the owners of a project's tasks. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it } from 'vitest'
