@@ -165,7 +165,7 @@ export type PeopleArgs = { org_id: string; search?: string; cursor?: string }
  * One batch of at most PEOPLE_BATCH of organization `org_id`'s profiles in
  * name order, ties by id (profiles.by_org_name), people, agents, switched
  * off and unclaimed seats alike, the names any seat of the organization
- * reads through pickers.mentions, as the workspace's people part gave them
+ * reads through pickers.orgPeople, as the workspace's people part gave them
  * to every seat before it was removed. The client builds Deleted by from it, "You" first and
  * unclaimed seats left out, and the assignee filter from every row.
  * `search` keeps those whose name holds every whitespace-separated

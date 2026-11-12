@@ -2221,13 +2221,14 @@ try {
   // Northstar has no permanent agent credential. Mint only this run's key;
   // its secret stays in the browser and cleanup revokes/deletes the row.
   // the store holds nobody but the signed-in person, so Atlas is found
-  // through the mention popup's read, whose rows give an agent no address
+  // through Deleted items' people read, whose rows tell an agent from a
+  // person
   const atlasId = await pageA.evaluate(async (name) => {
     const P = window.PLANNER
-    const found = await P.mentionChoices(P.homeOrg, 'Atlas', null)
+    const found = await P.deletedPeople(P.homeOrg, 'Atlas', null)
     const atlas =
       found?.state === 'ready'
-        ? found.rows.find((row) => row.name === 'Atlas' && row.email === null)
+        ? found.rows.find((row) => row.name === 'Atlas' && row.kind === 'agent')
         : undefined
     if (!atlas) throw new Error('Northstar has no Atlas profile')
     const key = await window.PLANNER.createAgentKey(atlas.id, name)
@@ -3011,16 +3012,16 @@ try {
         (await convex.query('taskWindow:task', { org_id: P.org.id, ref: id }))?.state ===
         'unavailable'
       // the store holds nobody but the signed-in person, so the agent is
-      // looked for through the mention popup's read (pickers.mentions) by
-      // its run-unique name, every batch of it
+      // looked for through the view filter's people read
+      // (pickers.orgPeople) by its run-unique name, every batch of it
       const agentListed = async () => {
         for (let cursor = null, batches = 0; ; batches++) {
-          const found = await P.mentionChoices(P.org.id, agentName, cursor)
+          const found = await P.orgPeopleChoices(P.org.id, agentName, cursor)
           if (found?.state !== 'ready')
-            throw new Error(`The mention read answered ${found?.state ?? 'nothing'}`)
+            throw new Error(`The people read answered ${found?.state ?? 'nothing'}`)
           if (found.rows.some((row) => row.id === agent)) return true
           if (found.next === null) return false
-          if (batches >= 40) throw new Error('The mention read did not end within 40 batches')
+          if (batches >= 40) throw new Error('The people read did not end within 40 batches')
           cursor = found.next
         }
       }

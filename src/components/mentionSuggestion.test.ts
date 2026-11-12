@@ -15,7 +15,13 @@ import { type ForcedMentions, mentionStandIn } from '../store/mentionStandIn.set
 
 type Choices = ReturnType<typeof mentionStandIn> | { state: 'refused'; message: string } | null
 /* One read the popup sent, and how to answer it. */
-type Read = { org: string; search: string; cursor: string | null; resolve: (a: Choices) => void }
+type Read = {
+  org: string
+  task: string
+  search: string
+  cursor: string | null
+  resolve: (a: Choices) => void
+}
 
 const store = vi.hoisted(() => ({
   reads: [] as Read[],
@@ -24,12 +30,15 @@ const store = vi.hoisted(() => ({
   // what each popup names (P.namePeople), by its key
   named: new Map<string, { org: string; id: string }[]>(),
   listeners: new Set<() => void>(),
+  // the tasks whose create the server has not taken yet
+  creating: new Set<string>(),
 }))
 vi.mock('../store/planner', () => ({
   P: {
     homeOrg: 'org-home',
-    mentionChoices: (org: string, search: string, cursor: string | null) =>
-      new Promise((resolve) => store.reads.push({ org, search, cursor, resolve })),
+    mentionChoices: (o: { org: string; task: string }, search: string, cursor: string | null) =>
+      new Promise((resolve) => store.reads.push({ ...o, search, cursor, resolve })),
+    createOnItsWay: (task: string) => store.creating.has(task),
     person: (id: string) => ({ state: 'ok', id, picture: store.pictures.get(id) ?? null }),
     namePeople: (owner: string, people: { org: string; id: string }[]) => {
       if (people.length === 0) store.named.delete(owner)
@@ -91,6 +100,7 @@ function answerOf(read: Read, force?: ForcedMentions): Choices {
       workspace,
       {
         org_id: read.org,
+        issue_id: read.task,
         ...(read.search ? { search: read.search } : {}),
         ...(read.cursor ? { after: read.cursor } : {}),
       },
@@ -114,16 +124,19 @@ const fail = async (read = store.reads.at(-1)) => {
 }
 const rest = (ms = MENTION_DELAY_MS) => vi.advanceTimersByTimeAsync(ms)
 
-/* A popup as TipTap drives it in an editor of organization `org`. TipTap
-   calls `render` once for each editor, so `start` after `exit` opens the
-   editor's next popup on the same renderer. */
-function popup(org: string | null = 'org-task') {
+/* A popup as TipTap drives it in an editor of organization `org` whose
+   text belongs to task `task`. TipTap calls `render` once for each editor,
+   so `start` after `exit` opens the editor's next popup on the same
+   renderer. */
+function popup(org: string | null = 'org-task', task: string | null = 'task-1') {
   let el: HTMLElement | null = null
   const command = vi.fn()
   const view = mentionSuggestion.render?.()
   if (!view?.onStart || !view.onUpdate || !view.onKeyDown || !view.onExit)
     throw new Error('no renderer')
-  const editor = { view: { dom: { getAttribute: () => org } } } as unknown as Editor
+  const editor = {
+    view: { dom: { getAttribute: (name: string) => (name === 'data-qivo-task' ? task : org) } },
+  } as unknown as Editor
   type Props = Parameters<NonNullable<typeof view.onStart>>[0]
   const props = (query: string) =>
     ({
@@ -174,6 +187,7 @@ beforeEach(() => {
   store.pictures.clear()
   store.named.clear()
   store.listeners.clear()
+  store.creating.clear()
 })
 
 afterEach(() => {
@@ -214,7 +228,7 @@ describe('the mention popup', () => {
     const p = popup()
     p.start('ält ann')
     await rest()
-    expect(store.reads.at(-1)).toMatchObject({ org: 'org-task', search: 'ält ann' })
+    expect(store.reads.at(-1)).toMatchObject({ org: 'org-task', task: 'task-1', search: 'ält ann' })
     await answer()
     expect(ids(p)).toEqual(['anna'])
     p.exit()
@@ -261,7 +275,7 @@ describe('the mention popup', () => {
     expect(active(p)).toBe('erik')
     // an Enter while Erik's row shows dimmed waits for Mira's answer
     p.type('mira')
-    expect(stale(p)).toBe(2)
+    expect(stale(p)).toBe(1)
     p.key('Enter')
     expect(p.command).not.toHaveBeenCalled()
     await rest()
@@ -370,6 +384,94 @@ describe('the mention popup', () => {
     expect(ids(p)).toHaveLength(16)
     expect(active(p)).toBe(ids(p)[8])
     expect(p.command).not.toHaveBeenCalled()
+  })
+
+  it("offers only the people the server answers for the editor's task, by name alone", async () => {
+    const p = popup()
+    p.start('')
+    await rest()
+    await answer(undefined, { only: ['anna', 'erik'] })
+    expect(ids(p)).toEqual(['anna', 'erik'])
+    const row = p.el()?.querySelector<HTMLElement>('[data-mention-id="anna"]')
+    expect(row?.textContent).toBe('AFAnna Fält')
+    expect(p.el()?.textContent).not.toContain('@')
+    // an email matches nobody, since the server reads names and initials
+    p.type('anna@qivo.test')
+    await rest()
+    await answer()
+    expect([ids(p), lines(p)]).toEqual([[], ['No matching members']])
+  })
+
+  it('reads nothing and lists nobody in an editor that names no task', async () => {
+    const p = popup('org-task', null)
+    p.start('anna')
+    await rest()
+    await rest(0)
+    expect(store.reads).toHaveLength(0)
+    expect([state(p), ids(p), lines(p)]).toEqual([
+      'held',
+      [],
+      ['This task is no longer available.'],
+    ])
+  })
+
+  it("waits for the person's own new task to be saved, then lists its people", async () => {
+    store.creating.add('task-1')
+    const p = popup()
+    p.start('anna')
+    await rest()
+    await rest(0)
+    expect(store.reads).toHaveLength(0)
+    expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
+    // the server took the create, which the store tells its listeners
+    store.creating.clear()
+    for (const listener of store.listeners) listener()
+    await rest(0)
+    expect(store.reads.at(-1)).toMatchObject({ task: 'task-1', search: 'anna' })
+    await answer()
+    expect(ids(p)).toEqual(['anna'])
+  })
+
+  it('reads once, for the newest text, when the task is saved, and nothing after leaving', async () => {
+    store.creating.add('task-1')
+    const p = popup()
+    p.start('anna')
+    await rest()
+    p.type('erik')
+    await rest()
+    store.creating.clear()
+    for (const listener of store.listeners) listener()
+    await rest(0)
+    expect(store.reads.map((read) => read.search)).toEqual(['erik'])
+    await answer()
+    expect(ids(p)).toEqual(['erik'])
+    p.exit()
+    // a popup that closed while its read waited reads nothing later
+    store.reads.length = 0
+    store.creating.add('task-1')
+    const again = popup()
+    again.start('anna')
+    await rest()
+    again.exit()
+    store.creating.clear()
+    for (const listener of store.listeners) listener()
+    await rest(0)
+    expect(store.reads).toHaveLength(0)
+  })
+
+  it("says the task's gate and rule states in the task pickers' words", async () => {
+    const p = popup()
+    p.start('anna')
+    await rest()
+    await answer(undefined, { state: { state: 'unavailable' } })
+    expect([state(p), lines(p)]).toEqual(['held', ['This task is no longer available.']])
+    p.type('erik')
+    await rest()
+    await answer(undefined, { state: { state: 'over_budget' } })
+    expect([state(p), lines(p)]).toEqual([
+      'held',
+      ["Qivo couldn't check who can be mentioned on this task."],
+    ])
   })
 
   it('tells each state apart, and says No matching members only at the real end', async () => {

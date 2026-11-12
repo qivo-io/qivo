@@ -306,11 +306,11 @@ describe('staging check REST contract', () => {
     expect(REMOVED_PARTS).toEqual(['workspace:people', 'workspace:catalog'])
     // the reads the menus take their rows from
     expect(read('../convex/teams.ts')).toContain('export const picker =')
-    expect(read('../convex/pickers.ts')).toContain('export const mentions =')
+    expect(read('../convex/pickers.ts')).toContain('export const orgPeople =')
     expect(read('../convex/pickers.ts')).toContain('export const taskFollowers =')
     expect(ROSTER_READS).toEqual({
       teams: 'teams:picker',
-      people: 'pickers:mentions',
+      people: 'pickers:orgPeople',
       followers: 'pickers:taskFollowers',
       board: 'tasks:board',
     })
@@ -365,17 +365,15 @@ describe('staging check REST contract', () => {
     expect(grant).toBeGreaterThan(-1)
     expect(grant).toBeLessThan(step.indexOf(`'[data-task-subscriber-search]'`))
     expect(step.slice(grant, grant + 120)).toContain("level: 'viewer'")
-    // his address comes from the app's mention read, as a REST user row
-    // carries none, and is what the Add list's search is given
+    // no read gives the run his address, so the Add list's search is
+    // given his name
     expect(step).not.toContain('leo.email')
-    const address = step.indexOf('window.PLANNER.mentionChoices(o, search, after)')
-    expect(address).toBeGreaterThan(step.indexOf(`'[data-filter-x="assignee"]'`))
-    expect(address).toBeLessThan(grant)
-    expect(step).toContain(`.fill(address)`)
+    expect(step).not.toContain('mentionChoices')
+    expect(step).toContain(`.fill(leo.name)`)
     // the removal duty starts before the PUT, so the finally removes a
     // grant the server committed whose answer was lost
     const duty = step.indexOf('granted = true')
-    expect(duty).toBeGreaterThan(address)
+    expect(duty).toBeGreaterThan(step.indexOf(`'[data-filter-x="assignee"]'`))
     expect(duty).toBeLessThan(grant)
     expect(step.indexOf('granted = true', duty + 1)).toBe(-1)
     const removal = step.indexOf(
@@ -3584,10 +3582,10 @@ describe('task list pages', () => {
       check.indexOf('async function removeTokenInApp('),
     )
     // the store holds nobody but Nora and no label, so the agents come from
-    // the mention popup's read, whose rows give an agent no address, and the
-    // labels from the label picker's, both without the cleanup token
-    expect(sweep).toContain('window.PLANNER.mentionChoices(o, search, after)')
-    expect(sweep).toContain('.filter((p) => p.email === null && matches(p.name))')
+    // Deleted items' people read, whose rows tell an agent from a person, and
+    // the labels from the label picker's, both without the cleanup token
+    expect(sweep).toContain('window.PLANNER.deletedPeople(o, search, after)')
+    expect(sweep).toContain(".filter((p) => p.kind === 'agent' && matches(p.name))")
     expect(sweep).toContain(
       'window.PLANNER.labelChoices({ org: window.PLANNER.homeOrg, search, cursor: after })',
     )

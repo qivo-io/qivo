@@ -1,8 +1,10 @@
-/* The editor's @ mention suggestions (pickers.mentions, model/pickers.ts
- * mentionsOf): who they offer, the popup's match over names, initials and
- * email, the order and continuation of the batches, the arguments and
- * cursors, who may read them, readiness and the read budget's stops. The
- * reads at the design size close the file, one figure a case. */
+/* The view filter's Assignee menu's people (pickers.orgPeople,
+ * model/pickers.ts orgPeopleOf): who they offer, the match over names and
+ * initials, never an email, the order and continuation of the batches, the
+ * arguments and cursors, who may read them, readiness and the read
+ * budget's stops. The reads at the design size close the file, one figure
+ * a case. The editor's @ mention popup reads pickers.mentions, which
+ * tests/mentionAccess.test.ts holds to its task's project. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -14,7 +16,7 @@ import { LIMITS, MENTION_BATCH } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { matchesAllWords } from '../lib/search'
-import { type MentionBatch, mentionsOf } from '../model/pickers'
+import { type OrgPeopleBatch, orgPeopleOf } from '../model/pickers'
 import {
   as,
   expectRefusal,
@@ -33,14 +35,14 @@ afterEach(() => {
   Object.assign(NAMED_READ, DEFAULT_READ)
 })
 
-type Ready = Extract<MentionBatch, { state: 'ready' }>
+type Ready = Extract<OrgPeopleBatch, { state: 'ready' }>
 type Row = Ready['rows'][number]
 type Args = { search?: string; after?: string; through?: string }
 
 const mentions = (t: T, caller: Doc<'profiles'>, a: Args = {}, org = caller.org_id) =>
-  as(t, caller).query(api.pickers.mentions, { org_id: org, ...a })
+  as(t, caller).query(api.pickers.orgPeople, { org_id: org, ...a })
 
-function ready(answer: MentionBatch): Ready {
+function ready(answer: OrgPeopleBatch): Ready {
   if (answer.state !== 'ready') throw new Error(`expected a batch, got ${JSON.stringify(answer)}`)
   return answer
 }
@@ -48,7 +50,7 @@ function ready(answer: MentionBatch): Ready {
 /* Every batch of a list from its start to its end, and the rows it listed
  * in order. A stopped batch never answers an end it did not reach. */
 async function listAll(
-  read: (after?: string) => Promise<MentionBatch>,
+  read: (after?: string) => Promise<OrgPeopleBatch>,
 ): Promise<{ rows: Row[]; batches: Ready[] }> {
   const batches: Ready[] = []
   let after: string | undefined
@@ -92,7 +94,7 @@ async function base(t: T = newT()) {
   return { t, f, person, keyed }
 }
 
-describe('who the suggestions offer', () => {
+describe('who the list offers', () => {
   it('offers every profile of the organization and none of another', async () => {
     const { t, f, person, keyed } = await base()
     const off = await person('Switched Off', { active: false })
@@ -131,7 +133,7 @@ describe('who the suggestions offer', () => {
 })
 
 describe('the match', () => {
-  it("keeps the popup's rule over names, initials and email, ignoring case but not accents", async () => {
+  it('matches names and initials, never an email, ignoring case but not accents', async () => {
     const { t, f, person, keyed } = await base()
     const anna = await person('Anna Fält', { email: 'anna@qivo.test', initials: 'AF' })
     const erik = await person('Erik Holm', { email: 'erik@qivo.test', initials: 'EH' })
@@ -142,22 +144,24 @@ describe('the match', () => {
       email: 'anna@home.test',
     })
     await keyed()
-    // the popup's cases before this read: reordered name fragments, case
-    // and blanks, initials, and an email word beside a name word
-    for (const search of ['ält ann', '  FÄ\tNA ', 'af', 'test ann', 'QIVO.TEST anna'])
+    // reordered name fragments, case and blanks, and initials
+    for (const search of ['ält ann', '  FÄ\tNA ', 'af'])
       expect(await found(t, f.user, search), search).toEqual([anna.id])
+    // an email finds nobody, whole or as a word beside a name word
+    for (const search of ['anna@qivo.test', 'test ann', 'QIVO.TEST anna', 'qivo'])
+      expect(await found(t, f.user, search), search).toEqual([])
     // every word must occur, and another organization's Anna is not here
     for (const search of ['anna home', 'anna erik'])
       expect(await found(t, f.user, search), search).toEqual([])
     // accents stay: "falt" does not find Fält
     expect(await found(t, f.user, 'falt')).toEqual([])
-    // an agent has no email, and is found by name and initials
+    // an agent is found by name and initials
     expect(await found(t, f.user, 'relay')).toEqual([f.agent.id])
     expect(await found(t, f.user, 'ry')).toEqual([f.agent.id])
     expect(await found(t, f.user, 'holm erik')).toEqual([erik.id])
   })
 
-  it('finds what the old rule finds over 40 varied people, paged to the end', async () => {
+  it('finds what the rule finds over 40 varied people, paged to the end', async () => {
     const { t, f, person, keyed } = await base()
     const firsts = ['Ana', 'Åsa', 'Björn', 'Chloé', 'Dmitri', 'Élise', 'Fatima', 'Göran']
     const lasts = ['Lind', 'Öberg', 'Nakamura', "O'Neil", 'Smith-Jones']
@@ -183,7 +187,7 @@ describe('the match', () => {
     for (const search of ['', 'a', 'lind', 'ÖB', 'åsa', 'asa', 'ex.test 1', 'go', 'é', 'nobody'])
       expect(await found(t, f.user, search), search).toEqual(
         everyone
-          .filter((p) => matchesAllWords(`${p.name}\n${p.initials}\n${p.email ?? ''}`, search))
+          .filter((p) => matchesAllWords(`${p.name}\n${p.initials}`, search))
           .map((p) => p.id)
           .sort(),
       )
@@ -260,7 +264,7 @@ describe('the order and continuation', () => {
   })
 })
 
-describe("the suggestions' arguments", () => {
+describe("the list's arguments", () => {
   it('refuses a search past LIMITS.search with its sentence', async () => {
     const { t, f, keyed } = await base()
     await keyed()
@@ -306,7 +310,7 @@ describe("the suggestions' arguments", () => {
       await expectRefusal(
         mentions(t, f.user, a),
         'bad_request',
-        /cursors from an earlier answer of these suggestions/,
+        /cursors from an earlier answer of this list/,
       ).catch((e: unknown) => {
         throw new Error(`${name}: ${String(e)}`)
       })
@@ -318,8 +322,8 @@ describe("the suggestions' arguments", () => {
   })
 })
 
-describe('who may read the suggestions', () => {
-  it('answers a guest and a viewer, with the five fields and a legacy color as gray', async () => {
+describe('who may read the list', () => {
+  it('answers a guest and a viewer, with the four fields, no email, and a legacy color as gray', async () => {
     const { t, f, person, keyed } = await base()
     const legacy = await person('Legacy Color', { color: 'teal', email: 'legacy@testbed.test' })
     await keyed()
@@ -333,11 +337,9 @@ describe('who may read the suggestions', () => {
       name: 'Legacy Color',
       initials: 'LC',
       color: '#8A8F98',
-      email: 'legacy@testbed.test',
     })
     const [agent] = ready(await mentions(t, f.guest, { search: 'relay' })).rows
-    expect(Object.keys(agent).sort()).toEqual(['color', 'email', 'id', 'initials', 'name'])
-    expect(agent.email).toBeNull()
+    expect(Object.keys(agent).sort()).toEqual(['color', 'id', 'initials', 'name'])
   })
 
   it('refuses a login without a seat, a switched-off seat and an organization being deleted', async () => {
@@ -386,7 +388,7 @@ describe('readiness and stops', () => {
     // the request's own reads (the login, its seats, the ready row) come
     // first, so a small document budget stops the walk partway
     NAMED_READ.documents = 6
-    const all = await listAll((after) => mentions(t, f.user, { search: 'zed.only', after }))
+    const all = await listAll((after) => mentions(t, f.user, { search: 'zed last', after }))
     expect(all.batches.length).toBeGreaterThan(1)
     expect(all.batches.some((b) => b.stopped)).toBe(true)
     expect(all.rows.map((r) => r.id)).toEqual([last.id])
@@ -398,7 +400,7 @@ describe('readiness and stops', () => {
   })
 })
 
-describe("the suggestions inside Convex's limits", () => {
+describe("the list inside Convex's limits", () => {
   /* What one transaction that runs `step` read, with what it answered. */
   const measured = <R>(t: T, step: (ctx: QueryCtx) => Promise<R>) =>
     t.run(async (ctx) => {
@@ -417,12 +419,12 @@ describe("the suggestions inside Convex's limits", () => {
   async function whole(
     name: string,
     t: T,
-    step: (ctx: QueryCtx) => Promise<MentionBatch>,
+    step: (ctx: QueryCtx) => Promise<OrgPeopleBatch>,
     end = false,
   ) {
     const read = await measured(t, step)
     const batch = ready(read.answer)
-    console.info(`mentions: ${name}`, {
+    console.info(`org people: ${name}`, {
       ranges: read.ranges,
       documents: read.documents,
       mib: read.mib,
@@ -482,18 +484,18 @@ describe("the suggestions inside Convex's limits", () => {
     )
     expect(count).toBe(1000)
     const first = await whole('first batch, no search, 1,000 people', t, (ctx) =>
-      mentionsOf(ctx, f.user, {}),
+      orgPeopleOf(ctx, f.user, {}),
     )
     expect(first.batch.rows).toHaveLength(MENTION_BATCH)
     const none = await whole(
       'a search that matches nobody, 1,000 people',
       t,
-      (ctx) => mentionsOf(ctx, f.user, { search: 'nobody has this name' }),
+      (ctx) => orgPeopleOf(ctx, f.user, { search: 'nobody has this name' }),
       true,
     )
     expect(none.batch.rows).toEqual([])
     // withOrg's viewer seat sorts last in name order, after every member,
-    // the agent Relay and the user seat, and holds the only such email
+    // the agent Relay and the user seat, and holds the only such name
     const last = await t.run((ctx) =>
       ctx.db
         .query('profiles')
@@ -503,9 +505,9 @@ describe("the suggestions inside Convex's limits", () => {
     )
     expect(last?.id).toBe(f.viewer.id)
     const lastPerson = await whole(
-      'an email fragment only the last person in name order holds, 1,000 people',
+      'a name only the last person in name order holds, 1,000 people',
       t,
-      (ctx) => mentionsOf(ctx, f.user, { search: 'viewer@' }),
+      (ctx) => orgPeopleOf(ctx, f.user, { search: 'viewer' }),
       true,
     )
     expect(lastPerson.batch.rows.map((r) => r.id)).toEqual([f.viewer.id])
@@ -515,7 +517,7 @@ describe("the suggestions inside Convex's limits", () => {
     await whole(
       'a Load more batch near the end, 1,000 people',
       t,
-      (ctx) => mentionsOf(ctx, f.user, { search: 'member 99', after: before }),
+      (ctx) => orgPeopleOf(ctx, f.user, { search: 'member 99', after: before }),
       true,
     )
   })

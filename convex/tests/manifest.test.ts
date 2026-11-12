@@ -690,7 +690,8 @@ people:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"
 people:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 people:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-pickers:mentions query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:mentions query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:orgPeople query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskFollowers query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1223,12 +1224,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // whom Team sync's Mention window may notify about it, and a check of a
   // few people by id. Each runs the write's own gate and rule, and is read
   // once a batch, never subscribed. The editor's mention suggestions take
-  // the organization alone, for any seat there, as the people part did
-  // before it was removed; the follower popover's Add list takes the task
-  // and runs the follow write's gate and rule.
+  // the task and offer the people with access to its project, behind the
+  // same gate, by name alone (the owner's decision of 12 November 2026);
+  // the view filter's people (orgPeople) take the organization alone, for
+  // any seat there, with every name and no email, as the people part gave
+  // them before it was removed; the follower popover's Add list takes the
+  // task and runs the follow write's gate and rule.
   pickers: {
     canOwn: 'orgQuery',
     mentions: 'orgQuery',
+    orgPeople: 'orgQuery',
     syncRecipients: 'orgQuery',
     taskFollowers: 'orgQuery',
     taskOwners: 'orgQuery',
@@ -1372,7 +1377,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 250
+const PUBLIC_COUNT = 251
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

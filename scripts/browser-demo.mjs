@@ -273,14 +273,21 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
           }
         }
         // The workspace holds nobody but the signed-in person, so people
-        // are found through the mention popup's read (pickers.mentions),
-        // every batch of a search, whose rows give an agent no address. A
+        // are found through Settings › Users' read (people.settingsPage),
+        // every page of a search, whose rows hold the kind and the address,
+        // which the signed-in admin may read. A
         // read that fails throws, so the cleanup never reports success
         // after finding nobody.
         const people = async (search) => {
           const rows = []
           for (let cursor = null, batches = 0; ; batches++) {
-            const found = await window.PLANNER.mentionChoices(org.id, search, cursor)
+            const found = await convex
+              .query('people:settingsPage', {
+                org_id: org.id,
+                ...(search === '' ? {} : { search }),
+                ...(cursor === null ? {} : { after: cursor }),
+              })
+              .catch(() => null)
             if (found?.state !== 'ready') {
               const why = found?.message ?? found?.state ?? 'the read failed'
               throw new Error(`Cleanup cannot list people: ${why}`)
@@ -294,14 +301,14 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
         // after its tasks: a temporary agent profile, by its run-unique name
         if (agentName) {
           for (const profile of (await people(agentName)).filter(
-            (p) => p.email === null && p.name === agentName,
+            (p) => p.kind === 'agent' && p.name === agentName,
           )) {
             await convex.mutation('profiles:remove', { org_id: org.id, id: profile.id })
           }
         }
         if (agentKeyName) {
           // the organization's agents' keys, read once (tokens.agentKeys)
-          const agents = (await people('')).filter((p) => p.email === null).map((p) => p.id)
+          const agents = (await people('')).filter((p) => p.kind === 'agent').map((p) => p.id)
           const answer = agents.length
             ? await window.PLANNER.agentKeys(org.id, agents)
             : { agents: [] }

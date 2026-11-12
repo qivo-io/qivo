@@ -1,5 +1,5 @@
 /* The mention stand-in (store/mentionStandIn.setup.ts) against the real
- * query (convex/pickers.ts mentions) on convex-test, as
+ * query (convex/pickers.ts orgPeople) on convex-test, as
  * labelPagesParity.test.ts holds the label stand-ins to theirs. Over
  * Northstar's people as Nora, with planted names whose UTF-8 byte order
  * differs from localeCompare and an agent without an email, it compares
@@ -62,7 +62,7 @@ async function both(f: Fixture, search: string) {
   let at: { server?: string; stand?: string } = {}
   for (let round = 0; round < 50; round++) {
     const args: MentionArgs = { org_id: f.org.id, ...(search ? { search } : {}) }
-    const s = await as(f.t, f.nora).query(api.pickers.mentions, {
+    const s = await as(f.t, f.nora).query(api.pickers.orgPeople, {
       ...args,
       ...(at.server ? { after: at.server } : {}),
     })
@@ -86,7 +86,7 @@ function refusal(read: () => unknown): string | null {
 }
 
 describe("the mention suggestions' stand-in", () => {
-  it('answers every batch of every search as pickers.mentions does', async () => {
+  it('answers every batch of every search as pickers.orgPeople does', async () => {
     const f = await northstar()
     const all = await both(f, '')
     expect(all.server.length).toBeGreaterThan(2)
@@ -106,14 +106,15 @@ describe("the mention suggestions' stand-in", () => {
     if (standOne?.state !== 'ready' || standTwo?.state !== 'ready') throw new Error('not ready')
     const ws = await wholeOf(f.t, f.nora)
     if (!ws) throw new Error('no workspace')
-    const kept = await as(f.t, f.nora).query(api.pickers.mentions, {
+    const kept = await as(f.t, f.nora).query(api.pickers.orgPeople, {
       org_id: f.org.id,
       through: two.next ?? '',
     })
     const standKept = mentionStandIn(ws, { org_id: f.org.id, through: standTwo.next ?? '' })
     expect(shape(standKept)).toEqual(shape(kept))
     expect(kept.state === 'ready' && kept.rows).toEqual([...one.rows, ...two.rows])
-    // names, initials, email words, case, accents kept, no match
+    // names, initials, an email's words, which match nobody, case, accents
+    // kept, no match
     for (const search of ['berg', 'NB', 'northstar.test', 'émile', 'emile', 'agent ra', 'nobody'])
       expect((await both(f, search)).stand.map(shape), search).toEqual(
         (await both(f, search)).server.map(shape),
@@ -128,7 +129,7 @@ describe("the mention suggestions' stand-in", () => {
     const [server, stand] = [first.server[0], first.stand[0]]
     if (server?.state !== 'ready' || stand?.state !== 'ready') throw new Error('not ready')
     await expect(
-      as(f.t, f.nora).query(api.pickers.mentions, {
+      as(f.t, f.nora).query(api.pickers.orgPeople, {
         org_id: f.org.id,
         search: 'berg',
         after: server.next ?? '',
@@ -141,7 +142,7 @@ describe("the mention suggestions' stand-in", () => {
     ).toBe('bad_request')
     const long = 'x'.repeat(201)
     await expect(
-      as(f.t, f.nora).query(api.pickers.mentions, { org_id: f.org.id, search: long }),
+      as(f.t, f.nora).query(api.pickers.orgPeople, { org_id: f.org.id, search: long }),
     ).rejects.toMatchObject({ data: { code: 'rule' } })
     expect(refusal(() => mentionStandIn(ws, { org_id: f.org.id, search: long }))).toBe('rule')
   })

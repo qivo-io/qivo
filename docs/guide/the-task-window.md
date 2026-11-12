@@ -24,10 +24,12 @@ keys include Ctrl/Cmd+B/I/U/E, Ctrl/Cmd+Shift+X and Ctrl/Cmd+K for links.
 Shift+Enter or Ctrl/Cmd+Enter starts a new line within a paragraph. Click a
 link to open, edit or remove it.
 
-Type **@** to mention someone in the task's organization. Qivo searches
-everyone there on the server by partial name, initials or email fragments,
-in any order, and shows 8 people at a time in name order, with **Load
-more** at the end for the next 8. Choose with arrow keys and Enter or a
+Type **@** to mention someone who has access to the task's project. The
+list offers nobody else, and it shows names only, never an email address,
+whoever you are. Qivo searches those people on the server by partial name
+or initials, in any order, and shows 8 at a time in name order, with **Load
+more** at the end for the next 8. To mention someone who is not in the
+list, give them access to the project first. Choose with arrow keys and Enter or a
 click. If people cannot load, **Try again** at the end of the list reads
 them again, and the arrow keys and Enter reach it too. While a search is
 on its way the list says **Searching…**, and an

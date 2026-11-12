@@ -211,7 +211,8 @@
 //                        byids-loading (a read by id never answers);
 //                        several joined by commas
 //   mentions             states the editor's @ mention suggestions
-//                        (pickers:mentions) answer whatever the people say,
+//                        (pickers:mentions) and the view filter's people
+//                        (pickers:orgPeople) answer whatever the people say,
 //                        for screenshots of states a seeded backend cannot
 //                        reach: stopped (an open batch stops after four
 //                        people), small (batches of three), error (every
@@ -621,9 +622,11 @@
 // (labels:picker) and the window's labels read by id (labels:byIds),
 // through the same stand-ins, for any seat, with can_create true for an
 // admin and a user and false for a Viewer, and the editor's @ mention
-// suggestions (pickers:mentions), through
-// src/store/mentionStandIn.setup.ts, over every person of the organization
-// with the popup's match. So are a task's owner lists and Team sync's
+// suggestions (pickers:mentions) and the view filter's people
+// (pickers:orgPeople), through src/store/mentionStandIn.setup.ts, over
+// every person of the organization with the lists' match and no email,
+// without the server's rule that narrows the suggestions to the people
+// with access to the task's project. So are a task's owner lists and Team sync's
 // Mention window (pickers:taskOwners, syncRecipients and canOwn), through
 // src/store/ownerPickersStandIn.setup.ts, which offers the organization's
 // active admins, users and guests as owners and its active people but the
@@ -2508,8 +2511,9 @@ const read = (name, args = {}) => {
       return labelsByIdsStandIn(snapshot, args, {
         force: { fail: labelPickerStates.has('byids-error') },
       })
-    // the editor's @ mention suggestions
+    // the editor's @ mention suggestions and the view filter's people
     case 'pickers:mentions':
+    case 'pickers:orgPeople':
       return mentionStandIn(snapshot, args, { force: forcedMentions })
     // a task's owner lists and Team sync's Mention window, over every
     // person the server holds

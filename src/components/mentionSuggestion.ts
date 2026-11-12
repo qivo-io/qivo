@@ -1,6 +1,6 @@
 /* @-mention suggestions for the description and comment editors. Typing "@"
-   opens a list of the people of the editor's organization anchored under
-   the caret (the suggestion plugin's managed mount handles positioning and
+   opens a list of the people who have access to the project of the
+   editor's task, by name alone, anchored under the caret (the suggestion plugin's managed mount handles positioning and
    outside-click dismissal; Escape is handled by the plugin itself, which
    exits the suggestion without bubbling to the modal). Selecting inserts a
    mention node {id, label}, which the dialect stores as
@@ -9,9 +9,15 @@
 
    The people come from the server, 8 at a time in name order
    (pickers.mentions, through P.mentionChoices), never from the workspace's
-   roster. The server searches every person of the organization with the
-   popup's match: every word of the text in the name, the initials or the
-   email, in any order, ignoring case but not accents. The renderer reads
+   roster. The server offers the active people and agents who see the
+   task's project, the caller too, and searches them with the popup's
+   match: every word of the text in the name or the initials, in any
+   order, ignoring case but not accents. It sends no email, and a row
+   shows the name alone, for everyone (the owner's decision of 12 November
+   2026). An editor that names no task reads nothing and lists nobody,
+   and a read for the person's own new task waits until the server took
+   its create.
+   The renderer reads
    through the shared paged list's `once` engine (lib/pagedList.ts
    onceList), so TipTap's own fetch (`items`) answers nothing and can never
    fail, which TipTap would show as no match:
@@ -99,8 +105,10 @@ export const mentionSuggestion: Omit<
     let el: HTMLDivElement | null = null
     let unmount: (() => void) | null = null
     let command: (attrs: MentionNodeAttrs) => void = () => {}
-    // the editor's organization: the task's, else the home organization
+    // the editor's organization, the task's, else the home organization,
+    // and the task its text belongs to, by uuid, or '' when it names none
     let org = ''
+    let task = ''
     // the typed text as the match reads it, and its list's key
     let words = ''
     let typedKey: string | null = null
@@ -124,17 +132,53 @@ export const mentionSuggestion: Omit<
     const owner = `mention:${++popups}`
     let pictures = ''
     let stopWatch: (() => void) | null = null
+    // the reads that wait for the task's create, each by the way to end it
+    const waits = new Set<() => void>()
 
     const list = onceList<MentionChoices, MentionChoice>(
       () => ({
         key: openKey,
-        source: { kind: 'once', read: (at) => P.mentionChoices(org, openWords, at.after) },
+        source: {
+          kind: 'once',
+          read: (at): Promise<MentionChoices | null> => {
+            if (task === '') return Promise.resolve({ state: 'unavailable' })
+            const words = openWords
+            const read = () => P.mentionChoices({ org, task }, words, at.after)
+            // the server cannot read a task it does not hold yet
+            return P.createOnItsWay(task) ? created(task).then(read) : read()
+          },
+        },
         batch: (answer) => (answer.state === 'ready' ? answer : null),
         id: (row) => row.id,
         most: PICKER_CAPS.mentions,
       }),
       () => landed(),
     )
+
+    /** Resolves once the server took `task`'s create (P.createOnItsWay).
+        The popup says Searching… meanwhile, as for any answer on its way,
+        and lists the task's people once it is saved. A wait that
+        `dropWaits` ended never resolves, so a text that was replaced and
+        a popup that closed read nothing. */
+    function created(task: string): Promise<void> {
+      return new Promise((resolve) => {
+        const end = () => {
+          stop()
+          waits.delete(end)
+        }
+        const stop = P.subscribe(() => {
+          if (P.createOnItsWay(task)) return
+          end()
+          resolve()
+        })
+        waits.add(end)
+      })
+    }
+
+    /** Ends every wait for a create, as a new text and leaving do. */
+    function dropWaits() {
+      for (const end of waits) end()
+    }
 
     /** Whether the typed text is known to match nobody without a read. */
     const knownNone = () =>
@@ -215,6 +259,7 @@ export const mentionSuggestion: Omit<
     function reset() {
       if (timer !== null) clearTimeout(timer)
       timer = null
+      dropWaits()
       list.stop()
       P.namePeople(owner, [])
       pictures = ''
@@ -265,6 +310,7 @@ export const mentionSuggestion: Omit<
       selected = 0
       // a Load more of the text before has no place in this list
       moreFrom = null
+      dropWaits()
       list.open(openKey)
     }
 
@@ -273,7 +319,7 @@ export const mentionSuggestion: Omit<
         match nobody. */
     function update(query: string) {
       const nextWords = searchWords(query)
-      const nextKey = `${org}\n${nextWords}`
+      const nextKey = `${org}\n${task}\n${nextWords}`
       if (nextKey !== typedKey) {
         typedKey = nextKey
         words = nextWords
@@ -319,13 +365,7 @@ export const mentionSuggestion: Omit<
       const name = document.createElement('span')
       name.className = 'mentionpop-name'
       name.textContent = u.name
-      const addr = document.createElement('span')
-      addr.className = 'mentionpop-email'
-      addr.textContent = u.email || ''
-      const identity = document.createElement('span')
-      identity.className = 'flex min-w-0 flex-1 flex-col text-left'
-      identity.append(name, addr)
-      row.append(av, identity)
+      row.append(av, name)
       // mousedown, not click: the editor must keep focus and selection
       if (stale) {
         row.setAttribute('data-mention-stale', '')
@@ -417,6 +457,7 @@ export const mentionSuggestion: Omit<
         el.setAttribute('data-mention-popup', '')
         const dom = props.editor?.view.dom as HTMLElement | undefined
         org = dom?.getAttribute('data-qivo-org') || P.homeOrg
+        task = dom?.getAttribute('data-qivo-task') || ''
         command = props.command
         reset()
         update(props.query)
