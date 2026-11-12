@@ -1,0 +1,177 @@
+name: WebKit check on macOS
+
+# Runs the end-to-end check (scripts/staging-check.mjs --local --browser webkit)
+# in Playwright's WebKit on a macOS runner. Run it by hand, on main or on a
+# branch. Nobody on the project has Safari. This WebKit is built for macOS from
+# the engine Safari uses, so the run is the nearest check of Safari the project
+# has. It is not Safari itself and not an iPhone.
+# The app is a production build, and its backend is a disposable local Convex
+# backend on the runner. The run holds no secrets and reaches no hosted
+# deployment. The backend's keys and the Northstar fixture logins are made on
+# the runner and go with it. See docs/deployment.md.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: webkit-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Named, so that a step fails when any command of a pipe fails, as the check
+# piped into tee must. The runner's default shell has no pipefail.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The local backend the check was built against. Its archive is checked
+  # against this SHA-256 before anything runs it.
+  BACKEND_RELEASE: precompiled-2026-10-22-1447815
+  BACKEND_SHA256: 9caa539df14dff09317c1f1c22714ed77640e2e4a18ef630bc368fe8c6bb65df
+  BACKEND_URL: http://127.0.0.1:3236
+  BACKEND_SITE_URL: http://127.0.0.1:3237
+  APP_URL: http://localhost:5241
+  DEPLOYMENT: local-webkit-3236
+  QIVO_ENVIRONMENT: development
+
+jobs:
+  webkit:
+    name: WebKit on macOS
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          check-latest: true
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Check the Node version
+        run: node scripts/node-version.mjs
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright's WebKit
+        run: npx playwright install webkit
+
+      # Everything the run makes stays outside the checkout, in the runner's
+      # temporary directory, which the app's server does not serve.
+      - name: Get the local Convex backend and make its keys
+        run: |
+          stack="$RUNNER_TEMP/webkit-check"
+          mkdir -p "$stack/backend/storage" "$stack/fixtures" "$stack/out"
+          chmod 700 "$stack/backend" "$stack/fixtures"
+          echo "STACK=$stack" >> "$GITHUB_ENV"
+          [ "$(uname -m)" = arm64 ]
+          curl -fsSL --retry 3 -o "$stack/backend.zip" \
+            "https://github.com/get-convex/convex-backend/releases/download/$BACKEND_RELEASE/convex-local-backend-aarch64-apple-darwin.zip"
+          echo "$BACKEND_SHA256  $stack/backend.zip" | shasum -a 256 -c -
+          unzip -q "$stack/backend.zip" -d "$stack/backend"
+          chmod +x "$stack/backend/convex-local-backend"
+          umask 077
+          openssl rand -hex 32 | tr -d '\n' > "$stack/backend/instance-secret"
+          "$stack/backend/convex-local-backend" keygen admin-key --instance-name qivo-webkit \
+            --instance-secret "$(cat "$stack/backend/instance-secret")" | tr -d '\n' > "$stack/backend/admin-key"
+          echo "::add-mask::$(cat "$stack/backend/instance-secret")"
+          echo "::add-mask::$(cat "$stack/backend/admin-key")"
+          {
+            echo "CONVEX_SELF_HOSTED_URL=$BACKEND_URL"
+            echo "CONVEX_SELF_HOSTED_ADMIN_KEY=$(cat "$stack/backend/admin-key")"
+          } > "$stack/backend/self-hosted.env"
+
+      - name: Start the backend
+        run: |
+          nohup "$STACK/backend/convex-local-backend" --interface 127.0.0.1 --port 3236 \
+            --site-proxy-port 3237 --convex-origin "$BACKEND_URL" --convex-site "$BACKEND_SITE_URL" \
+            --instance-name qivo-webkit --instance-secret "$(cat "$STACK/backend/instance-secret")" \
+            --local-storage "$STACK/backend/storage" --disable-beacon "$STACK/backend/db.sqlite3" \
+            > "$STACK/backend.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf "$BACKEND_URL/version" > /dev/null && break
+            sleep 1
+          done
+          # the end of its log says why a backend did not start. The whole
+          # log is not kept, since it can hold what functions print.
+          curl -sf "$BACKEND_URL/version" > /dev/null || { tail -n 40 "$STACK/backend.log"; exit 1; }
+
+      - name: Deploy the functions to it
+        run: |
+          set_env() { npx convex env set --env-file "$STACK/backend/self-hosted.env" "$1" "$2" > /dev/null; }
+          set_env SITE_URL "$APP_URL"
+          set_env QIVO_ENVIRONMENT development
+          set_env BETTER_AUTH_SECRET "$(openssl rand -base64 32 | tr -d '\n')"
+          npx convex deploy --env-file "$STACK/backend/self-hosted.env" \
+            --typecheck disable --codegen disable --yes
+
+      - name: Build the app and serve it
+        env:
+          VITE_CONVEX_URL: ${{ env.BACKEND_URL }}
+          VITE_CONVEX_SITE_URL: ${{ env.BACKEND_SITE_URL }}
+        run: |
+          npx vite build
+          # vite preview rewrites /app as Vercel does
+          nohup npx vite preview --port 5241 --strictPort --host localhost > "$STACK/app.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf "$APP_URL/app" > /dev/null && break
+            sleep 1
+          done
+          curl -sf "$APP_URL/app" > /dev/null || { tail -n 40 "$STACK/app.log"; exit 1; }
+
+      - name: Seed the Northstar fixture
+        env:
+          QIVO_FIXTURE_LOCAL: 'true'
+        run: |
+          export QIVO_FIXTURE_CREDENTIALS_DIR="$STACK/fixtures"
+          QIVO_LOCAL_ADMIN_KEY="$(cat "$STACK/backend/admin-key")"
+          export QIVO_LOCAL_ADMIN_KEY
+          node scripts/marketing-demo.mjs seed --local --deployment "$DEPLOYMENT" \
+            --url "$BACKEND_URL" --site-url "$APP_URL" > "$STACK/out/seed.log" 2>&1 \
+            || { tail -n 20 "$STACK/out/seed.log"; exit 1; }
+
+      # The check prints status lines only, never a secret, and takes a
+      # screenshot of a failed step unless a secret is on screen.
+      - name: Run the end-to-end check in WebKit
+        run: |
+          export QIVO_FIXTURE_CREDENTIALS_DIR="$STACK/fixtures"
+          QIVO_LOCAL_ADMIN_KEY="$(cat "$STACK/backend/admin-key")"
+          export QIVO_LOCAL_ADMIN_KEY
+          node scripts/staging-check.mjs --local --browser webkit --app-url "$APP_URL" \
+            --convex-url "$BACKEND_URL" --api-url "$BACKEND_SITE_URL" --deployment "$DEPLOYMENT" \
+            --shots "$STACK/out/shots" 2>&1 | tee "$STACK/out/staging-check.log"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### WebKit check on macOS"
+            echo
+            echo "macOS $(sw_vers -productVersion) on $(uname -m), commit \`$GITHUB_SHA\`"
+            echo
+            echo '```'
+            if [ -f "$STACK/out/staging-check.log" ]; then
+              grep -E '^(FAIL|SKIP|DONE)|^NOTE +(browser|search-lost)' "$STACK/out/staging-check.log" | cut -c1-400 \
+                || echo "The check printed no result line."
+            else
+              echo "The check did not start."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the check's log and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webkit-check
+          if-no-files-found: warn
+          retention-days: 7
+          path: ${{ runner.temp }}/webkit-check/out
