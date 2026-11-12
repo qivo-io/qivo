@@ -107,11 +107,12 @@
  * count over REST and on both pages, renames the team in place, removes
  * the agent and deletes the team from the list (ui/settings-teams). It
  * loads M's Board without the workspace's removed people and catalog
- * parts and with Nora's own seats alone in the store, finds Leo Martins in
- * the Board's Assignee menu and, with Viewer on the task's sub-project for
- * the step, by his address in a task's follower popover, and the run's
- * team by its tag in Team sync's scope menu, each on the server's reads
- * (ui/roster-parts). It
+ * parts and with Nora's own seats alone in the store, finds Nora, whom it
+ * gives a task there, in the Board's Assignee menu, which lists the owners
+ * of the Board's tasks alone and so not Leo Martins, finds Leo, with Viewer
+ * on the task's sub-project for the step, by his name in a task's follower
+ * popover, and the run's team by its tag in Team sync's scope menu, each on
+ * the server's reads (ui/roster-parts). It
  * searches Settings › Users for its Standard agent by name, which the deployment answers alone
  * with its key's fingerprint from a one-shot key read, opens its keys, and
  * checks that Organization › General's creators line names and counts what
@@ -8959,10 +8960,11 @@ export const ROSTER_READS = {
  *  alone (P.users). Team sync's scope menu finds the run's team by its
  *  tag through teams.picker, a pick names it on the trigger, and the
  *  agenda answers for its scope. M's Board's Assignee menu lists the
- *  owners of M's tasks alone, through pickers.viewOwners: it finds a
- *  person REST says holds a task of M that is not In review, and not
- *  OWNER_PICKERS_PERSON, who holds none there. A pick sends the Board's
- *  read with the holder's id in its owners, and the filter's × clears it.
+ *  owners of M's tasks alone, through pickers.viewOwners: the step makes
+ *  one task in Alpha that Nora holds, which goes with the run's project,
+ *  and the menu finds her and not OWNER_PICKERS_PERSON, who holds none
+ *  there. A pick sends the Board's read with Nora's id in its owners, and
+ *  the filter's × clears it.
  *  The follower Add list offers only people who see the task's project,
  *  so the step gives him Viewer on Alpha, run.t0's sub-project, which the
  *  run otherwise shares with its agents alone, and run.t0's follower
@@ -8972,7 +8974,7 @@ export const ROSTER_READS = {
  *  and a failure clears the filter and Team sync's scope in a `finally`.
  *  There a grant the step may have left goes as a check of its own
  *  (`ui/roster-parts/revoke`), so the run counts a grant it could not
- *  remove among its failures. It writes no record. It runs after
+ *  remove among its failures. It writes that one task. It runs after
  *  ui/settings-teams and before the run archives M, and needs a backend
  *  from this release on. */
 async function rosterPartsCheck() {
@@ -9010,11 +9012,16 @@ async function rosterPartsCheck() {
       // the Board's Assignee menu lists the owners of M's tasks alone: a
       // person who holds one, whom a pick sends the Board's read for, and
       // not Leo, who holds none there
-      const held = (await restTasks(w, `/tasks?project=${M.id}&limit=200`)).find(
-        (task) => task.assignee_id && task.assignee_id !== leo.id && task.status !== 'review',
-      )
-      expect(held, `${M.key} holds no assigned task to filter by`)
-      const holder = await restOk(w, 'GET', `/users/${held.assignee_id}`)
+      const held = await restOk(w, 'POST', '/tasks', {
+        project: A.id,
+        title: `${run.tag} roster holder`,
+        status: 'todo',
+        assignee_id: run.nora.id,
+      })
+      run.created.push(held)
+      eq(held.assignee_id, run.nora.id, "the task's assignee")
+      const holder = await restOk(w, 'GET', `/users/${run.nora.id}`)
+      // the Board was loaded before the task, so the menu reads after it
       await app.locator('[data-filter-assignee-menu]').first().click()
       const search = app.locator('[data-filter-assignee-search]')
       await search.fill(holder.name)

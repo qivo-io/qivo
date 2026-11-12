@@ -42,6 +42,8 @@ let root: Root
 /** every pickers:viewOwners read's arguments, oldest first */
 let asked: Record<string, unknown>[]
 let shown: IssueFilters
+/** what the read answers in place of the stand-in, when a case sets it */
+let answerWith: (() => unknown) | null = null
 
 /** Loads the store over an organization of `people` people, with `extra`
     changes. */
@@ -65,10 +67,11 @@ async function load({
     })
   extra?.(snap)
   asked = []
+  answerWith = null
   network.query.mockImplementation(async (ref, args) => {
     if (getFunctionName(ref) !== 'pickers:viewOwners') return null
     asked.push(args)
-    return viewOwnersStandIn(snap, args, { owners: OWNERS })
+    return answerWith ? answerWith() : viewOwnersStandIn(snap, args, { owners: OWNERS })
   })
   network.onUpdate.mockImplementation((ref, args, next) => {
     if (getFunctionName(ref) === 'people:byIds')
@@ -204,6 +207,29 @@ describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000
     await typeSearch('Person 0500')
     expect(listed()).toEqual([])
     expect(document.body.textContent).toContain('No matching people.')
+  })
+
+  it('says each state of the read in its own words, and lists nobody then', async () => {
+    await render()
+    answerWith = () => ({ state: 'over_budget' })
+    await openMenu()
+    expect(listed()).toEqual([])
+    expect(document.body.textContent).toContain(
+      "Qivo couldn't list who holds this project's tasks.",
+    )
+    answerWith = () => ({ state: 'unavailable' })
+    await typeSearch('a')
+    expect(listed()).toEqual([])
+    expect(document.body.textContent).toContain('This project is no longer available.')
+    // a project whose tasks nobody holds, and a search that finds nobody
+    answerWith = () => ({ state: 'ready', rows: [], next: null, stopped: false })
+    await typeSearch('')
+    expect(document.body.textContent).toContain('No one holds a task here.')
+    await typeSearch('zz')
+    expect(document.body.textContent).toContain('No matching people.')
+    // each new search read the server again, for the same project
+    expect(asked.map((a) => a.project_id)).toEqual(asked.map(() => snap.projects[0].id))
+    expect(asked.length).toBeGreaterThanOrEqual(4)
   })
 
   it('picks a person into the filter, shows the chosen first by name, and takes them back off', async () => {

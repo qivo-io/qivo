@@ -85,7 +85,11 @@ import { taskOwnerId } from '../lib/review'
 import { allWordsMatcher, searchWords } from '../lib/search'
 import {
   byIdSteps,
+  groupCheck,
+  isGroupIn,
   isOverBudget,
+  noSubtasks,
+  ownerSettled,
   projectSelection,
   selectionTasks,
   viewAccess,
@@ -686,11 +690,12 @@ export type ViewOwnersArgs = { project_id: string; search?: string }
  * 3. Every active task of those sub-projects (selectionTasks), the tasks
  *    the views filter, Done ones not yet archived included. Each gives its
  *    owner by the rule the filter matches by (lib/review.ts taskOwnerId):
- *    the reviewer while the task is In review and has one, else the
- *    assignee. A group stays with its assignee in the filter whatever its
- *    status; the write refuses a reviewer on a group, so a group In review
- *    with a reviewer is legacy data, and its reviewer is listed in the
- *    assignee's place.
+ *    the reviewer while a task without subtasks is In review and has one,
+ *    else the assignee. A group stays with its assignee whatever its
+ *    status, as a task In review that gains a subtask keeps its status and
+ *    reviewer, so each task In review with a reviewer other than its
+ *    assignee is asked for its active subtasks, as the views ask
+ *    (lib/viewReads.ts groupCheck), a range each.
  * 4. Each owner's profile by id, those of the caller's organization kept,
  *    as rows of id, name, initials and color, never an email, whose name
  *    and initials hold every word of the search (mentionsOf's match), in
@@ -714,14 +719,22 @@ export async function viewOwnersOf(
   const matches = allWordsMatcher(searchWords(search))
   try {
     const guard = viewBudget(ctx, VIEW_OWNERS.reads)
-    const selection = await projectSelection(ctx, guard, viewAccess(ctx, guard, me), a.project_id)
+    const seat = viewAccess(ctx, guard, me)
+    const selection = await projectSelection(ctx, guard, seat, a.project_id)
     if (selection === null) return UNAVAILABLE
+    const seats = new Map([[me.org_id, seat]])
+    const subtasks = noSubtasks()
     const owners = new Set<string>()
-    for await (const step of selectionTasks(ctx, guard, selection.subProjects))
+    for await (const step of selectionTasks(ctx, guard, selection.subProjects)) {
+      // a task In review with a reviewer stays with its assignee while it
+      // is a group, so only those are asked for their subtasks
+      const unsettled = step.filter((task) => !ownerSettled(task))
+      if (unsettled.length > 0) await groupCheck(ctx, guard, seats, unsettled, subtasks)
       for (const task of step) {
-        const owner = taskOwnerId(task)
+        const owner = taskOwnerId(task, isGroupIn(subtasks, task.id) === true)
         if (owner !== undefined) owners.add(owner)
       }
+    }
     const profiles = await byIdSteps(guard, [...owners], (id) => byId(ctx, 'profiles', id))
     const rows = profiles
       .filter((p): p is Doc<'profiles'> => p !== null && p.org_id === me.org_id)

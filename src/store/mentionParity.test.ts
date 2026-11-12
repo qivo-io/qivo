@@ -25,7 +25,7 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
-import { type MentionArgs, mentionStandIn } from './mentionStandIn.setup'
+import { type MentionArgs, mentionStandIn, viewOwnersStandIn } from './mentionStandIn.setup'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -38,7 +38,14 @@ const PLANTED = ['Zulu Andersen', 'Émile Roux', 'Øystein Berg', '😀 Lab Bot'
 /* Ordinary names, so the list holds three batches. */
 const MORE = ['Ada Lindqvist', 'Bo Nyström', 'Cleo Park', 'Dag Holm', 'Eva Sund', 'Fia Ek']
 
-type Fixture = { t: T; org: Doc<'organizations'>; nora: Doc<'profiles'>; issue: string }
+type Fixture = {
+  t: T
+  org: Doc<'organizations'>
+  nora: Doc<'profiles'>
+  issue: string
+  /** the sub-project every profile holds a grant on */
+  sub: string
+}
 
 /** Northstar with the planted people, an agent and a switched-off person,
     keyed, and a task in a sub-project each of them holds a grant on. */
@@ -73,7 +80,7 @@ async function northstar(): Promise<Fixture> {
       })
   })
   const issue = await plantIssue(t, { org_id: org.id, project_id: sub.id })
-  return { t, org, nora, issue: issue.id }
+  return { t, org, nora, issue: issue.id, sub: sub.id }
 }
 
 /** What both answer, with each cursor replaced by whether it is there. */
@@ -193,5 +200,22 @@ describe("the mention suggestions' stand-in", () => {
     expect(
       refusal(() => mentionStandIn(ws, { org_id: f.org.id, issue_id: f.issue, search: long })),
     ).toBe('rule')
+  })
+
+  it("answers the view filter's people as pickers.viewOwners does, for the owners a test names", async () => {
+    const f = await northstar()
+    const ws = await wholeOf(f.t, f.nora)
+    if (!ws) throw new Error('no workspace')
+    // the planted people, whose names sort apart by bytes, each hold a task
+    const holders = ws.profiles.filter((p) => PLANTED.includes(p.name) || p.name === 'Olof Off')
+    expect(holders).toHaveLength(PLANTED.length + 1)
+    for (const holder of holders)
+      await plantIssue(f.t, { org_id: f.org.id, project_id: f.sub, assignee_id: holder.id })
+    for (const search of ['', 'berg', 'émile', 'emile', 'northstar.test', 'nobody']) {
+      const args = { org_id: f.org.id, project_id: f.sub, ...(search ? { search } : {}) }
+      expect(viewOwnersStandIn(ws, args, { owners: holders.map((p) => p.id) }), search).toEqual(
+        await as(f.t, f.nora).query(api.pickers.viewOwners, args),
+      )
+    }
   })
 })

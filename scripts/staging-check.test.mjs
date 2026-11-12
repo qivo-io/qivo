@@ -358,9 +358,10 @@ describe('staging check REST contract', () => {
     // no step opens a task at /task/, which the router does not parse
     expect(check).not.toContain(`/app/\${ORG_SLUG}/task/`)
     // the Assignee menu lists the owners of the Board's tasks alone: the
-    // step picks a person REST says holds a task there, and checks that
-    // Leo, who holds none, is not offered
-    expect(step).toContain('const held = (await restTasks(w, `/tasks?project=')
+    // step gives Nora a task there, picks her, and checks that Leo, who
+    // holds none, is not offered
+    expect(step).toContain('assignee_id: run.nora.id,')
+    expect(step).toContain('run.created.push(held)')
     expect(step).toContain("app.getByText('No matching people.')")
     expect(step).toContain('addsQueryFor(f, ROSTER_READS.board, holder.id)')
     // the Add list offers only people who see the task's project, so Leo

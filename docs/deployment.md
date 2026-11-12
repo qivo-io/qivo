@@ -424,11 +424,11 @@ agent and deletes the team from the list (`ui/settings-teams`). Against a
 backend from before the release whose app reads the team pages from the
 server that step fails. Next it loads the run project's Board, whose sync
 socket must subscribe neither `workspace.people` nor `workspace.catalog`,
-with Nora's own seats alone in the store, finds a person who holds a task
-of that project in the Board's **Assignee** menu (`pickers.viewOwners`),
-which lists the owners of the Board's tasks alone and so does not offer
-Leo Martins, who holds none there. A pick reads the Board with the holder
-among its owners, and **×** clears it. The step then gives Leo Viewer on the
+with Nora's own seats alone in the store, gives Nora a task in the run's
+Alpha sub-project and finds her in the Board's **Assignee** menu
+(`pickers.viewOwners`), which lists the owners of the Board's tasks alone
+and so does not offer Leo Martins, who holds none there. A pick reads the
+Board with Nora among its owners, and **×** clears it. The step then gives Leo Viewer on the
 run's Alpha sub-project, finds him by his name under **+ Add** in the
 follower popover of a task there (`pickers.taskFollowers`, which offers
 only people who see the task's project), closes it without adding him and
@@ -1050,9 +1050,9 @@ deployment of a commit before v0.1.149.
 The app up to v0.1.165 reads its @ mention popup and the **Assignee**
 filter's people through `pickers.mentions` without a task, which the release
 after v0.1.165 refuses, so both say **Couldn't load people.** against a
-later backend. Its **+ Add** list under **Subscribers** still loads, and no
-longer finds a person by an email address. A tab that was open at the deploy does so too, until it
-reloads.
+later backend. A tab that was open at the deploy does so too, until it
+reloads. Its **+ Add** list under **Subscribers** still loads, and no
+longer finds a person by an email address.
 
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
