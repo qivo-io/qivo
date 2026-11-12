@@ -197,8 +197,8 @@ function FilterSearch({
    people. Mutually exclusive: picking a person clears it, and "Anyone" —
    which means no people filter at all — clears both.
 
-   The people come from the server (pickers.mentions, P.mentionChoices), 8
-   a batch in name order with a search over names, initials and email, read
+   The people come from the server (pickers.orgPeople, P.orgPeopleChoices), 8
+   a batch in name order with a search over names and initials, read
    once a batch while the menu is open and the page shows, with Load more
    and the list's end lines, at most PICKER_CAPS.owners kept: every profile
    of the organization, agents and switched-off people included, as the
@@ -239,7 +239,7 @@ function PeopleRows({
     key: visible && org ? `${org}\n${search.settled}` : null,
     source: {
       kind: 'once',
-      read: (at) => P.mentionChoices(org, search.settled, at.after),
+      read: (at) => P.orgPeopleChoices(org, search.settled, at.after),
     },
     batch: (answer) => (answer.state === 'ready' ? answer : null),
     id: (row) => row.id,

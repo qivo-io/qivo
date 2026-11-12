@@ -291,6 +291,10 @@ type DescEditorProps = {
      recipient inside the task`s own org, so a foreign name would render as a
      mention and notify nobody. Defaults to the home organization. */
   org?: string
+  /* the task this text belongs to, by uuid: its description or one of its
+     comments. The @-mention picker offers the people with access to that
+     task's project, and nobody for an editor that names none. */
+  task?: string
   value: string
   placeholder?: string
   ariaLabel?: string
@@ -299,7 +303,7 @@ type DescEditorProps = {
 }
 
 const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function DescEditorInner(
-  { issueKey, org, value, placeholder, ariaLabel, autoFocus, comment },
+  { issueKey, org, task, value, placeholder, ariaLabel, autoFocus, comment },
   refHandle,
 ) {
   // mode never flips on a live instance (the composer/edit editors always
@@ -553,6 +557,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           'aria-multiline': 'true',
           // read back by the mention suggestion, which has no React context
           'data-qivo-org': org || P.homeOrg || '',
+          'data-qivo-task': task || '',
           'aria-label': ariaLabel || 'Task description',
         },
         // autolink when a space completes an http(s) token — boundaries per

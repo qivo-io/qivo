@@ -326,9 +326,9 @@ try {
       const electronics = children.find((project) => project.name === 'Electronics')
       const firmware = children.find((project) => project.name === 'Firmware')
       // the store holds the signed-in person alone, so Leo is found through
-      // the mention popup's read
+      // the view filter's people read
       const nora = P.users.find((user) => user.id === P.CURRENT_USER)
-      const found = await P.mentionChoices(P.org.id, 'Leo Martins', null)
+      const found = await P.orgPeopleChoices(P.org.id, 'Leo Martins', null)
       const leo =
         found?.state === 'ready' ? found.rows.find((row) => row.name === 'Leo Martins') : undefined
       if (!electronics || !firmware || !nora || !leo)

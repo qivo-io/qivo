@@ -1,5 +1,5 @@
-/* The people pickers of a task and the editor's mention suggestions, read
- * from the server. The readers and their rules are in model/pickers.ts.
+/* The people pickers of a task, the editor's mention suggestions and the
+ * view filter's people, read from the server. The readers and their rules are in model/pickers.ts.
  *
  * - taskOwners: the people who could become a task's assignee or reviewer,
  *   25 at a time in name order, with a search over every one of them. The
@@ -41,17 +41,21 @@
  *   followers is refused with the write's sentence. Its rows are follower
  *   rows (model/pickers.ts FollowerRow), with the portrait's initials and
  *   color and no email.
- * - mentions: the people the editor's @ mention popup offers, 8 at a time
- *   in name order, with the popup's match over names, initials and email
- *   (src/components/mentionSuggestion.ts reads it once a batch while the
- *   popup is open). It is the exception to the rules above. It takes the
- *   organization and no task, runs no gate or rule, and offers every
- *   profile of the organization to any active seat there, guests and
- *   viewers included, as the popup always has; the mention fan-out still
- *   decides who is notified. Its rows hold the email, initials and color,
- *   since the popup shows and matches them, the fields the workspace's
- *   people part sent every seat before it was removed (model/pickers.ts
- *   mentionsOf). */
+ * - mentions: the people the editor's @ mention popup offers in a text of
+ *   a task, 8 at a time in name order, with the popup's match over names
+ *   and initials (src/components/mentionSuggestion.ts reads it once a
+ *   batch while the popup is open). Its gate is the pickers', and it
+ *   offers the active profiles, people and agents, who have access to the
+ *   task's project, the caller too, by the sight the mention fan-out
+ *   notifies by (the owner's decision of 12 November 2026). Its rows hold
+ *   the initials and color and no email (model/pickers.ts mentionsOf).
+ * - orgPeople: the people the view filter's Assignee menu offers, 8 at a
+ *   time in name order, with the same match and rows
+ *   (src/components/viewFilters.tsx PeopleRows). It is the exception to
+ *   the rules above. It takes the organization and no task, runs no gate
+ *   or rule, and offers every profile of the organization to any active
+ *   seat there, guests and viewers included, since a filter may name
+ *   anyone (model/pickers.ts orgPeopleOf). */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'
@@ -61,7 +65,9 @@ import {
   followerChoicesOf,
   type MentionBatch,
   mentionsOf,
+  type OrgPeopleBatch,
   type OwnerChecks,
+  orgPeopleOf,
   type PeopleBatch,
   syncRecipientsOf,
   taskOwnersOf,
@@ -133,15 +139,28 @@ export const taskFollowers = orgQuery({
   handler: (ctx, a): Promise<FollowerBatch> => followerChoicesOf(ctx, ctx.me, a),
 })
 
-/** One batch, in name order, of the people of the organization the
- * editor's @ mention popup offers: every profile, people, agents,
- * switched-off people, unclaimed seats and the caller alike, whose name,
- * initials and email hold every word of the search in any order, ignoring
- * case but not accents (model/pickers.ts mentionsOf). Any active seat of
- * the organization may read it. Answers `not_ready`, or `ready` with rows
- * of id, name, initials, color and email, `next` and `stopped`
- * (lib/namedPages.ts ListBatch). */
+/** One batch, in name order, of the people the editor's @ mention popup
+ * offers in a text of task `issue_id`: the active profiles, people and
+ * agents, who have access to the task's project, the caller too, whose
+ * name and initials hold every word of the search in any order, ignoring
+ * case but not accents (model/pickers.ts mentionsOf). Answers
+ * `unavailable` for a task the caller cannot write a text in, `refused`
+ * for a caller below User on its project, `not_ready`, `over_budget`, or
+ * `ready` with rows of id, name, initials and color, never an email,
+ * `next` and `stopped` (lib/namedPages.ts ListBatch). */
 export const mentions = orgQuery({
-  args: vListArgs,
+  args: { issue_id: v.string(), ...vListArgs },
   handler: (ctx, a): Promise<MentionBatch> => mentionsOf(ctx, ctx.me, a),
+})
+
+/** One batch, in name order, of the people of the organization the view
+ * filter's Assignee menu offers: every profile, people, agents,
+ * switched-off people, unclaimed seats and the caller alike, whose name
+ * and initials hold every word of the search, by mentions' match
+ * (model/pickers.ts orgPeopleOf). Any active seat of the organization may
+ * read it. Answers `not_ready`, or `ready` with rows of id, name, initials
+ * and color, never an email, `next` and `stopped`. */
+export const orgPeople = orgQuery({
+  args: vListArgs,
+  handler: (ctx, a): Promise<OrgPeopleBatch> => orgPeopleOf(ctx, ctx.me, a),
 })

@@ -1725,9 +1725,9 @@ async function healthCounts(
  * organization, by profile id, each read by id a step at a time; a lead
  * whose profile is gone, or one of another organization, is no lead. Any
  * seat of the organization reads every person's name through
- * pickers.mentions and people.byIds, the disclosure the workspace's people
- * part made before it was removed and that stays as it was, so ordering by
- * these names shows the reader nothing those reads do not. */
+ * pickers.orgPeople and people.byIds, the names the workspace's people
+ * part gave every seat before it was removed, so ordering by these names
+ * shows the reader nothing those reads do not. */
 async function leadKeys(
   ctx: QueryCtx,
   guard: ViewBudget,

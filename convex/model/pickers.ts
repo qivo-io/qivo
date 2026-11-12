@@ -2,9 +2,11 @@
  * become a task's assignee or reviewer (taskOwnersOf), whom Team sync's
  * Mention window may notify about it (syncRecipientsOf), and whether a few
  * named people could be chosen in one of those pickers now (canOwnOf).
- * Beside them, and unlike them, the editor's @ mention popup reads every
- * person of the organization with no task, gate or rule (mentionsOf, at
- * the end of this file). The REST and MCP project user list (lib/core.ts
+ * The editor's @ mention popup reads the people who have access to its
+ * task's project, behind the same gate (mentionsOf), and the view filter's
+ * Assignee menu reads every person of the organization with no task, gate
+ * or rule (orgPeopleOf), both without an email. The REST and MCP project
+ * user list (lib/core.ts
  * projectUserPage) asks the owner rule's helpers for one project, without
  * a task, within the rule's share (withinRule).
  *
@@ -510,25 +512,18 @@ export async function canOwnOf(
 
 /* ---------------------------------------------------------- the mentions */
 
-/** A person as the editor's @ mention popup shows and matches them: the
- * name, the initials and the color of their portrait (a legacy color sent
- * as gray, model/people.ts shownAvatarColor) and the email, null for an
- * agent. Any active seat of the organization reads these fields of every
- * profile here, guests and Viewers included, as the workspace's people
- * part sent them to every seat until it was removed; that disclosure is
- * kept as it was (an agent decision of 7 November 2026, for the owner). */
+/** A person as the editor's @ mention popup and the view filter's Assignee
+ * menu show and match them: the name, the initials and the color of their
+ * portrait (a legacy color sent as gray, model/people.ts shownAvatarColor).
+ * It holds no email, which neither list shows or matches for anyone (the
+ * owner's decision of 12 November 2026), and no team, level, task or
+ * project. */
 export type MentionRow = {
   id: string
   name: string
   initials: string
   color: string
-  email: string | null
 }
-
-/** What the mention popup's read answers: `not_ready` until the
- * organization's names are keyed, or one batch of people in name order
- * (lib/namedPages.ts ListBatch: rows, next, stopped). */
-export type MentionBatch = { state: 'not_ready' } | ({ state: 'ready' } & ListBatch<MentionRow>)
 
 /** `profile` as a mention row. */
 const mentionRow = (profile: Doc<'profiles'>): MentionRow => ({
@@ -536,73 +531,148 @@ const mentionRow = (profile: Doc<'profiles'>): MentionRow => ({
   name: profile.name,
   initials: profile.initials,
   color: shownAvatarColor(profile.color),
-  email: profile.email ?? null,
 })
 
-/** The list name the mention cursors are sealed with. */
-const MENTIONS = 'pickers.mentions'
+/* What the two lists match a search against: the name and the initials,
+ * one a line, never the email. */
+const mentionText = (profile: Doc<'profiles'>) => `${profile.name}\n${profile.initials}`
 
-/* The refusal of a cursor that is not one of the suggestions' for the same
- * organization and search. */
+/** What the mention popup is asked for: the task whose text holds the "@"
+ * and a list's search and cursors. */
+export type MentionsArgs = ListArgs & { issue_id: string }
+
+/** What the mention popup's read answers: the task pickers' gate states,
+ * `not_ready` until the organization's names are keyed, `over_budget` when
+ * its rule could not be worked out within PICKERS.rule, or one batch of
+ * people in name order (lib/namedPages.ts ListBatch: rows, next,
+ * stopped). */
+export type MentionBatch =
+  | { state: 'unavailable' }
+  | { state: 'refused'; message: string }
+  | { state: 'not_ready' }
+  | { state: 'over_budget' }
+  | ({ state: 'ready' } & ListBatch<MentionRow>)
+
+/** What the view filter's Assignee menu's read answers: `not_ready` until
+ * the organization's names are keyed, or one batch of people in name
+ * order. */
+export type OrgPeopleBatch = { state: 'not_ready' } | ({ state: 'ready' } & ListBatch<MentionRow>)
+
+/** The list names the cursors are sealed with. */
+const MENTIONS = 'pickers.mentions'
+const ORG_PEOPLE = 'pickers.orgPeople'
+
+/* The refusals of a cursor that is not one of the list's for the same
+ * arguments and search. */
 const MENTIONS_CURSOR =
-  'after and through must be cursors from an earlier answer of these suggestions, with the same search; start again from the first batch'
+  'after and through must be cursors from an earlier answer of these suggestions, for the same task and search; start again from the first batch'
+const ORG_PEOPLE_CURSOR =
+  'after and through must be cursors from an earlier answer of this list, with the same search; start again from the first batch'
 
 /**
- * pickers.mentions for `me`: one batch of MENTION_BATCH people of the
- * organization the editor's @ mention popup offers, in name order, with
- * the popup's own match. In order:
+ * pickers.mentions for `me`: one batch of MENTION_BATCH people the editor's
+ * @ mention popup offers in a text of task `a.issue_id`, its description or
+ * one of its comments, in name order. It offers only the people who have
+ * access to the task's project (the owner's decision of 12 November 2026):
+ * an active profile that sees the project, navigation included
+ * (lib/access.ts canSeeProjectFor, the rule the mention fan-out notifies
+ * by), a person or an agent, the caller too. A switched-off profile and
+ * anyone without a level on the project are left out, an organization
+ * admin without one included. In order:
  *
  * 1. The arguments: a search past LIMITS.search is refused with that
  *    limit's sentence, and a cursor that is not one of these suggestions'
- *    for the same organization and search with badRequest
+ *    for the same organization, task and search with badRequest
  *    (model/projectSettings.ts orderedListAsk). The cursor's scope holds
- *    the search as the match reads it (lib/search.ts searchWords) beside
- *    its name key, so "Café" and "cafe", which match different people
- *    here, never share a cursor.
- * 2. `not_ready` until the organization's names are keyed
- *    (model/nameKeys.ts nameKeysReady), with no row.
- * 3. The walk: every profile of the organization in name key order, ties
- *    by id (profileIndex), after the cursor, people, agents, switched-off
- *    people, unclaimed seats and the caller alike, as the popup has always
- *    offered every one of them and the mention fan-out decides who is
- *    notified (model/messages.ts postMessage). It keeps each whose name,
- *    initials and email, one a line, hold every whitespace-separated word
- *    of the search in any order, ignoring case but not accents
- *    (lib/search.ts allWordsMatcher), the popup's rule before this read.
- *    Past NAMED_READ it stops and says so, with a cursor, and never
- *    answers an end it did not reach.
+ *    the search as the match reads it (lib/search.ts searchWords), so
+ *    "Café" and "cafe", which match different people here, never share a
+ *    cursor.
+ * 2. The gate (pickerTask), before any person is read: `unavailable` alike
+ *    for every task the caller cannot write a text in, and `refused` with
+ *    NO_WRITE_ACCESS for a caller below User on its project, since a
+ *    description and a comment both need Edit.
+ * 3. `not_ready` until the organization's names are keyed.
+ * 4. The rule within PICKERS.rule, else `over_budget`, with no row.
+ * 5. The walk over every profile of the organization in name key order,
+ *    ties by id (profileIndex), after the cursor, keeping each profile the
+ *    rule lets in whose name and initials, one a line, hold every
+ *    whitespace-separated word of the search in any order, ignoring case
+ *    but not accents (lib/search.ts allWordsMatcher). Past NAMED_READ it
+ *    stops and says so, with a cursor, and never answers an end it did not
+ *    reach.
  *
- * No task, project, grant or team is read, so the read cannot widen
- * access to work, and any active seat of the organization may read it,
- * guests and viewers too, the disclosure the workspace's people part made
- * to every seat before it was removed, kept as it was. With `through` a batch holds every match up to it and
- * stops past four batches (lib/namedPages.ts listBatch); the app reads
- * without it, once a batch, and never subscribes. A kept row reads
- * nothing more, so a batch costs one document a person walked.
- * tests/mentionSuggestions.test.ts ("the suggestions inside Convex's
- * limits") logs what a batch reads among 1,000 people, without the login's
- * own reads: a first batch without a search, a search that matches nobody
- * and an email fragment only the last person in name order holds, each of
- * which walks every profile, and a Load more batch near the end.
- * NAMED_READ's documents hold the longest walk several times over.
+ * Its reads are syncRecipientsOf's: the gate's, the rule's and one
+ * document a person walked. The app reads it once a batch while the popup
+ * is open and never subscribes. tests/mentionAccess.test.ts holds who it
+ * offers to whom.
  */
 export async function mentionsOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  a: ListArgs,
+  a: MentionsArgs,
 ): Promise<MentionBatch> {
-  const ask = await orderedListAsk(MENTIONS, [me.org_id, searchWords(a.search ?? '')], a, {
+  const scope = [me.org_id, a.issue_id, searchWords(a.search ?? '')]
+  const ask = await orderedListAsk(MENTIONS, scope, a, {
     tieOf: idTieOf,
     refusal: MENTIONS_CURSOR,
+  })
+  const gate = await pickerTask(ctx, me, a.issue_id, 'recipient')
+  if (!('task' in gate)) return gate
+  if (!(await nameKeysReady(ctx, me.org_id))) return NOT_READY
+  const sees = await withinRule(ctx, (guard) =>
+    canSeeProjectFor(ctx, gate.project, { guard, reads: projectLevelReads() }),
+  )
+  if (sees === null) return OVER_BUDGET
+  const matches = allWordsMatcher(ask.search)
+  const batch = await listBatch(ctx, ask, {
+    stream: indexAfter(profileIndex(ctx, me.org_id), ask.after),
+    keep: async (profile: Doc<'profiles'>) =>
+      profile.active && sees(profile) && matches(mentionText(profile)) ? mentionRow(profile) : null,
+    limit: MENTION_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
+}
+
+/**
+ * pickers.orgPeople for `me`: one batch of MENTION_BATCH people of the
+ * organization the view filter's Assignee menu offers, in name order. It
+ * walks every profile of the organization in name key order, ties by id
+ * (profileIndex), after the cursor, people, agents, switched-off people,
+ * unclaimed seats and the caller alike, as the menu has always listed
+ * them, since a filter may name anyone whose tasks the caller sees. It
+ * keeps each whose name and initials hold every word of the search, by
+ * mentionsOf's match. The arguments, readiness and stops are mentionsOf's,
+ * with a cursor's scope of the organization and the search.
+ *
+ * No task, project, grant or team is read, so the read cannot widen access
+ * to work, and any active seat of the organization may read it, guests and
+ * viewers too. That every seat reads every name here is an agent decision
+ * of 12 November 2026 that waits for the owner, who that day took the
+ * email out of both lists and narrowed the mention popup to the task's
+ * project. With `through` a batch holds every match up to it and stops
+ * past four batches (lib/namedPages.ts listBatch); the app reads without
+ * it, once a batch, and never subscribes. A kept row reads nothing more,
+ * so a batch costs one document a person walked.
+ * tests/mentionSuggestions.test.ts ("the list inside Convex's limits")
+ * logs what a batch reads among 1,000 people, without the login's own
+ * reads. NAMED_READ's documents hold the longest walk several times over.
+ */
+export async function orgPeopleOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: ListArgs,
+): Promise<OrgPeopleBatch> {
+  const ask = await orderedListAsk(ORG_PEOPLE, [me.org_id, searchWords(a.search ?? '')], a, {
+    tieOf: idTieOf,
+    refusal: ORG_PEOPLE_CURSOR,
   })
   if (!(await nameKeysReady(ctx, me.org_id))) return NOT_READY
   const matches = allWordsMatcher(ask.search)
   const batch = await listBatch(ctx, ask, {
     stream: indexAfter(profileIndex(ctx, me.org_id), ask.after),
     keep: async (profile: Doc<'profiles'>) =>
-      matches(`${profile.name}\n${profile.initials}\n${profile.email ?? ''}`)
-        ? mentionRow(profile)
-        : null,
+      matches(mentionText(profile)) ? mentionRow(profile) : null,
     limit: MENTION_BATCH,
     ceiling: await namedCeiling(ctx),
   })

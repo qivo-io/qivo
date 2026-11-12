@@ -1000,19 +1000,13 @@ textarea {
 }
 .mentionpop-name {
   flex: 1;
+  min-width: 0;
+  text-align: left;
   color: var(--text-1);
   font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.mentionpop-email {
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
 }
 .mentionpop-empty {
   padding: 8px 10px;

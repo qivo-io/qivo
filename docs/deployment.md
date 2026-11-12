@@ -365,8 +365,8 @@ its run tag over REST, finds it through **Add label**'s search on the
 deployment's batches (`labels.picker`), puts it on the task and takes it
 off with the chip's ×, creates `<tag> Made in picker` from the picker with
 Enter once **Create new label** shows, and in the comment composer picks
-the Standard agent from the @ mention popup (`pickers.mentions`) with
-Enter, then clears the draft so nothing posts and nobody is notified
+the Standard agent, who has access to the task's sub-project, from the @
+mention popup (`pickers.mentions`) with Enter, then clears the draft so nothing posts and nobody is notified
 (`ui/label-mention-pickers`). Each label change is checked over REST, and
 the step deletes both labels in the app before it returns, also after a
 failure, so the later `ui/settings-labels` search for the run tag finds
@@ -424,9 +424,9 @@ backend from before the release whose app reads the team pages from the
 server that step fails. Next it loads the run project's Board, whose sync
 socket must subscribe neither `workspace.people` nor `workspace.catalog`,
 with Nora's own seats alone in the store, finds Leo Martins in the Board's
-**Assignee** menu (`pickers.mentions`), whose pick reads the Board with
+**Assignee** menu (`pickers.orgPeople`), whose pick reads the Board with
 him among its owners and whose **×** clears it, gives him Viewer on the
-run's Alpha sub-project, finds him by his address under **+ Add** in the
+run's Alpha sub-project, finds him by his name under **+ Add** in the
 follower popover of a task there (`pickers.taskFollowers`, which offers
 only people who see the task's project), closes it without adding him and
 takes the grant away again, and finds the run's team by its tag in
@@ -1042,6 +1042,12 @@ through `deletedItems.list` and searches it through `deletedItems.matches`,
 which the release after v0.1.160 removed, so its Deleted items page cannot
 load against a later backend. Never return the app or the demo alone to a
 deployment of a commit before v0.1.149.
+
+The app up to v0.1.165 reads its @ mention popup and the **Assignee**
+filter's people through `pickers.mentions` without a task, which the release
+after v0.1.165 refuses, so both say **Couldn't load people.** against a
+later backend. A tab that was open at the deploy does so too, until it
+reloads.
 
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
@@ -2439,6 +2445,24 @@ sends a size, a name and at most 100 ids a call, and the app floor that
 floor in either direction. Returning the backend alone to v0.1.162 is safe,
 because the app reads nothing these changes removed. The release needs no
 backfill and no release step.
+
+From the release after v0.1.165, the @ mention popup offers only the people
+who have access to the project of the task whose description or comment
+holds the **@**, by name alone, and no list of people that any seat reads
+sends or matches an email (owner decision, 12 November 2026).
+`pickers.mentions` takes the task (`issue_id`), runs the task pickers' gate
+before it reads anyone, and answers the active people and agents who see
+the task's project, the caller too, with the name, initials and color. The
+**Assignee** filter's menu reads the new `pickers.orgPeople`, every person
+of the organization with the same fields. Both match names and initials,
+and neither matches an address any more. The app of that release sends
+`issue_id` and calls `pickers.orgPeople`, so that release is the backend's
+floor for its app. An app from it, against a backend before it, says
+**Couldn't load people.** in every mention popup and in the Assignee menu,
+until the backend rolls forward. An earlier app against this backend says
+the same in both, as [Rollback and hotfixes](#rollback-and-hotfixes) lists.
+The release changes no table, field or index and has no backfill and no
+release step.
 
 ## Node.js version
 

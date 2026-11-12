@@ -41,10 +41,11 @@ const workspace: Pick<Workspace, 'myProfileIds' | 'profiles'> = {
 vi.mock('../store/planner', () => ({
   P: {
     homeOrg: 'org-task',
-    mentionChoices: (org: string, search: string, cursor: string | null) => {
+    mentionChoices: (o: { org: string; task: string }, search: string, cursor: string | null) => {
       const read = Promise.resolve(
         mentionStandIn(workspace, {
-          org_id: org,
+          org_id: o.org,
+          issue_id: o.task,
           ...(search ? { search } : {}),
           ...(cursor ? { after: cursor } : {}),
         }),
@@ -90,6 +91,7 @@ beforeEach(() => {
     content: '<p>Ask</p>',
   })
   editor.view.dom.setAttribute('data-qivo-org', 'org-task')
+  editor.view.dom.setAttribute('data-qivo-task', 'task-1')
 })
 
 afterEach(() => {

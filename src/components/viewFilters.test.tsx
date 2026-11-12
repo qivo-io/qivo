@@ -13,7 +13,7 @@ import { TooltipProvider } from './ui/tooltip'
 /* The view filter's Assignee menu on the real store, among the design
    size's 1,000 people. The store holds nobody but the signed-in person, so
    the menu lists the organization's people from the server
-   (pickers.mentions through its stand-in), MENTION_BATCH a batch with the
+   (pickers.orgPeople through its stand-in), MENTION_BATCH a batch with the
    server's search and Load more, and the people already chosen first,
    named by id (people.byIds), also one a filter carried from a project of
    the login's other organization chose there. */
@@ -38,7 +38,7 @@ let store: typeof import('../store/planner')
 let ui: typeof import('./viewFilters')
 let container: HTMLDivElement
 let root: Root
-/** every pickers:mentions read's arguments, oldest first */
+/** every pickers:orgPeople read's arguments, oldest first */
 let asked: Record<string, unknown>[]
 let shown: IssueFilters
 
@@ -65,7 +65,7 @@ async function load({
   extra?.(snap)
   asked = []
   network.query.mockImplementation(async (ref, args) => {
-    if (getFunctionName(ref) !== 'pickers:mentions') return null
+    if (getFunctionName(ref) !== 'pickers:orgPeople') return null
     asked.push(args)
     return mentionStandIn(snap, args)
   })
@@ -194,10 +194,13 @@ describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000
     await settle()
     expect(listed()).toHaveLength(2 * MENTION_BATCH)
     expect(asked[1]).toHaveProperty('after')
-    // the server's search over names and addresses
+    // the server's search over names and initials, never an address
+    await typeSearch('0996 pe')
+    expect(asked.at(-1)).toMatchObject({ search: '0996 pe' })
+    expect(listed()).toEqual([person(996)])
     await typeSearch('person996@example')
     expect(asked.at(-1)).toMatchObject({ search: 'person996@example' })
-    expect(listed()).toEqual([person(996)])
+    expect(listed()).toEqual([])
   })
 
   it('picks a person into the filter, shows the chosen first by name, and takes them back off', async () => {

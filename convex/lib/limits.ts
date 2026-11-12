@@ -191,12 +191,13 @@ export const TEAM_SYNC_TASKS = 1000
  * not a limit on what the list holds. */
 export const LIST_BATCH = 25
 
-/** The people one batch of the editor's @ mention popup holds before Load
- * more (pickers.ts mentions), the popup's eight rows. A batch size, not a
- * limit on the people of an organization or on the mentions a text holds
- * (LIMITS.mentions). Among 1,000 people a first batch without a search
- * reads about 10 profiles, and a search that matches nobody every one of
- * them (model/pickers.ts mentionsOf). */
+/** The people one batch of the editor's @ mention popup and of the view
+ * filter's Assignee menu holds before Load more (pickers.ts mentions and
+ * orgPeople), eight rows. A batch size, not a limit on the people of an
+ * organization or on the mentions a text holds (LIMITS.mentions). Among
+ * 1,000 people a first batch of the menu without a search reads about 10
+ * profiles, and a search that matches nobody every one of them
+ * (model/pickers.ts orgPeopleOf). */
 export const MENTION_BATCH = 8
 
 /** The most ids one call that looks rows up by id may name, such as

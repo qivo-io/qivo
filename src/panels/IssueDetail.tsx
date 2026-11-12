@@ -1362,6 +1362,7 @@ function topInScroller(el: Element): number {
 const CommentRow = memo(function CommentRow({
   c,
   org,
+  task,
   canLead,
   locked = false,
   editing,
@@ -1370,6 +1371,9 @@ const CommentRow = memo(function CommentRow({
 }: {
   c: CommentVM
   org: string
+  /** the comment's task, by uuid, whose project's people its editor's @
+      offers */
+  task: string
   canLead: boolean
   /** an archived task's comments, which no one edits or deletes */
   locked?: boolean
@@ -1452,6 +1456,7 @@ const CommentRow = memo(function CommentRow({
               <DescEditor
                 issueKey={null}
                 org={org}
+                task={task}
                 value={c.body}
                 placeholder="Comment…"
                 ariaLabel="Edit comment"
@@ -2953,6 +2958,7 @@ function IssueDetail({
             ref={descRef}
             issueKey={it.id}
             org={it.org}
+            task={it.uuid}
             value={it.description || ''}
           />
         </EditorSlot>
@@ -3013,6 +3019,7 @@ function IssueDetail({
                   key={s.id}
                   c={s.c}
                   org={it.org}
+                  task={it.uuid}
                   canLead={canLead}
                   locked={archived}
                   editing={editingComment === s.id}
@@ -3105,6 +3112,7 @@ function IssueDetail({
                   ref={composerRef}
                   issueKey={null}
                   org={it.org}
+                  task={it.uuid}
                   value=""
                   placeholder="Leave a comment…"
                   ariaLabel="Leave a comment"

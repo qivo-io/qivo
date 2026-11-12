@@ -12,12 +12,13 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import type { GrantLevel } from '../lib/enums'
-import { BY_IDS_MAX, LIMITS, LIST_BATCH } from '../lib/limits'
+import { BY_IDS_MAX, LIMITS, LIST_BATCH, MENTION_BATCH } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { NO_WRITE_ACCESS, REVIEWER_ON_GROUP } from '../model/issues'
 import {
   canOwnOf,
+  mentionsOf,
   type OwnerChecks,
   type PeopleBatch,
   PICKERS,
@@ -1095,6 +1096,27 @@ describe("the pickers inside Convex's limits", () => {
       true,
     )
     expect(nobody.batch.rows).toEqual([])
+    // the editor's @ mention popup, whose rule is the recipients' sight
+    for (const [name, search] of [
+      ['mentions, first batch, 995 in a sharing team', undefined],
+      ['mentions, a search that matches nobody among 1,000 people', NOBODY],
+    ] as const) {
+      const read = await measured(t, (ctx) =>
+        mentionsOf(ctx, f.user, { issue_id: issue.id, ...(search ? { search } : {}) }),
+      )
+      if (read.answer.state !== 'ready') throw new Error(`${name}: ${read.answer.state}`)
+      console.info(`pickers: ${name}`, {
+        ranges: read.ranges,
+        documents: read.documents,
+        mib: read.mib,
+        rows: read.answer.rows.length,
+        stopped: read.answer.stopped,
+        end: read.answer.next === null,
+      })
+      expect(read.answer.stopped, name).toBe(false)
+      expect(read.answer.rows, name).toHaveLength(search ? 0 : MENTION_BATCH)
+      if (search) expect(read.answer.next, name).toBeNull()
+    }
     // the public queries answer the same under the deployment's limits
     expect(ready(await owners(t, f.user, issue.id, 'assignee')).rows).toEqual(first.batch.rows)
   }, 60_000)

@@ -2730,7 +2730,8 @@ async function deletedLeft(tag) {
  *
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
- *     the agents come from the mention popup's read (pickers.mentions), as
+ *     the agents come from Deleted items' people read
+ *     (deletedItems.people), whose rows tell an agent from a person, as
  *     the store holds nobody but Nora;
  *  2. with a temporary token for REST reads, projects (with their tasks,
  *     comments, files, grants and milestones), those REST lists and those
@@ -2808,22 +2809,22 @@ async function sweep(tag, label) {
         ),
       )
     ).filter((p) => !p.under && matches(p.name))
-  /** The agents with the tag in Nora's organization, from the mention
-   *  popup's read (P.mentionChoices, pickers.mentions), whose rows give an
-   *  agent no address, a batch at a time, as the store holds nobody but
-   *  Nora; a failed read is a failure. */
+  /** The agents with the tag in Nora's organization, from Deleted items'
+   *  people read (P.deletedPeople, deletedItems.people), whose rows tell
+   *  an agent from a person, a batch at a time, as the store holds nobody
+   *  but Nora; a failed read is a failure. */
   const taggedAgents = async () => {
     const org = await evaluate(app, () => window.PLANNER.homeOrg)
     return (
       await appBatches('agents', (cursor) =>
-        evaluate(app, ([o, search, after]) => window.PLANNER.mentionChoices(o, search, after), [
+        evaluate(app, ([o, search, after]) => window.PLANNER.deletedPeople(o, search, after), [
           org,
           searchOf(tag),
           cursor,
         ]),
       )
     )
-      .filter((p) => p.email === null && matches(p.name))
+      .filter((p) => p.kind === 'agent' && matches(p.name))
       .map((p) => ({ id: p.id, name: p.name, org }))
   }
   /** The keys of `agents`, read once in each agent's organization
@@ -6218,12 +6219,14 @@ export const LABEL_MENTION_NAMES = { found: 'Found in picker', made: 'Made in pi
  *  labels, and Enter makes it and puts it on the task, both checked over
  *  REST, before its chip's × takes it off. In the comment composer "@" and
  *  the Standard agent's name list the agent from the deployment's answer,
- *  Enter puts the mention in the draft, and the step then clears the
+ *  which offers only the people with access to the task's project, as the
+ *  agent has on Alpha, Enter puts the mention in the draft, and the step then clears the
  *  draft and presses Escape, so nothing posts and nobody is notified. The
  *  step deletes both labels in the app before it returns, also after a
  *  failure, so a later step's search for the run tag lists neither; the
  *  sweep deletes them by the run tag only when that failed too. A backend
- *  before the release that added pickers.mentions fails the mention part. */
+ *  before the release that gave pickers.mentions its task fails the mention
+ *  part. */
 async function labelMentionPickersCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
@@ -8945,7 +8948,7 @@ export const REMOVED_PARTS = ['workspace:people', 'workspace:catalog']
 /** The queries the step's menus read their rows from. */
 export const ROSTER_READS = {
   teams: 'teams:picker',
-  people: 'pickers:mentions',
+  people: 'pickers:orgPeople',
   followers: 'pickers:taskFollowers',
   board: 'tasks:board',
 }
@@ -8956,13 +8959,13 @@ export const ROSTER_READS = {
  *  alone (P.users). Team sync's scope menu finds the run's team by its
  *  tag through teams.picker, a pick names it on the trigger, and the
  *  agenda answers for its scope. M's Board's Assignee menu finds
- *  OWNER_PICKERS_PERSON through pickers.mentions, a pick sends the
+ *  OWNER_PICKERS_PERSON through pickers.orgPeople, a pick sends the
  *  Board's read with his id in its owners, and the filter's × clears it.
  *  The follower Add list offers only people who see the task's project,
  *  so the step gives him Viewer on Alpha, run.t0's sub-project, which the
  *  run otherwise shares with its agents alone, and run.t0's follower
- *  popover finds him by his address, from the mention read as a REST user
- *  row carries none, under + Add through pickers.taskFollowers and closes
+ *  popover finds him by his name, since no read gives the run his
+ *  address, under + Add through pickers.taskFollowers and closes
  *  without adding anyone. The grant goes once the follower half is done,
  *  and a failure clears the filter and Team sync's scope in a `finally`.
  *  There a grant the step may have left goes as a check of its own
@@ -9025,19 +9028,8 @@ async function rosterPartsCheck() {
       filtered = false
       await app.locator('[data-filter-x="assignee"]').first().waitFor({ state: 'detached' })
 
-      // run.t0's follower popover finds Leo by his address under + Add,
-      // once he sees Alpha. A REST user row carries no address, so it comes
-      // from the mention read the Assignee menu lists people from.
-      const org = await evaluate(app, () => window.PLANNER.homeOrg)
-      const people = await appBatches('people', (cursor) =>
-        evaluate(app, ([o, search, after]) => window.PLANNER.mentionChoices(o, search, after), [
-          org,
-          OWNER_PICKERS_PERSON,
-          cursor,
-        ]),
-      )
-      const address = people.find((p) => p.id === leo.id)?.email
-      expect(address, `the mention read gives ${leo.name} no address`)
+      // run.t0's follower popover finds Leo by his name under + Add, once
+      // he sees Alpha
       // the removal duty starts before the grant is sent, so a grant the
       // server committed whose answer was lost goes too
       granted = true
@@ -9051,7 +9043,7 @@ async function rosterPartsCheck() {
       await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
       await app.locator('[data-task-subscribe]').first().click()
       await app.locator('[data-task-subscriber-add-open]').first().click()
-      await app.locator('[data-task-subscriber-search]').first().fill(address)
+      await app.locator('[data-task-subscriber-search]').first().fill(leo.name)
       await app
         .locator(`[data-task-subscriber-add="${leo.id}"]`)
         .first()
@@ -9095,7 +9087,7 @@ async function rosterPartsCheck() {
         ),
         "the agenda was not read for the team's scope",
       )
-      return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${leo.name} in its Assignee menu and by his address in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
+      return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${leo.name} in its Assignee menu and by his name in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
     } finally {
       // a failure leaves the Board's filter and Team sync's scope as they
       // were: the filter's × on M's Board, and M's meeting by its address

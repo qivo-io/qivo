@@ -79,7 +79,7 @@ export const LABEL_WORDS: ChoiceWords = {
     its way, a failed Load more under the kept rows, and the cap. */
 export const MENTION_WORDS: ChoiceWords & { searching: string; failedMore: string; full: string } =
   {
-    held: (held) => heldLine(held, true),
+    held: (held) => taskHeldLine(held, "Qivo couldn't check who can be mentioned on this task."),
     searching: 'Searching…',
     failed: "Couldn't load people.",
     failedMore: "Couldn't load more people.",

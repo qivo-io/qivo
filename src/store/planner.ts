@@ -8718,7 +8718,9 @@ export type LabelChoices =
   | ({ state: 'ready' } & LabelPickerBatch)
   | { state: 'refused'; message: string }
 /** One answer of the editor's mention popup's read (P.mentionChoices,
-    pickers.mentions), or a refusal with the server's sentence. */
+    pickers.mentions) or of the view filter's Assignee menu's
+    (P.orgPeopleChoices, pickers.orgPeople), or a refusal with the server's
+    sentence. */
 export type MentionChoices =
   | FunctionReturnType<typeof api.pickers.mentions>
   | { state: 'refused'; message: string }
@@ -11289,7 +11291,8 @@ export const PLANNER = {
      people pickers read the server's people of the task's or project's
      organization: a task's owner lists and Team sync's Mention window
      (P.ownerChoices, P.recipientChoices and P.ownerChecks), the editor's @
-     mention popup and the view filter's Assignee menu (P.mentionChoices),
+     mention popup (P.mentionChoices), the view filter's Assignee menu
+     (P.orgPeopleChoices),
      the follower popover's Add list (P.followerChoices) and Settings' and
      the dialogs' people pickers. `user` names one of those seats. */
   /** Where the project cache stands on a project moveFamily needs facts of
@@ -13471,31 +13474,43 @@ export const PLANNER = {
     }
   },
 
-  /** One batch of the editor's @ mention popup for organization `org`
-      (pickers.mentions), read once and never subscribed to: the people
-      whose name, initials and email hold every word of `search`, after
-      `cursor`, an earlier answer's `next`, or from the start. A search past
-      its limit or a cursor the server no longer accepts answers `refused`
-      with the server's sentence, and a failed read null. */
-  mentionChoices: async (
+  /** One batch of the editor's @ mention popup for a text of task `task`
+      in organization `org` (pickers.mentions), read once and never
+      subscribed to: the people with access to the task's project whose
+      name and initials hold every word of `search`, after `cursor`, an
+      earlier answer's `next`, or from the start. A search past its limit
+      or a cursor the server no longer accepts answers `refused` with the
+      server's sentence, and a failed read null. */
+  mentionChoices: (
+    o: { org: string; task: string },
+    search: string,
+    cursor: string | null,
+  ): Promise<MentionChoices | null> =>
+    pickerRead('mention suggestions', () =>
+      convex.query(api.pickers.mentions, {
+        org_id: o.org,
+        issue_id: o.task,
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { after: cursor }),
+      }),
+    ),
+
+  /** One batch of the view filter's Assignee menu for organization `org`
+      (pickers.orgPeople), read and answered as P.mentionChoices: every
+      person of the organization whose name and initials hold every word
+      of `search`. */
+  orgPeopleChoices: (
     org: string,
     search: string,
     cursor: string | null,
-  ): Promise<MentionChoices | null> => {
-    try {
-      return await convex.query(api.pickers.mentions, {
+  ): Promise<MentionChoices | null> =>
+    pickerRead('people filter', () =>
+      convex.query(api.pickers.orgPeople, {
         org_id: org,
         ...(search === '' ? {} : { search }),
         ...(cursor === null ? {} : { after: cursor }),
-      })
-    } catch (e) {
-      const { code, message } = errData(e)
-      if (code === 'bad_request' || code === 'rule')
-        return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
-      console.error('[qivo] mention suggestions read failed:', e)
-      return null
-    }
-  },
+      }),
+    ),
 
   /** One batch of organization `org`'s teams for Team sync's scope menu
       (teams.picker), read once and never subscribed to: the teams whose
