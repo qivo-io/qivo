@@ -226,7 +226,11 @@
  * unzips it and checks its format 4 manifest, t0 in data/tasks, its
  * deleted task in deleted/tasks and deleted/items, no file contents and
  * its size, and that the record line shows today; it deletes the file
- * and its Deleted item for good afterwards (ui/org-export).
+ * and its Deleted item for good afterwards (ui/org-export). In a browser
+ * without a save picker, Firefox and WebKit, the page saves by its
+ * download link instead, so the step reads the file the browser
+ * downloaded, checks the same archive, and checks that nothing recorded
+ * the save, which the app cannot confirm.
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
  * the project's Overview, which opens the Milestones window on the
@@ -294,7 +298,9 @@
  * Notification delivery control must round-trip All enabled sessions and
  * back from the server, a mention must reach the leader's alerts alone,
  * and the other page must take over when the leader closes; the step puts
- * the mode back and signs its context out (ui/notification-delivery).
+ * the mode back and signs its context out (ui/notification-delivery). Both
+ * alert steps report SKIP in a browser whose pages get no notification
+ * permission, which is Playwright's WebKit.
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -318,8 +324,9 @@
  * line goes through redact(). Screenshots are off unless --shots names a
  * directory, and never taken while a secret or a password field is on screen.
  * With --shots each failed step leaves a picture of the app's page as
- * failed-<step>.png, and a step that timed out waiting for an element names
- * that element in its FAIL line.
+ * failed-<step>.png, with each / of the step as -, such as
+ * failed-ui-org-export.png, and a step that timed out waiting for an
+ * element names that element in its FAIL line.
  *
  *   staging, from the application checkout (see docs/deployment.md):
  *     "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
@@ -754,6 +761,10 @@ function describe(error) {
   return `${error?.name ?? 'Error'}: ${first.slice(0, 200)}${waited ? ` (${waited})` : ''}`
 }
 
+/** The file name, without .png, of the picture a failed step `id` leaves
+ *  under --shots: `failed-` and the id with each / as -. */
+export const failedShot = (id) => `failed-${id.replaceAll('/', '-')}`
+
 /** Set by the first Ctrl-C, SIGTERM or SIGHUP: the run stops before its
  *  next check and goes on to cleanup. A second signal exits at once. */
 let interrupted = false
@@ -770,7 +781,7 @@ async function check(id, fn) {
     results.fail.push(id)
     say('FAIL', id, describe(error))
     // the app's page as the step left it, with --shots
-    await shot(app, `failed-${id.replaceAll('/', '-')}`).catch(() => {})
+    await shot(app, failedShot(id)).catch(() => {})
     return false
   }
 }
@@ -826,6 +837,24 @@ export async function evaluate(target, fn, arg, ms = 30_000) {
           () => reject(new Error(`a call in the page gave no answer in ${ms / 1000} s`)),
           ms,
         )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** `promise`, or a failure that says `what` once `ms` have passed. For a
+ *  wait Playwright gives no timeout, such as a download's file or a count
+ *  on a page that no longer answers, which would otherwise hold up the run
+ *  and its cleanup. */
+export async function within(promise, ms, what) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(what)), ms)
       }),
     ])
   } finally {
@@ -1708,22 +1737,41 @@ async function routeBypass(target) {
   )
 }
 
+/** How long a failure's screenshot waits for the page, so a page that no
+ *  longer answers never holds up the next step or the cleanup. */
+const SHOT_MS = 15_000
+
 /** Screenshot for a failure, only with --shots and never while a secret or
  *  password field is on screen. */
 async function shot(page, name) {
-  if (!cfg.shots || !page) return
-  const revealing = await page
-    .locator(
-      '[data-fresh-token], [data-fresh-key], [data-fresh-agent], [data-new-mcp-token="created"], input[type="password"]',
+  if (!cfg.shots || !page || page.isClosed()) return
+  // a page that does not answer within SHOT_MS gets no picture, since
+  // whether it shows a secret is then unknown
+  let revealing
+  try {
+    revealing = await within(
+      page
+        .locator(
+          '[data-fresh-token], [data-fresh-key], [data-fresh-agent], [data-new-mcp-token="created"], input[type="password"]',
+        )
+        .count(),
+      SHOT_MS,
+      'the page gave no answer',
     )
-    .count()
-    .catch(() => 1)
+  } catch {
+    say('NOTE', 'screenshot', `${name} skipped because the page could not be read`)
+    return
+  }
   if (revealing) {
     say('NOTE', 'screenshot', `${name} skipped because a secret or password field is on screen`)
     return
   }
   mkdirSync(cfg.shots, { recursive: true })
-  await page.screenshot({ path: join(cfg.shots, `${name}.png`) }).catch(() => {})
+  await within(
+    page.screenshot({ path: join(cfg.shots, `${name}.png`) }),
+    SHOT_MS,
+    'the page gave no picture',
+  ).catch(() => {})
 }
 
 async function signIn(account) {
@@ -1993,10 +2041,12 @@ async function openUsers() {
  *  says nothing matches. The search goes to the server once typing rests.
  *  In some runs the field is empty again a moment after the typing, in
  *  Chromium and in WebKit, for a cause not found. The step
- *  then types again and says so in a NOTE, with whether the field is
- *  still the element it typed into, so each time leaves its evidence. */
+ *  then types again, once, and says so in a NOTE, with whether the field
+ *  is still the element it typed into, so each time leaves its evidence.
+ *  A field that loses its text a second time fails the step. */
 async function searchUsers(text) {
   const field = app.locator('[data-users-search]')
+  let retyped = false
   const type = async () => {
     await field.fill(text)
     await field.evaluate((el) => {
@@ -2011,6 +2061,8 @@ async function searchUsers(text) {
         same: el.stgchkTyped === true,
       }))
       if (now.value !== text) {
+        expect(!retyped, 'the Users search lost its typed text twice')
+        retyped = true
         say(
           'NOTE',
           'users-search',
@@ -2038,10 +2090,18 @@ async function searchUsers(text) {
   )
 }
 
+/** `text` as the server compares names: without accents and in lower case. */
+const folded = (text) => text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+
 /** Whether an open picker's list shows the answer of the search `text`:
- *  it has rows, and each row's text holds the search. */
-export const listAnswers = (texts, text) =>
-  texts.length > 0 && texts.every((row) => row.toLowerCase().includes(text.toLowerCase()))
+ *  it has rows, and each row's text holds every word of the search, in any
+ *  order and whatever the accents and the case, as the server matches a
+ *  name (convex/lib/search.ts). A row the server found by an address or by
+ *  initials alone does not count, so the step searches by names. */
+export const listAnswers = (texts, text) => {
+  const words = folded(text).split(/\s+/).filter(Boolean)
+  return texts.length > 0 && texts.every((row) => words.every((word) => folded(row).includes(word)))
+}
 
 /** Types `text` into an open picker's `search` and presses `choice` once
  *  `rows`, the list's choices, show the search's answer (listAnswers). A
@@ -2049,7 +2109,9 @@ export const listAnswers = (texts, text) =>
  *  answer once typing has rested, emptying the list in between, and a press
  *  that lands on a row as it goes is lost. Chromium and Firefox press
  *  before the list changes. Playwright's WebKit presses about as late as
- *  the search rests, and lost such presses. */
+ *  the search rests, and lost such presses. A list whose rows are off until
+ *  the search is answered, such as the Board's Assignee menu, needs no such
+ *  wait, since a press waits for its row to be on. */
 async function pressSearched(search, text, rows, choice) {
   await search.fill(text)
   expect(
@@ -6884,7 +6946,12 @@ async function phoneSelectsCheck() {
           rows.push({ ...row, paints: !before.equals(after) })
         }
         read += rows.length
-        problems.push(...selectProblems(name, rows))
+        const found = selectProblems(name, rows)
+        // at phone size, since the step's own picture comes after the
+        // viewport went back
+        if (found.length > 0)
+          await shot(app, `${failedShot(PHONE_SELECTS_STEP)}-${path.replaceAll('/', '-')}`)
+        problems.push(...found)
       }
       expect(problems.length === 0, problems.join('; '))
       return `${read} closed dropdowns on ${phoneSelectPages(M.num).length} pages show their chosen text at phone size`
@@ -7623,31 +7690,57 @@ async function inboxListCheck() {
 const NO_NOTIFICATIONS =
   'this browser gives its pages no notification permission, so no page leads the alerts'
 
-let notifications
-
-/** Whether a page of this browser gets the notification permission the run
- *  grants its context, read once on a page of the app's origin in a context
- *  of its own. Only a page with it leads the alerts (src/lib/notify.ts
- *  canNotify), which the alert steps need. Chromium is taken to give it, so
- *  a Chromium that does not fails those steps as before. Playwright's
- *  WebKit keeps a page's permission at its default whatever the context
- *  grants. */
-async function notificationsGranted() {
-  if (cfg.browser === 'chromium') return true
-  if (notifications !== undefined) return notifications
+/** Whether a page of `browser` gets the notification permission a context
+ *  grants `origin`, read on a page of that origin in a context of its own.
+ *  False for a browser that knows no such permission and for a page that
+ *  reads its permission as not granted, as in Playwright's WebKit, which
+ *  keeps a page's permission at its default whatever the context grants.
+ *  Any other failure is thrown, since it says nothing about the browser. */
+export async function notificationPermission(browser, origin) {
   const own = await browser.newContext()
   try {
-    await own.grantPermissions(['notifications'], { origin: cfg.appOrigin })
+    try {
+      await own.grantPermissions(['notifications'], { origin })
+    } catch (error) {
+      if (/unknown permission/i.test(String(error?.message))) return false
+      throw error
+    }
     const page = await own.newPage()
-    await page.goto(`${cfg.appOrigin}/app`, { waitUntil: 'domcontentloaded' })
-    notifications = await page.evaluate(
+    await page.goto(`${origin}/app`, { waitUntil: 'domcontentloaded' })
+    return await evaluate(
+      page,
       () => typeof Notification === 'function' && Notification.permission === 'granted',
     )
-  } catch {
-    notifications = false
   } finally {
     await own.close().catch(() => {})
   }
+}
+
+let notifications
+
+/** Whether the alert step `id` can run, which needs a page that leads the
+ *  alerts, and only a page with the notification permission does
+ *  (src/lib/notify.ts canNotify). Chromium is taken to give it, so a
+ *  Chromium that does not fails the step as before. Another browser is
+ *  asked once (notificationPermission). Without the permission the step
+ *  reports SKIP. When the permission could not be read the step reports
+ *  FAIL, and the next alert step asks again. */
+async function alertsCan(id) {
+  if (cfg.browser === 'chromium') return true
+  if (notifications === undefined) {
+    try {
+      notifications = await notificationPermission(browser, cfg.appOrigin)
+    } catch (error) {
+      results.fail.push(id)
+      say(
+        'FAIL',
+        id,
+        `this browser's notification permission could not be read: ${describe(error)}`,
+      )
+      return false
+    }
+  }
+  if (!notifications) skip(id, NO_NOTIFICATIONS)
   return notifications
 }
 
@@ -7707,7 +7800,7 @@ async function inboxFeedCheck() {
   const { t0, nora } = run
   const { M } = run.projects
   const marks = INBOX_FEED_MARKS
-  if (!(await notificationsGranted())) return skip(INBOX_FEED_STEP, NO_NOTIFICATIONS)
+  if (!(await alertsCan(INBOX_FEED_STEP))) return
   await check(INBOX_FEED_STEP, async () => {
     const origin = cfg.appOrigin
     await context.grantPermissions(['notifications'], { origin })
@@ -7944,7 +8037,7 @@ async function notificationDeliveryCheck() {
   const s = run.creds.stdKey
   const { t0, nora } = run
   const marks = NOTIFICATION_DELIVERY_MARKS
-  if (!(await notificationsGranted())) return skip(NOTIFICATION_DELIVERY_STEP, NO_NOTIFICATIONS)
+  if (!(await alertsCan(NOTIFICATION_DELIVERY_STEP))) return
   await check(NOTIFICATION_DELIVERY_STEP, async () => {
     const origin = cfg.appOrigin
     const own = await browser.newContext({ viewport: { width: 1360, height: 900 } })
@@ -9577,8 +9670,12 @@ async function projectDialogsCheck() {
       "Nora's automatic level",
     )
     const search = app.locator('[data-project-access-search]')
-    await search.fill(team.name)
-    await app.locator(`[data-project-access-team-option="${team.id}"]`).click({ timeout: 30_000 })
+    await pressSearched(
+      search,
+      team.name,
+      app.locator('[data-project-access-team-option]'),
+      app.locator(`[data-project-access-team-option="${team.id}"]`),
+    )
     await app
       .locator(`[data-project-team-role="${team.id}"]`)
       .selectOption(PROJECT_DIALOGS_EXPECTED.team)
@@ -10951,6 +11048,14 @@ export const ORG_EXPORT_PICKER = `(() => {
 /** How long the step waits for the export to be ready. */
 export const ORG_EXPORT_READY_MS = 5 * 60_000
 
+/** How long the step waits for a started download of the archive to end. */
+export const ORG_EXPORT_DOWNLOAD_MS = 2 * 60_000
+
+/** How a page saves an export (src/lib/orgExport.ts exportWay, outside the
+ *  desktop app): into a chosen file in a secure context that has a save
+ *  picker, else by its download link. */
+export const exportWayOf = ({ secure, picker }) => (secure && picker ? 'file' : 'link')
+
 /** Settings › Organization › General › Export data on the deployment's
  *  export job (orgExport.request, status and claimDownload, the /exports/
  *  route) and its record (orgRemovals.recordExport), as Nora on t0's
@@ -10966,8 +11071,10 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  then until that job is ready (ORG_EXPORT_READY_MS for both, the time
  *  it took in its note). By the link the browser must then start a
  *  download and the section say it was sent, and the step reads the
- *  downloaded file, which the app cannot confirm, so no record is
- *  expected. Into a file it waits
+ *  downloaded file, the last the page started and ended within
+ *  ORG_EXPORT_DOWNLOAD_MS. The app cannot confirm a download, so the
+ *  step checks that no saved line or record mark shows and that the
+ *  record line is as before. Into a file it waits
  *  for the saved line and the recorded mark and reads the file back from the
  *  origin private file system. Either way it unzips the file with fflate and checks the
  *  manifest (format qivo-organization-export, version 4, the
@@ -11001,6 +11108,9 @@ async function orgExportCheck() {
     const r = await rest(w, 'DELETE', `/tasks/${gone.id}`)
     expect(r.status === 200, `DELETE ${gone.key} answered HTTP ${r.status}`)
     let itemId = null
+    // the downloads the page starts, by the link way
+    const downloads = []
+    const onDownload = (download) => downloads.push(download)
     await context.addInitScript(ORG_EXPORT_PICKER)
     try {
       await evaluate(app, (flag) => sessionStorage.setItem(flag, '1'), ORG_EXPORT_PICKER_FLAG)
@@ -11013,20 +11123,23 @@ async function orgExportCheck() {
         await until(async () => (await section.getAttribute(m.state)) !== 'unknown', 60_000),
         'the export section never read the deployment',
       )
-      const way = (await evaluate(
-        app,
-        () => window.isSecureContext && typeof window.showSaveFilePicker === 'function',
-      ))
-        ? 'file'
-        : 'link'
+      const way = exportWayOf(
+        await evaluate(app, () => ({
+          secure: window.isSecureContext,
+          picker: typeof window.showSaveFilePicker === 'function',
+        })),
+      )
+      // Chromium has a save picker, so there the file way is checked, never
+      // passed over
+      if (cfg.browser === 'chromium') eq(way, 'file', 'how Chromium saves an export')
       eq(await section.getAttribute(m.delivery), way, 'how the page saves an export')
       // by the link the browser downloads the archive once it is ready
-      const downloading =
-        way === 'link'
-          ? app
-              .waitForEvent('download', { timeout: ORG_EXPORT_READY_MS + 120_000 })
-              .catch(() => null)
-          : null
+      if (way === 'link') app.on('download', onDownload)
+      const lastExport = async () => {
+        const line = app.locator(`[${m.lastExport}]`)
+        return (await line.count()) > 0 ? ((await line.first().textContent()) ?? '').trim() : ''
+      }
+      const recordedBefore = await lastExport()
       const before = await section.getAttribute(m.state)
       if (before === 'collecting')
         throw new Error('an export of the organization is already being prepared')
@@ -11054,17 +11167,35 @@ async function orgExportCheck() {
       const took = Math.round((Date.now() - started) / 1000)
       let zip
       if (way === 'link') {
-        const download = await downloading
-        expect(download !== null, 'the browser started no download of the ready export')
         expect(
           await until(async () => (await app.locator(`[${m.sent}]`).count()) > 0, 60_000),
           'the page never said that the browser is downloading the export',
         )
+        expect(
+          await until(() => downloads.length > 0, 60_000),
+          'the browser started no download of the ready export',
+        )
+        // the last one: an earlier job's download, started as the page
+        // opened, comes before this job is ready
+        const download = downloads[downloads.length - 1]
         try {
-          zip = new Uint8Array(readFileSync(await download.path()))
-        } finally {
-          await download.delete().catch(() => {})
+          zip = new Uint8Array(
+            readFileSync(
+              await within(
+                download.path(),
+                ORG_EXPORT_DOWNLOAD_MS,
+                `the download of the export did not finish in ${ORG_EXPORT_DOWNLOAD_MS / 60_000} minutes`,
+              ),
+            ),
+          )
+        } catch (error) {
+          await download.cancel().catch(() => {})
+          throw error
         }
+        // nothing confirms a download, so nothing may record the save
+        eq(await app.locator(`[${m.recorded}]`).count(), 0, 'record marks after a download')
+        eq(await app.locator(`[${m.saved}]`).count(), 0, 'saved lines after a download')
+        eq(await lastExport(), recordedBefore, 'the record line after a download')
       } else {
         const recorded = app.locator(`[${m.recorded}]`)
         expect(
@@ -11133,6 +11264,8 @@ async function orgExportCheck() {
       )
       return `prepared t0's organization's export in ${took} s, saved ${bytes} bytes into the chosen file, recorded it, and found ${run.t0.key} and the deleted ${gone.key} in the archive`
     } finally {
+      app.off('download', onDownload)
+      for (const download of downloads) await download.delete().catch(() => {})
       await evaluate(
         app,
         async ([flag, name]) => {

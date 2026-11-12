@@ -100,7 +100,9 @@ jobs:
             curl -sf "$BACKEND_URL/version" > /dev/null && break
             sleep 1
           done
-          curl -sf "$BACKEND_URL/version" > /dev/null
+          # the end of its log says why a backend did not start. The whole
+          # log is not kept, since it can hold what functions print.
+          curl -sf "$BACKEND_URL/version" > /dev/null || { tail -n 40 "$STACK/backend.log"; exit 1; }
 
       - name: Deploy the functions to it
         run: |
@@ -123,7 +125,7 @@ jobs:
             curl -sf "$APP_URL/app" > /dev/null && break
             sleep 1
           done
-          curl -sf "$APP_URL/app" > /dev/null
+          curl -sf "$APP_URL/app" > /dev/null || { tail -n 40 "$STACK/app.log"; exit 1; }
 
       - name: Seed the Northstar fixture
         env:
@@ -157,7 +159,7 @@ jobs:
             echo
             echo '```'
             if [ -f "$STACK/out/staging-check.log" ]; then
-              grep -E '^(FAIL|SKIP|DONE)|^NOTE +browser' "$STACK/out/staging-check.log" | cut -c1-400 \
+              grep -E '^(FAIL|SKIP|DONE)|^NOTE +(browser|users-search)' "$STACK/out/staging-check.log" | cut -c1-400 \
                 || echo "The check printed no result line."
             else
               echo "The check did not start."

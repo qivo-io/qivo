@@ -53,8 +53,10 @@ import {
   directoryGroups,
   evaluate,
   exportItemOf,
+  exportWayOf,
   FIXTURE_STATUS,
   FORMERLY_BARE,
+  failedShot,
   freeMilestoneWeek,
   freePastMilestoneWeek,
   HIDDEN_TASK_WINDOW_STEP,
@@ -99,9 +101,11 @@ import {
   NOTIFICATION_DELIVERY_STEP,
   newerWalk,
   notificationCall,
+  notificationPermission,
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
+  ORG_EXPORT_DOWNLOAD_MS,
   ORG_EXPORT_FILE,
   ORG_EXPORT_MARKS,
   ORG_EXPORT_PICKER,
@@ -202,6 +206,7 @@ import {
   waitedFor,
   weekOf,
   wholeBatchNames,
+  within,
   withQuery,
   workloadPeople,
 } from './staging-check.mjs'
@@ -620,7 +625,9 @@ describe('staging check REST contract', () => {
     expect(step.indexOf("await dialog.locator('[data-new-project-access]').click()")).toBeLessThan(
       step.indexOf(mine),
     )
-    expect(step.indexOf(mine)).toBeLessThan(step.indexOf('await search.fill(team.name)'))
+    const teamSearch = step.indexOf('await pressSearched(\n      search,\n      team.name,')
+    expect(teamSearch).toBeGreaterThan(-1)
+    expect(step.indexOf(mine)).toBeLessThan(teamSearch)
     // its project goes in the cleanup
     expect(check).toContain(
       'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
@@ -1241,10 +1248,26 @@ describe('staging check REST contract', () => {
     // a browser without a save picker gets none, so its page keeps the link
     expect(stand('1', false)).toBeUndefined()
     // by the link the step reads the browser's download, which nothing records
-    const link = step.slice(step.indexOf("if (way === 'link') {"), step.indexOf('} else {'))
-    expect(link).toContain('await download.path()')
+    const from = step.indexOf("      if (way === 'link') {\n        expect(")
+    expect(from).toBeGreaterThan(-1)
+    const link = step.slice(from, step.indexOf('\n      } else {', from))
     expect(link).toContain('m.sent')
-    expect(link).not.toContain('m.recorded')
+    // the download's file is waited for with a bound and cancelled past it
+    expect(link).toMatch(/await within\(\s*download\.path\(\),\s*ORG_EXPORT_DOWNLOAD_MS,/)
+    expect(link).toContain('await download.cancel()')
+    // nothing may record a save the app could not confirm
+    for (const none of [
+      "m.recorded}]`).count(), 0, 'record marks after a download')",
+      "m.saved}]`).count(), 0, 'saved lines after a download')",
+      "eq(await lastExport(), recordedBefore, 'the record line after a download')",
+    ])
+      expect(link, none).toContain(none)
+    // Chromium never passes over the file way
+    expect(step).toContain("if (cfg.browser === 'chromium') eq(way, 'file',")
+    expect(exportWayOf({ secure: true, picker: true })).toBe('file')
+    expect(exportWayOf({ secure: true, picker: false })).toBe('link')
+    expect(exportWayOf({ secure: false, picker: true })).toBe('link')
+    expect(ORG_EXPORT_DOWNLOAD_MS).toBe(2 * 60_000)
   })
 
   it("takes the export step's Deleted item only from an answered search, as the one row of the task's key and title", () => {
@@ -1972,8 +1995,10 @@ describe('staging check REST contract', () => {
     expect(IMAGE_SPACER.length).toBeGreaterThan(500)
     const step = check.slice(
       check.indexOf('async function descriptionImagesCheck()'),
-      check.indexOf('export const TEAM_SYNC_STEP'),
+      check.indexOf('export const PHONE_SELECTS_STEP'),
     )
+    expect(step.length).toBeGreaterThan(1000)
+    expect(step).not.toContain('async function phoneSelectsCheck()')
     expect(step).toContain('setViewportSize({ width: 390, height: 844 })')
     // a phone's window shows the description under Details
     expect(step).toContain("getByText('Details', { exact: true })")
@@ -2493,9 +2518,105 @@ describe('what a timeout waited for', () => {
   })
 })
 
+describe('a wait with a bound', () => {
+  it('answers a promise that settles in time and fails one that does not', async () => {
+    await expect(within(Promise.resolve('file'), 1000, 'too late')).resolves.toBe('file')
+    await expect(within(new Promise(() => {}), 10, 'the download did not finish')).rejects.toThrow(
+      'the download did not finish',
+    )
+    await expect(within(Promise.reject(new Error('cancelled')), 1000, 'too late')).rejects.toThrow(
+      'cancelled',
+    )
+  })
+})
+
+describe("a failed step's picture", () => {
+  it('is named after the step, with each / as -', () => {
+    expect(failedShot('ui/org-export')).toBe('failed-ui-org-export')
+    expect(failedShot('standard-agent/ui/remove')).toBe('failed-standard-agent-ui-remove')
+    expect(failedShot('run')).toBe('failed-run')
+  })
+})
+
+describe("a browser's notification permission", () => {
+  /** A stand-in browser whose one context answers as `over` says. */
+  const browserOf = (over = {}) => {
+    const seen = { closed: 0, visited: null, granted: null }
+    const page = {
+      goto: async (url) => {
+        if (over.goto) throw over.goto
+        seen.visited = url
+      },
+      evaluate: async () => over.permission ?? true,
+    }
+    const context = {
+      grantPermissions: async (names, options) => {
+        if (over.grant) throw over.grant
+        seen.granted = [names, options]
+      },
+      newPage: async () => page,
+      close: async () => {
+        seen.closed++
+      },
+    }
+    return {
+      seen,
+      newContext: async () => {
+        if (over.context) throw over.context
+        return context
+      },
+    }
+  }
+  const origin = 'http://localhost:5241'
+
+  it('is what a page of the app reads once the context granted it', async () => {
+    const browser = browserOf()
+    expect(await notificationPermission(browser, origin)).toBe(true)
+    expect(browser.seen.granted).toEqual([['notifications'], { origin }])
+    expect(browser.seen.visited).toBe(`${origin}/app`)
+    expect(browser.seen.closed).toBe(1)
+    expect(await notificationPermission(browserOf({ permission: false }), origin)).toBe(false)
+  })
+  it('is none in a browser that knows no such permission', async () => {
+    const browser = browserOf({ grant: new Error('Unknown permission: notifications') })
+    expect(await notificationPermission(browser, origin)).toBe(false)
+    expect(browser.seen.closed).toBe(1)
+  })
+  it('is unknown, and thrown, when the context, the grant or the page fails otherwise', async () => {
+    for (const over of [
+      { context: new Error('browser has been closed') },
+      { grant: new Error('Target closed') },
+      { goto: new Error('net::ERR_CONNECTION_RESET') },
+    ]) {
+      const browser = browserOf(over)
+      await expect(notificationPermission(browser, origin)).rejects.toThrow(
+        Object.values(over)[0].message,
+      )
+      expect(browser.seen.closed).toBe(over.context ? 0 : 1)
+    }
+  })
+  it('skips an alert step only for a known lack of it, and fails it when unknown', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const can = script.slice(
+      script.indexOf('async function alertsCan(id) {'),
+      script.indexOf('/** The step that checks a desktop alert'),
+    )
+    expect(can).toContain("if (cfg.browser === 'chromium') return true")
+    expect(can.indexOf('results.fail.push(id)')).toBeGreaterThan(can.indexOf('} catch (error) {'))
+    expect(can).toContain('if (!notifications) skip(id, NO_NOTIFICATIONS)')
+    // an unread permission stays unset, so the next alert step asks again
+    expect(can.slice(can.indexOf('} catch (error) {'))).not.toContain('notifications = ')
+    for (const step of ['INBOX_FEED_STEP', 'NOTIFICATION_DELIVERY_STEP'])
+      expect(script).toContain(`if (!(await alertsCan(${step}))) return`)
+  })
+})
+
 describe('a picker list that shows its search', () => {
-  it('holds rows that all name the search, whatever the case', () => {
+  it('holds rows that all name every word of the search, in any order, whatever the case and the accents', () => {
     expect(listAnswers(['Nora Berg'], 'nora berg')).toBe(true)
+    expect(listAnswers(['Berg, Nóra'], 'Nora  Berg')).toBe(true)
+    expect(listAnswers(['Nora Lindberg'], 'Nora Berg')).toBe(true)
+    expect(listAnswers(['Nora Lind'], 'Nora Berg')).toBe(false)
     expect(
       listAnswers(
         ['stgchk-1 Standard agentagent', 'stgchk-1 Standard agent 2'],
@@ -2507,7 +2628,7 @@ describe('a picker list that shows its search', () => {
     expect(listAnswers(['Aisha Rahman', 'Nora Berg'], 'Nora Berg')).toBe(false)
     expect(listAnswers([], 'Nora Berg')).toBe(false)
   })
-  it('is what every searched press of a person or a parent waits for', () => {
+  it('is what the searched presses of these pickers wait for, each on its own rows', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     for (const search of [
       'data-team-member-picker-search',
@@ -2517,7 +2638,22 @@ describe('a picker list that shows its search', () => {
       'data-new-subproject-parent-search',
     ])
       expect(script, search).not.toContain(`[${search}]').fill(`)
-    expect(script.match(/await pressSearched\(/g)).toHaveLength(6)
+    expect(script).not.toContain('await search.fill(team.name)')
+    const calls = script.split('await pressSearched(').slice(1)
+    expect(calls).toHaveLength(7)
+    const rows = calls.map(
+      (call) => /app\.locator\('(\[data-[^']+)'\),\n\s+app\.locator\(`/.exec(call)?.[1],
+    )
+    expect(rows).toEqual([
+      '[data-team-member-choice]',
+      // the people; the row that names no one stays whatever the search
+      '[data-reassign-choice]:not([data-reassign-choice=""])',
+      '[data-project-access-choice]',
+      '[data-lead-choice]',
+      '[data-project-access-team-option]',
+      '[data-new-subproject-parent-choice]',
+      '[data-lead-choice]',
+    ])
   })
 })
 
