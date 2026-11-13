@@ -6,7 +6,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { api } from '../../convex/_generated/api'
 import { authClient } from '../lib/auth'
-import { SIGN_OUT_FAILED } from '../lib/authSession'
 import { connectionScopeLabel, connectionScopes, consentFailure } from '../lib/oauthConnection'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { P } from '../store/planner'
@@ -18,9 +17,8 @@ export function OAuthConnect({
   onUseAnotherAccount,
 }: {
   oauthQuery: string
-  /** Signs out to use another account. Resolves false when the server
-      could not sign the person out now, so this page stays and says so. */
-  onUseAnotherAccount: () => Promise<boolean>
+  /** Signs out to use another account, then reloads the page. */
+  onUseAnotherAccount: () => void
 }) {
   const [context, setContext] = useState<Context | null>(null)
   const [allowChanges, setAllowChanges] = useState(true)
@@ -77,12 +75,11 @@ export function OAuthConnect({
     }
   }
 
-  const switchAccount = async () => {
+  // The sign-out ends in a reload, so the controls stay held from here on.
+  const switchAccount = () => {
     setSigningOut(true)
     setError('')
-    if (await onUseAnotherAccount()) return
-    setError(SIGN_OUT_FAILED)
-    setSigningOut(false)
+    onUseAnotherAccount()
   }
 
   if (!context) {
@@ -128,7 +125,7 @@ export function OAuthConnect({
         size="sm"
         className="mt-1 -ml-2"
         disabled={locked}
-        onClick={() => void switchAccount()}
+        onClick={switchAccount}
       >
         {signingOut ? 'Signing out…' : 'Use another account'}
       </Button>

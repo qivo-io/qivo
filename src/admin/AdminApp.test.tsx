@@ -3,11 +3,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { SIGN_OUT_FAILED, SignOutFailed } from '../lib/authSession'
 
 /* The console's sign-out buttons, in the desktop nav and the compact header.
    Only the operator session is replaced, so the real signOutAndReload in
-   ./auth turns its answer into a reload or a sentence to show. */
+   ./auth reloads the page once the sign-out ends. */
 
 const session = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<void>>(async () => {}),
@@ -67,11 +66,11 @@ describe('the console sign-out', () => {
   it.each([
     ['the nav', 0],
     ['the compact header', 1],
-  ])('from %s shows the refusal and gives both buttons back', async (_, which) => {
-    let refuse!: () => void
+  ])('from %s holds both buttons until it ends, then reloads the page', async (_, which) => {
+    let end!: () => void
     session.signOut.mockReturnValueOnce(
-      new Promise((_resolve, reject) => {
-        refuse = () => reject(new SignOutFailed())
+      new Promise((resolve) => {
+        end = resolve
       }),
     )
     const buttons = await render()
@@ -80,19 +79,10 @@ describe('the console sign-out', () => {
     expect(held(buttons)).toEqual([true, true])
     // the compact button's name, which replaces its text for assistive technology
     expect(buttons[1].getAttribute('aria-label')).toBe('Signing out…')
-
-    await act(async () => refuse())
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(SIGN_OUT_FAILED)
-    expect(labels(buttons)).toEqual(['Sign out', 'Sign out'])
-    expect(held(buttons)).toEqual([false, false])
-    expect(buttons[1].getAttribute('aria-label')).toBe('Sign out')
     expect(reload).not.toHaveBeenCalled()
-  })
 
-  it('reloads the page once the server signs the operator out', async () => {
-    const [nav] = await render()
-    await act(async () => nav.click())
+    await act(async () => end())
     expect(reload).toHaveBeenCalledOnce()
-    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(held(buttons)).toEqual([true, true])
   })
 })

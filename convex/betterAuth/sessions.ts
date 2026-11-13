@@ -10,7 +10,7 @@ import { query } from './_generated/server'
 
 /** The login of session `sessionId`, or null unless that session exists,
  * has not expired and belongs to `userId`, and that login exists. One call
- * proves what the adapter's safeGetAuthUser (left out of Qivo's copy)
+ * proves what the adapter's safeGetAuthUser, which Qivo does not call,
  * proves with two adapter.findOne calls, and also that the session is the
  * login's. An expiry that is not a number refuses, as the adapter's `gt`
  * filter does. */

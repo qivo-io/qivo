@@ -2492,6 +2492,28 @@ backend, such as a tab left open, say **Couldn't load people.** in both
 menus until the tab reloads or the backend rolls forward. The release changes
 no table, field or index and has no backfill and no release step.
 
+From the release after v0.1.166, Qivo runs the official Convex adapter for
+Better Auth, `@convex-dev/better-auth` 0.13.0, with Better Auth 1.7.21, in
+place of its own copy of the adapter and Better Auth 1.7.12 (owner decision,
+13 November 2026, [Better Auth and the Convex adapter](better-auth-upgrade.md)).
+Logins, password hashes, sessions, OAuth clients, consents, grants and tokens
+are stored as before, so nobody signs in again and no MCP client reconnects.
+A sign-in answers without a token cookie and clears the one the browser
+holds, and the app asks `/api/auth/convex/token` for its token, as every
+earlier app does. A sign-out signs the browser out whatever the server
+answers, and the server no longer answers one it could not complete with
+HTTP `503` and `SIGN_OUT_FAILED`. An earlier app against this backend, such
+as a tab left open, signs in and out as before. This app against an earlier
+backend does too, except that it signs the browser out where that backend
+answers `503`. A completed sign-out now also forgets a session that another
+tab of the same page stored while the request ran, and that tab signs in
+again. The release adds four indexes to the auth component, which Convex
+builds when it deploys, and removes none: `accountId_providerId_userId` on
+`account`, `clientId` on `oauthConsent`, `clientId_userId` on
+`oauthAccessToken` and `clientId_referenceId_userId` on `oauthRefreshToken`.
+It changes no table or field and has no backfill and no release step, and
+the backend may return to an earlier commit, which drops those indexes.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

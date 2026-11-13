@@ -1,8 +1,8 @@
 /* The caller's login, read without loading Better Auth. The adapter's own
- * safeGetAuthUser and getAuthUser, which Qivo's copy of it
- * (vendor/convex-better-auth) leaves out, ran through auth.ts's
- * authComponent, with its whole Better Auth closure and two nested calls
- * into the component's adapter, which loads it again in the component.
+ * safeGetAuthUser and getAuthUser (@convex-dev/better-auth), which Qivo does
+ * not call, run through auth.ts's authComponent, with its whole Better Auth
+ * closure and two nested calls into the component's adapter, which loads it
+ * again in the component.
  * Functions that run often, such as
  * each call of a demo start (demo.ts ensureMine) and every app boot
  * (identity.ts claimMySeats), read the login here instead. This module

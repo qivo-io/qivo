@@ -230,23 +230,6 @@ describe('a router whose import of auth.ts succeeds', () => {
     vi.resetModules()
   })
 
-  it('hands Better Auth the host and protocol a proxy forwarded', async () => {
-    const response = await fetchOf(newT(), '/api/auth/get-session', {
-      headers: {
-        Origin: APP,
-        'x-better-auth-forwarded-host': 'app.example.test',
-        'x-better-auth-forwarded-proto': 'https',
-      },
-    })
-    expect(response.status).toBe(200)
-    expect(
-      auth.received.map((request) => [
-        request.headers.get('x-forwarded-host'),
-        request.headers.get('x-forwarded-proto'),
-      ]),
-    ).toEqual([['app.example.test', 'https']])
-  })
-
   it('fails the auth routes with an error and no CORS echo when an app origin is misconfigured, while REST answers', async () => {
     // Hosted deployments refuse an http: app origin (lib/deployment.ts appOrigins).
     vi.stubEnv('QIVO_ENVIRONMENT', 'staging')

@@ -355,7 +355,7 @@ describe('the pause while Qivo cannot save', () => {
     expect(reload).not.toHaveBeenCalled()
     expect(notes()).toHaveLength(2)
     P.signOut()
-    // the notes go only once the server has ended the session
+    // the notes go only once the sign-out request has ended
     expect(notes()).toHaveLength(2)
     await settle()
     expect(notes()).toEqual([])
@@ -384,30 +384,23 @@ describe('the pause while Qivo cannot save', () => {
     release()
   })
 
-  it('keeps the person signed in and every note when the server could not sign them out', async () => {
+  it('sends one request for a press repeated while the sign-out runs, and keeps every note until it ends', async () => {
     await boot()
     const { P } = store
     const auth = await import('../lib/auth')
-    const { SignOutFailed, SIGN_OUT_FAILED } = await import('../lib/authSession')
-    let refuse = () => {}
-    vi.mocked(auth.signOut).mockImplementationOnce(
-      () => new Promise((_, reject) => (refuse = () => reject(new SignOutFailed()))),
-    )
+    let end = () => {}
+    vi.mocked(auth.signOut).mockImplementationOnce(() => new Promise((resolve) => (end = resolve)))
     storage.set('qivo.unconfirmed.v1:org-8:someone-else:closed-page', '[]')
     // the press that starts the request hands it to the control
     expect(P.signOut()).toBeInstanceOf(Promise)
     // a second press while the first runs sends no second request
     expect(P.signOut()).toBeUndefined()
     expect(auth.signOut).toHaveBeenCalledTimes(1)
-    refuse()
-    await settle()
-    expect(showToast).toHaveBeenLastCalledWith(SIGN_OUT_FAILED, 'error')
     expect(notes()).toHaveLength(1)
     expect(reload).not.toHaveBeenCalled()
-    // the next press tries again
-    P.signOut()
-    expect(auth.signOut).toHaveBeenCalledTimes(2)
+    end()
     await settle()
+    expect(notes()).toEqual([])
     expect(reload).toHaveBeenCalled()
   })
 

@@ -4,8 +4,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { Seatless } from '../convex/lib/workspaceJoin'
-import { SIGN_OUT_FAILED, SignOutFailed } from './lib/authSession'
-import { loadFailureText } from './lib/loadFailure'
 
 /* The gate with the auth client, the store and the workspace code replaced.
    Each test starts signed out, so every auth call answers without a session
@@ -148,27 +146,6 @@ function stubLocation(href = 'http://localhost:3000/app') {
   const reload = vi.fn()
   vi.stubGlobal('location', { href, origin, pathname, search, hash, reload })
   return reload
-}
-
-/* Presses `label` and checks that it and the `others` buttons are held while
-   the sign-out runs. The server then answers with a fault, and the screen
-   must say so and give every button back. */
-async function refuseSignOut(label: string, others: string[]) {
-  let refuse!: () => void
-  auth.signOut.mockReturnValueOnce(
-    new Promise((_resolve, reject) => {
-      refuse = () => reject(new SignOutFailed())
-    }),
-  )
-  const pressed = await vi.waitFor(() => button(label))
-  const held = [pressed, ...others.map(button)]
-  await act(async () => pressed.click())
-  expect(pressed.textContent).toBe('Signing out…')
-  for (const b of held) expect(b.disabled, b.textContent ?? '').toBe(true)
-  await act(async () => refuse())
-  expect(pressed.textContent).toBe(label)
-  for (const b of held) expect(b.disabled, b.textContent ?? '').toBe(false)
-  expect(container.textContent).toContain(SIGN_OUT_FAILED)
 }
 
 /* The sign-in gate sends an address as Qivo stores and mails it
@@ -320,80 +297,26 @@ describe('the boot on a task address', () => {
   })
 })
 
-/* A fault or a rate limit leaves the person signed in (lib/authSession.ts
-   signOut), so the screen stays, says so and lets them try again. */
-describe('a sign-out the server could not complete', () => {
-  it('keeps the load failure screen with both of its buttons and why it failed', async () => {
-    signIn()
-    const failure = new Error('offline')
-    planner.initStore.mockRejectedValueOnce(failure)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const reload = stubLocation()
-    await render()
-    await refuseSignOut('Sign out', ['Try again'])
-    expect(container.textContent).toContain(loadFailureText(failure))
-    expect(reload).not.toHaveBeenCalled()
-  })
-
-  it('clears the refusal when the person tries again, also on the next screen', async () => {
-    signIn()
-    const failure = new Error('offline')
-    planner.initStore.mockRejectedValueOnce(failure)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    stubLocation()
-    await render()
-    await refuseSignOut('Sign out', ['Try again'])
-    // the load works this time and finds no seat, so the organization form
-    await act(async () => button('Try again').click())
-    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
-    expect(container.textContent).not.toContain(SIGN_OUT_FAILED)
-    expect(container.querySelector('[role="alert"]')).toBeNull()
-  })
-
-  it('keeps the confirm screen with its buttons', async () => {
+/* The sign-out holds in this browser whatever the server answers
+   (lib/authSession.ts signOut), so every press ends in a reload. */
+describe('a sign-out from the gate', () => {
+  it('holds the confirm screen while it runs, then reloads the page', async () => {
+    let end!: () => void
+    auth.signOut.mockReturnValueOnce(
+      new Promise((resolve) => {
+        end = resolve
+      }),
+    )
     signIn(false)
     const reload = stubLocation()
     await render()
-    await refuseSignOut('Use another account', [
-      'Resend confirmation email',
-      'Already confirmed? Reload',
-    ])
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(SIGN_OUT_FAILED)
-    expect(reload).not.toHaveBeenCalled()
-  })
-
-  it('keeps the organization form and the name typed into it', async () => {
-    signIn()
-    const reload = stubLocation()
-    await render()
-    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
-    await type(field('organization-name'), 'Acme')
-    await refuseSignOut('Use another account', ['Create organization'])
-    expect(field('organization-name')?.value).toBe('Acme')
-    expect(reload).not.toHaveBeenCalled()
-  })
-
-  it('stays on the connect page, which says so', async () => {
-    signIn()
-    auth.signOut.mockRejectedValueOnce(new SignOutFailed())
-    const reload = stubLocation(CONNECT_URL)
-    await render()
     const pressed = await vi.waitFor(() => button('Use another account'))
+    const held = [pressed, button('Resend confirmation email'), button('Already confirmed? Reload')]
     await act(async () => pressed.click())
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(SIGN_OUT_FAILED)
-    expect(pressed.textContent).toBe('Use another account')
-    expect(pressed.disabled).toBe(false)
+    expect(pressed.textContent).toBe('Signing out…')
+    for (const b of held) expect(b.disabled, b.textContent ?? '').toBe(true)
     expect(reload).not.toHaveBeenCalled()
-  })
-})
-
-describe('a sign-out the server completes', () => {
-  it('reloads the page from a gate screen', async () => {
-    signIn()
-    const reload = stubLocation()
-    await render()
-    const pressed = await vi.waitFor(() => button('Use another account'))
-    await act(async () => pressed.click())
+    await act(async () => end())
     expect(reload).toHaveBeenCalledOnce()
   })
 

@@ -61,6 +61,7 @@ export const tables = {
   })
     .index('accountId', ['accountId'])
     .index('accountId_providerId', ['accountId', 'providerId'])
+    .index('accountId_providerId_userId', ['accountId', 'providerId', 'userId'])
     .index('providerId_userId', ['providerId', 'userId'])
     .index('userId', ['userId']),
   verification: defineTable({
@@ -141,8 +142,8 @@ export const tables = {
     metadata: v.optional(v.union(v.null(), v.string())),
     createdAt: v.optional(v.union(v.null(), v.number())),
   })
-    .index('clientId_resourceId', ['clientId', 'resourceId'])
-    .index('resourceId', ['resourceId']),
+    .index('resourceId', ['resourceId'])
+    .index('clientId_resourceId', ['clientId', 'resourceId']),
   oauthRefreshToken: defineTable({
     token: v.string(),
     clientId: v.string(),
@@ -165,8 +166,7 @@ export const tables = {
     .index('token', ['token'])
     .index('clientId', ['clientId'])
     .index('sessionId', ['sessionId'])
-    .index('userId', ['userId'])
-    .index('authorizationCodeId', ['authorizationCodeId']),
+    .index('userId', ['userId']),
   oauthAccessToken: defineTable({
     token: v.optional(v.union(v.null(), v.string())),
     clientId: v.string(),
@@ -187,7 +187,6 @@ export const tables = {
     .index('clientId', ['clientId'])
     .index('sessionId', ['sessionId'])
     .index('userId', ['userId'])
-    .index('authorizationCodeId', ['authorizationCodeId'])
     .index('refreshId', ['refreshId']),
   oauthConsent: defineTable({
     clientId: v.string(),
@@ -199,7 +198,7 @@ export const tables = {
     createdAt: v.optional(v.union(v.null(), v.number())),
     updatedAt: v.optional(v.union(v.null(), v.number())),
   })
-    .index('clientId_userId', ['clientId', 'userId'])
+    .index('clientId', ['clientId'])
     .index('userId', ['userId']),
   oauthClientAssertion: defineTable({
     expiresAt: v.number(),

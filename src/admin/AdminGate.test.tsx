@@ -3,7 +3,6 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { SIGN_OUT_FAILED } from '../lib/authSession'
 
 /* The operator console's gate when Convex drops its sign-in after the first
    answer. lib/authSession.ts arms a session that still exists again and
@@ -18,8 +17,7 @@ const auth = vi.hoisted(() => ({
   operator: true,
   session: { data: null as { session: object } | null },
   signIn: vi.fn(async () => ({ error: null })),
-  // the sentence to show when the server could not sign the operator out
-  signOutAndReload: vi.fn<() => Promise<string | null>>(async () => null),
+  signOutAndReload: vi.fn<() => Promise<void>>(async () => {}),
 }))
 vi.mock('./auth', () => ({
   armConvexAuth: async (onLost?: () => void) => {
@@ -148,15 +146,8 @@ describe('the operator sign-in', () => {
 })
 
 describe('the no access screen when the operator uses another account', () => {
-  /* Opens the gate on a stored session without operator access and presses
-     the switch, whose sign-out answers `refused`. Returns the button. */
-  async function useAnotherAccount(refused: string | null) {
-    let answer!: (refused: string | null) => void
-    auth.signOutAndReload.mockReturnValueOnce(
-      new Promise((resolve) => {
-        answer = resolve
-      }),
-    )
+  /* The gate opens on a stored session without operator access. */
+  it('holds the button from the press until the sign-out reloads the page', async () => {
     auth.session = { data: { session: {} } }
     auth.operator = false
     await render()
@@ -168,21 +159,7 @@ describe('the no access screen when the operator uses another account', () => {
     )
     if (!pressed) throw new Error('no Use another account button')
     await act(async () => pressed.click())
-    expect(pressed.textContent).toBe('Signing out…')
-    expect(pressed.disabled).toBe(true)
-    await act(async () => answer(refused))
-    return pressed
-  }
-
-  it('says the sign-out failed and offers the button again', async () => {
-    const pressed = await useAnotherAccount(SIGN_OUT_FAILED)
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(SIGN_OUT_FAILED)
-    expect(pressed.textContent).toBe('Use another account')
-    expect(pressed.disabled).toBe(false)
-  })
-
-  it('holds the button while a sign-out that ended reloads the page', async () => {
-    const pressed = await useAnotherAccount(null)
+    expect(auth.signOutAndReload).toHaveBeenCalledOnce()
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(pressed.textContent).toBe('Signing out…')
     expect(pressed.disabled).toBe(true)

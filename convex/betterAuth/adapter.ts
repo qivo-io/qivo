@@ -1,4 +1,4 @@
-import { createApi } from '../../vendor/convex-better-auth/src/client'
+import { createApi } from '@convex-dev/better-auth'
 import { createAuthOptions } from '../auth'
 import schema from './schema'
 
@@ -12,8 +12,9 @@ export const {
   findOne,
   findMany,
   updateOne,
-  incrementOne,
   updateMany,
   deleteOne,
   deleteMany,
+  consumeOne,
+  incrementOne,
 } = createApi(schema, (ctx) => createAuthOptions(ctx, { schemaOnly: true }))

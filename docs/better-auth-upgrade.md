@@ -1,59 +1,110 @@
-# Better Auth and Qivo's copy of the Convex adapter
+# Better Auth and the Convex adapter
 
-Qivo runs Better Auth `1.7.12` with its own copy of the Convex adapter in
-[`vendor/convex-better-auth/`](../vendor/convex-better-auth/README.md).
-`package.json` pins `better-auth`, `@better-auth/core` and
-`@better-auth/oauth-provider` to the same release. This document says why the
-copy exists, what it changed, how to move to a later Better Auth release, and
-when to go back to an official adapter release. It does not authorize a
-production deployment.
+Qivo runs Better Auth `1.7.21` with the official Convex adapter,
+`@convex-dev/better-auth` `0.13.0`. `package.json` pins `better-auth`,
+`@better-auth/core` and `@better-auth/oauth-provider` to the same release, and
+the adapter to its own. This document says which releases Qivo can run and
+why, what Qivo changes for the adapter, what changed with Better Auth 1.7 and
+how to move to a later release. It does not authorize a production
+deployment.
 
-## Why Qivo keeps its own copy
+## The adapter and the releases Qivo can run
 
-Verified on October 24, 2026 against the npm registry and GitHub:
+From October 24 to November 13, 2026, Qivo ran its own copy of the adapter in
+`vendor/convex-better-auth/`, because the official adapter did not support
+Better Auth 1.7 yet. Its release `0.13.0` of November 4, 2026 does, and the
+owner decided on November 13, 2026 to use it and delete the copy, so that
+Qivo keeps no adapter code of its own. Two things follow from that.
 
-- The latest `@convex-dev/better-auth` is `0.12.5`, whose peer range is
-  `better-auth >=1.6.11 <1.7.0`.
-- The latest Better Auth is `1.7.12`, released October 20, 2026. `1.8.0-beta.2`
-  is a prerelease.
-- Better Auth's
+- **The OAuth provider's link index is declared as an ordinary index.** The
+  adapter refuses a schema that declares a unique index of several fields,
+  because it cannot enforce one, and its documentation lists the OAuth
+  provider as incompatible for that reason. The provider declares one such
+  index, `oauthClientResource` on `(clientId, resourceId)`, a client's link
+  to a resource. `withOrdinaryLinkIndex` in `convex/lib/oauthProvider.ts`
+  hands Better Auth the provider's tables with that index kept but no longer
+  unique. Nothing Qivo serves can store a pair twice: the provider writes a
+  link only when it registers a client, for a client id it made in that
+  request. It stores a client whose id is a metadata document's URL, which
+  two requests could name at once, only with its client discovery extension
+  (`@better-auth/cimd`), which Qivo does not install, and
+  `convex/tests/oauth.test.ts` shows that such a client id stores nothing.
+  The provider's routes that link a client afterwards are not served
+  (`convex/lib/authRoutes.ts`). A second row would change no answer either,
+  because the provider and Qivo ask only whether a link exists, and a
+  client's delete removes every link. Serving one of those routes or
+  accepting such clients needs the pair kept unique some other way first.
+  `convex/tests/betterAuthSchema.test.ts` fails when a provider release
+  declares another such index. The adapter's maintainers do not test it with
+  the OAuth provider, so the checks below are what shows that a release
+  works. An open pull request,
+  [convex/better-auth#471](https://github.com/convex/better-auth/pull/471),
+  proposes that the adapter enforce these indexes. With a release that does,
+  remove `withOrdinaryLinkIndex`.
+- **Better Auth stays at the newest release the adapter works with.** Better
+  Auth publishes a release on most days, and its
   [`SECURITY.md`](https://github.com/better-auth/better-auth/blob/main/SECURITY.md)
   says: "We only support the latest version of Better Auth. Older versions
-  are not supported."
-- [get-convex/better-auth#430](https://github.com/get-convex/better-auth/pull/430),
-  which ports the adapter to Better Auth 1.7.7, has no maintainer review and
-  its CI has not run.
+  are not supported." The adapter's peer range, `>=1.7.16 <1.8.0`, also
+  admits releases published after it. Better Auth `1.7.22` of November 12,
+  2026 consumes a verification value with a query that compares a row id
+  with `ne`, which adapter `0.13.0` refuses, so the OAuth code exchange fails
+  on it (`convex/tests/oauth.test.ts`). `1.7.21` is the newest release whose
+  tests pass. Move past it only with an adapter release that works with the
+  newer one, and check the advisories of the releases in between meanwhile
+  (see [Advisories](#advisories)).
 
-The owner approved copying the adapter into Qivo and porting it to 1.7 on
-October 24, 2026. The copy holds only the parts Qivo uses, taken from the
-official repository's `main` at `3f41cbcf` (tag `v0.12.5` is `c628916b`;
-the seven commits between them change no copied file). Pull request #430 at
-`fe7e0431` was read as a reference, and only what Qivo needs was taken from
-it. The copy's README lists every file, what Qivo changed and what it left
-out. `@convex-dev/better-auth` is no longer installed.
+### What the copy fixed, in adapter 0.13.0
+
+Qivo's copy fixed these in the adapter it was taken from. Read from the
+source of `0.13.0` on November 13, 2026, for a later release to recheck:
+
+| The copy's fix | In `0.13.0` |
+| --- | --- |
+| A read of several pages resumes after the page it read, so a page that stops early is not read twice | Fixed |
+| A single-row lookup reads on past a page with no match | Fixed |
+| The queries for the values of an `in` clause merge on the fields their index orders by | Fixed |
+| A lookup of only `OR` clauses answers null when none matches | Fixed |
+| An update that matches no row answers null | Fixed |
+| An `eq null` clause matches a field never written | Fixed |
+| `consumeOne` and `incrementOne` run as one mutation each | Fixed |
+| A second `in` clause of one lookup is applied to each row | Not fixed. With an index, the adapter applies only the first. No lookup of Better Auth or the OAuth provider has two. |
+| A lookup that no index fully serves reads through the index that covers most of it | Not taken. The adapter scans the table and warns. `convex/betterAuth/schema.ts` holds the indexes, and a test in which a lookup scans fails. |
+| A unique index of several fields is enforced | Not taken. The adapter refuses such an index (see above). |
 
 ## What changed with Better Auth 1.7
 
-- **Adapter.** Better Auth 1.7 passes `modelKey` to every adapter method,
-  which the copy drops. `consumeOne` and `incrementOne` are native component
-  mutations, so they stay atomic; Better Auth's fallback compares every field
-  of the row it read, which fails on `_creationTime` and on fields never
-  written. An `eq null` clause also matches a field Convex stores as absent,
-  which refresh-token rotation relies on, so Qivo's own refresh claim
-  (`claimRefreshToken`) is gone. A unique index of several fields is enforced.
-  The copy also fixes four upstream bugs in reads that span pages, which its
-  README lists.
+- **Adapter.** `consumeOne` and `incrementOne` are native component
+  mutations, so they stay atomic. An `eq null` clause also matches a field
+  Convex stores as absent, which refresh-token rotation relies on, so Qivo's
+  own refresh claim (`claimRefreshToken`) is gone. The adapter rejects a
+  second account with the same provider and account id. It reads a table
+  through an index only when one starts with every field a lookup compares
+  for equality, and scans the table otherwise, with a warning that names the
+  index to add. Its schema generator knows the lookups of Better Auth itself,
+  so `convex/betterAuth/schema.ts` adds the indexes the OAuth provider's
+  lookups need, and a test in which a lookup scans fails
+  (`convex/tests/env.setup.ts`).
 - **The `convex()` plugin** no longer builds the `oidc-provider` plugin,
-  which 1.7 removed. `/api/auth/convex/.well-known/openid-configuration` is
-  gone; Convex reads keys from `/api/auth/convex/jwks` (`convex/auth.config.ts`).
-  The JWT's issuer, audience, subject, claims and keys are unchanged, so
-  nobody signs in again.
+  which 1.7 removed. It serves a discovery document of its own at
+  `/api/auth/convex/.well-known/openid-configuration`, which Qivo does not
+  serve (`convex/lib/authRoutes.ts`); Convex reads keys from
+  `/api/auth/convex/jwks` (`convex/auth.config.ts`). The JWT's issuer,
+  audience, subject, claims and keys are unchanged, so nobody signs in again.
+  A sign-in no longer answers with a token cookie. It clears that cookie, so
+  no token of an earlier session outlives the sign-in, and the page asks
+  `/api/auth/convex/token` for the new session's token, as it already did.
 - **Schema.** `convex/betterAuth/schema.generated.ts` holds the 1.7 tables,
   among them `oauthResource`, `oauthClientResource` and
   `oauthClientAssertion`, and new optional fields on the token and client
-  tables. `convex/betterAuth/schema.ts` keeps the consent index and adds
-  `account.microsoftTenantId`. It no longer accepts `oauthClient.public` and
-  `oauthClient.type`, which 1.6 wrote and 1.7 dropped (see
+  tables. `convex/betterAuth/schema.ts` adds `account.microsoftTenantId`
+  and the indexes of the OAuth provider's lookups: a consent by its client
+  and login and by its connection, the tokens of an authorization code, and
+  the access and refresh tokens of a client and login, which the provider
+  deletes when a revocation loses its refresh token to a rotation. It also
+  holds the indexes of the nightly token cleanup. It no longer accepts
+  `oauthClient.public` and `oauthClient.type`, which 1.6 wrote and 1.7
+  dropped (see
   [Existing data and deployment order](#existing-data-and-deployment-order)).
 - **OAuth provider** (`convex/lib/oauthProvider.ts`). The MCP endpoint is the
   one configured resource, and every new client is linked to it. Registration
@@ -109,17 +160,18 @@ out. `@convex-dev/better-auth` is no longer installed.
   answers HTTP `404` (`convex/lib/authRoutes.ts`) and the metadata names no
   introspection endpoint.
 - **Writes with a chosen id.** Some Better Auth features create a row whose
-  id they choose, so that a second attempt with the same id fails: DPoP proof
-  reservations, `private_key_jwt` client assertions (`oauthClientAssertion`),
-  and the verification reservations of the Magic Link, email OTP and Sign In
-  with Ethereum plugins. Convex chooses every document id, so the copy cannot
-  store such a row, and none of these features works with it. Qivo uses none
-  of them. Supporting one needs a table keyed by that id and a uniqueness
-  check in the copy.
-- **DPoP.** Better Auth 1.7 supports DPoP-bound tokens (RFC 9449), but the
-  copy cannot store their proof reservations (see above), and `/mcp` checks
-  no proof. Qivo issues Bearer tokens only: the token endpoint ignores a
-  `DPoP` header, as a server without DPoP does, authorize refuses
+  id they choose, so that a second attempt with the same id fails, such as
+  `private_key_jwt` client assertions (`oauthClientAssertion`) and the
+  verification reservations of the Magic Link, email OTP and Sign In with
+  Ethereum plugins. Convex chooses every document id. The adapter keeps a
+  reservation in the `verification` table unique by its identifier instead,
+  and stores a row of any other table without the chosen id, so that row is
+  not single-use. Qivo uses none of these features and has tested none of
+  them with the adapter.
+- **DPoP.** Better Auth 1.7 supports DPoP-bound tokens (RFC 9449), but Qivo
+  has not tested their proof reservations with the adapter (see above), and
+  `/mcp` checks no proof. Qivo issues Bearer tokens only: the token endpoint
+  ignores a `DPoP` header, as a server without DPoP does, authorize refuses
   `dpop_jkt`, registration drops `dpop_bound_access_tokens`, the metadata
   lists no DPoP algorithms, and `/mcp` refuses a bound token.
 - **Registration** ignores an `Authorization` header, because Better Auth 1.7
@@ -184,25 +236,26 @@ out. `@convex-dev/better-auth` is no longer installed.
   so a later replay is refused without ending the grant. An upgrade that shows Better Auth revoked refresh tokens again,
   or accepts a refresh token past that lifetime, needs that cleanup
   rechecked.
-- **A failed sign-out says so.** Better Auth answers a sign-out whose
-  session delete failed with HTTP `200` and clears the cookie. Qivo's after
-  hook on `/sign-out` (`oauthHooks`) deletes a session that is still stored
-  once more and looks it up again, and if it is still stored, answers HTTP
-  `503` with `SIGN_OUT_FAILED` and without clearing the session cookie. A
-  sign-out Better Auth refused, such as one with a malformed body, ends
-  nothing. The hook also drops the signed authorization request that the
-  app's OAuth client adds to a sign-out from the connect page, which the
-  provider would refuse once it expires. The cross-domain client in the copy
-  clears the stored session only after a sign-out succeeds. After a fault or
-  a rate limit (HTTP `5xx` or `429`), the app, the consent page and the
-  operator console keep the person signed in and ask them to try again
-  (`signOut` in `src/lib/authSession.ts`). Any other refusal would repeat on
-  every try, so the browser forgets the session then, as it does when the
-  server cannot be reached or gives no answer within 15 seconds; the server
-  session then ends at its expiry. A press while a sign-out runs joins it,
-  and the controls show that it runs. A login removal from the console deletes the login and
-  then its sessions and tokens, and `/mcp` refuses every token of a missing
-  or banned login.
+- **A sign-out always signs the browser out.** The adapter's cross-domain
+  client forgets the session in the browser as it sends the sign-out, so the
+  person is signed out there whatever the server answers, also offline
+  (`signOut` in `src/lib/authSession.ts`). Better Auth answers a sign-out
+  whose session delete failed with HTTP `200`, and Qivo adds nothing to that
+  (owner decision, November 13, 2026). Such a failure is rare, nobody can use
+  the session from that browser, and it ends at its expiry, at most 7 days
+  later. Until then the access tokens issued in it keep working, each for at
+  most an hour. Qivo's before hook on `/sign-out` (`oauthHooks`) drops the
+  signed authorization request that the app's OAuth client adds to a
+  sign-out from the connect page, which the provider would refuse once it
+  expires. A press while a sign-out runs joins it, and the controls show that
+  it runs. The client applies the cleared cookies of a completed sign-out to
+  the browser's stored session as it is when the answer arrives. A session
+  that another tab of the same page stored while the request ran is therefore
+  forgotten too, and that tab signs in again. Qivo's copy kept such a
+  session. The app and the operator console store their sessions apart, so
+  neither signs the other out. A login removal from the console deletes the
+  login and then its sessions and tokens, and `/mcp` refuses every token of a
+  missing or banned login.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
   smoke cleanup and the demo purge) also delete the client's resource links.
   The operator's and the console's login deletes keep the clients, as before.
@@ -260,9 +313,11 @@ earlier release.
 
 ## Advisories
 
-`npm audit` reports no vulnerability. Better Auth publishes some advisories
-only as repository advisories, which `npm audit` does not read, so each was
-checked against the code on October 24, 2026.
+`npm audit` reports no vulnerability in Better Auth or the adapter (November
+13, 2026). Better Auth publishes some advisories only as repository
+advisories, which `npm audit` does not read, so each was checked against the
+code, those below on October 24, 2026 and the later ones on November 13,
+2026.
 
 - [GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)
   (medium, OAuth resource indicators not bound to the grant) affected the
@@ -281,31 +336,63 @@ checked against the code on October 24, 2026.
   (high, device authorization) affected 1.6.31 and is fixed in 1.7.0-rc.3.
   Qivo does not use the device authorization plugin.
 - [GHSA-fmh4-wcc4-5jm3](https://github.com/better-auth/better-auth/security/advisories/GHSA-fmh4-wcc4-5jm3)
-  (high, organization invitations) lists `>= 1.6.14` with no fixed version,
-  so it also covers 1.7.12; the global advisory, which `npm audit` reads,
-  lists only `< 1.6.11`. Qivo does not use the organization plugin.
+  (high, organization invitations) is fixed in 1.7.16. Qivo does not use the
+  organization plugin.
+- Twelve advisories of November 3, 2026 are fixed in 1.7.16, which Qivo's
+  release includes. None applied to Qivo on 1.7.12. They cover the phone
+  number, email OTP, passkey, organization, Stripe, Expo and Electron
+  plugins, the Kysely and Drizzle adapters, secondary storage and the
+  cookie cache, none of which Qivo uses, email change, which Qivo does not
+  turn on, and, in
+  [GHSA-9hm7-xhfp-cx58](https://github.com/better-auth/better-auth/security/advisories/GHSA-9hm7-xhfp-cx58)
+  (medium, an unverified provider email treated as verified), generic OAuth,
+  Zoom and providers that send `email_verified` as a string. Qivo signs in
+  with the built-in Google and Microsoft providers.
+- No advisory names a release from 1.7.17 to 1.7.23. The release notes of
+  1.7.22 and 1.7.23, which Qivo does not run yet, list bug fixes only.
+- The adapter's four advisories
+  ([GHSA-j8qq-g9pm-v3c2](https://github.com/convex/better-auth/security/advisories/GHSA-j8qq-g9pm-v3c2),
+  [GHSA-pgx2-m66h-x29f](https://github.com/convex/better-auth/security/advisories/GHSA-pgx2-m66h-x29f),
+  [GHSA-9qq3-v9g3-cxhw](https://github.com/convex/better-auth/security/advisories/GHSA-9qq3-v9g3-cxhw)
+  and
+  [GHSA-4qvm-r4pr-v3wg](https://github.com/convex/better-auth/security/advisories/GHSA-4qvm-r4pr-v3wg))
+  are fixed in 0.12.6 and 0.12.7, before the release Qivo runs. Their
+  conditions never held for Qivo: its trusted origins are exact
+  (`appOrigins` in `convex/lib/deployment.ts`), its `baseURL` is a fixed
+  string and it does not use the two-factor plugin.
 
 The other repository advisories cover releases before 1.6.31 or plugins
 Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 
 ## Moving to a later Better Auth release
 
-1. Read the release notes of every release since `1.7.12`, the
+1. Read the release notes of every release since `1.7.21`, the
    upgrade guide (for 1.7, [Upgrading to Better Auth 1.7](https://www.better-auth.com/docs/guides/1-7-upgrade-guide)) and the
    repository's [security advisories](https://github.com/better-auth/better-auth/security/advisories),
    which `npm audit` does not show.
 2. Pin `better-auth`, `@better-auth/core` and `@better-auth/oauth-provider` to
-   the same release and run `npm ci` with peer checks on. Do not use
-   `--force`, `--legacy-peer-deps` or an override for Better Auth or the copy.
-3. Port the copy: compare the adapter types and the atomic fallbacks in
-   `@better-auth/core` (`dist/db/adapter/`) with the previous release, and
-   the APIs the plugins call. Note each change in the header of the file it
-   touches.
+   the same release, inside the peer range of the `@convex-dev/better-auth`
+   release Qivo pins, and run `npm ci` with peer checks on. Do not use
+   `--force`, `--legacy-peer-deps` or an override for Better Auth or the
+   adapter.
+3. Move the adapter when a release of it works with a newer Better Auth. Read
+   its [changelog](https://github.com/convex/better-auth/blob/main/CHANGELOG.md),
+   its upgrade guide and its
+   [security advisories](https://github.com/convex/better-auth/security/advisories).
+   Then push to a disposable local backend, which regenerates
+   `convex/betterAuth/_generated/`. A Better Auth release inside the peer
+   range can still send a query the adapter refuses, as 1.7.22 did, so the
+   tests decide, not the range.
 4. Regenerate the schema from `convex/betterAuth`:
    `npx auth@<release> generate --output schema.generated.ts`.
-   Format it, read the diff, and keep `schema.ts`'s additions in step
-   (`convex/tests/betterAuthAdapter.test.ts` checks the indexes). A field the
-   new schema drops stays optional in `schema.ts` until a backfill removes it.
+   Format it, put the relative path back in its header, read the diff, and
+   keep `schema.ts`'s additions in step
+   (`convex/tests/betterAuthSchema.test.ts` checks the account table and the
+   link index). The generator leaves out the indexes of the OAuth provider's
+   lookups, which `schema.ts` adds. A test in which a Better Auth lookup
+   scans a table fails and names the index to add
+   (`convex/tests/env.setup.ts`). A field the new schema drops stays optional
+   in `schema.ts` until a backfill removes it.
 5. Run `npm run verify:local` and the checks below, then the hands-on checks
    on a disposable local backend.
 6. After the merge, verify the exact candidate on staging with the private
@@ -338,10 +425,9 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   header gets a Bearer token.
 - Sign-out ends every access token of the session, also after more than 100
   refreshes, and a refresh after it still renews. A call that ends more than
-  100 sessions ends the tokens of each. A sign-out whose session delete fails
-  twice, or that Better Auth skipped, answers HTTP `503` and keeps the
-  session and its cookie, and the browser client keeps the session to try
-  again (`src/lib/authSession.test.ts`). A sign-out with an expired signed
+  100 sessions ends the tokens of each. A sign-out leaves the browser with
+  no session, also when the server answers with a failure or cannot be
+  reached (`src/lib/authSession.test.ts`). A sign-out with an expired signed
   authorization request ends the session. The nightly cleanup deletes
   expired sessions through its delete trigger and ends their tokens at the
   expiry, and deletes spent OAuth tokens (`convex/tests/authRetention.test.ts`).
@@ -366,7 +452,7 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   `convex/auth.ts` inside the handler, after the refusals that need no
   Better Auth. `convex/tests/authTriggers.test.ts` walks the router's static
   imports and fails when one reaches Better Auth, `convex/auth.ts`,
-  `convex/lib/oauthProvider.ts` or this copy. `convex/tests/authHttp.test.ts`
+  `convex/lib/oauthProvider.ts` or the adapter. `convex/tests/authHttp.test.ts`
   pins the status, every header and the body of the sign-in, OAuth and
   metadata answers, the router's table of those routes and a sweep of every
   route `convex/lib/authRoutes.ts` lists, for a regular deployment and the
@@ -399,7 +485,7 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   of a demo start read the caller's login with Qivo's own session check,
   `liveSessionUser` in `convex/betterAuth/sessions.ts`, through
   `convex/lib/authUser.ts`, because loading Better Auth on each call is
-  slow. The copy therefore leaves out the adapter's `getAuthUser` and
+  slow. Qivo therefore does not call the adapter's `getAuthUser` and
   `safeGetAuthUser`. `liveSessionUser` reads the session and user rows
   directly, so compare it with the release's rules for a live session and
   keep it as strict: the session exists, has not expired and is the token
@@ -423,26 +509,25 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   Better Auth out of every module a REST or MCP call runs, following each
   nested call.
 
-## Comparing the copy with an official release
+## What Qivo does not take from the adapter
 
-When get-convex/better-auth publishes a release that supports the Better
-Auth release Qivo runs, compare it with the copy:
+- **Route registration.** The adapter's `registerRoutes` builds a Better Auth
+  instance while the HTTP router loads, and Convex loads the router for every
+  HTTP action, so every REST, MCP and image request would pay for Better
+  Auth. Its `registerRoutesLazy` builds none then, but still imports the
+  module that does. Qivo registers the `/api/auth/` routes itself in
+  `convex/lib/authRoutes.ts` (`registerAuthRoutes`) and imports
+  `convex/auth.ts` only inside the handlers that need it (`convex/http.ts`).
+  Compare a later release's `registerRoutes` paths, methods and CORS options
+  with that function. The adapter's routes also set the request's host and
+  forwarded headers to an origin the app trusts, for a Better Auth that reads
+  its base URL from the request. Qivo sets a fixed `baseURL`, so its handler
+  passes the request on as it arrived.
+- **The caller's login.** See the last two checks above.
+- **The discovery document and the key rotation routes** of the `convex()`
+  plugin, which `convex/lib/authRoutes.ts` does not list.
 
-```sh
-git clone https://github.com/get-convex/better-auth.git dev-temp/upstream
-git -C dev-temp/upstream checkout <tag>
-npx biome format --write --config-path . dev-temp/upstream/src
-diff -ru dev-temp/upstream/src vendor/convex-better-auth/src
-```
-
-Formatting the upstream tree with this repository's Biome settings first
-leaves only real differences, such as the parts Qivo left out, its types and
-its changes. `registerRoutes` shows as left out, because Qivo registers the
-routes in `convex/lib/authRoutes.ts` (`registerAuthRoutes`) so that the HTTP
-router loads no Better Auth. Compare a later release's `registerRoutes`
-paths, methods, CORS options and forwarded headers with that function.
-Going back to the published package makes sense once a release
-supports the latest Better Auth, covers every change the copy's README lists
-(or Qivo no longer needs one), and its maintainers keep it current. Then
-install it, switch the imports back, delete the copy and run the checks
-above.
+If a release of the adapter or of Better Auth breaks one of the checks above,
+stay on the releases that pass, and report the failure to the adapter's
+repository. Do not copy the adapter back into Qivo without the owner's
+decision.

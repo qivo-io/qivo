@@ -79,12 +79,11 @@ function loaded(entry: string, walk: Walk = {}) {
   return { modules, packages }
 }
 
-/** The Better Auth packages and Qivo's copy of the adapter among `loaded`. */
-function betterAuthIn({ modules, packages }: ReturnType<typeof loaded>) {
-  return [
-    ...[...packages].filter((name) => /^(@better-auth|better-auth)\b/.test(name)),
-    ...[...modules].filter((path) => path.includes('vendor/convex-better-auth')),
-  ]
+/** The Better Auth packages and its Convex adapter among `loaded`. */
+function betterAuthIn({ packages }: ReturnType<typeof loaded>) {
+  return [...packages].filter((name) =>
+    /^(@better-auth|better-auth|@convex-dev\/better-auth)\b/.test(name),
+  )
 }
 
 /** The function references in `source`: the module each names and the
@@ -217,7 +216,7 @@ describe('the auth triggers, the demo start, the boot claim and the machine call
       if (!(module in sources)) return [`${by} names ${module}, which is no module`]
       const found = loaded(module)
       const unknown = [...found.modules].filter(
-        (path) => !(path in sources) && !/_generated\/|vendor\/convex-better-auth/.test(path),
+        (path) => !(path in sources) && !/_generated\//.test(path),
       )
       return [
         ...(found.modules.has('../auth.ts') || betterAuthIn(found).length > 0

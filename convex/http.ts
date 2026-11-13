@@ -1,6 +1,6 @@
 /* The one HTTP router. Convex loads it, with every module it imports, for
  * each HTTP action, so none of those modules may load Better Auth, auth.ts
- * or the adapter copy in vendor/convex-better-auth/, because REST, MCP, the
+ * or the Convex adapter (@convex-dev/better-auth), because REST, MCP, the
  * file and image links, uploads, billing webhooks, demo reporting and every
  * CORS preflight would pay for it. A handler that needs Better Auth imports
  * ./auth inside the handler, after the refusals that need none, as the
@@ -16,12 +16,7 @@ import type { Id } from './_generated/dataModel'
 import type { ActionCtx } from './_generated/server'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
-import {
-  registerAuthRoutes,
-  restoreOriginalForwardedHeaders,
-  servedAuthRoutes,
-  servesAuthRoute,
-} from './lib/authRoutes'
+import { registerAuthRoutes, servedAuthRoutes, servesAuthRoute } from './lib/authRoutes'
 import { boundValidationAnswer } from './lib/authValidation'
 import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
@@ -123,9 +118,8 @@ const authRoute = answerAfterBody(async (ctx, original) => {
     if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
       return new Response(null, { status: 415 })
   }
-  const read = await readAuthBody(original)
-  if (read instanceof Response) return read
-  const request = restoreOriginalForwardedHeaders(read)
+  const request = await readAuthBody(original)
+  if (request instanceof Response) return request
   const { createAuth } = await import('./auth')
   // Enforced before Better Auth allocates any identity, even when the
   // caller goes directly to Convex rather than through our website.

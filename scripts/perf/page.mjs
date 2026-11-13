@@ -74,7 +74,8 @@ export async function buildPage(source, outDir, temporary) {
 /** The source of `commit` in `root`'s repository, in a folder of its own
     under `temporary`, with `root`'s dependencies: the app, the backend and
     the scripts, and from the commits that hold it the copy of the Convex
-    Better Auth adapter the app imports (vendor/). */
+    Better Auth adapter the app imported (vendor/) before it used the
+    published package. */
 export async function checkoutOf(root, commit, temporary) {
   const folder = join(temporary, `baseline-${commit.slice(0, 12)}`)
   await mkdir(folder)

@@ -125,31 +125,18 @@ export function serveOnly<Auth extends { handler(request: Request): Promise<Resp
   }
 }
 
-/** `request` with the host and protocol a proxy in front of Convex put in
- * x-better-auth-forwarded-host and -proto moved back into x-forwarded-host
- * and -proto, which Convex's own front end overwrites, or `request` itself
- * when it carries neither. The copy takes over `request`'s body, so hand it
- * a request whose body is already read (lib/requestBody.ts
- * bufferedRequest). Copied from get-convex/better-auth
- * src/client/create-client.ts at 3f41cbcf (Apache-2.0, see
- * vendor/convex-better-auth/LICENSE). */
-export const restoreOriginalForwardedHeaders = (request: Request) => {
-  const originalHost = request.headers.get('x-better-auth-forwarded-host')
-  const originalProto = request.headers.get('x-better-auth-forwarded-proto')
-  if (!originalHost && !originalProto) return request
-  const headers = new Headers(request.headers)
-  if (originalHost) headers.set('x-forwarded-host', originalHost)
-  if (originalProto) headers.set('x-forwarded-proto', originalProto)
-  return new Request(request, { headers })
-}
-
 /**
  * Routes GET and POST on every path under AUTH_BASE_PATH to `handler`, with
- * their CORS and preflight, as the adapter's registerRoutes did, without
- * building a Better Auth instance (get-convex/better-auth
- * src/client/create-client.ts at 3f41cbcf, Apache-2.0). `handler` is built
- * with answerAfterBody (lib/requestBody.ts), so its answers wait for the
- * body. An answer echoes the request's origin when it is an app origin,
+ * their CORS and preflight, as the adapter's registerRoutes does, without
+ * building a Better Auth instance or loading its module. Adapted from
+ * convex/better-auth src/client/create-client.ts at 3f41cbcf (Apache-2.0,
+ * the license of the @convex-dev/better-auth package). It hands `handler`
+ * the request as it arrived. The adapter's routes also rewrite the
+ * request's host and forwarded headers, which only matters to a Better Auth
+ * that reads its base URL from the request, and Qivo sets a fixed one
+ * (auth.ts baseURL). `handler` is built with answerAfterBody
+ * (lib/requestBody.ts), so its answers wait for the body. An answer echoes
+ * the request's origin when it is an app origin,
  * read on every request, or one of `allowedOrigins`, allows credentials and
  * the Content-Type, Better-Auth-Cookie and Authorization headers and
  * `allowedHeaders`, and exposes Set-Better-Auth-Cookie. Any other origin

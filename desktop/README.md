@@ -345,7 +345,7 @@ certificates and hostname mismatches without disabling TLS verification.
 Remove the override once electron-builder's dependency tree no longer needs it.
 
 This affects build tooling, not the installed desktop runtime. Better Auth
-and Qivo's copy of its Convex adapter are described in
+and its Convex adapter are described in
 [the Better Auth notes](../docs/better-auth-upgrade.md).
 
 ## Test builds and release plan
