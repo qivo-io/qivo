@@ -29,14 +29,19 @@ export const tables = {
     .index('clientId_userId', ['clientId', 'userId'])
     .index('clientId_referenceId_userId', ['clientId', 'referenceId', 'userId']),
   /* The provider finds the tokens an authorization code issued by the code's
-   * id, to revoke them when the code is used again. The nightly token cleanup
-   * finds the rows that protect nothing any more by the other indexes
+   * id, to revoke them when the code is used again. When a revocation loses
+   * its refresh token to a rotation, it deletes the access tokens of the
+   * client and login, and the refresh tokens of the client and login that
+   * Qivo narrows to the connection (lib/oauthAdapter.ts). The nightly token
+   * cleanup finds the rows that protect nothing any more by the last indexes
    * (oauth.ts deleteSpentTokens). */
   oauthAccessToken: generatedTables.oauthAccessToken
     .index('authorizationCodeId', ['authorizationCodeId'])
+    .index('clientId_userId', ['clientId', 'userId'])
     .index('expiresAt', ['expiresAt']),
   oauthRefreshToken: generatedTables.oauthRefreshToken
     .index('authorizationCodeId', ['authorizationCodeId'])
+    .index('clientId_referenceId_userId', ['clientId', 'referenceId', 'userId'])
     .index('expiresAt', ['expiresAt'])
     .index('revoked', ['revoked']),
 }

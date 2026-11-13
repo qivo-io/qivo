@@ -2363,6 +2363,61 @@ describe('the access check of every machine call, without the adapter', () => {
 })
 
 describe('Convex refresh-token compare-and-set adapter', () => {
+  /* lib/oauthProvider.ts withOrdinaryLinkIndex relies on this: a client is
+   * stored only by registration, never from a client id that is the URL of
+   * a metadata document, which two requests could name at once. */
+  it('stores no client for a client id that is a metadata document URL', async () => {
+    const f = await fixture()
+    const request = await authorization(f, 'https://client.example.test/oauth/client.json')
+    const response = await authorize(request)
+    const answer = await json(response)
+    expect(JSON.stringify(answer)).toContain('invalid_client')
+    const stored = await runInAuth(f.t, async (ctx) => ({
+      clients: await ctx.db.query('oauthClient').collect(),
+      links: await ctx.db.query('oauthClientResource').collect(),
+    }))
+    expect(stored).toEqual({ clients: [], links: [] })
+  })
+
+  it('revokes a refresh token, and ends the connection when a rotation claimed the token first', async () => {
+    const f = await fixture()
+    const revoke = (clientId: string, token: string) =>
+      http(f.t, '/api/auth/oauth2/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form({ client_id: clientId, token, token_type_hint: 'refresh_token' }),
+      })
+    const c = await connect(f)
+    const revoked = await revoke(c.request.clientId, c.refresh_token)
+    expect(revoked.status, await revoked.clone().text()).toBe(200)
+    await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
+
+    // A rotation that claims the token between the revocation's read and its
+    // own claim makes the provider delete the tokens of the client and login,
+    // which Qivo narrows to this connection (lib/oauthAdapter.ts). Those
+    // deletes read through indexes of convex/betterAuth/schema.ts, or the
+    // scan check of env.setup.ts fails this case.
+    const other = await connect(f)
+    const claim = vi
+      .spyOn(adapter.incrementOne as unknown as { _handler: () => Promise<null> }, '_handler')
+      .mockResolvedValueOnce(null)
+    const raced = await revoke(other.request.clientId, other.refresh_token)
+    claim.mockRestore()
+    expect(raced.status, await raced.clone().text()).toBeLessThan(500)
+    const left = await runInAuth(f.t, async (ctx) => ({
+      refresh: await ctx.db
+        .query('oauthRefreshToken')
+        .withIndex('clientId', (q) => q.eq('clientId', other.request.clientId))
+        .collect(),
+      access: await ctx.db
+        .query('oauthAccessToken')
+        .withIndex('clientId', (q) => q.eq('clientId', other.request.clientId))
+        .collect(),
+    }))
+    expect(left).toEqual({ refresh: [], access: [] })
+    await deniedAccess(f, other.access_token)
+  })
+
   it('retains additional token/client predicates and allows only one concurrent claim of an absent revoked field', async () => {
     const f = await fixture()
     const row = await f.t.mutation(components.betterAuth.adapter.create, {

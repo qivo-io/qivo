@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkoutEnvironment } from '../git.mjs'
@@ -63,5 +63,40 @@ describe('the baseline checkout', () => {
     vi.stubEnv('GIT_DIR', join(other, '.git'))
     const folder = await checkoutOf(root, commit, temporary)
     expect(existsSync(join(folder, 'scripts/perf/page.mjs'))).toBe(true)
+  })
+
+  it('takes vendor/ from a commit that holds it, and archives one that holds none', async () => {
+    temporary = mkdtempSync(join(tmpdir(), 'qivo-perf-vendor-'))
+    const repository = join(temporary, 'repository')
+    mkdirSync(repository)
+    const git = (...args) =>
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+        cwd: repository,
+        env: checkoutEnvironment(),
+        encoding: 'utf8',
+      }).trim()
+    const commit = (message) => {
+      git('add', '-A')
+      git(
+        ...['-c', 'user.name=Test', '-c', 'user.email=test@example.test'],
+        ...['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message],
+      )
+      return git('rev-parse', 'HEAD')
+    }
+    git('init', '-q')
+    // what checkoutOf archives, and the adapter copy earlier commits held
+    for (const path of ['app.html', 'src/a.ts', 'convex/a.ts', 'scripts/a.mjs', 'vendor/a.ts']) {
+      mkdirSync(dirname(join(repository, path)), { recursive: true })
+      writeFileSync(join(repository, path), '')
+    }
+    const withVendor = commit('with the copy')
+    rmSync(join(repository, 'vendor'), { recursive: true })
+    const withoutVendor = commit('without it')
+
+    const earlier = await checkoutOf(repository, withVendor, temporary)
+    expect(existsSync(join(earlier, 'vendor/a.ts'))).toBe(true)
+    const later = await checkoutOf(repository, withoutVendor, temporary)
+    expect(existsSync(join(later, 'src/a.ts'))).toBe(true)
+    expect(existsSync(join(later, 'vendor'))).toBe(false)
   })
 })

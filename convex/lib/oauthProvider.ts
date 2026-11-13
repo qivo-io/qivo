@@ -126,8 +126,10 @@ type ProviderSchema = ReturnType<typeof oauthProvider>['schema']
  * Nothing in Qivo can store a pair twice. The provider writes a link only
  * when it registers a client, for a client id it made in that request. Two
  * registrations can name one client only when the client id is a metadata
- * document's URL, which Qivo does not accept, and the provider's routes that
- * link a client afterwards are not served (lib/authRoutes.ts). A second row
+ * document's URL, which the provider stores only with its client discovery
+ * extension (@better-auth/cimd), which Qivo does not install
+ * (tests/oauth.test.ts), and the provider's routes that link a client
+ * afterwards are not served (lib/authRoutes.ts). A second row
  * would also change no answer: the provider and Qivo (betterAuth/lookups.ts
  * clientLinked) ask only whether a link exists, and a client's delete removes
  * every link (betterAuth/oauth.ts). Serving either of those needs the pair

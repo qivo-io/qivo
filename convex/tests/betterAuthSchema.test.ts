@@ -5,9 +5,12 @@
 import { oauthProvider } from '@better-auth/oauth-provider'
 import { getAuthTables } from 'better-auth/db'
 import { describe, expect, it } from 'vitest'
+import { components } from '../_generated/api'
 import { createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { tables as generated } from '../betterAuth/schema.generated'
+import { takeScans } from './env.setup'
+import { newT } from './helpers.setup'
 
 type Declared = Record<
   string,
@@ -58,5 +61,30 @@ describe('the component schema', () => {
       indexDescriptor: 'clientId_resourceId',
       fields: ['clientId', 'resourceId'],
     })
+  })
+})
+
+describe('the scan check of env.setup.ts', () => {
+  /* An adapter release that words its warning differently, or stops giving
+   * it, fails here, since the check would then pass every scan. */
+  it('records the warning the adapter gives a lookup that no index serves', async () => {
+    await newT().query(components.betterAuth.adapter.findMany, {
+      model: 'session',
+      where: [{ field: 'ipAddress', value: '192.0.2.1' }],
+      paginationOpts: { cursor: null, numItems: 1 },
+    })
+    const found = takeScans()
+    expect(found).toHaveLength(1)
+    expect(found[0]).toContain('table "session"')
+    expect(found[0]).toContain('[ipAddress]')
+  })
+
+  it('records nothing for a lookup an index serves', async () => {
+    await newT().query(components.betterAuth.adapter.findMany, {
+      model: 'session',
+      where: [{ field: 'userId', value: 'nobody' }],
+      paginationOpts: { cursor: null, numItems: 1 },
+    })
+    expect(takeScans()).toEqual([])
   })
 })

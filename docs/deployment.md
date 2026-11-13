@@ -2505,10 +2505,14 @@ answers, and the server no longer answers one it could not complete with
 HTTP `503` and `SIGN_OUT_FAILED`. An earlier app against this backend, such
 as a tab left open, signs in and out as before. This app against an earlier
 backend does too, except that it signs the browser out where that backend
-answers `503`. The release adds the index `accountId_providerId_userId` to
-the auth component's `account` table, which Convex builds when it deploys,
-and removes none. It changes no table or field and has no backfill and no
-release step, and the backend may return to an earlier commit.
+answers `503`. A completed sign-out now also forgets a session that another
+tab of the same page stored while the request ran, and that tab signs in
+again. The release adds four indexes to the auth component, which Convex
+builds when it deploys, and removes none: `accountId_providerId_userId` on
+`account`, `clientId` on `oauthConsent`, `clientId_userId` on
+`oauthAccessToken` and `clientId_referenceId_userId` on `oauthRefreshToken`.
+It changes no table or field and has no backfill and no release step, and
+the backend may return to an earlier commit, which drops those indexes.
 
 ## Node.js version
 

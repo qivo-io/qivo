@@ -8,6 +8,12 @@ const SITE_URL = 'https://auth-session-test.convex.site'
 const APP_PREFIX = 'better-auth'
 const ADMIN_PREFIX = 'qivo-admin'
 type AuthSession = ReturnType<typeof createAuthSession>
+
+/* What the server answers a sign-out with: its session, session cache,
+ * remember-me and Convex token cookies, each cleared. */
+const SIGNED_OUT_COOKIES = ['session_token', 'session_data', 'dont_remember', 'convex_jwt']
+  .map((name) => `better-auth.${name}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`)
+  .join(', ')
 type SocketFetcher = Parameters<ConvexClient['setAuth']>[0]
 type AuthChange = Parameters<ConvexClient['setAuth']>[1]
 
@@ -188,7 +194,13 @@ function authService(baseURL = SITE_URL) {
         sessions.delete(token)
         revoked.push(token)
       }
-      return Response.json({ success: true })
+      // Better Auth clears its cookies in the answer, whether or not a
+      // session ended, and the cross-domain plugin moves them into this
+      // header (convex/tests/authHttp.test.ts pins the four of them).
+      return Response.json(
+        { success: true },
+        { headers: { 'set-better-auth-cookie': SIGNED_OUT_COOKIES } },
+      )
     }
     throw new Error(`Unexpected auth request: ${path}`)
   })
@@ -210,6 +222,10 @@ function authService(baseURL = SITE_URL) {
     },
   }
 }
+
+/** The session token a Better-Auth-Cookie header names, or ''. */
+const sessionTokenIn = (cookieHeader: string) =>
+  /(?:^|; )better-auth\.session_token=([^;]*)/.exec(cookieHeader)?.[1] ?? ''
 
 async function login(session: AuthSession, email: string) {
   const result = await session.authClient.signIn.email({ email, password: 'test-password' })
@@ -515,9 +531,10 @@ describe('independent app and admin browser sessions', () => {
       expect(service.sessions.has(otherToken)).toBe(true)
       expect(ownSocket.clearAuth).toHaveBeenCalledOnce()
       expect(otherSocket.clearAuth).not.toHaveBeenCalled()
-      expect(own.authClient.getCookie()).toBe('')
+      // the answer's cleared cookies replace the jar's, so it names no session
+      expect(sessionTokenIn(own.authClient.getCookie())).toBe('')
       expect(own.authClient.getSessionData()).toBeNull()
-      expect(saved(ownPrefix)).toEqual({ cookie: '{}', cache: '{}' })
+      expect(saved(ownPrefix).cache).toBe('{}')
       expect(saved(otherPrefix)).toEqual(otherBefore)
       expect(other.authClient.getSessionData()).toMatchObject({
         session: { token: otherToken },
@@ -828,33 +845,45 @@ describe('independent app and admin browser sessions', () => {
     expect(await adminSocket.token()).toBeNull()
   })
 
-  it.each([
-    { outcome: 'ends', status: undefined },
-    { outcome: 'fails', status: 503 },
-  ])(
-    'a sign-out that $outcome after another tab signed in keeps the newer session',
-    async ({ status }) => {
-      let answer = () => {}
-      const answered = new Promise<void>((resolve) => (answer = resolve))
-      // The clients take fetch when they are created.
-      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).endsWith('/sign-out')) await answered
-        return service.fetch(input, init)
-      })
-      const { admin } = pair()
-      const oldToken = await login(admin, 'operator@example.test')
-      if (status) service.fail('/sign-out', status)
-      const signedOut = admin.signOut()
-      await vi.advanceTimersByTimeAsync(0)
-      // another tab of the console signs in while the sign-out runs
-      const otherTab = createAuthSession(ADMIN_PREFIX, socket().client)
-      const newToken = await login(otherTab, 'operator@example.test')
-      answer()
-      await signedOut
-      expect(service.revoked).toEqual(status ? [] : [oldToken])
-      expect(saved(ADMIN_PREFIX).cookie).toContain(newToken)
-    },
-  )
+  /* Another tab of the console signs in while this tab's sign-out waits for
+     its answer. Answers the old token, the new one and the jar afterwards. */
+  async function signInDuringSignOut(status?: number) {
+    let answer = () => {}
+    const answered = new Promise<void>((resolve) => (answer = resolve))
+    // The clients take fetch when they are created.
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/sign-out')) await answered
+      return service.fetch(input, init)
+    })
+    const { admin } = pair()
+    const oldToken = await login(admin, 'operator@example.test')
+    if (status) service.fail('/sign-out', status)
+    const signedOut = admin.signOut()
+    await vi.advanceTimersByTimeAsync(0)
+    const otherTab = createAuthSession(ADMIN_PREFIX, socket().client)
+    const newToken = await login(otherTab, 'operator@example.test')
+    answer()
+    await signedOut
+    return { oldToken, newToken, jar: saved(ADMIN_PREFIX).cookie ?? '' }
+  }
+
+  it('a sign-out the server could not complete keeps a session another tab stored meanwhile', async () => {
+    const { newToken, jar } = await signInDuringSignOut(503)
+    expect(service.revoked).toEqual([])
+    expect(jar).toContain(newToken)
+  })
+
+  /* The plugin applies the cleared cookies of a completed sign-out to the jar
+     as it is when the answer arrives, so they also replace a session another
+     tab stored while the request ran. That tab signs in again. The owner
+     accepted this with the plugin's sign-out (docs/better-auth-upgrade.md). */
+  it('a completed sign-out also forgets a session another tab stored meanwhile', async () => {
+    const { oldToken, newToken, jar } = await signInDuringSignOut()
+    expect(service.revoked).toEqual([oldToken])
+    expect(jar).not.toContain(newToken)
+    // the server still holds the newer session, until its expiry
+    expect(service.sessions.has(newToken)).toBe(true)
+  })
 
   it('a sign-out pressed again while it runs sends one request', async () => {
     const { admin } = pair()

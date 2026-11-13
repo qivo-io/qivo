@@ -25,8 +25,11 @@ Qivo keeps no adapter code of its own. Two things follow from that.
   hands Better Auth the provider's tables with that index kept but no longer
   unique. Nothing Qivo serves can store a pair twice: the provider writes a
   link only when it registers a client, for a client id it made in that
-  request, Qivo accepts no client whose id is a metadata document's URL, and
-  the provider's routes that link a client afterwards are not served
+  request. It stores a client whose id is a metadata document's URL, which
+  two requests could name at once, only with its client discovery extension
+  (`@better-auth/cimd`), which Qivo does not install, and
+  `convex/tests/oauth.test.ts` shows that such a client id stores nothing.
+  The provider's routes that link a client afterwards are not served
   (`convex/lib/authRoutes.ts`). A second row would change no answer either,
   because the provider and Qivo ask only whether a link exists, and a
   client's delete removes every link. Serving one of those routes or
@@ -50,6 +53,24 @@ Qivo keeps no adapter code of its own. Two things follow from that.
   tests pass. Move past it only with an adapter release that works with the
   newer one, and check the advisories of the releases in between meanwhile
   (see [Advisories](#advisories)).
+
+### What the copy fixed, in adapter 0.13.0
+
+Qivo's copy fixed these in the adapter it was taken from. Read from the
+source of `0.13.0` on November 13, 2026, for a later release to recheck:
+
+| The copy's fix | In `0.13.0` |
+| --- | --- |
+| A read of several pages resumes after the page it read, so a page that stops early is not read twice | Fixed |
+| A single-row lookup reads on past a page with no match | Fixed |
+| The queries for the values of an `in` clause merge on the fields their index orders by | Fixed |
+| A lookup of only `OR` clauses answers null when none matches | Fixed |
+| An update that matches no row answers null | Fixed |
+| An `eq null` clause matches a field never written | Fixed |
+| `consumeOne` and `incrementOne` run as one mutation each | Fixed |
+| A second `in` clause of one lookup is applied to each row | Not fixed. With an index, the adapter applies only the first. No lookup of Better Auth or the OAuth provider has two. |
+| A lookup that no index fully serves reads through the index that covers most of it | Not taken. The adapter scans the table and warns. `convex/betterAuth/schema.ts` holds the indexes, and a test in which a lookup scans fails. |
+| A unique index of several fields is enforced | Not taken. The adapter refuses such an index (see above). |
 
 ## What changed with Better Auth 1.7
 
@@ -76,9 +97,14 @@ Qivo keeps no adapter code of its own. Two things follow from that.
 - **Schema.** `convex/betterAuth/schema.generated.ts` holds the 1.7 tables,
   among them `oauthResource`, `oauthClientResource` and
   `oauthClientAssertion`, and new optional fields on the token and client
-  tables. `convex/betterAuth/schema.ts` keeps the consent index and adds
-  `account.microsoftTenantId`. It no longer accepts `oauthClient.public` and
-  `oauthClient.type`, which 1.6 wrote and 1.7 dropped (see
+  tables. `convex/betterAuth/schema.ts` adds `account.microsoftTenantId`
+  and the indexes of the OAuth provider's lookups: a consent by its client
+  and login and by its connection, the tokens of an authorization code, and
+  the access and refresh tokens of a client and login, which the provider
+  deletes when a revocation loses its refresh token to a rotation. It also
+  holds the indexes of the nightly token cleanup. It no longer accepts
+  `oauthClient.public` and `oauthClient.type`, which 1.6 wrote and 1.7
+  dropped (see
   [Existing data and deployment order](#existing-data-and-deployment-order)).
 - **OAuth provider** (`convex/lib/oauthProvider.ts`). The MCP endpoint is the
   one configured resource, and every new client is linked to it. Registration
@@ -222,9 +248,14 @@ Qivo keeps no adapter code of its own. Two things follow from that.
   signed authorization request that the app's OAuth client adds to a
   sign-out from the connect page, which the provider would refuse once it
   expires. A press while a sign-out runs joins it, and the controls show that
-  it runs. A login removal from the console deletes the login and then its
-  sessions and tokens, and `/mcp` refuses every token of a missing or banned
-  login.
+  it runs. The client applies the cleared cookies of a completed sign-out to
+  the browser's stored session as it is when the answer arrives. A session
+  that another tab of the same page stored while the request ran is therefore
+  forgotten too, and that tab signs in again. Qivo's copy kept such a
+  session. The app and the operator console store their sessions apart, so
+  neither signs the other out. A login removal from the console deletes the
+  login and then its sessions and tokens, and `/mcp` refuses every token of a
+  missing or banned login.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
   smoke cleanup and the demo purge) also delete the client's resource links.
   The operator's and the console's login deletes keep the clients, as before.
@@ -396,8 +427,7 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   refreshes, and a refresh after it still renews. A call that ends more than
   100 sessions ends the tokens of each. A sign-out leaves the browser with
   no session, also when the server answers with a failure or cannot be
-  reached, and keeps a newer session that another tab stored meanwhile
-  (`src/lib/authSession.test.ts`). A sign-out with an expired signed
+  reached (`src/lib/authSession.test.ts`). A sign-out with an expired signed
   authorization request ends the session. The nightly cleanup deletes
   expired sessions through its delete trigger and ends their tokens at the
   expiry, and deletes spent OAuth tokens (`convex/tests/authRetention.test.ts`).

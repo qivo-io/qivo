@@ -297,9 +297,12 @@ export function createAuthSession(
   }
 
   /** Sends the sign-out and drops this page's Convex sign-in whatever the
-      server answers. It leaves storage to the plugin. Clearing the prefix
-      again after the answer would wipe a newer session that another tab
-      stored under it meanwhile. */
+      server answers. It leaves storage to the plugin, which clears the
+      prefix as the request leaves. When the server completes the sign-out,
+      the plugin also applies the answer's cleared cookies to the prefix as
+      it is then, so a session that another tab stored under it while the
+      request ran is forgotten too, and that tab signs in again. After a
+      failure or no answer, such a session stays. */
   async function endSession(): Promise<void> {
     // an app update's reload would drop the request
     const releaseUpdateBlock = beginUpdateBlock()

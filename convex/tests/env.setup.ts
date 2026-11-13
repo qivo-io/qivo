@@ -22,7 +22,7 @@
  * Wired globally from vitest.config.mts, so the src/ suites run it too. They
  * read none of this and the node environment already carries `process`. */
 
-import { afterEach } from 'vitest'
+import { afterAll, afterEach } from 'vitest'
 
 /* convex/** runs in edge-runtime, which may or may not carry a process global
  * — attachments.test.ts plants its own vars through the same handle. */
@@ -40,7 +40,11 @@ g.process.env.QIVO_ENVIRONMENT ??= 'development'
  * a lookup scans fails after it ran, with the index each warning names.
  * The warning is recorded, not thrown, because Better Auth catches the
  * errors of some lookups, such as the cleanup after a replayed authorization
- * code. A test that replaces console.warn hides its scans from this. */
+ * code. A scan after a file's last test fails the file. A scan by work that
+ * outlives its test, such as a scheduled function, fails the next test. A
+ * test that replaces console.warn hides its scans from this.
+ * betterAuthSchema.test.ts checks that the adapter still words the warning
+ * this way. */
 const scans: string[] = []
 const warn = console.warn
 console.warn = (...args: unknown[]) => {
@@ -48,8 +52,15 @@ console.warn = (...args: unknown[]) => {
     scans.push(args[0])
   else warn(...args)
 }
-afterEach(() => {
-  if (scans.length === 0) return
-  const found = [...new Set(scans.splice(0))]
-  throw new Error(`A Better Auth lookup scanned a table:\n${found.join('\n')}`)
-})
+
+/** The scan warnings recorded since the last call, which empties them. For
+ * the test that makes a lookup scan on purpose. */
+export const takeScans = () => scans.splice(0)
+
+function reportScans() {
+  const found = [...new Set(takeScans())]
+  if (found.length > 0)
+    throw new Error(`A Better Auth lookup scanned a table:\n${found.join('\n')}`)
+}
+afterEach(reportScans)
+afterAll(reportScans)
