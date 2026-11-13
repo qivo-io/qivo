@@ -77,10 +77,8 @@ describe('the baseline checkout', () => {
       }).trim()
     const commit = (message) => {
       git('add', '-A')
-      git(
-        ...['-c', 'user.name=Test', '-c', 'user.email=test@example.test'],
-        ...['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message],
-      )
+      const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.test']
+      git(...identity, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message)
       return git('rev-parse', 'HEAD')
     }
     git('init', '-q')
