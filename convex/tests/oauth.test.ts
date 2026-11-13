@@ -2368,15 +2368,38 @@ describe('Convex refresh-token compare-and-set adapter', () => {
    * a metadata document, which two requests could name at once. */
   it('stores no client for a client id that is a metadata document URL', async () => {
     const f = await fixture()
-    const request = await authorization(f, 'https://client.example.test/oauth/client.json')
-    const response = await authorize(request)
-    const answer = await json(response)
-    expect(JSON.stringify(answer)).toContain('invalid_client')
+    const clientId = 'https://client.example.test/oauth/client.json'
+    // The document a provider with client discovery would fetch and accept,
+    // so that a refusal here means it was never asked for.
+    const fetched = vi.fn(async () =>
+      Response.json({
+        client_id: clientId,
+        client_name: 'Metadata document client',
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        scope: WRITE,
+      }),
+    )
+    vi.stubGlobal('fetch', fetched)
+    try {
+      const response = await authorize(await authorization(f, clientId))
+      expect(JSON.stringify(await json(response))).toContain('invalid_client')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(fetched).not.toHaveBeenCalled()
     const stored = await runInAuth(f.t, async (ctx) => ({
       clients: await ctx.db.query('oauthClient').collect(),
       links: await ctx.db.query('oauthClientResource').collect(),
     }))
     expect(stored).toEqual({ clients: [], links: [] })
+    // and the server's metadata offers no such clients
+    const metadata = await json(
+      await http(f.t, '/.well-known/oauth-authorization-server', { headers: { Origin: APP } }),
+    )
+    expect(metadata.client_id_metadata_document_supported).toBeUndefined()
   })
 
   it('revokes a refresh token, and ends the connection when a rotation claimed the token first', async () => {
