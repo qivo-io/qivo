@@ -53,18 +53,15 @@ const NAV_ICONS = {
 export function AdminApp() {
   const [view, setView] = useState<View>('dashboard')
   const [operator, setOperator] = useState('')
+  // a sign-out under way, which ends in a reload
   const [signingOut, setSigningOut] = useState(false)
-  // a sign-out the server could not complete, for the operator to try again
-  const [signOutError, setSignOutError] = useState('')
-  const signOut = async () => {
-    setSignOutError('')
-    setSigningOut(true)
-    const refused = await signOutAndReload()
-    if (!refused) return
-    setSignOutError(refused)
-    setSigningOut(false)
+  const signOutControl = {
+    signingOut,
+    onSignOut: () => {
+      setSigningOut(true)
+      void signOutAndReload()
+    },
   }
-  const signOutControl = { signingOut, onSignOut: () => void signOut() }
 
   useEffect(() => {
     void authClient.getSession(NO_QUERY).then(({ data }) => setOperator(data?.user.email ?? ''))
@@ -94,11 +91,6 @@ export function AdminApp() {
             className="animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-[1280px]"
             key={view}
           >
-            {signOutError && (
-              <div role="alert" className="mb-6 text-sm text-danger">
-                {signOutError}
-              </div>
-            )}
             {view === 'dashboard' && <Dashboard />}
             {view === 'orgs' && <Orgs />}
             {view === 'usage' && <Usage />}

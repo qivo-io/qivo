@@ -1,16 +1,12 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { oauthProviderAuthServerMetadata } from '@better-auth/oauth-provider'
+import { type AuthFunctions, createClient, type GenericCtx } from '@convex-dev/better-auth'
+import { convex, crossDomain } from '@convex-dev/better-auth/plugins'
+import { isRunMutationCtx, requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import { type BetterAuthOptions, betterAuth } from 'better-auth/minimal'
 import { admin } from 'better-auth/plugins'
 import { anonymous } from 'better-auth/plugins/anonymous'
 import { makeFunctionReference } from 'convex/server'
-import {
-  type AuthFunctions,
-  createClient,
-  type GenericCtx,
-} from '../vendor/convex-better-auth/src/client'
-import { convex, crossDomain } from '../vendor/convex-better-auth/src/plugins'
-import { isRunMutationCtx, requireRunMutationCtx } from '../vendor/convex-better-auth/src/utils'
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'

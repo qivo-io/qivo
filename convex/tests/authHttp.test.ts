@@ -182,9 +182,11 @@ const METADATA = {
   backchannel_logout_session_supported: false,
 }
 
-/* The session cookie and the token cookie of a sign-in, masked. */
+/* The session cookie of a sign-in, masked. A sign-in also clears the token
+ * cookie, so that no token of an earlier session outlives it, and the page
+ * asks /convex/token for the new session's. */
 const SIGNED_IN_COOKIE = (maxAge: number) =>
-  `set-better-auth-cookie: __Secure-better-auth.session_token=<value>; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax, __Secure-better-auth.convex_jwt=<value>; Max-Age=900; Path=/; HttpOnly; Secure; SameSite=Lax`
+  `set-better-auth-cookie: __Secure-better-auth.session_token=<value>; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax, __Secure-better-auth.convex_jwt=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`
 const TOKEN_COOKIE =
   'set-better-auth-cookie: __Secure-better-auth.convex_jwt=<value>; Max-Age=900; Path=/; HttpOnly; Secure; SameSite=Lax'
 const CLEARED_TOKEN_COOKIE =
@@ -335,7 +337,11 @@ const REGULAR_CASES: Case[] = [
     },
     {
       status: 401,
-      headers: headers(authCors(REGULAR_APP), ['content-type: application/json']),
+      // every answer of a sign-in route clears the token cookie
+      headers: headers(authCors(REGULAR_APP), [
+        'content-type: application/json',
+        CLEARED_TOKEN_COOKIE,
+      ]),
       body: { message: 'Invalid email or password', code: 'INVALID_EMAIL_OR_PASSWORD' },
     },
   ],
@@ -430,7 +436,10 @@ const REGULAR_CASES: Case[] = [
       ),
     {
       status: 400,
-      headers: headers(authCors(REGULAR_APP), ['content-type: application/json']),
+      headers: headers(authCors(REGULAR_APP), [
+        'content-type: application/json',
+        CLEARED_TOKEN_COOKIE,
+      ]),
       body: {
         message: '[body.scopes.0] Invalid input: expected string, received number',
         code: 'VALIDATION_ERROR',
@@ -834,16 +843,16 @@ const JSON_TYPE = 'application/json'
 const REGULAR_SWEEP: Record<(typeof AUTH_ROUTES)[number], Swept> = {
   'GET /get-session': [200, SESSION_NAMES, JSON_TYPE],
   'GET /convex/token': [401, prefixed('content-type'), JSON_TYPE],
-  'POST /sign-in/email': [400, prefixed('content-type'), JSON_TYPE],
+  'POST /sign-in/email': [400, prefixed('content-type', 'set-cookie'), JSON_TYPE],
   'POST /sign-out': [200, SIGN_OUT_NAMES, JSON_TYPE],
   'POST /sign-up/email': [503, prefixed('content-type'), JSON_TYPE],
-  'POST /sign-in/social': [400, prefixed('content-type'), JSON_TYPE],
+  'POST /sign-in/social': [400, prefixed('content-type', 'set-cookie'), JSON_TYPE],
   'POST /send-verification-email': [503, prefixed('content-type'), JSON_TYPE],
   'POST /request-password-reset': [503, prefixed('content-type'), JSON_TYPE],
   'POST /reset-password': [400, prefixed('content-type'), JSON_TYPE],
   'POST /cross-domain/one-time-token/verify': [400, prefixed('content-type'), JSON_TYPE],
-  'GET /callback/google': [302, prefixed('content-type', 'location'), JSON_TYPE],
-  'GET /callback/microsoft': [302, prefixed('content-type', 'location'), JSON_TYPE],
+  'GET /callback/google': [302, prefixed('content-type', 'location', 'set-cookie'), JSON_TYPE],
+  'GET /callback/microsoft': [302, prefixed('content-type', 'location', 'set-cookie'), JSON_TYPE],
   'GET /verify-email': [400, prefixed('content-type'), JSON_TYPE],
   'GET /reset-password/:token': [400, prefixed('content-type'), JSON_TYPE],
   'GET /error': [200, prefixed('content-type'), 'text/html'],

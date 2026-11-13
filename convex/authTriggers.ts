@@ -3,7 +3,7 @@
  * functions. The component calls one as a nested function in the
  * transaction of the row's write, once for each row, so Better Auth's bulk
  * session delete, such as a ban, runs onDelete up to 200 times in one
- * transaction (vendor/convex-better-auth/src/client/adapter.ts deleteMany).
+ * transaction (the adapter's deleteMany, @convex-dev/better-auth).
  *
  * A nested call loads the imports of its module again, so this module
  * imports none of Better Auth. On a local backend a trigger in a module that
@@ -11,8 +11,8 @@
  * about 5 ms here, and a ban of 200 sessions failed on Convex's time limit
  * for one transaction. */
 
+import type { Triggers } from '@convex-dev/better-auth'
 import { v } from 'convex/values'
-import type { Triggers } from '../vendor/convex-better-auth/src/client'
 import type { DataModel } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'

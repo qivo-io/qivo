@@ -70,7 +70,7 @@ import {
   signOut as authSignOut,
   onSignedIn,
 } from '../lib/auth'
-import { NO_QUERY, SignOutFailed } from '../lib/authSession'
+import { NO_QUERY } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
@@ -16718,11 +16718,11 @@ export const PLANNER = {
       server or a field holds typed text, the first press says what would be
       lost, and only a second press within SIGN_OUT_CONFIRM_MS goes ahead,
       without the close warning asking again. Signing out works offline
-      too, because it clears the sign-in stored in this browser. When the
-      server answers that it could not end the session, the person stays
-      signed in and is told to try again (lib/authSession.ts signOut). A
-      press while a sign-out runs does nothing. Returns the sign-out request
-      when this press started one, for the control to show that it runs. */
+      too, and when the server answers with a failure, because the request
+      itself clears the sign-in stored in this browser (lib/authSession.ts
+      signOut). A press while a sign-out runs does nothing. Returns the
+      sign-out request when this press started one, for the control to show
+      that it runs. */
   signOut: (): Promise<void> | undefined => {
     const waiting = syncStatus.unconfirmed()
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
@@ -16750,19 +16750,12 @@ export const PLANNER = {
     // a deliberate sign-out ends the session itself, so the leader sends no
     // end at the page's close
     stopAlerts()
-    const leave = () => {
-      unconfirmedNote.forgetAll()
-      clearAvatarSources()
-      leaveDeliberately()
-      reloadPage()
-    }
     return authSignOut()
-      .then(leave, (failure: unknown) => {
-        if (failure instanceof SignOutFailed) {
-          toast(failure.message)
-          // still signed in, so the desktop alerts go on
-          startAlerts()
-        } else leave()
+      .then(() => {
+        unconfirmedNote.forgetAll()
+        clearAvatarSources()
+        leaveDeliberately()
+        reloadPage()
       })
       .finally(() => {
         signingOut = false

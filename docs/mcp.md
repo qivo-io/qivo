@@ -958,7 +958,7 @@ is still refused, but it no longer revokes the connection. A client that
 refreshes at most once an hour keeps at most 768 such hashes a connection,
 32 days of refreshes. A fresh connection creates a new grant.
 
-The OAuth provider is Better Auth `1.7.12`, which fixes the resource-binding
+The OAuth provider is Better Auth `1.7.21`, which fixes the resource-binding
 advisory [GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)
 of the 1.6 line: the provider binds each grant to the resource it was
 approved for. The MCP endpoint is the one resource Qivo configures, and the
@@ -966,7 +966,7 @@ provider refuses a client that is not linked to it. Qivo also
 checks resource parameters and stores an immutable resource binding on each
 grant; regression tests cover foreign and repeated resource indicators and
 the canonical default when omitted. Do not add another resource without
-revisiting these checks. [Better Auth and Qivo's copy of the Convex
+revisiting these checks. [Better Auth and the Convex
 adapter](better-auth-upgrade.md) describes the release Qivo runs and how to
 move to a later one.
 

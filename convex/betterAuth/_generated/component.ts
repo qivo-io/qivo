@@ -54,6 +54,487 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     adapter: {
+      consumeOne: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          input:
+            | {
+                model: "user";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "name"
+                    | "email"
+                    | "emailVerified"
+                    | "image"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "userId"
+                    | "role"
+                    | "banned"
+                    | "banReason"
+                    | "banExpires"
+                    | "isAnonymous"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "session";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "expiresAt"
+                    | "token"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "ipAddress"
+                    | "userAgent"
+                    | "userId"
+                    | "impersonatedBy"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "account";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "accountId"
+                    | "providerId"
+                    | "userId"
+                    | "accessToken"
+                    | "refreshToken"
+                    | "idToken"
+                    | "accessTokenExpiresAt"
+                    | "refreshTokenExpiresAt"
+                    | "scope"
+                    | "password"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "microsoftTenantId"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "verification";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "identifier"
+                    | "value"
+                    | "expiresAt"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "jwks";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "publicKey"
+                    | "privateKey"
+                    | "createdAt"
+                    | "expiresAt"
+                    | "alg"
+                    | "crv"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthClient";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "clientId"
+                    | "clientSecret"
+                    | "clientDiscoveryId"
+                    | "disabled"
+                    | "skipConsent"
+                    | "enableEndSession"
+                    | "subjectType"
+                    | "scopes"
+                    | "clientCredentialsScopes"
+                    | "userId"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "name"
+                    | "uri"
+                    | "icon"
+                    | "contacts"
+                    | "tos"
+                    | "policy"
+                    | "softwareId"
+                    | "softwareVersion"
+                    | "softwareStatement"
+                    | "redirectUris"
+                    | "postLogoutRedirectUris"
+                    | "backchannelLogoutUri"
+                    | "backchannelLogoutSessionRequired"
+                    | "tokenEndpointAuthMethod"
+                    | "applicationType"
+                    | "jwks"
+                    | "jwksUri"
+                    | "grantTypes"
+                    | "responseTypes"
+                    | "requirePKCE"
+                    | "dpopBoundAccessTokens"
+                    | "referenceId"
+                    | "metadata"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthResource";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "identifier"
+                    | "name"
+                    | "accessTokenTtl"
+                    | "refreshTokenTtl"
+                    | "signingAlgorithm"
+                    | "signingKeyId"
+                    | "allowedScopes"
+                    | "customClaims"
+                    | "dpopBoundAccessTokensRequired"
+                    | "disabled"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "policyVersion"
+                    | "metadata"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthClientResource";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "clientId"
+                    | "resourceId"
+                    | "metadata"
+                    | "createdAt"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthRefreshToken";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "token"
+                    | "clientId"
+                    | "sessionId"
+                    | "userId"
+                    | "referenceId"
+                    | "authorizationCodeId"
+                    | "resources"
+                    | "requestedUserInfoClaims"
+                    | "expiresAt"
+                    | "createdAt"
+                    | "revoked"
+                    | "rotatedAt"
+                    | "rotationReplayResponse"
+                    | "rotationReplayExpiresAt"
+                    | "authTime"
+                    | "confirmation"
+                    | "scopes"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthAccessToken";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "token"
+                    | "clientId"
+                    | "sessionId"
+                    | "userId"
+                    | "referenceId"
+                    | "authorizationCodeId"
+                    | "resources"
+                    | "requestedUserInfoClaims"
+                    | "refreshId"
+                    | "expiresAt"
+                    | "createdAt"
+                    | "revoked"
+                    | "confirmation"
+                    | "scopes"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthConsent";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field:
+                    | "clientId"
+                    | "userId"
+                    | "referenceId"
+                    | "resources"
+                    | "requestedUserInfoClaims"
+                    | "scopes"
+                    | "createdAt"
+                    | "updatedAt"
+                    | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              }
+            | {
+                model: "oauthClientAssertion";
+                where?: Array<{
+                  connector?: "AND" | "OR";
+                  field: "expiresAt" | "_id";
+                  mode?: "sensitive" | "insensitive";
+                  operator?:
+                    | "lt"
+                    | "lte"
+                    | "gt"
+                    | "gte"
+                    | "eq"
+                    | "in"
+                    | "not_in"
+                    | "ne"
+                    | "contains"
+                    | "starts_with"
+                    | "ends_with";
+                  value:
+                    | string
+                    | number
+                    | boolean
+                    | Array<string>
+                    | Array<number>
+                    | null;
+                }>;
+              };
+          onDeleteHandle?: string;
+        },
+        any,
+        Name
+      >;
       create: FunctionReference<
         "mutation",
         "internal",
@@ -253,6 +734,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | { data: { expiresAt: number }; model: "oauthClientAssertion" };
           onCreateHandle?: string;
           select?: Array<string>;
+          unique?: Array<string>;
         },
         any,
         Name
@@ -1344,7 +1826,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   updatedAt?: number;
                   userId?: null | string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "name"
@@ -1395,7 +1877,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   userAgent?: null | string;
                   userId?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "expiresAt"
@@ -1447,7 +1929,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   updatedAt?: number;
                   userId?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "accountId"
@@ -1496,7 +1978,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   updatedAt?: number;
                   value?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "identifier"
@@ -1538,7 +2020,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   privateKey?: string;
                   publicKey?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "publicKey"
@@ -1610,7 +2092,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   uri?: null | string;
                   userId?: null | string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "clientId"
@@ -1690,7 +2172,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   signingKeyId?: null | string;
                   updatedAt?: null | number;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "identifier"
@@ -1739,7 +2221,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   metadata?: null | string;
                   resourceId?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "clientId"
@@ -1791,7 +2273,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   token?: string;
                   userId?: string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "token"
@@ -1853,7 +2335,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   token?: null | string;
                   userId?: null | string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "token"
@@ -1906,7 +2388,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   updatedAt?: null | number;
                   userId?: null | string;
                 };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field:
                     | "clientId"
@@ -1944,7 +2426,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                 increment: Record<string, number>;
                 model: "oauthClientAssertion";
                 set?: { expiresAt?: number };
-                where: Array<{
+                where?: Array<{
                   connector?: "AND" | "OR";
                   field: "expiresAt" | "_id";
                   mode?: "sensitive" | "insensitive";

@@ -1,10 +1,10 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provider'
-import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api'
+import type { GenericCtx } from '@convex-dev/better-auth'
+import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
+import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
-import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import {
@@ -114,6 +114,31 @@ async function ensureConnection(ctx: GenericCtx<DataModel>, args: FunctionArgs<t
     throw error
   }
 }
+
+type ProviderSchema = ReturnType<typeof oauthProvider>['schema']
+
+/** The provider's tables, with the index of a client's link to a resource,
+ * (clientId, resourceId), kept but no longer declared unique. The Convex
+ * adapter refuses a schema that declares a unique index of several fields,
+ * because it cannot enforce one, and this is the provider's only such index
+ * (tests/betterAuthSchema.test.ts fails when a release adds another).
+ *
+ * Nothing in Qivo can store a pair twice. The provider writes a link only
+ * when it registers a client, for a client id it made in that request. Two
+ * registrations can name one client only when the client id is a metadata
+ * document's URL, which Qivo does not accept, and the provider's routes that
+ * link a client afterwards are not served (lib/authRoutes.ts). A second row
+ * would also change no answer: the provider and Qivo (betterAuth/lookups.ts
+ * clientLinked) ask only whether a link exists, and a client's delete removes
+ * every link (betterAuth/oauth.ts). Serving either of those needs the pair
+ * kept unique some other way first. */
+const withOrdinaryLinkIndex = (schema: ProviderSchema) => ({
+  ...schema,
+  oauthClientResource: {
+    ...schema.oauthClientResource,
+    indexes: schema.oauthClientResource.indexes.map((index) => ({ ...index, unique: false })),
+  },
+})
 
 export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, schemaOnly = false) {
   const resource = schemaOnly ? 'http://schema-only.invalid/mcp' : mcpResource()
@@ -245,6 +270,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
   })
   return {
     ...provider,
+    schema: withOrdinaryLinkIndex(provider.schema),
     onRequest: async (request: Request, context: Parameters<typeof provider.onRequest>[1]) => {
       const url = new URL(request.url)
       if (url.pathname.endsWith('/.well-known/oauth-authorization-server')) {
@@ -286,10 +312,11 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
           }
         }
         /* Qivo does not support DPoP (RFC 9449): the MCP endpoint checks no
-         * proof, and the adapter cannot store the proof reservations Better
-         * Auth makes. A server without DPoP ignores the header and issues a
-         * Bearer token, whose token_type tells the client (RFC 9449 section
-         * 5), so the header is dropped before the provider sees it. */
+         * proof, and Qivo has not tested the proof reservations Better Auth
+         * makes with the Convex adapter. A server without DPoP ignores the
+         * header and issues a Bearer token, whose token_type tells the client
+         * (RFC 9449 section 5), so the header is dropped before the provider
+         * sees it. */
         if (request.headers.has('DPoP')) {
           const headers = new Headers(request.headers)
           headers.delete('DPoP')
@@ -386,9 +413,8 @@ async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown
 const AUTH_SCHEME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
 
 /** Better Auth hooks for the OAuth provider. They limit client registration,
- * check authorize and token requests before the provider handles them,
- * revoke a grant whose code or refresh token is replayed, and answer a
- * sign-out that could not end its session as a failure. */
+ * check authorize and token requests before the provider handles them, and
+ * revoke a grant whose code or refresh token is replayed. */
 export function oauthHooks(ctx: GenericCtx<DataModel>) {
   const requestBody = (value: unknown): Record<string, unknown> | undefined =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -495,41 +521,6 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       }
     }),
     after: createAuthMiddleware(async (endpoint) => {
-      if (endpoint.path === '/sign-out') {
-        /* Better Auth answers a sign-out whose session delete failed as a
-         * success and clears the cookie, so the session and its access tokens
-         * (lib/sessionEnd.ts) would outlive a sign-out the person saw succeed.
-         * A session still stored is deleted once more here; if it stays, the
-         * answer is an error that keeps the cookie, so the app keeps the
-         * person signed in and says so (lib/authSession.ts signOut). A
-         * sign-out Better Auth refused, such as a malformed body, ended
-         * nothing and clears no cookie, so it stays as it is. */
-        const { context } = endpoint
-        if (isAPIError(context.returned)) return
-        const token = await endpoint.getSignedCookie(
-          context.authCookies.sessionToken.name,
-          context.secret,
-        )
-        if (!token) return
-        const stored = () =>
-          context.adapter.findOne({ model: 'session', where: [{ field: 'token', value: token }] })
-        try {
-          if (await stored()) {
-            // Better Auth skips the delete without an error when its own
-            // lookup of the row fails.
-            await context.internalAdapter.deleteSession(token)
-            if (await stored()) throw new Error('The session is still stored')
-          }
-        } catch (error) {
-          context.logger.error('The session could not be ended at sign-out', error)
-          context.responseHeaders?.delete('set-cookie')
-          throw new APIError('SERVICE_UNAVAILABLE', {
-            code: 'SIGN_OUT_FAILED',
-            message: 'Qivo could not sign you out. Try again.',
-          })
-        }
-        return
-      }
       if (endpoint.path !== '/oauth2/token') return
       endpoint.setHeader('Cache-Control', 'no-store')
       endpoint.setHeader('Pragma', 'no-cache')

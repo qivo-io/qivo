@@ -9,7 +9,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { MutationCtx } from '../_generated/server'
 import { createAuth } from '../auth'
-import * as authTriggers from '../authTriggers'
 import * as adapter from '../betterAuth/adapter'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
@@ -1663,36 +1662,6 @@ describe('OAuth revocation, replay and live account checks', () => {
     await deniedAccess(f, c.access_token)
   })
 
-  it('answers a sign-out whose session cannot be ended as a failure that keeps the cookie, and ends both on a retry', async () => {
-    const f = await fixture()
-    const c = await connect(f)
-    const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
-    const [session] = await sessions()
-    // The session's delete trigger (lib/sessionEnd.ts endSession).
-    const trigger = () =>
-      vi.spyOn(authTriggers.onDelete as unknown as { _handler: () => Promise<void> }, '_handler')
-    // Every delete of the session fails, Better Auth's and Qivo's second try.
-    const end = trigger().mockRejectedValue(new Error('injected session end failure'))
-    const failed = await signOut(f)
-    const answer = await json(failed)
-    expect(failed.status, JSON.stringify(answer)).toBe(503)
-    expect(answer.code).toBe('SIGN_OUT_FAILED')
-    // The session cookie stays. The convex plugin still drops its cached
-    // JWT, which the session mints again.
-    expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
-    expect(failed.headers.get('set-cookie')).toBeNull()
-    expect((await sessions()).map((row) => row._id)).toEqual([session._id])
-    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
-    end.mockRestore()
-    // One failed delete is retried within the same sign-out.
-    trigger().mockRejectedValueOnce(new Error('injected session end failure'))
-    const retried = await signOut(f)
-    expect(retried.status).toBe(200)
-    expect(retried.headers.get('set-better-auth-cookie')).toContain('session_token=;')
-    expect(await sessions()).toEqual([])
-    await deniedAccess(f, c.access_token)
-  })
-
   it('ends the access tokens of every session when one call ends more than 100', async () => {
     const f = await fixture()
     const c = await connect(f)
@@ -1960,36 +1929,6 @@ describe('OAuth revocation, replay and live account checks', () => {
     const answer = await signOut(f, { oauth_query: expired })
     expect(answer.status, await answer.clone().text()).toBe(200)
     await deniedAccess(f, c.access_token)
-  })
-
-  it('answers a sign-out whose session delete Better Auth skipped as a failure', async () => {
-    const f = await fixture()
-    const c = await connect(f)
-    // Better Auth's delete looks the row up first and skips it, without an
-    // error, when that lookup fails.
-    const handler = adapter.findMany as unknown as {
-      _handler: (ctx: unknown, args: { model: string }) => Promise<unknown>
-    }
-    const original = handler._handler
-    const lookup = vi.spyOn(handler, '_handler').mockImplementation((ctx, args) => {
-      if (args.model === 'session') throw new Error('injected session lookup failure')
-      return original(ctx, args)
-    })
-    const failed = await signOut(f)
-    lookup.mockRestore()
-    expect(failed.status, await failed.clone().text()).toBe(503)
-    expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
-    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
-  })
-
-  it('leaves the session of a sign-out Better Auth refused', async () => {
-    const f = await fixture()
-    const c = await connect(f)
-    const refused = await signOut(f, { disableRedirect: 'not a boolean' })
-    expect(refused.status, await refused.clone().text()).toBe(400)
-    const sessions = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
-    expect(sessions).toHaveLength(1)
-    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('refuses a token issued before its session ended and passes one issued after', async () => {
@@ -2353,7 +2292,16 @@ describe('the access check of every machine call, without the adapter', () => {
       (f: Fx) => f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false })),
       INVALID,
     ],
-    ['refuses a grant whose browser session ended', (f: Fx) => signOut(f), INVALID],
+    [
+      'refuses a grant whose browser session ended',
+      // Ending a session schedules usage.ts keepSignIn, which reads the login
+      // through the adapter and is no part of a machine call, so it runs first.
+      async (f: Fx) => {
+        await signOut(f)
+        await f.t.finishAllScheduledFunctions(() => {})
+      },
+      INVALID,
+    ],
     ['refuses a grant whose login was deleted', (f: Fx) => deleteRow(f, 'user', f.userId), INVALID],
     [
       'refuses a grant whose login is banned',

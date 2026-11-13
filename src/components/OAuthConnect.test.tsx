@@ -3,12 +3,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { SIGN_OUT_FAILED } from '../lib/authSession'
 import { OAuthConnect } from './OAuthConnect'
 
 /* The connect page's "Use another account". AuthGate passes a sign-out that
-   resolves false when the server could not sign the person out, and reloads
-   the page when it could (AuthGate.test.tsx drives both through the gate). */
+   reloads the page when it ends (AuthGate.test.tsx drives it through the
+   gate). */
 
 vi.mock('../lib/auth', () => ({ authClient: { oauth2: { consent: vi.fn() } } }))
 // a request for both scopes, so the page shows the Allow changes checkbox
@@ -50,7 +49,7 @@ function button(label: string) {
 
 /* Opens the page with the sign-out `onUseAnotherAccount` and returns its
    switch button and every control the sign-out holds. */
-async function render(onUseAnotherAccount: () => Promise<boolean>) {
+async function render(onUseAnotherAccount: () => void) {
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -65,27 +64,11 @@ async function render(onUseAnotherAccount: () => Promise<boolean>) {
 }
 
 describe('the connect page when the person uses another account', () => {
-  it('says the sign-out failed and gives every control back', async () => {
-    let answer!: (signedOut: boolean) => void
-    const { pressed, controls } = await render(
-      () =>
-        new Promise<boolean>((resolve) => {
-          answer = resolve
-        }),
-    )
+  it('holds every control from the press until the sign-out reloads the page', async () => {
+    const signOut = vi.fn()
+    const { pressed, controls } = await render(signOut)
     await act(async () => pressed.click())
-    expect(pressed.textContent).toBe('Signing out…')
-    for (const c of controls) expect(c.disabled, c.id || c.textContent || '').toBe(true)
-
-    await act(async () => answer(false))
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(SIGN_OUT_FAILED)
-    expect(pressed.textContent).toBe('Use another account')
-    for (const c of controls) expect(c.disabled, c.id || c.textContent || '').toBe(false)
-  })
-
-  it('holds every control while a sign-out that ended reloads the page', async () => {
-    const { pressed, controls } = await render(async () => true)
-    await act(async () => pressed.click())
+    expect(signOut).toHaveBeenCalledOnce()
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(pressed.textContent).toBe('Signing out…')
     for (const c of controls) expect(c.disabled, c.id || c.textContent || '').toBe(true)

@@ -1,8 +1,8 @@
 import type { oauthProviderClient } from '@better-auth/oauth-provider/client'
+import { convexClient, crossDomainClient } from '@convex-dev/better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/client'
 import { anonymousClient } from 'better-auth/client/plugins'
 import type { ConvexClient } from 'convex/browser'
-import { convexClient, crossDomainClient } from '../../vendor/convex-better-auth/src/client/plugins'
 import { convexSiteUrl } from './backendUrl'
 import { beginUpdateBlock } from './updateSafety'
 
@@ -52,17 +52,6 @@ function retryPause(attempt: number, onWait?: (wake: () => void) => void): Promi
     if (events) window.addEventListener('online', done)
     onWait?.(done)
   })
-}
-
-/** What the person reads when the server could not sign them out now. */
-export const SIGN_OUT_FAILED = 'Qivo could not sign you out. Try again.'
-
-/** Thrown by a sign-out the server could not complete now, after a fault or
-    a rate limit. The person is still signed in and can try again. */
-export class SignOutFailed extends Error {
-  constructor() {
-    super(SIGN_OUT_FAILED)
-  }
 }
 
 /* Each entry point creates its own session. The cross-domain plugin stores
@@ -292,15 +281,13 @@ export function createAuthSession(
     return connect(generation, onLost)
   }
 
-  /* Ends the session on the server, then forgets it in this browser. The
-     plugin clears only this prefix; the server ends only its session.
-     Callers reload afterward, re-arming this page's socket on the next
-     mount. A press while a sign-out runs joins it. A fault or a rate limit
-     (5xx, 429) did not end the session, and another try can, so the session
-     stays here and this throws SignOutFailed. Any other refusal repeats on
-     every try, and a server that cannot be reached or does not answer in
-     time cannot end it now, so the session is forgotten here anyway: signing
-     out works offline, and the server ends the session at its expiry. */
+  /* Signs this page out. The plugin forgets the session in this browser as
+     it sends the request, so the sign-out holds here also when the server
+     cannot be reached, does not answer in time or answers with a failure.
+     The plugin clears only this prefix, and the server ends only its
+     session, at once or, if it could not, at the session's expiry. A press
+     while a sign-out runs joins it. This never rejects. Callers reload
+     afterward, re-arming this page's socket on the next mount. */
   let signingOut: Promise<void> | null = null
   function signOut(): Promise<void> {
     signingOut ??= endSession().finally(() => {
@@ -309,32 +296,26 @@ export function createAuthSession(
     return signingOut
   }
 
+  /** Sends the sign-out and drops this page's Convex sign-in whatever the
+      server answers. It leaves storage to the plugin. Clearing the prefix
+      again after the answer would wipe a newer session that another tab
+      stored under it meanwhile. */
   async function endSession(): Promise<void> {
-    // an app update's reload would drop the request and its answer
+    // an app update's reload would drop the request
     const releaseUpdateBlock = beginUpdateBlock()
     try {
-      let answer: Awaited<ReturnType<typeof authClient.signOut>>
-      try {
-        answer = await authClient.signOut({ fetchOptions: { timeout: REQUEST_TIMEOUT_MS } })
-      } catch {
-        clearLocalSession()
-        return
-      }
-      if (answer.error) {
-        const { status } = answer.error
-        if (status >= 500 || status === 429) throw new SignOutFailed()
-        clearLocalSession()
-        return
-      }
+      await authClient.signOut({ fetchOptions: { timeout: REQUEST_TIMEOUT_MS } })
+    } catch {
+      // The plugin forgot the session before the request left.
+    } finally {
       armGeneration++
       client.client.clearAuth()
-    } finally {
       releaseUpdateBlock()
     }
   }
 
-  // Expiry is enforced on the server. This removes the local credential even
-  // when an offline browser cannot complete a sign-out request.
+  // Removes this prefix's local credential without a request, as the demo
+  // does at its end. Expiry is enforced on the server.
   function clearLocalSession() {
     armGeneration++
     client.client.clearAuth()

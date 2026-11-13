@@ -1,7 +1,7 @@
 import { oauthProviderClient } from '@better-auth/oauth-provider/client'
 import type { ConvexClient } from 'convex/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAuthSession, NO_QUERY, SignOutFailed } from './authSession'
+import { createAuthSession, NO_QUERY } from './authSession'
 import { oauthConnectRequest } from './oauthConnection'
 
 const SITE_URL = 'https://auth-session-test.convex.site'
@@ -828,42 +828,33 @@ describe('independent app and admin browser sessions', () => {
     expect(await adminSocket.token()).toBeNull()
   })
 
-  it('a sign-out the server refuses keeps the session to try again', async () => {
-    const { admin, adminSocket } = pair()
-    const token = await login(admin, 'operator@example.test')
-    const before = saved(ADMIN_PREFIX)
-    service.fail('/sign-out', 503)
-    await expect(admin.signOut()).rejects.toBeInstanceOf(SignOutFailed)
-    expect(adminSocket.clearAuth).not.toHaveBeenCalled()
-    expect(saved(ADMIN_PREFIX)).toEqual(before)
-    expect(admin.authClient.getCookie()).toContain(token)
-    service.recover()
-    await admin.signOut()
-    expect(service.revoked).toEqual([token])
-    expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
-    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
-  })
-
-  it('a sign-out that ends after another tab signed in keeps the newer session', async () => {
-    let answer = () => {}
-    const answered = new Promise<void>((resolve) => (answer = resolve))
-    // The clients take fetch when they are created.
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith('/sign-out')) await answered
-      return service.fetch(input, init)
-    })
-    const { admin } = pair()
-    const oldToken = await login(admin, 'operator@example.test')
-    const signedOut = admin.signOut()
-    await vi.advanceTimersByTimeAsync(0)
-    // another tab of the console signs in while the sign-out runs
-    const otherTab = createAuthSession(ADMIN_PREFIX, socket().client)
-    const newToken = await login(otherTab, 'operator@example.test')
-    answer()
-    await signedOut
-    expect(service.revoked).toEqual([oldToken])
-    expect(saved(ADMIN_PREFIX).cookie).toContain(newToken)
-  })
+  it.each([
+    { outcome: 'ends', status: undefined },
+    { outcome: 'fails', status: 503 },
+  ])(
+    'a sign-out that $outcome after another tab signed in keeps the newer session',
+    async ({ status }) => {
+      let answer = () => {}
+      const answered = new Promise<void>((resolve) => (answer = resolve))
+      // The clients take fetch when they are created.
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/sign-out')) await answered
+        return service.fetch(input, init)
+      })
+      const { admin } = pair()
+      const oldToken = await login(admin, 'operator@example.test')
+      if (status) service.fail('/sign-out', status)
+      const signedOut = admin.signOut()
+      await vi.advanceTimersByTimeAsync(0)
+      // another tab of the console signs in while the sign-out runs
+      const otherTab = createAuthSession(ADMIN_PREFIX, socket().client)
+      const newToken = await login(otherTab, 'operator@example.test')
+      answer()
+      await signedOut
+      expect(service.revoked).toEqual(status ? [] : [oldToken])
+      expect(saved(ADMIN_PREFIX).cookie).toContain(newToken)
+    },
+  )
 
   it('a sign-out pressed again while it runs sends one request', async () => {
     const { admin } = pair()
@@ -874,17 +865,19 @@ describe('independent app and admin browser sessions', () => {
   })
 
   it.each([
-    ['a refusal that repeats on every try', 403],
+    ['a failure from the server', 503],
     ['no answer in time', 'hang' as const],
-  ])('a sign-out that gets %s forgets the session here', async (_, failure) => {
+  ])('a sign-out that gets %s still forgets the session here', async (_, failure) => {
     const { admin, adminSocket } = pair()
     const token = await login(admin, 'operator@example.test')
     service.fail('/sign-out', failure)
     const signedOut = admin.signOut()
     await vi.advanceTimersByTimeAsync(15_000)
-    await signedOut
+    await expect(signedOut).resolves.toBeUndefined()
     expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
-    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: null, cache: null })
+    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
+    expect(admin.authClient.getCookie()).toBe('')
+    // the server did not end the session, which lasts until its expiry
     expect(service.sessions.has(token)).toBe(true)
   })
 
@@ -894,10 +887,10 @@ describe('independent app and admin browser sessions', () => {
     const adminToken = await login(admin, 'operator@example.test')
     const appBefore = saved(APP_PREFIX)
     service.fail('/sign-out')
-    await admin.signOut()
+    await expect(admin.signOut()).resolves.toBeUndefined()
     expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
     expect(appSocket.clearAuth).not.toHaveBeenCalled()
-    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: null, cache: null })
+    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
     expect(saved(APP_PREFIX)).toEqual(appBefore)
     expect(await appSocket.token()).toBe(`jwt:${appToken}:nora@example.test`)
     // A failed HTTP request cannot establish that server revocation happened.

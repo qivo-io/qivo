@@ -9,8 +9,7 @@ type LazyAdapter = (options: BetterAuthOptions) => DBAdapter
 // refresh token's replay from touching other connections. The provider's
 // rotation claims a refresh token with incrementOne on `revoked eq null`,
 // which the adapter runs as one mutation that also matches a never-revoked
-// token, whose `revoked` Convex stores as absent
-// (vendor/convex-better-auth/src/client/adapter-utils.ts).
+// token, whose `revoked` Convex stores as absent (@convex-dev/better-auth).
 export const oauthAdapter =
   (factory: LazyAdapter): LazyAdapter =>
   (options) => {

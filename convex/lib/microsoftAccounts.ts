@@ -1,4 +1,4 @@
-import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
+import type { GenericCtx } from '@convex-dev/better-auth'
 import { components } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
 

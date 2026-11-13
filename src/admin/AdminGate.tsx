@@ -132,22 +132,13 @@ export function AdminGate() {
         <p className="mb-6 text-base leading-normal text-text-2">
           Your account does not have platform administrator access.
         </p>
-        {error && (
-          <div role="alert" className="mb-6 text-sm text-danger">
-            {error}
-          </div>
-        )}
         <Button
           type="button"
           disabled={busy}
           onClick={() => {
-            setError('')
+            // the sign-out ends in a reload, so the button stays held
             setBusy(true)
-            void signOutAndReload().then((refused) => {
-              if (!refused) return
-              setError(refused)
-              setBusy(false)
-            })
+            void signOutAndReload()
           }}
         >
           {busy ? 'Signing out…' : 'Use another account'}
