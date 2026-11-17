@@ -2116,11 +2116,15 @@ export const MOVE_SUBTREE_EDIT_RULE =
 /** The refusal of a move that would carry subtasks whose `blockers`, their
  * assignees and reviewers, cannot work in the destination, by name (owner,
  * 17 November 2026). The mover edits every carried subtask, so each is
- * named. */
-export const moveSubtreeHolderRule = (blockers: readonly MoveBlocker[]): string =>
+ * named. `unchecked` says the move stopped checking before the last
+ * subtask, so others may block it too. */
+export const moveSubtreeHolderRule = (
+  blockers: readonly MoveBlocker[],
+  unchecked = false,
+): string =>
   blockersSentence(
     blockers,
-    false,
+    unchecked,
     () => 'cannot edit that sub-project; give them Edit access there',
   )
 /* A task moving to another top-level project may have at most
@@ -2204,7 +2208,11 @@ export async function subtasksWouldMove(
  * A subtask the actor cannot edit refuses at once. The people who cannot
  * hold theirs are gathered over every carried subtask, which costs what a
  * move that passes reads, and refuse together by name
- * (moveSubtreeHolderRule), a profile that is gone as "someone". */
+ * (moveSubtreeHolderRule), a profile that is gone as "someone". Once
+ * someone blocks the move and the transaction has no room left
+ * (SUBTREE_ROOM), the walk stops and the refusal names those found with a
+ * word that others may block it too, so gathering never costs the refusal
+ * its sentence. */
 async function subtreeToCarry(
   ctx: QueryCtx,
   a: {
@@ -2230,7 +2238,12 @@ async function subtreeToCarry(
   const carried: Doc<'issues'>[] = []
   // the people who cannot hold their carried subtasks, with those subtasks
   const blocked = new Map<string, Doc<'issues'>[]>()
+  let unchecked = false
   for (const c of below) {
+    if (blocked.size > 0 && (await usedMoreThan(ctx, SUBTREE_ROOM.room))) {
+      unchecked = true
+      break
+    }
     if ((await a.topOf(c.project_id)) === dst) continue
     const editable = await edits(c.project_id)
     if (editable === null) throw rule(SUBTASK_BEING_DELETED)
@@ -2249,7 +2262,7 @@ async function subtreeToCarry(
       const name = blockers.length < MOVE_NAMES.people ? await nameOf(ctx, holder) : ''
       blockers.push({ name, tasks: tasks.map((task) => issueKey(task.num)), hidden: 0 })
     }
-    throw rule(moveSubtreeHolderRule(blockers))
+    throw rule(moveSubtreeHolderRule(blockers, unchecked))
   }
   return carried
 }

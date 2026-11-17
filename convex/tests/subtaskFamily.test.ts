@@ -379,6 +379,35 @@ describe('moving a task to another top-level project', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: undefined })
     })
+    // with no room left once someone blocks the move, the walk stops there
+    // and says that others may block it too, where a move with room names
+    // the next subtask's person as well
+    const second = await plantIssue(t, {
+      ...base,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      assignee_id: nia.id,
+    })
+    const saved = { ...SUBTREE_ROOM }
+    Object.assign(SUBTREE_ROOM, { room: 0 })
+    try {
+      const stopped = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
+      expect(stopped.data.message).toBe(
+        `${f.guest.name} (on ${issueKey(inPcb.num)}) and possibly others cannot edit that sub-project; give them Edit access there, or change who works on those subtasks first`,
+      )
+    } finally {
+      Object.assign(SUBTREE_ROOM, saved)
+    }
+    const whole = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
+    expect(whole.data.message).toBe(
+      moveSubtreeHolderRule([
+        { name: f.guest.name, tasks: [issueKey(inPcb.num)], hidden: 0 },
+        { name: 'Nia None', tasks: [issueKey(second.num)], hidden: 0 },
+      ]),
+    )
+    await t.run(async (ctx) => {
+      await ctx.db.delete(second._id)
+    })
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { reviewer_id: undefined })
     })
