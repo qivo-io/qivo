@@ -168,23 +168,26 @@ export const HOLDER_SIGHT_RULE =
 
 /** Someone whose work on a task's subtasks refuses its move (moveIssueCore):
  * their name, the IDs of the subtasks they are assigned to or reviewing in
- * projects the mover sees, and how many more they hold in projects the
- * mover cannot see. */
-export type MoveBlocker = { name: string; tasks: string[]; hidden: number }
+ * projects the mover sees, how many more they hold in projects the mover
+ * cannot see, and with `unsure` how many more in projects whose sight the
+ * move had no room left to check. */
+export type MoveBlocker = { name: string; tasks: string[]; hidden: number; unsure?: number }
 
 /** How many people a move's refusal names, and how many subtasks beside
  * each. The rest are counted. */
 export const MOVE_NAMES = { people: 5, tasks: 3 }
 
 /* One blocker as a refusal names them, "Aisha Rahman (on QN-14 and 1
- * more)", with a subtask the mover cannot see told only as that, and by
- * the name alone where the move could not tell which subtasks they are. */
+ * more)". Subtasks the mover cannot see are told only as that, and where
+ * some of the unnamed ones are unsure, only counted. */
 function blockerText(b: MoveBlocker): string {
   const shown = b.tasks.slice(0, MOVE_NAMES.tasks)
-  const more = b.tasks.length - shown.length + b.hidden
+  const unsure = b.unsure ?? 0
+  const more = b.tasks.length - shown.length + b.hidden + unsure
   if (shown.length === 0) {
     if (more === 0) return b.name
-    return `${b.name} (on ${more === 1 ? 'a subtask' : `${more} subtasks`} you cannot see)`
+    const count = more === 1 ? 'a subtask' : `${more} subtasks`
+    return `${b.name} (on ${count}${unsure === 0 ? ' you cannot see' : ''})`
   }
   return `${b.name} (on ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''})`
 }
@@ -207,8 +210,8 @@ function blockersSentence(
   const who = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
   // one subtask is "that subtask", also where two people hold it
   const tasks = new Set(blockers.flatMap((b) => b.tasks))
-  const hidden = blockers.reduce((sum, b) => sum + b.hidden, 0)
-  const one = rest === 0 && !unchecked && tasks.size + hidden === 1
+  const uncounted = blockers.reduce((sum, b) => sum + b.hidden + (b.unsure ?? 0), 0)
+  const one = rest === 0 && !unchecked && tasks.size + uncounted === 1
   return `${who} ${lacks(named.length > 1)}, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
 }
 
@@ -2264,7 +2267,8 @@ async function nameOf(ctx: QueryCtx, profileId: string): Promise<string> {
  * window says already. Only the MOVE_NAMES.people the sentence names are
  * read. `me` sees `own`, the moved task's project, which the move checked.
  * A subtask in another project whose sight the transaction has no room
- * left to check (SUBTREE_ROOM) is left out, neither named nor counted. */
+ * left to check (SUBTREE_ROOM) is counted as `unsure`, never named and
+ * never left out, so the sentence stays whole. */
 async function moveBlockers(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -2292,6 +2296,7 @@ async function moveBlockers(
         const sight = await sees(task.project_id)
         if (sight === true) blocker.tasks.push(issueKey(task.num))
         else if (sight === false) blocker.hidden += 1
+        else blocker.unsure = (blocker.unsure ?? 0) + 1
       }
     }
     blockers.push(blocker)

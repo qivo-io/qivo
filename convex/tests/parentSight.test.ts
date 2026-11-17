@@ -226,6 +226,23 @@ describe('a subtask is held only by people who can see every task above it', () 
     )
   })
 
+  /* Every refusal `move` meets as the share of its transaction a walk may
+   * fill (SUBTREE_ROOM) grows by one database query at a time, the finest
+   * step a refusal can change at, until it says `whole`. */
+  const refusalsByRoom = async (move: () => Promise<unknown>, whole: string) => {
+    const said = new Set<string>()
+    const saved = { ...SUBTREE_ROOM }
+    try {
+      for (let queries = 0; queries <= 400 && !said.has(whole); queries++) {
+        Object.assign(SUBTREE_ROOM, { room: (queries + 0.5) / 4096, every: 1 })
+        said.add((await expectRefusal(move(), 'rule')).data.message)
+      }
+    } finally {
+      Object.assign(SUBTREE_ROOM, saved)
+    }
+    return [...said].sort()
+  }
+
   it('says others may block a move too once it has no room to check them, and that it is too large before anyone blocks it', async () => {
     const t = newT({ transactionLimits: true })
     const { f, base, hiddenSub } = await scene(t)
@@ -239,38 +256,16 @@ describe('a subtask is held only by people who can see every task above it', () 
     const key = (i: number) => issueKey(kids[i].num)
     const blocker = (name: string, i: number) => ({ name, tasks: [key(i)], hidden: 0 })
     const all = [blocker('Ada', 0), blocker('Bea', 1), blocker('Cy', 2)]
-    // every share of the transaction the move may fill, from none to all
-    const said = new Set<string>()
-    const saved = { ...SUBTREE_ROOM }
-    try {
-      for (let room = 0; room <= 1000; room++) {
-        Object.assign(SUBTREE_ROOM, { room: room / 100_000, every: 1 })
-        const r = await expectRefusal(
-          as(t, f.admin).mutation(api.issues.move, {
-            org_id: f.org.id,
-            id: top.id,
-            project_id: hiddenSub.id,
-          }),
-          'rule',
-        )
-        said.add(r.data.message)
-      }
-    } finally {
-      Object.assign(SUBTREE_ROOM, saved)
-    }
-    const whole = await expectRefusal(
+    const move = () =>
       as(t, f.admin).mutation(api.issues.move, {
         org_id: f.org.id,
         id: top.id,
         project_id: hiddenSub.id,
-      }),
-      'rule',
-    )
-    said.add(whole.data.message)
+      })
     // nothing but these, each of them met: too large while nobody blocks
     // it yet, the people found so far with the word that others may block
     // it too, and everyone once the room holds
-    expect([...said].sort()).toEqual(
+    expect(await refusalsByRoom(move, moveHolderRule(all))).toEqual(
       [
         MOVE_TOO_LARGE,
         moveHolderRule(all.slice(0, 1), true),
@@ -280,6 +275,41 @@ describe('a subtask is held only by people who can see every task above it', () 
     )
     expect(moveHolderRule(all.slice(0, 1), true)).toBe(
       `Ada (on ${key(0)}) and possibly others have no access to that sub-project; give them access there, or change who works on those subtasks first`,
+    )
+  })
+
+  it('counts a subtask whose project it has no room to check, and never leaves it out', async () => {
+    const t = newT({ transactionLimits: true })
+    const { f, base, hiddenSub } = await scene(t)
+    const top = await plantIssue(t, { ...base, title: 'Top' })
+    // Ada holds a subtask in the task's own sub-project and one in PCB,
+    // which the mover sees too, and has no access to the destination
+    const ada = await plantSeat(t, { org_id: f.org.id, name: 'Ada' })
+    await grant(t, [f.sub.id, f.sub2.id], ada.id)
+    const own = await plantIssue(t, { ...base, parent_id: top.id, assignee_id: ada.id })
+    const inPcb = await plantIssue(t, {
+      ...base,
+      project_id: f.sub2.id,
+      parent_id: top.id,
+      assignee_id: ada.id,
+    })
+    const move = () =>
+      as(t, f.admin).mutation(api.issues.move, {
+        org_id: f.org.id,
+        id: top.id,
+        project_id: hiddenSub.id,
+      })
+    const keys = [issueKey(own.num), issueKey(inPcb.num)]
+    const whole = moveHolderRule([{ name: 'Ada', tasks: keys, hidden: 0 }])
+    const counted = moveHolderRule([{ name: 'Ada', tasks: keys.slice(0, 1), hidden: 0, unsure: 1 }])
+    expect(counted).toBe(
+      `Ada (on ${keys[0]} and 1 more) has no access to that sub-project; give them access there, or change who works on those subtasks first`,
+    )
+    expect(await refusalsByRoom(move, whole)).toEqual([MOVE_TOO_LARGE, counted, whole].sort())
+    // a person whose subtasks are all unsure is named with their count, not
+    // as holding subtasks the mover cannot see
+    expect(moveHolderRule([{ name: 'Ada', tasks: [], hidden: 0, unsure: 2 }])).toBe(
+      'Ada (on 2 subtasks) has no access to that sub-project; give them access there, or change who works on those subtasks first',
     )
   })
 

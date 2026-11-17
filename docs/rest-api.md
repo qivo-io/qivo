@@ -1788,10 +1788,10 @@ moved to Deleted items refuses the move for everyone, admins included, with
 `400` `a subtask of this task is being moved to Deleted items; try again
 when that finishes`. The assignee and the reviewer of
 each active subtask must be able to work in the
-destination. Otherwise the PATCH is a `400` that names each of them with
-their subtasks, such as `Aisha Rahman (on QN-14) cannot edit that
-sub-project; give them Edit access there, or change who works on that
-subtask first`. A group's own reviewer who cannot
+destination. Otherwise the PATCH is a `400` that names them with their
+subtasks, such as `Aisha Rahman (on QN-14) cannot edit that sub-project;
+give them Edit access there, or change who works on that subtask first`,
+up to five people with up to three subtasks each, the rest counted. A group's own reviewer who cannot
 is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
