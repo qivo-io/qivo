@@ -165,8 +165,64 @@ export const REVIEWER_SIGHT_RULE =
   'a subtask can only be reviewed by someone who can see every task above it'
 export const HOLDER_SIGHT_RULE =
   'everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it'
-export const MOVE_HOLDER_RULE =
-  'someone assigned to or reviewing a subtask of this task has no access to that sub-project; give them access there, or change who works on that subtask first'
+
+/** Someone whose work on a task's subtasks refuses its move (moveIssueCore):
+ * their name, the IDs of the subtasks they are assigned to or reviewing in
+ * projects the mover sees, and how many more they hold in projects the
+ * mover cannot see. */
+export type MoveBlocker = { name: string; tasks: string[]; hidden: number }
+
+/** How many people a move's refusal names, and how many subtasks beside
+ * each. The rest are counted. */
+export const MOVE_NAMES = { people: 5, tasks: 3 }
+
+/* One blocker as a refusal names them, "Aisha Rahman (on QN-14 and 1
+ * more)", with a subtask the mover cannot see told only as that, and by
+ * the name alone where the move could not tell which subtasks they are. */
+function blockerText(b: MoveBlocker): string {
+  const shown = b.tasks.slice(0, MOVE_NAMES.tasks)
+  const more = b.tasks.length - shown.length + b.hidden
+  if (shown.length === 0) {
+    if (more === 0) return b.name
+    return `${b.name} (on ${more === 1 ? 'a subtask' : `${more} subtasks`} you cannot see)`
+  }
+  return `${b.name} (on ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''})`
+}
+
+/* The sentence of a move's refusal over `blockers`, at least one: the first
+ * MOVE_NAMES.people by name with their subtasks and the others counted,
+ * then `lacks`, which takes the verb's form, and what to change. `unchecked`
+ * says the move stopped checking before the last person, so others may
+ * block it too. */
+function blockersSentence(
+  blockers: readonly MoveBlocker[],
+  unchecked: boolean,
+  lacks: (several: boolean) => string,
+): string {
+  const named = blockers.slice(0, MOVE_NAMES.people).map(blockerText)
+  const rest = blockers.length - named.length
+  if (rest > 0)
+    named.push(`${unchecked ? 'at least ' : ''}${rest} ${rest === 1 ? 'other' : 'others'}`)
+  else if (unchecked) named.push('possibly others')
+  const who = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
+  // one subtask is "that subtask", also where two people hold it
+  const tasks = new Set(blockers.flatMap((b) => b.tasks))
+  const hidden = blockers.reduce((sum, b) => sum + b.hidden, 0)
+  const one = rest === 0 && !unchecked && tasks.size + hidden === 1
+  return `${who} ${lacks(named.length > 1)}, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
+}
+
+/** The refusal of a move that would take the task out of sight of
+ * `blockers`, the people assigned to or reviewing its subtasks who have no
+ * access to the destination, by name (owner, 17 November 2026). App, REST
+ * and MCP send the same sentence. */
+export const moveHolderRule = (blockers: readonly MoveBlocker[], unchecked = false): string =>
+  blockersSentence(
+    blockers,
+    unchecked,
+    (several) =>
+      `${several ? 'have' : 'has'} no access to that sub-project; give them access there`,
+  )
 export const REVIEWER_ON_GROUP =
   'a task with subtasks has no reviewer of its own; set reviewers on its subtasks'
 
@@ -716,18 +772,35 @@ async function holdersUnder(
   self: { assignee_id?: string; reviewer_id?: string; group: boolean },
   read: { kids?: readonly Doc<'issues'>[]; refusal?: string } = {},
 ): Promise<string[]> {
-  const holders = new Set<string>()
-  if (self.assignee_id !== undefined) holders.add(self.assignee_id)
-  if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
+  return [...(await heldUnder(ctx, rootId, self, read)).keys()]
+}
+
+/* holdersUnder's people, each with the active subtasks they are assigned to
+ * or reviewing, in the walk's order; the task's own people hold none of
+ * them. A move names the people who block it by these. */
+async function heldUnder(
+  ctx: QueryCtx,
+  rootId: string,
+  self: { assignee_id?: string; reviewer_id?: string; group: boolean },
+  read: { kids?: readonly Doc<'issues'>[]; refusal?: string } = {},
+): Promise<Map<string, Doc<'issues'>[]>> {
+  const held = new Map<string, Doc<'issues'>[]>()
+  const holds = (holder: string, subtask?: Doc<'issues'>) => {
+    const tasks = held.get(holder) ?? []
+    if (subtask !== undefined && !tasks.includes(subtask)) tasks.push(subtask)
+    held.set(holder, tasks)
+  }
+  if (self.assignee_id !== undefined) holds(self.assignee_id)
+  if (self.reviewer_id !== undefined && !self.group) holds(self.reviewer_id)
   const room = roomCheck(ctx, read.refusal)
   await room()
   const kids = read.kids?.filter((c) => c.archived_at === undefined) ?? activeSubtasks(ctx, rootId)
   for await (const c of kids) {
     await room(getDocumentSize(c))
-    if (c.assignee_id !== undefined) holders.add(c.assignee_id)
-    if (c.reviewer_id !== undefined) holders.add(c.reviewer_id)
+    if (c.assignee_id !== undefined) holds(c.assignee_id, c)
+    if (c.reviewer_id !== undefined) holds(c.reviewer_id, c)
   }
-  return [...holders]
+  return held
 }
 
 /* The predicate behind assertAssigneeRule: an active same-org profile with
@@ -2037,8 +2110,16 @@ export const MOVE_SUBTASK_RULE =
   "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change"
 export const MOVE_SUBTREE_EDIT_RULE =
   'moving this task would move a subtask in a project you cannot edit; someone who can edit that project can move it'
-export const MOVE_SUBTREE_HOLDER_RULE =
-  'someone assigned to or reviewing a subtask of this task cannot edit that sub-project; give them Edit access there, or change who works on that subtask first'
+/** The refusal of a move that would carry subtasks whose `blockers`, their
+ * assignees and reviewers, cannot work in the destination, by name (owner,
+ * 17 November 2026). The mover edits every carried subtask, so each is
+ * named. */
+export const moveSubtreeHolderRule = (blockers: readonly MoveBlocker[]): string =>
+  blockersSentence(
+    blockers,
+    false,
+    () => 'cannot edit that sub-project; give them Edit access there',
+  )
 /* A task moving to another top-level project may have at most
  * LIMITS.moveSubtree.max subtasks, archived ones included. The move reads
  * them all, including any already in the destination's top-level project,
@@ -2116,7 +2197,11 @@ export async function subtasksWouldMove(
  * it at the target. A subtask has no subtasks of its own, so its reviewer is
  * never a group's dormant one. Archived subtasks keep their people
  * unchecked, as an archived task's people are. `below` holds every subtask
- * (subtasksOf), and the walk refuses past LIMITS.moveSubtree.max of them. */
+ * (subtasksOf), and the walk refuses past LIMITS.moveSubtree.max of them.
+ * A subtask the actor cannot edit refuses at once. The people who cannot
+ * hold theirs are gathered over every carried subtask, which costs what a
+ * move that passes reads, and refuse together by name
+ * (moveSubtreeHolderRule), a profile that is gone as "someone". */
 async function subtreeToCarry(
   ctx: QueryCtx,
   a: {
@@ -2140,19 +2225,78 @@ async function subtreeToCarry(
     return result
   }
   const carried: Doc<'issues'>[] = []
+  // the people who cannot hold their carried subtasks, with those subtasks
+  const blocked = new Map<string, Doc<'issues'>[]>()
   for (const c of below) {
     if ((await a.topOf(c.project_id)) === dst) continue
     const editable = await edits(c.project_id)
     if (editable === null) throw rule(SUBTASK_BEING_DELETED)
     if (!editable) throw rule(MOVE_SUBTREE_EDIT_RULE)
     if (c.archived_at === undefined) {
-      for (const holder of [c.assignee_id, c.reviewer_id]) {
-        if (holder !== undefined && !(await canHold(holder))) throw rule(MOVE_SUBTREE_HOLDER_RULE)
+      for (const holder of new Set([c.assignee_id, c.reviewer_id])) {
+        if (holder === undefined || (await canHold(holder))) continue
+        blocked.set(holder, [...(blocked.get(holder) ?? []), c])
       }
     }
     carried.push(c)
   }
+  if (blocked.size > 0) {
+    const blockers: MoveBlocker[] = []
+    for (const [holder, tasks] of blocked) {
+      const name = blockers.length < MOVE_NAMES.people ? await nameOf(ctx, holder) : ''
+      blockers.push({ name, tasks: tasks.map((task) => issueKey(task.num)), hidden: 0 })
+    }
+    throw rule(moveSubtreeHolderRule(blockers))
+  }
   return carried
+}
+
+/* The name a move's refusal gives profile `profileId`, "someone" for one
+ * that is gone. */
+async function nameOf(ctx: QueryCtx, profileId: string): Promise<string> {
+  return (await byId(ctx, 'profiles', profileId))?.name ?? 'someone'
+}
+
+/* The people of `blocked`, each with the subtasks they hold, as a move's
+ * refusal names them to `me`: a subtask by its ID where `me` sees its
+ * project, and otherwise only counted, so the sentence tells nothing of a
+ * project `me` cannot see beyond that a subtask is there, which the task
+ * window says already. Only the MOVE_NAMES.people the sentence names are
+ * read. `me` sees `own`, the moved task's project, which the move checked.
+ * A subtask in another project whose sight the transaction has no room
+ * left to check (SUBTREE_ROOM) is left out, neither named nor counted. */
+async function moveBlockers(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  own: string,
+  blocked: readonly (readonly [Doc<'profiles'>, readonly Doc<'issues'>[]])[],
+): Promise<MoveBlocker[]> {
+  const seen = new Map<string, boolean | null>([[own, true]])
+  const sees = async (projectId: string): Promise<boolean | null> => {
+    let known = seen.get(projectId)
+    if (known === undefined) {
+      if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) known = null
+      else {
+        const project = await byId(ctx, 'projects', projectId)
+        known = project !== null && (await canSeeProject(ctx, me, project))
+      }
+      seen.set(projectId, known)
+    }
+    return known
+  }
+  const blockers: MoveBlocker[] = []
+  for (const [profile, tasks] of blocked) {
+    const blocker: MoveBlocker = { name: profile.name, tasks: [], hidden: 0 }
+    if (blockers.length < MOVE_NAMES.people) {
+      for (const task of tasks) {
+        const sight = await sees(task.project_id)
+        if (sight === true) blocker.tasks.push(issueKey(task.num))
+        else if (sight === false) blocker.hidden += 1
+      }
+    }
+    blockers.push(blocker)
+  }
+  return blockers
 }
 
 /** The stamps a task writes as it moves to another sub-project. A time
@@ -2282,18 +2426,31 @@ export async function moveIssueCore(
     below !== undefined ? await subtreeToCarry(ctx, { below, target, actor: me, topOf }) : []
   // whoever works on a subtask must still see this task once it moves, so
   // every active assignee or reviewer below it needs access to the
-  // destination (the sentence names no one: some subtasks may be hidden)
-  const holders = await holdersUnder(
+  // destination. Everyone is checked, as a move that passes checks them,
+  // and those without access refuse the move together, by name
+  // (moveHolderRule). Once the transaction has no room for the next person
+  // the move is too large, unless someone already blocks it, whom the
+  // refusal then names with a word that others may too.
+  const held = await heldUnder(
     ctx,
     issue.id,
     { group: true },
     { kids: below, refusal: MOVE_TOO_LARGE },
   )
-  for (const holder of holders) {
-    await assertRoom(ctx, MOVE_TOO_LARGE)
+  const blocked: [Doc<'profiles'>, Doc<'issues'>[]][] = []
+  let unchecked = false
+  for (const [holder, tasks] of held) {
+    if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) {
+      if (blocked.length === 0) throw rule(MOVE_TOO_LARGE)
+      unchecked = true
+      break
+    }
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
-    if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
+    if (!(await canSeeProject(ctx, profile, target))) blocked.push([profile, tasks])
+  }
+  if (blocked.length > 0) {
+    throw rule(moveHolderRule(await moveBlockers(ctx, me, issue.project_id, blocked), unchecked))
   }
   // A caller that answers with the task's full read, which reads its
   // active subtasks again (MachineMove.answerReadsSubtasks), gets a move

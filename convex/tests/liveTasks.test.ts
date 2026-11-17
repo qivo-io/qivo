@@ -17,8 +17,9 @@ import { COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
+import { issueKey } from '../lib/taskRefs'
 import { getProject } from '../machine/rest'
-import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
+import { moveSubtreeHolderRule, REVIEWER_RULE } from '../model/issues'
 import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import { boardFor, NO_FILTERS, projectScope } from './board.setup'
@@ -820,14 +821,16 @@ describe('writes that change which subtasks count', () => {
     // losing the review
     const root = await task(fx, { title: 'Root' })
     const kid = await task(fx, { title: 'Kid', parent_id: root.id, reviewer_id: rita.id })
-    await expectRefusal(
+    const refusal = await expectRefusal(
       as(fx.t, fx.admin).mutation(api.issues.move, {
         org_id: fx.org.id,
         id: root.id,
         project_id: fx.away.id,
       }),
       'rule',
-      new RegExp(`^${MOVE_SUBTREE_HOLDER_RULE}$`),
+    )
+    expect(refusal.data.message).toBe(
+      moveSubtreeHolderRule([{ name: rita.name, tasks: [issueKey(kid.num)], hidden: 0 }]),
     )
     expect(await row(fx, kid.id)).toMatchObject({ project_id: fx.sub.id, reviewer_id: rita.id })
   })

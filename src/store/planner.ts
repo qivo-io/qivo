@@ -13149,8 +13149,9 @@ export const PLANNER = {
       as the server does. Returns the (unchanged) key, or null for a no-op or
       an invalid target. Whether everyone on the task and its subtasks keeps
       access is the server's to check, at full scope: a refusal
-      (MOVE_HOLDER_RULE, MOVE_SUBTREE_HOLDER_RULE, ASSIGNEE_RULE or
-      REVIEWER_RULE) is toasted with its sentence and the move taken back,
+      (moveHolderRule and moveSubtreeHolderRule, which name the people and
+      their subtasks, ASSIGNEE_RULE or REVIEWER_RULE) is toasted with its
+      sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
       task moved only then. The target must be a sub-project the project
       cache answers `ok` with Edit or Lead. A seeded or loading one, and

@@ -12,11 +12,12 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
+import { issueKey } from '../lib/taskRefs'
 import {
   MOVE_SUBTASK_RULE,
   MOVE_SUBTREE_EDIT_RULE,
-  MOVE_SUBTREE_HOLDER_RULE,
   MOVE_TOO_LARGE,
+  moveSubtreeHolderRule,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
   SUBTREE_ROOM,
@@ -352,14 +353,32 @@ describe('moving a task to another top-level project', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: f.guest.id })
     })
+    const named = moveSubtreeHolderRule([
+      { name: f.guest.name, tasks: [issueKey(inPcb.num)], hidden: 0 },
+    ])
+    expect(named).toBe(
+      `${f.guest.name} (on ${issueKey(inPcb.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
+    )
     const holder = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(holder.data.message).toBe(MOVE_SUBTREE_HOLDER_RULE)
+    expect(holder.data.message).toBe(named)
     // a subtask has no subtasks of its own, so its reviewer is checked too
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: undefined, reviewer_id: f.guest.id })
     })
     const reviewer = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(reviewer.data.message).toBe(MOVE_SUBTREE_HOLDER_RULE)
+    expect(reviewer.data.message).toBe(named)
+    // two people who cannot work there are named together, each once
+    const nia = await plantSeat(t, { org_id: f.org.id, name: 'Nia None' })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(inPcb._id, { assignee_id: nia.id })
+    })
+    const both = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
+    expect(both.data.message).toBe(
+      `Nia None (on ${issueKey(inPcb.num)}) and ${f.guest.name} (on ${issueKey(inPcb.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
+    )
+    await t.run(async (ctx) => {
+      await ctx.db.patch(inPcb._id, { assignee_id: undefined })
+    })
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { reviewer_id: undefined })
     })

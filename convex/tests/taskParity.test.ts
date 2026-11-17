@@ -34,13 +34,14 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
+import { issueKey } from '../lib/taskRefs'
 import { sha256hex } from '../machine/auth'
 import {
   ASSIGNEE_RULE,
   ASSIGNEE_SIGHT_RULE,
   HOLDER_SIGHT_RULE,
   type IssuePatch,
-  MOVE_HOLDER_RULE,
+  moveHolderRule,
   REPORTER_IMMUTABLE_SENTENCE,
 } from '../model/issues'
 import {
@@ -700,11 +701,11 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     ).toMatchObject({ parent_id: pcbParent.id, assignee_id: null })
     // whoever works on a subtask still has to see the destination and the parent
     const top = await task(fx, { assignee_id: fwOnly.id })
-    await task(fx, { parent_id: top.id, assignee_id: fwOnly.id })
+    const below = await task(fx, { parent_id: top.id, assignee_id: fwOnly.id })
     await refused(
       restPatch(fx, top.id, { project: 'PCB', assignee_id: pcbOnly.id }),
       'rule',
-      MOVE_HOLDER_RULE,
+      moveHolderRule([{ name: fwOnly.name, tasks: [issueKey(below.num)], hidden: 0 }]),
     )
     // and a task with subtasks takes no parent at all (one level of subtasks)
     await refused(

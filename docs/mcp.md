@@ -2441,7 +2441,12 @@ refused with `your account has no write access to that project`, and one you
 cannot read reads `project "<ref>" not found (or not visible to you)`. The
 task's assignee, and the reviewer of a task without subtasks, must be able to
 work in the destination, and everyone working on its active subtasks must be
-able to see it. An `assignee_id` or `reviewer_id` in the same call, null
+able to see it. The refusal for the people on its subtasks names them, such
+as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on a subtask you cannot
+see) have no access to that sub-project; give them access there, or change
+who works on those subtasks first`. It names up to five people with up to
+three subtasks each and counts the rest, and a subtask in a project you
+cannot see is counted without its ID. An `assignee_id` or `reviewer_id` in the same call, null
 included, takes the place of the current one in this check, and a new one is
 checked against the destination. A moved task keeps its key, labels, links
 and subtasks.
@@ -2456,9 +2461,10 @@ to Deleted items refuses the move for everyone, admins included, with `a
 subtask of this task is being moved to Deleted items; try again when that
 finishes`.
 The assignee and the reviewer of each active subtask must be able to work
-in the destination (otherwise `someone assigned to or reviewing a subtask of
-this task cannot edit that sub-project; give them Edit access there, or
-change who works on that subtask first`); a group's own reviewer who cannot
+in the destination. Otherwise the refusal names each of them with their
+subtasks, such as `Aisha Rahman (on QN-14) cannot edit that sub-project;
+give them Edit access there, or change who works on that subtask first`. A
+group's own reviewer who cannot
 is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `this task has more than
 200 subtasks, archived ones included, and a move to another project carries
