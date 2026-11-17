@@ -456,7 +456,15 @@ the task from the deployment's preview (`accessRemovals.preview`), chooses
 Nora in the **Reassign** picker's search (`accessRemovals.reassignChoices`)
 and saves, then checks over REST that the task is Nora's and the agent's
 grant is gone (`ui/removal-window`). Against a backend from before the
-removal window's release that step fails. In **New project** it then makes
+removal window's release that step fails. It then makes two more
+sub-projects there, gives the Standard agent Edit on the first alone and
+puts a task in it with a subtask the agent holds. Moving the task to the
+second sub-project, which the agent cannot see, must be refused with the
+agent's name and the subtask's ID over REST and MCP and in a toast of the
+task window's **Move** window, and must pass once the agent can view the
+second sub-project (`ui/move-blockers`). Against a backend from before the
+release after v0.1.167, whose refusal names nobody, that step fails. In
+**New project** it then makes
 a project of its own with its run tag, led by the Standard agent and shared
 with the run's team as Viewer from the deployment's pickers, and checks
 that the dialog's own entry for a creator who names someone else as lead
