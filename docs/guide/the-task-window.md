@@ -403,9 +403,12 @@ move for that reviewer. Everyone assigned to or reviewing a subtask that
 stays where it is needs at least View access at the
 destination, so they can still see the task. Qivo checks everyone on the
 task and its subtasks when you choose **Move**, also on subtasks in projects
-you cannot see, and when someone would lose access it refuses the move and
-says what to change: give them access there, or change who works on that
-subtask. Switched-off people are not checked on the subtasks that stay.
+you cannot see, and when someone would lose access it refuses the move,
+names them with the subtasks they work on, and says what to change: give
+them access there, or change who works on those subtasks. It names up to
+five people with up to three subtasks each and counts the rest. A subtask in
+a project you cannot see is counted without its ID. Switched-off people are
+not checked on the subtasks that stay.
 
 ## Archiving
 

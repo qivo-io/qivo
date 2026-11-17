@@ -121,7 +121,12 @@
  * removes the agent's grant there in the app, whose removal window lists
  * the task from the deployment's preview (accessRemovals.preview), and
  * hands the task to Nora through the window's picker
- * (accessRemovals.reassignChoices) (ui/removal-window). It makes another
+ * (accessRemovals.reassignChoices) (ui/removal-window). It makes two
+ * sub-projects there, a task in the first with a subtask the Standard
+ * agent holds, and checks that moving the task to the second, which the
+ * agent cannot see, is refused with the agent's name and the subtask's ID
+ * over REST, MCP and in the Move window's toast (ui/move-blockers). It
+ * makes another
  * sub-project there, led by the Standard agent and shared with its team,
  * and on that sub-project's Settings page, from the deployment's reads
  * (projectSettings.get, users, teams and candidates), sets the team's
@@ -9502,6 +9507,110 @@ async function removalWindowCheck() {
   })
 }
 
+/** The step that checks a refused move names who blocks it
+ *  (moveBlockersCheck). */
+export const MOVE_BLOCKERS_STEP = 'ui/move-blockers'
+
+/** What a move's refusal says after the name of the one person who blocks
+ *  it through one subtask (convex/model/issues.ts moveHolderRule). The
+ *  sentence starts with the person's name, whose first letter the app's
+ *  toast capitalizes. */
+export const moveRefusalTail = (key) =>
+  ` (on ${key}) has no access to that sub-project; give them access there, or change who works on that subtask first`
+
+/** A move that would take a task out of sight of someone working on its
+ *  subtask is refused with that person's name and the subtask's ID, over
+ *  REST, MCP and in the app. The run makes two sub-projects of its own
+ *  under its second project, as ui/removal-window does, gives its Standard
+ *  agent Edit on the first alone, and puts a task there with a subtask the
+ *  agent holds. Moving the task to the second sub-project, which the agent
+ *  cannot see, answers moveRefusalTail after the agent's name over REST
+ *  (400) and MCP, and the task window's Move window, with the second
+ *  sub-project found by its name in the picker, toasts the same sentence
+ *  and leaves the task where it is. Once the agent views the second
+ *  sub-project the same move passes. The tasks go to run.created and the
+ *  sub-projects with their project. It notifies only the run's own agent,
+ *  runs while the run's projects are active, and needs a backend from the
+ *  release after v0.1.167 on; an older one names nobody, so the step
+ *  fails on the sentence. */
+async function moveBlockersCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  await check(MOVE_BLOCKERS_STEP, async () => {
+    let parent = run.projects.N ?? run.projects.R
+    if (!parent) {
+      parent = await restOk(w, 'POST', '/projects', { name: `${run.tag} move project` })
+      run.projects.R = parent
+    }
+    const from = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Move from`,
+      parent: parent.id,
+    })
+    const to = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Move to`,
+      parent: parent.id,
+    })
+    await restOk(w, 'PUT', `/projects/${from.id}/access/users/${std.id}`, { level: 'user' })
+    const top = await restOk(w, 'POST', '/tasks', {
+      project: from.id,
+      title: `${run.tag} move refused`,
+      status: 'todo',
+    })
+    run.created.push(top)
+    const below = await restOk(w, 'POST', '/tasks', {
+      project: from.id,
+      title: `${run.tag} move blocker`,
+      status: 'todo',
+      parent: top.key,
+      assignee_id: std.id,
+    })
+    run.created.push(below)
+    const sentence = `${std.name}${moveRefusalTail(below.key)}`
+    await restRefusal(w, 'PATCH', `/tasks/${top.key}`, { project: to.id }, 400, sentence)
+    eq(
+      await toolRefusal(w, 'update_task', { ref: top.key, project: to.id }),
+      sentence,
+      "update_task's refusal",
+    )
+    // the task window's Move window, with the destination found by its name
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${top.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
+    await app.getByRole('button', { name: 'Task actions', exact: true }).click()
+    await app.getByText('Move to sub-project…', { exact: true }).click()
+    await app.locator('[data-modal-shell] [data-target-picker]').waitFor({ timeout: 30_000 })
+    await pressSearched(
+      app.locator('[data-modal-shell] [data-target-search]'),
+      to.name,
+      app.locator('[data-modal-shell] [data-target]'),
+      app.locator(`[data-modal-shell] [data-target="${to.id}"]`),
+    )
+    const move = app
+      .locator('[data-modal-shell]')
+      .getByRole('button', { name: 'Move', exact: true })
+    expect(
+      await until(async () => await move.isEnabled(), 60_000),
+      `Move stayed off for ${to.name}`,
+    )
+    await move.click()
+    const toast = app.locator(`.${TOAST_HOST}`).getByText(moveRefusalTail(below.key))
+    await toast.first().waitFor({ timeout: 60_000 })
+    const said = ((await toast.first().textContent()) ?? '').trim()
+    expect(said.toLowerCase().startsWith(sentence.toLowerCase()), `the toast reads ${short(said)}`)
+    eq(
+      (await restOk(w, 'GET', `/tasks/${top.key}`)).project_id,
+      from.id,
+      "the refused task's project",
+    )
+    // once the agent sees the destination, the same move passes
+    await restOk(w, 'PUT', `/projects/${to.id}/access/users/${std.id}`, { level: 'viewer' })
+    const moved = await restOk(w, 'PATCH', `/tasks/${top.key}`, { project: to.id })
+    eq(moved.project_id, to.id, "the moved task's project")
+    return `moving ${top.key} to ${to.name} named ${std.name} and ${below.key} over REST, MCP and in the Move window's toast, and passed once the agent could see it`
+  })
+}
+
 /** Chooses project `id` in the shared project picker that `trigger`
  *  opens, found by searching `name` (src/components/ProjectPicker.tsx). A
  *  picker of one project (`many` false, Search in) closes on the pick; one
@@ -13372,6 +13481,9 @@ async function main() {
   await settingsUsersCheck()
   // the removal window and its Reassign picker on a sub-project of its own
   await removalWindowCheck()
+  // a refused move names who blocks it, over REST, MCP and in the Move
+  // window, on two sub-projects of its own
+  await moveBlockersCheck()
   // a project's Settings page on the server's reads, on a sub-project of its own
   await projectSettingsCheck()
   // the New project and New sub-project dialogs on the server's pickers, on

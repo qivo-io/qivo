@@ -6,7 +6,7 @@ import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
-import { MOVE_HOLDER_RULE } from '../../convex/model/issues'
+import { moveHolderRule } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
   type LabelsByIdsArgs,
@@ -1987,7 +1987,12 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'issues:move'
-        ? Promise.reject(new ConvexError({ code: 'rule', message: MOVE_HOLDER_RULE }))
+        ? Promise.reject(
+            new ConvexError({
+              code: 'rule',
+              message: moveHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'], hidden: 0 }]),
+            }),
+          )
         : Promise.resolve(null),
     )
     await moveToBench()

@@ -12,6 +12,7 @@ import {
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
+import { moveHolderRule } from '../convex/model/issues'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import { endText } from '../src/lib/deletedItems'
 import { LABEL_COLORS } from '../src/lib/labelColors'
@@ -95,7 +96,9 @@ import {
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
   MILESTONES_SECTION_QUERY,
+  MOVE_BLOCKERS_STEP,
   mcpListSettled,
+  moveRefusalTail,
   mutationRequest,
   NEW_TASK_READS,
   NOTIFICATION_DELIVERY_MARKS,
@@ -543,6 +546,24 @@ describe('staging check REST contract', () => {
     expect(REMOVAL_STEP).toBe('ui/removal-window')
     expect(REMOVAL_EXPECTED.submit).toBe('Reassign and remove')
     expect(REMOVAL_EXPECTED.chosen('Nora Berg')).toBe('New assignee: Nora Berg')
+  })
+  it("checks a refused move by the server's own sentence and the Move window's marks", () => {
+    const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
+    expect(MOVE_BLOCKERS_STEP).toBe('ui/move-blockers')
+    // the sentence the step expects is the one the server sends
+    expect(`Ada Lind${moveRefusalTail('QN-7')}`).toBe(
+      moveHolderRule([{ name: 'Ada Lind', tasks: ['QN-7'], hidden: 0 }]),
+    )
+    // must fail: two subtasks, or a second person, end another way
+    expect(
+      moveHolderRule([{ name: 'Ada Lind', tasks: ['QN-7', 'QN-8'], hidden: 0 }]),
+    ).not.toContain(moveRefusalTail('QN-7'))
+    for (const mark of ['aria-label="Task actions"', 'Move to sub-project…'])
+      expect(read('../src/panels/IssueDetail.tsx'), mark).toContain(mark)
+    expect(read('../src/panels/Modals.tsx')).toContain('submitLabel="Move"')
+    const picker = read('../src/components/TargetPicker.tsx')
+    for (const mark of ["'data-target-search'", 'data-target-picker', 'data-target={row.id}'])
+      expect(picker, mark).toContain(mark)
   })
   it("checks a project's Settings page on the page's own selectors, after the removal window", () => {
     const page = readFileSync(
@@ -2762,7 +2783,7 @@ describe('a picker list that shows its search', () => {
       expect(script, search).not.toContain(`[${search}]').fill(`)
     expect(script).not.toContain('await search.fill(team.name)')
     const calls = script.split('await pressSearched(').slice(1)
-    expect(calls).toHaveLength(7)
+    expect(calls).toHaveLength(8)
     const rows = calls.map(
       (call) => /app\.locator\('([^']+)'\),\n\s+app\.locator\(`/.exec(call)?.[1],
     )
@@ -2770,6 +2791,8 @@ describe('a picker list that shows its search', () => {
       '[data-team-member-choice]',
       // the people; the row that names no one stays whatever the search
       '[data-reassign-choice]:not([data-reassign-choice=""])',
+      // the Move window's sub-projects
+      '[data-modal-shell] [data-target]',
       '[data-project-access-choice]',
       '[data-lead-choice]',
       // each team's label, since the option is a checkbox without text

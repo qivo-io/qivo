@@ -4,7 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MOVE_HOLDER_RULE } from '../../convex/model/issues'
+import { moveHolderRule } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
@@ -349,7 +349,12 @@ describe('the Move window over a task the window shows from its own answer', () 
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'identity:claimMySeats'
         ? Promise.resolve(null)
-        : Promise.reject(new ConvexError({ code: 'rule', message: MOVE_HOLDER_RULE })),
+        : Promise.reject(
+            new ConvexError({
+              code: 'rule',
+              message: moveHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'], hidden: 0 }]),
+            }),
+          ),
     )
     const shown = () => P.taskDetail('far')?.view
     const before = shown()?.project
@@ -357,7 +362,7 @@ describe('the Move window over a task the window shows from its own answer', () 
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(window.showToast).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Someone assigned to or reviewing a subtask of this task has no access to that sub-project',
+        'Rita Lund (on QN-7) has no access to that sub-project; give them access there, or change who works on that subtask first.',
       ),
       'error',
     )
