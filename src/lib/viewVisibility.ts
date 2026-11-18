@@ -40,9 +40,8 @@
      needs (store/liveParts.ts).
    - The unread summary and the feed of new unread events, the summary and
      feed sides, and the desktop alert leader's beat, claims and its watch
-     of notifications.settings (lib/notificationLeader.ts), since the owner's
-     rule keeps the unread count and notifications running while nobody
-     looks.
+     of notifications.settings (lib/notificationLeader.ts), since the unread
+     count and notifications keep running while nobody looks.
    - The deferred items' watches of a restore a person started
      (store/planner.ts watchDeferred), which gate the restore's writes.
    - billing.status, the read-only banner over every main page

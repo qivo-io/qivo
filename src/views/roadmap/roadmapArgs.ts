@@ -86,12 +86,11 @@ const wordsOf = (search: string) => search.toLowerCase().split(/\s+/).filter(Boo
  * Whether the Roadmap keeps the answer for the arguments `from` (a key of
  * roadmapRequest) on screen, marked refreshing, while the answer for `to`
  * is on its way. It keeps it for the same scope and filter row with
- * another window or planned task (the coordinator's rule of 5 November
- * 2026), and for typing that only narrows the text filter, every other
- * filter the same, so the Roadmap's own check of what it shows can only
- * drop a task the server keeps (the Board's rule,
- * views/board/useBoardView.ts narrowsText). Any other change shows the
- * loading frame.
+ * another window or planned task, and for typing that only narrows the
+ * text filter, every other filter the same, so the Roadmap's own check
+ * of what it shows can only drop a task the server keeps (the Board's
+ * rule, views/board/useBoardView.ts narrowsText). Any other change
+ * shows the loading frame.
  */
 export function keepsRoadmap(from: string, to: string): boolean {
   if (from === to) return false

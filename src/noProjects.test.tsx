@@ -588,8 +588,8 @@ describe('the Overview of a scope with nothing to summarize', () => {
     // nothing counted, so no summary and no status strip
     expect(document.querySelector('[data-ov-summary], [data-ov-strip]')).toBeNull()
     // My view whose sub-project holds no task of the person's lists no
-    // milestone, as it covers only the projects that hold their own work
-    // (owner, 28 October 2026), so its note is the whole page
+    // milestone, as it covers only the projects that hold their own work,
+    // so its note is the whole page
     await reload()
     const plan = withMilestone(member(), 'plan', 'Plan launch')
     await app(plan, '/app/~/overview/mine')

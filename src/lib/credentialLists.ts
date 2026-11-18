@@ -5,10 +5,10 @@
 
 /** The most personal tokens the token list gathers with Load more, 80
     batches; past it the list asks for a search. No design-size figure
-    covers a person's tokens and the owner expects one or a few, so this
-    bounds the rows the page holds, about 2,000 rows of a few hundred bytes,
-    not the tokens a person may keep, which every search still reaches.
-    Tests lower it. */
+    covers a person's tokens, and a person is expected to keep one or a few,
+    so this bounds the rows the page holds, about 2,000 rows of a few
+    hundred bytes, not the tokens a person may keep, which every search
+    still reaches. Tests lower it. */
 export const TOKEN_LIST = { most: 2000 }
 
 /** The most connected apps the Connected apps list gathers with Load

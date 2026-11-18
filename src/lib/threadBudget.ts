@@ -70,7 +70,7 @@ import { LIMITS } from '../../convex/lib/limits'
     A comment open in an editor is held besides, outside the count, until
     its editor closes or a page holds it again.
 
-    The figure follows the coordinator's rule for it, checked with the
+    The figure follows the rule for it, checked with the
     browser benchmark's thread phase (scripts/benchmark-browser.mjs
     --thread), each case one figure raised: the largest candidate whose
     median longest frame after a delivered comment and after a Show earlier
@@ -78,11 +78,9 @@ import { LIMITS } from '../../convex/lib/limits'
     than 150, which holds the live window, the live page and one more page.
     The closing review's sweep, with the window's comment rows memoized,
     found no candidate that meets it, so the figure is the rule's floor.
-    The owner kept that floor on 12 November 2026 and accepted, for now,
-    the frames over the rule that the app then shows after a delivered
-    comment and after a Show earlier press.
-    Design specification row 441 holds the budget and the rule. Tests
-    lower it and restore it. */
+    So the app shows frames over the rule after a delivered comment and
+    after a Show earlier press. Design specification row 441 holds the
+    budget and the rule. Tests lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of
