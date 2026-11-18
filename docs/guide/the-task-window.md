@@ -400,8 +400,8 @@ The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
 before moving. The same holds for each active subtask that moves with the
 task. Moving a group clears an ineligible reviewer instead of refusing the
-move for that reviewer. Qivo checks everyone on the task and its subtasks
-when you choose **Move**, and when someone cannot work there it refuses the
+move for that reviewer. Qivo checks everyone on the task and on the subtasks
+that move when you choose **Move**, and when someone cannot work there it refuses the
 move, names them with the subtasks they work on, and says what to change:
 give them Edit access there, or change who works on those subtasks. It
 names up to five people with up to three subtasks each and counts the rest.

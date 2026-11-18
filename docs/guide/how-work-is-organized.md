@@ -300,8 +300,7 @@ reached 100 links since. A subtask deleted on its own
 returns under its parent when the parent still exists in the subtask's
 sub-project, is not a subtask
 itself and has fewer than 100 active subtasks, the restored task has no subtasks,
-you can edit the parent, and everyone assigned to or reviewing the subtask
-can still see the parent's project. An archived subtask does not count
+and you can edit the parent. An archived subtask does not count
 toward the 100. Otherwise, or when the parent's
 subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
@@ -309,8 +308,9 @@ from the archive under a full parent does. A family saved before the rule
 that a subtask stays in its parent's sub-project can be split by a restore,
 because a subtask in another sub-project than its parent's returns as a
 top-level task, also when it was deleted together with that parent or
-with its project. Work that was archived when it was
-deleted returns archived. A restored Done task restarts its auto-archive
+with its project. A restored task comes back without its assignee or
+reviewer when that person can no longer edit its sub-project. Work that was
+archived when it was deleted returns archived. A restored Done task restarts its auto-archive
 clock. A restored project shows to its leads and the people and teams it is
 shared with at the same moment, and to organization admins in Settings ›
 Projects. A task restored on its own sends its followers a **Restored** update.

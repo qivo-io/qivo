@@ -1778,7 +1778,7 @@ someone who can edit that project can move it`). A subtask in a project that is 
 moved to Deleted items refuses the move for everyone, admins included, with
 `400` `a subtask of this task is being moved to Deleted items; try again
 when that finishes`. The assignee and the reviewer of
-each active subtask must be able to work in the
+each active subtask the move carries must be able to work in the
 destination. Otherwise the PATCH is a `400` that names them with their
 subtasks, such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16)
 cannot edit that sub-project; give them Edit access there, or change who

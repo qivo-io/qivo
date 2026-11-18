@@ -2460,8 +2460,8 @@ edit that project can move it`). A subtask in a project that is being moved
 to Deleted items refuses the move for everyone, admins included, with `a
 subtask of this task is being moved to Deleted items; try again when that
 finishes`.
-The assignee and the reviewer of each active subtask must be able to work
-in the destination. Otherwise the refusal names them with their subtasks,
+The assignee and the reviewer of each active subtask the move carries must
+be able to work in the destination. Otherwise the refusal names them with their subtasks,
 such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16) cannot
 edit that sub-project; give them Edit access there, or change who works on
 those subtasks first`, up to five people with up to three subtasks each,
