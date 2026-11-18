@@ -356,11 +356,7 @@ moves or leaves it, or until a restore from Deleted items brings it back
 as a top-level task. The subtask picker shows it first among the
 current subtasks you can edit. The current parent shows first so you can
 remove it.
-Everyone assigned to or reviewing the task or its subtasks must be able to
-see the new parent and every task above it. Qivo checks this when you save
-and, when someone could not, refuses the parent and says what to change. The assignee and
-reviewer pickers on a subtask offer only people who can see every task above
-it. Removing a parent needs edit access to the subtask only. Adding or
+Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
 other. If a task's parent is in an archived project or
 a project you cannot access, which only a task saved before the rule can
@@ -409,10 +405,6 @@ when you choose **Move**, and when someone cannot work there it refuses the
 move, names them with the subtasks they work on, and says what to change:
 give them Edit access there, or change who works on those subtasks. It
 names up to five people with up to three subtasks each and counts the rest.
-A task saved before the rule can have a subtask already in the destination.
-Everyone assigned to or reviewing such a subtask needs at least View access
-there, so they can still see the task, and Qivo names them the same way when
-they have none. Switched-off people are not checked on those subtasks.
 
 ## Archiving
 

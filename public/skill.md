@@ -152,9 +152,7 @@ Before writing `assignee_id`, `reviewer_id` or `reporter_id`, call
 `GET /v1/projects/{ref}/users`, which answer `{next_cursor, users}` a page
 at a time; follow `next_cursor` until it is null, as a user missing from the
 pages read so far is not ineligible. Any returned profile may be the reporter; only
-`assignable: true` profiles may be assignees or reviewers. On a subtask, the
-assignee or reviewer must also be able to see every task above it, which
-`assignable` does not show; Qivo refuses the write otherwise.
+`assignable: true` profiles may be assignees or reviewers.
 The general `list_users` roster does not prove project access. Names, emails,
 and external-system IDs are not valid substitutes for Qivo profile UUIDs.
 

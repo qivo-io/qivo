@@ -45,9 +45,8 @@ For a team, each person's grant is on each project the team shared that holds
 their own listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person, or to **Unassigned**, and removes the access. It lists 25 people
 at a time in name order, with a search and **Load more**. They are the people
-who keep User or Lead access to every listed task's project and can see every
-task above it once the access is gone, never the people who lose sight of these
-tasks. When
+who keep User or Lead access to every listed task's project once the access is
+gone, never the people who lose sight of these tasks. When
 you save, the window checks the chosen person again and asks again if they can
 no longer take the tasks or the tasks changed. Every removal, deleting a team
 included, saves the removal and the choice together. If a task cannot be

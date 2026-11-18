@@ -31,8 +31,7 @@ Tasks have these fields:
   users cannot be selected. Reducing access to Viewer keeps existing
   assignments but prevents new ones. Removing someone's access while they
   hold open tasks asks whether to keep them as Viewer or reassign the tasks
-  ([Project access](./who-sees-what-the-access-model.md)). A subtask can only go to someone who
-  can see every task above it, because the parent holds its context.
+  ([Project access](./who-sees-what-the-access-model.md)).
 - **Reviewer**. An optional person or agent who meets the Assignee rules and
   may also be the assignee. While a task is **In Review** with a reviewer,
   that reviewer owns its work for My view, filters, assignee lanes, workload,
