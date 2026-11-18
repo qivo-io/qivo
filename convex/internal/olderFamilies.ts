@@ -23,18 +23,22 @@
  * each, and a cursor. `run`, an internal action, counts page after page for
  * at most RUN.ms, well inside Convex's action time limit, and answers the
  * totals with `done: false` and a `cursor` to go on from, or `done: true`.
- * Call it again with that `cursor` until `done` is true. With the private
+ * Until `done` is true, call it again with its whole answer as the
+ * arguments; it goes on from that cursor and adds to those totals, so the
+ * answer with `done: true` counts the whole deployment. With the private
  * helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/olderFamilies:run '{}'
+ *   "$H" staging npx convex run internal/olderFamilies:run '<its answer>'
  * On the demo, whose stored key cannot run internal functions, the private
  * with-temp-deploy-key helper runs it with a short-lived key; `run` needs
  * deployment:functions:runInternalActions. */
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { type GenericValidator, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import { internalAction, internalQuery, type QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
+import { badRequest, require } from '../lib/functions'
 
 /** The tasks one page reads and the example ids a page or a run lists of
  * each kind. A page of ordinary tasks reads a few hundred kilobytes. Tests
@@ -127,18 +131,68 @@ const countRef = makeFunctionReference<'query', { cursor: string | null }, Count
   'internal/olderFamilies:count',
 )
 
-/** Counts page after page from `cursor` on for at most RUN.ms, and answers
- * the figures of every page it read with up to OLDER_FAMILIES.examples
- * example ids of each kind, `done`, and while not done the `cursor` to go
- * on from. */
+/** What `run` answers: the totals of every page since the first call of
+ * the run, `done`, and while not done the `cursor` to go on from. */
+export type RunAnswer = Omit<CountPage, 'cursor'> &
+  ({ done: true; cursor: null } | { done: false; cursor: string })
+
+/* One validator of each counted kind. */
+const perKind = <V extends GenericValidator>(item: V) =>
+  v.object({
+    sibling: item,
+    other_project: item,
+    missing_parent: item,
+    held: item,
+  } satisfies Record<Counted, V>)
+
+const natural = (n: number) => Number.isInteger(n) && n >= 0
+
+/* The totals a call goes on from: none for the first call, else those of
+ * the previous answer, which must come whole, with its cursor, and hold
+ * together. The arguments are this call's own, so the run adds to them. */
+function startingTotals({
+  cursor,
+  scanned,
+  counts,
+  examples,
+}: Partial<Omit<CountPage, 'cursor'>> & { cursor?: string }): Omit<CountPage, 'cursor'> {
+  const parts = [cursor, scanned, counts, examples]
+  if (parts.every((part) => part === undefined)) return empty()
+  require(cursor !== undefined &&
+    scanned !== undefined &&
+    counts !== undefined &&
+    examples !== undefined, badRequest(
+    'pass the whole previous answer: its cursor, scanned, counts and examples',
+  ))
+  const sum = COUNTED.reduce((total, kind) => total + counts[kind], 0)
+  require(natural(scanned) &&
+    sum <= scanned &&
+    COUNTED.every(
+      (kind) =>
+        natural(counts[kind]) &&
+        examples[kind].length <= Math.min(counts[kind], OLDER_FAMILIES.examples),
+    ), badRequest('the previous answer does not hold together; pass it back as run answered it'))
+  return { scanned, counts, examples }
+}
+
+/** Counts page after page for at most RUN.ms and answers a RunAnswer. A
+ * first call passes nothing. A later call passes the previous answer back
+ * whole, `done: false` included, and goes on from its cursor and its
+ * totals, so the answer with `done: true` covers every page of the run with
+ * up to OLDER_FAMILIES.examples example ids of each kind. */
 export const run = internalAction({
-  args: { cursor: v.optional(v.string()) },
-  handler: async (ctx, a) => {
+  args: {
+    cursor: v.optional(v.string()),
+    scanned: v.optional(v.number()),
+    counts: v.optional(perKind(v.number())),
+    examples: v.optional(perKind(v.array(v.string()))),
+    done: v.optional(v.literal(false)),
+  },
+  handler: async (ctx, a): Promise<RunAnswer> => {
     const until = Date.now() + RUN.ms
-    const totals = empty()
+    const totals = startingTotals(a)
     let cursor: string | null = a.cursor ?? null
-    let done = false
-    while (!done) {
+    do {
       const page = await ctx.runQuery(countRef, { cursor })
       totals.scanned += page.scanned
       for (const kind of COUNTED) {
@@ -146,10 +200,10 @@ export const run = internalAction({
         const room = OLDER_FAMILIES.examples - totals.examples[kind].length
         totals.examples[kind].push(...page.examples[kind].slice(0, Math.max(0, room)))
       }
-      done = page.cursor === null
       cursor = page.cursor
-      if (Date.now() >= until) break
-    }
-    return { ...totals, done, cursor: done ? null : cursor }
+    } while (cursor !== null && Date.now() < until)
+    return cursor === null
+      ? { ...totals, done: true, cursor: null }
+      : { ...totals, done: false, cursor }
   },
 })

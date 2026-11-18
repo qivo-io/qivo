@@ -235,7 +235,7 @@ describe("the operator's deletion of one organization", () => {
     await expectRefusal(
       remove(t, { org_id: f.org.id, confirm: 'testbed' }),
       'rule',
-      /live paid subscription/,
+      /Polar subscription that bills or can still bill/,
     )
     await t.run((ctx) =>
       ctx.db.patch(sub, {
@@ -256,6 +256,30 @@ describe("the operator's deletion of one organization", () => {
     expect(await remove(t, { org_id: f.org.id, confirm: 'testbed' })).toMatchObject({
       state: 'started',
     })
+  })
+
+  it('refuses a pending Polar subscription, which can still complete and bill', async () => {
+    const t = newT()
+    const f = await scene(t)
+    // billingSync.ts stores Polar's `incomplete` as `pending` and clears the
+    // checkout, so only the provider id tells it from a checkout's start
+    await subscribe(t, f, { status: 'pending', polar_subscription_id: uuid() })
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    vi.stubEnv('APP_MODE', '')
+    expect((await list(t)).orgs.find((row) => row.id === f.org.id)?.billing).toEqual({
+      enabled: true,
+      live_subscription: true,
+      open_checkout: false,
+    })
+    const before = await orgRows(t, f.org.id)
+    await expectRefusal(
+      remove(t, { org_id: f.org.id, confirm: 'testbed' }),
+      'rule',
+      /Polar subscription that bills or can still bill/,
+    )
+    await runSteps(t)
+    expect(await orgRows(t, f.org.id)).toEqual(before)
+    expect(await audits(t)).toEqual([])
   })
 
   it('brings a pending removal forward instead of adding a second', async () => {

@@ -2689,9 +2689,13 @@ both of them:
   audit log, with `operator (deploy key)` as its actor. `confirm` must be the
   organization's address. It refuses an unknown organization, a wrong
   address, the fixture's organization unless `allow_fixture` is `true`, and
-  while billing runs an organization whose stored subscription is live and
-  paid or that has an open checkout. It cancels nothing, so end that
-  subscription in Polar first, or let the checkout end, and call it again.
+  while billing runs an organization whose stored Polar subscription bills
+  or can still bill or that has an open checkout. That is every stored
+  status but `canceled`, until the subscription ends. Billing stores
+  Polar's `incomplete` as `pending`, so a `pending` subscription with a
+  Polar id counts too, and `orgs` shows it with `live_subscription: true`.
+  It cancels nothing, so end that subscription in Polar first, or let the
+  checkout end, and call it again.
   For an organization that is already being deleted it answers
   `{"state": "running"}` with the step's phase.
 
@@ -2699,16 +2703,20 @@ After the release deploys, with the owner's approval of each command and
 on production after a verified backup, on each deployment in turn:
 
 1. List the organizations and show the list to the owner.
-2. Delete each organization the owner names, with its id and address.
+2. Delete each organization the owner names, with its id and address. The
+   deletion leaves the Better Auth logins of its people, so they can still
+   sign in and then create an organization or join one by an invitation.
 3. List again until no named organization is listed. A deletion that
    still runs shows its `phase`.
 4. On development and staging, reset Northstar Labs. The reset wipes the
    fixture's work and seeds it again, and keeps the organization, its
    logins and its receipt.
-5. Run the count until it answers `done: true`. It must report no
-   `sibling` and no `other_project` task. A call that does not finish
-   within its five minutes answers `done: false` with a `cursor`; call it
-   again with `{"cursor": "<that cursor>"}`.
+5. Run the count until it answers `done: true`. A call that does not
+   finish within its five minutes answers `done: false` with a `cursor`
+   and the totals so far. Call it again with that whole answer as its
+   arguments, which goes on from the cursor and adds to those totals, so
+   the answer with `done: true` counts the whole deployment. That answer
+   must report no `sibling` and no `other_project` task.
 
 ```sh
 H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
@@ -2719,6 +2727,7 @@ H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
   npm run demo -- reset --staging --confirm northstar-labs --anchor 2026-11-16
 "$H" staging npx convex run internal/olderFamilies:run '{}'
+"$H" staging npx convex run internal/olderFamilies:run '<its whole answer>'
 ```
 
 Development takes the same commands with `development` in place of
@@ -2734,7 +2743,16 @@ only the count there, with a short-lived key:
 T="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key"
 "$T" demo --allow deployment:functions:runInternalActions -- \
   npx convex run internal/olderFamilies:run '{}'
+"$T" demo --allow deployment:functions:runInternalActions -- \
+  npx convex run internal/olderFamilies:run '<its whole answer>'
 ```
+
+The demo may report `sibling` tasks. A visitor's demo lasts 24 hours, and
+one made before the release could put a subtask in a sibling sub-project,
+as the earlier app allowed. A count above zero on the demo can come only
+from such demos, so count again once 24 hours have passed since the
+deploy, when the cleanup has deleted them, and expect no `sibling` and no
+`other_project` task then.
 
 The count reads every task with a parent and reports how many have their
 parent in a sibling sub-project (`sibling`), in another top-level project

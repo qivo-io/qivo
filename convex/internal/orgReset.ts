@@ -20,8 +20,9 @@
  * be the organization's address, as an admin's request asks. It refuses an
  * unknown organization, a wrong address, the fixture's organization unless
  * `allow_fixture` is true, and while billing runs an organization whose
- * stored subscription is live and paid or that holds an open checkout; it
- * cancels nothing, so an operator ends such a subscription in Polar first.
+ * stored Polar subscription bills or can still bill, a pending one included,
+ * or that holds an open checkout; it cancels nothing, so an operator ends
+ * such a subscription in Polar first.
  * Billing is read from Qivo's own record, which Polar's webhooks keep, as a
  * mutation cannot ask Polar. For an organization being deleted it answers
  * that the deletion runs. It writes the audit row an admin's request
@@ -33,7 +34,6 @@ import { internalMutation, internalQuery, type QueryCtx } from '../_generated/se
 import { billingEnabled, orgRemovalFor, subscriptionFor } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { notFound, require, rule } from '../lib/functions'
-import { LIVE_POLAR_STATUSES } from '../lib/polar'
 import { audit } from '../model/admin'
 import { hasPendingCheckout } from '../model/billing'
 import { countersRow } from '../model/orgs'
@@ -68,12 +68,27 @@ export type OrgRow = {
   billing: { enabled: boolean; live_subscription: boolean; open_checkout: boolean }
 }
 
-/* Whether the stored subscription is a live paid one: a Polar
- * subscription in a status that ends an admin's deletion request by
- * revoking it (orgRemovals.ts), not ended. */
-const paidLive = (sub: Doc<'billing_subscriptions'> | null, now = Date.now()): boolean =>
+/* The stored statuses of a subscription that bills or can still bill.
+ * billingSync.ts stores Polar's live statuses (lib/polar.ts
+ * LIVE_POLAR_STATUSES) as they are, except `incomplete`, which it stores as
+ * `pending`, as it stores `incomplete_expired`. A stored `pending` cannot
+ * tell the two apart, so it counts as live. Of the stored statuses
+ * (lib/billingTypes.ts vBillingStatus) only `canceled` is left out. */
+const BILLABLE_STATUSES = [
+  'active',
+  'trialing',
+  'past_due',
+  'paused',
+  'unpaid',
+  'pending',
+] as const satisfies readonly Doc<'billing_subscriptions'>['status'][]
+
+/* Whether the stored subscription is a Polar subscription that bills or can
+ * still bill: it has a provider id, a status of BILLABLE_STATUSES and has
+ * not ended. Fails closed, so a deletion never starts under one. */
+const billable = (sub: Doc<'billing_subscriptions'> | null, now = Date.now()): boolean =>
   !!sub?.polar_subscription_id &&
-  LIVE_POLAR_STATUSES.some((status) => status === sub.status) &&
+  BILLABLE_STATUSES.some((status) => status === sub.status) &&
   !(sub.ended_at && Date.parse(sub.ended_at) <= now)
 
 /* At most `cap` + 1 rows of a range, answered as a Count. */
@@ -133,7 +148,7 @@ async function rowOf(ctx: QueryCtx, org: Doc<'organizations'>, fixtures: Set<str
       : null,
     billing: {
       enabled: billingEnabled(),
-      live_subscription: paidLive(sub),
+      live_subscription: billable(sub),
       open_checkout: hasPendingCheckout(sub),
     },
   }
@@ -180,8 +195,8 @@ export const deleteOrg = internalMutation({
     ))
     if (billingEnabled()) {
       const sub = await subscriptionFor(ctx, org.id)
-      require(!paidLive(sub), rule(
-        'this organization has a live paid subscription; end it in Polar first, nothing was changed',
+      require(!billable(sub), rule(
+        'this organization has a Polar subscription that bills or can still bill; end it in Polar first, nothing was changed',
       ))
       require(!hasPendingCheckout(sub), rule(
         'this organization has an open checkout; let it end or clear it first, nothing was changed',

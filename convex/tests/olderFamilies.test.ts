@@ -9,6 +9,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OLDER_FAMILIES, RUN } from '../internal/olderFamilies'
 import {
+  expectRefusal,
   NOW,
   newT,
   type OrgFixture,
@@ -94,20 +95,48 @@ describe('the count of subtasks in another sub-project than their parent', () =>
       if (cursor === null) break
     }
     expect([scanned, cursor]).toEqual([4, null])
-    // the run sums them; with no time left it stops after one page
-    RUN.ms = -1
-    const partway = await t.action(internal.internal.olderFamilies.run, {})
-    expect(partway).toMatchObject({ scanned: 1, done: false })
-    RUN.ms = DEFAULT_RUN.ms
-    const rest = await t.action(internal.internal.olderFamilies.run, {
-      cursor: partway.cursor ?? undefined,
-    })
-    expect(rest).toMatchObject({ scanned: 3, done: true, cursor: null })
-    expect(await t.action(internal.internal.olderFamilies.run, {})).toMatchObject({
+    // the run sums them; with no time left each call stops after one page
+    const whole = {
       scanned: 4,
       counts: { sibling: 1, other_project: 1, missing_parent: 1, held: 0 },
       examples: { sibling: [sibling.id], other_project: [across.id] },
       done: true,
-    })
+      cursor: null,
+    }
+    expect(await t.action(internal.internal.olderFamilies.run, {})).toMatchObject(whole)
+    RUN.ms = -1
+    let answer = await t.action(internal.internal.olderFamilies.run, {})
+    expect(answer).toMatchObject({ scanned: 1, done: false })
+    // a call given the previous answer whole goes on from its cursor and
+    // totals, so the last answer counts every page of the run
+    let calls = 1
+    while (!answer.done && calls < 10) {
+      answer = await t.action(internal.internal.olderFamilies.run, answer)
+      calls += 1
+    }
+    expect(calls).toBeGreaterThan(3)
+    expect(answer).toMatchObject(whole)
+  })
+
+  it('refuses a cursor without the totals of the answer it came with', async () => {
+    const t = newT()
+    await scene(t)
+    OLDER_FAMILIES.page = 1
+    RUN.ms = -1
+    const first = await t.action(internal.internal.olderFamilies.run, {})
+    if (first.done) throw new Error('expected a run that stops partway')
+    await expectRefusal(
+      t.action(internal.internal.olderFamilies.run, { cursor: first.cursor }),
+      'bad_request',
+      /whole previous answer/,
+    )
+    await expectRefusal(
+      t.action(internal.internal.olderFamilies.run, {
+        ...first,
+        counts: { ...first.counts, held: first.scanned + 1 },
+      }),
+      'bad_request',
+      /does not hold together/,
+    )
   })
 })
