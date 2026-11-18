@@ -128,10 +128,10 @@ import {
  * in owner id order.
  *
  * The loads' measured size is 3,000 open tasks held by the scope's 10
- * owners across the organization, at which every walker's week is given. By
- * the rule for figures that follow workloads, a walker's week and a row's
- * verdict that needs a load may answer unavailable past it, inside the
- * design size. It is measured for an everyday project of 3 sub-projects of
+ * owners across the organization, at which every walker's week is given. A
+ * walker's week and a row's verdict that needs a load depend on people's
+ * workloads, so they may answer unavailable past it, inside the design
+ * size. It is measured for an everyday project of 3 sub-projects of
  * 30 open tasks whose 10 owners hold the organization's open tasks, half of
  * them scheduled, in sub-projects of 30, three to a project (the on-demand
  * cases, QIVO_AGENDA_ORG_OPEN=1, which log what each size reads). From

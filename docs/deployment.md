@@ -2676,12 +2676,14 @@ Rollback and hotfixes. Two releases broke that rule on purpose: v0.1.52 and
 the release after it, which replaced `snapshot.forMe` with the workspace
 parts. A tab open across either deploy shows wrong load or cannot load until
 it reloads, and each is a rollback floor (see Rollback and hotfixes). Later
-changes keep the rule, with two exceptions. The release after v0.1.159
-removes the milestones of the workspace projects part, and the release after
-v0.1.160 the workspace's people and catalog parts, in the same release that
-stops using them. A tab open across either deploy cannot load until it
-reloads, and each release's deployment paragraph names the floor a later
-rollback needs.
+changes keep the rule, except some of the releases from the one after
+v0.1.159 to v0.1.169, which remove an old function, part or answer field, or
+start to require an argument, in the same release that stops using the old
+form. The releases after v0.1.159, v0.1.160, v0.1.161, v0.1.165 and v0.1.166
+do. A tab open across such a deploy cannot load, or cannot load the part
+that changed, until it reloads, and each release's paragraph in Rollback and
+hotfixes says what an earlier app does and names the floor a later rollback
+needs. From the release after v0.1.170 on, every change keeps the rule.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.
 

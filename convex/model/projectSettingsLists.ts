@@ -39,7 +39,7 @@
  * and projects.deleteDeep of an Archived projects entry. A sub-project
  * beneath an archived parent, which only a search lists, carries its
  * parent's `can_restore`, the action a search hit takes (restoring the
- * parent brings it back when `with_parent`), and no right of its own
+ * parent brings it back when `with_parent`), and no right of its own.
  * They are the writes' own rule, since the writes ask this predicate
  * (model/projects.ts assertManages and subProjectParent,
  * projects.deleteDeep and removalSummary).
