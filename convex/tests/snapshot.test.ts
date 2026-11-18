@@ -549,6 +549,35 @@ describe('task history visibility', () => {
     for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(['E', 'F', 'G'])
   })
 
+  it('a reparent row reaches only people who can access both parents it names where they are now', async () => {
+    const reader = await seatOn(f.sub.id)
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const [child, before, after] = [await task(), await task(), await task()]
+    const writer = as(t, f.user) // leads f.meta
+    const reparent = (parent_id: string) =>
+      writer.mutation(api.issues.update, { org_id: f.org.id, id: child.id, patch: { parent_id } })
+    await reparent(before.id)
+    await reparent(after.id)
+    // the row names the new parent first and the one before second
+    const row = `moved under QN-${after.num} (from QN-${before.num})`
+    const sees = async (p: Doc<'profiles'>) =>
+      (await historyOf(p, child.id)).some((a) => `${a.verb} ${a.detail}` === row)
+    for (const p of [reader, f.admin]) expect(await sees(p)).toBe(true)
+    // the parent before moves to a sub-project the reader cannot access
+    await writer.mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: before.id,
+      project_id: hiddenSub.id,
+    })
+    expect(await sees(reader)).toBe(false)
+    expect(await sees(f.admin)).toBe(true)
+  })
+
   it('a relation row reaches the people who can read every task its list names', async () => {
     const member = await seatOn(f.sub.id)
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

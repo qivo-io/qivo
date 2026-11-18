@@ -25,6 +25,7 @@ import {
   type RestoreResult,
   restoreItems,
   runStep,
+  SIGHT_READ,
   STALLED_MS,
   startPurge,
   TRASH_BUDGET,
@@ -487,13 +488,17 @@ describe('restoring a task item', () => {
     expect((await liveTask(t, parent.id))?.remaining_hours).toBe(6)
   })
 
-  it('brings a subtask back top-level when the restorer cannot edit its parent', async () => {
+  it('brings a subtask back top-level, and leaves its parent as it was, when the parent is in a sub-project the restorer cannot edit', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Firmware through a grant of its own, and cannot see
     // the sibling sub-project where the parent is, a family stored across
-    // sub-projects before the subtask rule
+    // sub-projects before the subtask rule. The rule drops that parent
+    // first (keptParent's sameSubProject). No task item reaches the check
+    // of the restorer's Edit on the parent any more: the restore needs Edit
+    // on every sub-project its tasks go back to (taskItemBlock), and a
+    // parent may only be in the task's own
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -722,6 +727,41 @@ describe('restoring a task item', () => {
     ])
   })
 
+  it('reads no more for who sees a parent than SIGHT_READ allows, and leaves that task without it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    // two subtasks deleted alone: one person works on the first, two on
+    // the second
+    const people = await plantPeople(t, f, 3)
+    const under = (extra: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id, project_id: f.sub.id, parent_id: epic.id, ...extra })
+    const one = await under({ assignee_id: people[0] })
+    const two = await under({ assignee_id: people[1], reviewer_id: people[2] })
+    for (const task of [one, two]) await deleteTask(t, f, task.id)
+    const items = [await itemFor(t, one.id), await itemFor(t, two.id)]
+    // what one person costs fits, what two cost does not
+    SIGHT_READ.ranges = 5
+
+    for (const item of items)
+      expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    expect((await liveTask(t, one.id))?.parent_id).toBe(epic.id)
+    expect((await liveTask(t, two.id))?.parent_id).toBeUndefined()
+    expect(warn.mock.calls).toEqual([
+      [
+        'A deleted item restore cannot check who sees the parent of a task',
+        { item_id: items[1].id, task_id: two.id },
+      ],
+    ])
+    // the task comes back with its people
+    expect(await liveTask(t, two.id)).toMatchObject({
+      assignee_id: people[1],
+      reviewer_id: people[2],
+    })
+  })
+
   it('keeps no parent in another sub-project, even one its assignee can see', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -771,15 +811,16 @@ describe('restoring a task item', () => {
     expect(refused.data.message).toBe(SUBTASK_PROJECT_RULE)
   })
 
-  it('keeps no parent that someone working on a subtask that comes back with it cannot see', async () => {
+  it('keeps no parent for a task that comes back with a subtask, whoever can see it', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const hiddenSub = await plantHiddenSibling(t, f, f.guest)
-    const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
-    // a chain stored before the subtask rule: the admin, who reads TBED by a
-    // grant, works on the task; the guest, who cannot see the parent's
-    // sub-project, works on its subtask
+    // a chain stored before one level of subtasks, all in Board rev: the
+    // admin works on the task and the guest on its subtask, and both see
+    // the parent. A task with a subtask takes no parent (workersOf), which
+    // the restore decides before it asks who sees the parent, so it never
+    // asks about the people on a subtask that comes back with the task
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const task = await plantIssue(t, {
       org_id,
       project_id: f.sub2.id,
@@ -792,13 +833,73 @@ describe('restoring a task item', () => {
       parent_id: task.id,
       assignee_id: f.guest.id,
     })
+    // a task beside it without subtasks keeps the parent
+    const alone = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      assignee_id: f.admin.id,
+    })
     await deleteTask(t, f, task.id, { subtask_ids: [subtask.id] })
+    await deleteTask(t, f, alone.id)
     await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    await restore(t, f.user, [(await itemFor(t, alone.id)).id])
     expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
     expect(await liveTask(t, subtask.id)).toMatchObject({
       parent_id: task.id,
       assignee_id: f.guest.id,
     })
+    expect((await liveTask(t, alone.id))?.parent_id).toBe(parent.id)
+  })
+
+  it('brings a subtask back under its parent without a person who lost access to the sub-project', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // the guest edits Firmware and Board rev through grants of their own
+    await plantHiddenSibling(t, f, f.guest)
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const plantSubtask = () =>
+      plantIssue(t, {
+        org_id,
+        project_id: f.sub2.id,
+        parent_id: parent.id,
+        assignee_id: f.guest.id,
+        reviewer_id: f.guest.id,
+      })
+    const deleteAndRestore = async (task: Doc<'issues'>) => {
+      await deleteTask(t, f, task.id)
+      const item = await itemFor(t, task.id)
+      expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+      return await liveTask(t, task.id)
+    }
+    // while the guest can see Board rev, the subtask comes back under the
+    // parent with them
+    expect(await deleteAndRestore(await plantSubtask())).toMatchObject({
+      parent_id: parent.id,
+      assignee_id: f.guest.id,
+      reviewer_id: f.guest.id,
+    })
+    // the guest is left on a subtask after losing Board rev, planted as
+    // rows as an older family is. The restore drops them from it
+    // (keepsHolder) before it asks who sees the parent, so the parent stays
+    // and nobody on the subtask is left without sight of it. Everyone the
+    // task keeps can edit the parent's sub-project, so that check (allSee)
+    // finds no one who cannot see the parent
+    const left = await plantSubtask()
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub2.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      if (grant === null) throw new Error('the guest holds no grant on Board rev')
+      await ctx.db.delete(grant._id)
+    })
+    const back = await deleteAndRestore(left)
+    expect(back?.parent_id).toBe(parent.id)
+    expect([back?.assignee_id, back?.reviewer_id]).toEqual([undefined, undefined])
   })
 
   it(`brings a task back with its ${LIMITS.subtasks.max} subtasks and their people, within the real limits`, async () => {
@@ -940,6 +1041,36 @@ describe('restoring a task item', () => {
       assignee_id: assignee,
       reviewer_id: reviewer,
     })
+  })
+
+  it('reveals in a step of its own when the restore call runs out of reads before it counts the subtasks of the parent', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // a parent of about 14 KB, its text in its task row too, as a rollback
+    // to the second release writes it
+    const parent = await plantCopiedIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      description: 'Field note. '.repeat(1_190),
+    })
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    // restoring the comment moves a row before the reveal, so the call
+    // asks whether the reveal fits in what it has left (revealFits)
+    await comment(t, task)
+    await deleteTask(t, f, task.id)
+    // the call, a quarter of a step, has bytes left after the fill for the
+    // reveal and not for reading the parent and counting its subtasks
+    TRASH_BUDGET.bytes = 32_000
+
+    const item = await itemFor(t, task.id)
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
+    expect(await liveTask(t, task.id)).toBeNull()
+    // the step of its own counts them whole and keeps the parent
+    await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect((await liveTask(t, task.id))?.parent_id).toBe(parent.id)
   })
 
   it('drops references whose uuid now names something created after the delete', async () => {
