@@ -58,14 +58,14 @@
  * timed.
  *
  * Run it after rolling forward past a rollback before the favorites
- * release (v0.1.106), each hosted run with the owner's approval, the dry
- * run first, and on production a repair only after a verified backup:
+ * release (v0.1.106), each hosted run with approval, the dry run first, and
+ * on production a repair only after a verified backup:
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/favoritesRepair:run '{"dry_run": true}'
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/favoritesRepair:run '{"dry_run": false}'
  * Pass `"cursor"` from an answer to go on where it stopped. On the demo,
  * whose stored key cannot run internal functions, the private
  * with-temp-deploy-key helper runs it with a short-lived key, a key
- * permission change that needs the owner's approval:
+ * permission change that needs approval:
  *   ~/projects/qivo-internal/scripts/with-temp-deploy-key demo --allow deployment:functions:runInternalActions,deployment:functions:runInternalMutations -- npx convex run internal/favoritesRepair:run '{"dry_run": true}'
  */
 import { makeFunctionReference } from 'convex/server'

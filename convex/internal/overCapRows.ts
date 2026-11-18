@@ -36,7 +36,7 @@
  *   "$H" staging npx convex run internal/overCapRows:check '{"phase": "teams"}'
  *
  * Run the fix only after the deployment serves this release, and only with
- * the owner's approval; it changes what people see. On production, take
+ * approval; it changes what people see. On production, take
  * and verify a backup first (qivo-internal docs/deployment.md). Read the dry
  * run, which writes nothing, then fix and check again:
  *   "$H" staging npx convex run internal/overCapRows:fix '{"dry_run": true}'

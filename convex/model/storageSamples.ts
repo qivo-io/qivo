@@ -46,9 +46,9 @@ export const SAMPLE_STALLED_MS = 15 * 60_000
 export const SAMPLE_EXPIRY = { page: 200 }
 
 /** How many UTC days samples and run rows are kept, today included. That
- * is more than a year, so the owner can read a year of history and a
- * monthly period on the daily basis can fall back at its cutoff to a
- * reading from a period before it (sampleBefore).
+ * is more than a year, so a year of history can be read and a monthly period
+ * on the daily basis can fall back at its cutoff to a reading from a period
+ * before it (sampleBefore).
  * About 400 rows an organization at the retention, each about 230 bytes as
  * Convex sizes a document (storageSamples.test.ts), about 90 KB. */
 export const SAMPLE_RETENTION_DAYS = 400

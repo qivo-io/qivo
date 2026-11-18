@@ -100,8 +100,8 @@
  * once, without updated_at, an event or activity, so readers show the same
  * text, and every open tab's task parts run again as their rows change.
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
  * (qivo-internal docs/deployment.md); the clear is the step a rollback past
  * this release cannot undo for the tasks it clears. On the demo, whose
  * stored key cannot run internal functions, the private with-temp-deploy-key

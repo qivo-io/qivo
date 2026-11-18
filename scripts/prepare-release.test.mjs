@@ -139,7 +139,7 @@ describe('preparing a draft', () => {
       `Draft release [v0.1.10](https://github.com/qivo-io/qivo/releases/tag/draft) is ready. ${DRAFT_STEPS}\n\n${header}\n`,
     )
     expect(DRAFT_STEPS).toContain("Do not change the draft's tag or target.")
-    // Staging moves on with main, so the owner checks it still serves the draft's commit.
+    // Staging moves on with main, so the steps check it still serves the draft's commit.
     expect(DRAFT_STEPS).toContain(
       "Check that https://preview.qivo.io/version.json still names the draft's commit",
     )
@@ -244,7 +244,7 @@ describe('preparing a draft', () => {
     await expect(
       prepareRelease({ github: api, log: quiet, fetchImpl: live(), summaryFile }),
     ).rejects.toThrow(/503/)
-    // The new draft exists, so the owner still gets its link and the steps.
+    // The new draft exists, so the summary still holds its link and the steps.
     expect(readFileSync(summaryFile, 'utf8')).toContain(
       `[v0.1.10](https://github.com/qivo-io/qivo/releases/tag/draft) is ready. ${DRAFT_STEPS}`,
     )
@@ -285,7 +285,7 @@ describe('preparing a draft', () => {
       summaryFile,
     })
     expect(writes[1].body.body).toContain('Changes since production: Unchanged')
-    // The warning is for the owner of the draft, not the published release text.
+    // The warning goes to the log and the run summary, not the published release text.
     expect(writes[1].body.body).not.toContain(warning)
     expect(logged).toContain(warning)
     expect(readFileSync(summaryFile, 'utf8')).toContain(`${DRAFT_STEPS}\n\n${warning}\n\n## What`)

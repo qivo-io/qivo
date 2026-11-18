@@ -68,8 +68,8 @@
  * that may only run internal queries:
  *   "$H" staging npx convex run internal/navBackfill:check '{"table": "projects", "at": null}'
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
  * (qivo-internal docs/deployment.md). On the demo, whose stored key cannot
  * run internal functions, the private with-temp-deploy-key helper runs each
  * command with a short-lived key; `run`, an internal action, needs

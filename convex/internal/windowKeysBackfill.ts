@@ -26,8 +26,8 @@
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/windowKeysBackfill:remaining '{"table": "issues"}'
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
  * (qivo-internal docs/deployment.md). Read the dry run, which writes
  * nothing, then give the keys and check again:
  *   "$H" staging npx convex run internal/windowKeysBackfill:run '{"dry_run": true}'
