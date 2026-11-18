@@ -82,11 +82,7 @@ Website, docs and app changes all ship the same way.
    `internal/commentCountsBackfill` right after it deploys, on staging, the
    demo and production (see Recovery and compatibility), and the release
    that adds the Overview's counts needs `internal/overviewCountsBackfill`
-   the same way. The release after v0.1.168, v0.1.169, carried the one-time
-   reset of the organizations on development, staging and production, which
-   ran on 18 November 2026, as did the count of `internal/olderFamilies`
-   there and on the demo. The release after v0.1.169 removes the reset's
-   functions (see Recovery and compatibility).
+   the same way.
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That
@@ -2532,6 +2528,13 @@ builds when it deploys, and removes none: `accountId_providerId_userId` on
 It changes no table or field and has no backfill and no release step, and
 the backend may return to an earlier commit, which drops those indexes.
 
+The release after v0.1.169 removes the internal functions
+`internal/orgReset:orgs` and `internal/orgReset:deleteOrg`, which only
+v0.1.169 (`5138c16`) has. The second deletes an organization at once. From
+that release on, never return the backend to v0.1.169, which would bring
+both back; roll forward instead. The release changes no table, field or
+index and has no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2667,45 +2670,18 @@ from before the rule stay readable, so returning the backend to an earlier
 release is safe, but that release makes families across sub-projects
 again.
 
-The owner decided the same day that the old data goes. v0.1.169, the
-release after v0.1.168, carried two internal functions for a one-time
-reset, which only a deploy key could call. `internal/orgReset:orgs` listed
-a deployment's organizations with their counts, whether each was the
-Northstar fixture's, any pending deletion and their billing state.
-`internal/orgReset:deleteOrg` deleted one organization at once through the
-steps of an admin's deletion request, without its read-only period and the
-admins' email. The reset ran on 18 November 2026. On development and
-staging the list held only fixture organizations, so `deleteOrg` did not
-run there, and Northstar Labs was reset from the seed, anchored on Monday
-16 November 2026. On production `deleteOrg` deleted every organization,
-Northstar Labs included, and no demo data was seeded. By the owner's
-decision no backup was taken first, as production then held no real user
-data. The demo kept its organizations, which are visitors' own demos that
-its cleanup deletes as they expire. From then on every deployment holds
-real user data.
-
-The production deletions left the Better Auth logins of the organizations'
-people, as every organization deletion does, so they can still sign in and
-then create an organization or join one by an invitation. Qivo Admin's
-Audit page on production lists each deletion as **Requested organization
-deletion** (`org.deletion_requested`) with `operator (deploy key)` as its
-actor, until the row is 90 days old.
-
-The release after v0.1.169 removes both functions, by the owner's rule that
-no function that deletes an organization at once stays on a production
-deployment with real user data. Of the releases, only v0.1.169 (`5138c16`)
-has them, so a backend that still serves it, or one returned to it, can
-still delete an organization at once through `deleteOrg`. Never call either
-function there.
-Both were internal, so no app calls them, and their removal sets no
-rollback floor, adds nothing to the Instant Rollback list and needs no
-release step.
+v0.1.169 (`5138c16`) also carried two internal functions,
+`internal/orgReset:orgs` and `internal/orgReset:deleteOrg`, which listed a
+deployment's organizations and deleted one at once through the steps of an
+admin's deletion request. The release after v0.1.169 removes both. Only a
+deploy key could call them and no app calls them, so their removal adds
+nothing to the Instant Rollback list and needs no release step. A backend
+that still serves v0.1.169 has them. Never call either function there, and
+never return a backend to v0.1.169 (see Rollback and hotfixes).
 
 The read-only count `internal/olderFamilies` stays as an operator's check.
-On 18 November 2026 it found no `sibling`, `other_project`,
-`missing_parent` or `held` task on development, staging, production and
-the demo. To count again, with the owner's approval of each run, call it
-until it answers `done: true`. A call that does not finish within its five
+To count, with the owner's approval of each run, call it until it answers
+`done: true`. A call that does not finish within its five
 minutes answers `done: false` with a `cursor` and the totals so far. Call
 it again with that whole answer as its arguments, which goes on from the
 cursor and adds to those totals, so the answer with `done: true` counts the
@@ -2734,16 +2710,7 @@ The count reads every task with a parent and reports how many have their
 parent in a sibling sub-project (`sibling`), in another top-level project
 (`other_project`), no live parent (`missing_parent`), or a project that
 Deleted items holds while a project item moves or restores (`held`), with
-up to five example task ids of each, and writes nothing. The staging check
-signs in to Northstar Labs alone and seeds nothing, so it runs as before
-on the Northstar Labs that the reset seeded.
-
-On development and staging the reset kept the fixture's organization.
-Deleting it removes the organization's receipt and frees the ids the seed
-reserved, but leaves the Better Auth logins of the seven Northstar people,
-which may hold seats elsewhere. A later `seed` then refuses with
-`marketing demo: a demo email already belongs to an unowned account` until
-those logins are deleted.
+up to five example task ids of each, and writes nothing.
 
 Organizations no longer have the fields `next_issue_num`, `next_project_num`
 and `activity_count`. Every hosted deployment cleared them with the one-time
