@@ -123,9 +123,10 @@
  * hands the task to Nora through the window's picker
  * (accessRemovals.reassignChoices) (ui/removal-window). It makes two
  * sub-projects there, a task in the first with a subtask the Standard
- * agent holds, and checks that moving the task to the second, which the
- * agent cannot see, is refused with the agent's name and the subtask's ID
- * over REST, MCP and in the Move window's toast (ui/move-blockers). It
+ * agent holds, and checks that moving the task to the second, where the
+ * agent cannot work, is refused with the agent's name and the subtask's ID
+ * over REST, MCP and in the Move window's toast, and that the move carries
+ * the subtask once the agent can (ui/move-blockers). It
  * makes another
  * sub-project there, led by the Standard agent and shared with its team,
  * and on that sub-project's Settings page, from the deployment's reads
@@ -3183,8 +3184,11 @@ export const WRITE_CONFLICT =
 const WRITE_TIMEOUT =
   'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
 const changedNothing = (error) => error === WRITE_CONFLICT || error === WRITE_TIMEOUT
-const NOT_SAME_FAMILY =
-  'a subtask must be in the same project as its parent task, in any of its sub-projects'
+const NOT_SAME_FAMILY = 'a subtask must be in the same sub-project as its parent task'
+/** The refusal of a move of a subtask that keeps its parent
+ *  (convex/model/issues.ts MOVE_SUBTASK_RULE). */
+const MOVE_OUT_OF_FAMILY =
+  "a subtask stays in its parent task's sub-project; to move it to another sub-project, detach it from its parent in the same change"
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
 const UPLOAD_URL_USED = 'this upload URL has already been used; start a new upload'
 const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
@@ -6020,8 +6024,8 @@ async function listOrderChecks() {
   })
 }
 
-/** A subtask stays in its parent's top-level project (#129). Makes the
- *  run's second project, which the facts checks use. */
+/** A subtask stays in its parent's own sub-project (the release after
+ *  v0.1.168). Makes the run's second project, which the facts checks use. */
 async function subtaskRuleChecks() {
   const w = run.creds.writeToken
   const { A, Z } = run.projects
@@ -6033,14 +6037,47 @@ async function subtaskRuleChecks() {
     })
     run.created.push(run.parent)
     run.child = await restOk(w, 'POST', '/tasks', {
-      project: Z.id,
-      title: `${run.tag} subtask in Zulu`,
+      project: A.id,
+      title: `${run.tag} subtask in Alpha`,
       parent: run.parent.key,
       remaining_hours: 2,
     })
     run.created.push(run.child)
     eq(run.child.parent_id, run.parent.id, "the subtask's parent")
     eq((await restOk(w, 'GET', `/tasks/${run.parent.key}`)).is_group, true, 'the parent is a group')
+    // a subtask in Zulu, a sibling sub-project of the parent's, is refused
+    await restRefusal(
+      w,
+      'POST',
+      '/tasks',
+      { project: Z.id, title: `${run.tag} refused sibling subtask`, parent: run.parent.key },
+      400,
+      NOT_SAME_FAMILY,
+    )
+    eq(
+      await toolRefusal(w, 'create_task', {
+        project: Z.id,
+        title: `${run.tag} refused sibling subtask`,
+        parent: run.parent.key,
+      }),
+      NOT_SAME_FAMILY,
+      'create_task in a sibling sub-project',
+    )
+    // and so is a move of the subtask there that keeps the parent
+    await restRefusal(
+      w,
+      'PATCH',
+      `/tasks/${run.child.key}`,
+      { project: Z.id },
+      400,
+      MOVE_OUT_OF_FAMILY,
+    )
+    eq(
+      (await restOk(w, 'GET', `/tasks/${run.child.key}`)).project_id,
+      A.id,
+      "the subtask's project",
+    )
+    return `a subtask in ${A.name} with its parent; refused in ${Z.name} over REST and MCP, and a move there that keeps the parent refused`
   })
   if (!run.child) return
   await check('subtask-rule/other-project', async () => {
@@ -6071,11 +6108,11 @@ async function subtaskRuleChecks() {
       `/tasks/${run.child.key}`,
       { project: N1.id },
       400,
-      "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change",
+      MOVE_OUT_OF_FAMILY,
     )
     eq(
       (await restOk(w, 'GET', `/tasks/${run.child.key}`)).project_id,
-      Z.id,
+      A.id,
       "the subtask's project",
     )
   })
@@ -9512,27 +9549,30 @@ async function removalWindowCheck() {
 export const MOVE_BLOCKERS_STEP = 'ui/move-blockers'
 
 /** What a move's refusal says after the name of the one person who blocks
- *  it through one subtask (convex/model/issues.ts moveHolderRule). The
- *  sentence starts with the person's name, whose first letter the app's
- *  toast capitalizes. */
+ *  it through one subtask the move carries (convex/model/issues.ts
+ *  moveSubtreeHolderRule). The sentence starts with the person's name,
+ *  whose first letter the app's toast capitalizes. */
 export const moveRefusalTail = (key) =>
-  ` (on ${key}) has no access to that sub-project; give them access there, or change who works on that subtask first`
+  ` (on ${key}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`
 
-/** A move that would take a task out of sight of someone working on its
- *  subtask is refused with that person's name and the subtask's ID, over
- *  REST, MCP and in the app. The run makes two sub-projects of its own
- *  under its second project, as ui/removal-window does, gives its Standard
- *  agent Edit on the first alone, and puts a task there with a subtask the
- *  agent holds. Moving the task to the second sub-project, which the agent
- *  cannot see, answers moveRefusalTail after the agent's name over REST
- *  (400) and MCP, and the task window's Move window, with the second
- *  sub-project found by its name in the picker, toasts the same sentence
- *  and leaves the task where it is. Once the agent views the second
- *  sub-project the same move passes. The tasks go to run.created and the
- *  sub-projects with their project. It notifies only the run's own agent,
- *  runs while the run's projects are active, and needs a backend from the
- *  release after v0.1.167 on; an older one names nobody, so the step
- *  fails on the sentence. */
+/** A move that would carry a subtask to a sub-project where someone
+ *  working on it cannot work is refused with that person's name and the
+ *  subtask's ID, over REST, MCP and in the app. A subtask stays in its
+ *  parent's sub-project, so every move carries the subtasks. The run makes
+ *  two sub-projects of its own under its second project, as
+ *  ui/removal-window does, gives its Standard agent Edit on the first
+ *  alone, and puts a task there with a subtask the agent holds. Moving the
+ *  task to the second sub-project, where the agent has no Edit, answers
+ *  moveRefusalTail after the agent's name over REST (400) and MCP, and the
+ *  task window's Move window, with the second sub-project found by its
+ *  name in the picker, toasts the same sentence and leaves the task where
+ *  it is. Once the agent has Edit on the second sub-project the same move
+ *  passes and carries the subtask there. The tasks go to run.created and
+ *  the sub-projects with their project. It notifies only the run's own
+ *  agent, runs while the run's projects are active, and needs a backend
+ *  from the release after v0.1.168 on; an older one moves the task within
+ *  its project alone and refuses with another sentence, so the step fails
+ *  on the sentence. */
 async function moveBlockersCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
@@ -9603,11 +9643,15 @@ async function moveBlockersCheck() {
       from.id,
       "the refused task's project",
     )
-    // once the agent sees the destination, the same move passes
-    await restOk(w, 'PUT', `/projects/${to.id}/access/users/${std.id}`, { level: 'viewer' })
+    // once the agent edits the destination, the same move passes and the
+    // subtask comes along
+    await restOk(w, 'PUT', `/projects/${to.id}/access/users/${std.id}`, { level: 'user' })
     const moved = await restOk(w, 'PATCH', `/tasks/${top.key}`, { project: to.id })
     eq(moved.project_id, to.id, "the moved task's project")
-    return `moving ${top.key} to ${to.name} named ${std.name} and ${below.key} over REST, MCP and in the Move window's toast, and passed once the agent could see it`
+    const carried = await restOk(w, 'GET', `/tasks/${below.key}`)
+    eq(carried.project_id, to.id, "the carried subtask's project")
+    eq(carried.parent_id, top.id, "the carried subtask's parent")
+    return `moving ${top.key} to ${to.name} named ${std.name} and ${below.key} over REST, MCP and in the Move window's toast, and passed with ${below.key} once the agent could edit it`
   })
 }
 
@@ -12488,18 +12532,21 @@ async function factsFixture() {
       return t
     }
     const f = { week, past, weekStart: me.organization.week_start }
-    // a group with a Done and an open subtask here and an open one in N2
+    // a group with a Done and two open subtasks, in its own sub-project as
+    // a subtask stays with its parent
     f.g = await make(N1, 'facts group', { remaining_hours: 5 })
     f.c1 = await make(N1, 'facts done subtask', { parent: f.g.key, status: 'done', due_date: past })
     f.c2 = await make(N1, 'facts open subtask', { parent: f.g.key, remaining_hours: 3 })
-    f.c3 = await make(N2, 'facts subtask in Zulu', {
+    f.c3 = await make(N1, 'facts third subtask', {
       parent: f.g.key,
       remaining_hours: 4,
       due_date: past,
     })
-    // a parent whose only subtask is in N2, and a plain task
-    f.p = await make(N1, 'live parent', { remaining_hours: 6 })
+    // a parent with its only subtask in N2, a task there due long ago, and
+    // a plain task here
+    f.p = await make(N2, 'live parent', { remaining_hours: 6 })
     f.q = await make(N2, 'live subtask', { parent: f.p.key, remaining_hours: 2 })
+    f.z = await make(N2, 'facts leaf in Zulu', { remaining_hours: 4, due_date: past })
     f.l = await make(N1, 'facts leaf')
     // delay: due long ago, planned long ago, planned ahead, and both
     f.late = await make(N1, 'delay past due', { due_date: past, remaining_hours: 4 })
@@ -12517,13 +12564,13 @@ async function factsFixture() {
       end_week: addDays(week, 35),
     })
     // the leaves of each sub-project while both are active; p and g are groups
-    f.leaves1 = [f.c1, f.c2, f.l, f.late, f.behind, f.ok, f.lateAhead]
-    f.leaves2 = [f.c3, f.q]
+    f.leaves1 = [f.c1, f.c2, f.c3, f.l, f.late, f.behind, f.ok, f.lateAhead]
+    f.leaves2 = [f.q, f.z]
     fixture = f
     // a new project answers zeros on REST and MCP, because it holds no tasks
     same(N.completion, completion(0, 0), 'completion in the POST answer')
     same(N2.completion, completion(0, 0), 'completion in the create_project answer')
-    return `${N.name} with ${N1.name} and ${N2.name}, 11 tasks`
+    return `${N.name} with ${N1.name} and ${N2.name}, 12 tasks`
   })
   return fixture
 }
@@ -12542,23 +12589,24 @@ async function progressChecks(f) {
     await sameEverywhere(w, f.c1, N1, 'progress', null)
     await sameEverywhere(w, f.l, N1, 'progress', null)
   })
-  // The Standard agent sees N1 alone, so the subtask in N2 is hidden from it.
-  await check('task-progress/partial', async () => {
+  // The Standard agent sees N1 alone, which holds every subtask of the
+  // group, as a subtask stays in its parent's sub-project.
+  await check('task-progress/reader', async () => {
     const s = run.creds.stdKey
     await restOk(w, 'PUT', `/projects/${N1.id}/access/users/${run.agents.std.id}`, {
       level: 'viewer',
     })
     same(
       (await restOk(s, 'GET', `/tasks/${f.g.key}`)).progress,
-      progress(1, 2, true),
-      'REST progress with a hidden subtask',
+      progress(1, 3),
+      'REST progress for a reader of the sub-project',
     )
     same(
       (await toolOk(s, 'get_task', { ref: f.g.key })).progress,
-      progress(1, 2, true),
-      'MCP progress with a hidden subtask',
+      progress(1, 3),
+      'MCP progress for a reader of the sub-project',
     )
-    return '1 of the 2 it can read, partial'
+    return '1 of 3 for a reader of the sub-project alone, whole'
   })
 }
 
@@ -12629,12 +12677,12 @@ async function completionChecks(f) {
       'the update_project answer',
     )
   })
-  // the agent reads N1 only, where p's subtask is hidden: p stays a group
-  await check('project-completion/hidden-subtask', async () => {
+  // the agent reads N1 only, which holds its families whole
+  await check('project-completion/reader', async () => {
     same(
       (await restOk(run.creds.stdKey, 'GET', `/projects/${N1.id}`)).completion,
       want1,
-      'a parent whose only subtask is hidden still counts as a group',
+      'a reader of the sub-project alone reads its completion',
     )
   })
 }
@@ -12694,15 +12742,18 @@ async function delayChecks(f) {
   })
 }
 
-/** The live group rule (#149): a subtask in an archived project makes no
- *  task in an active project a group, and a restore or a move out of the
- *  archived project makes it one again and clears its own hours. */
+/** The live group rule (#149) for a family in one sub-project, as a
+ *  subtask stays in its parent's sub-project: a task with an active subtask
+ *  is a group, also while their sub-project is archived, as a parent in an
+ *  archived project counts every active subtask, and the archived
+ *  sub-project's tasks leave the project's completion until its restore. A
+ *  subtask in an archived project under a parent in an active one comes
+ *  only from data stored before that rule, which no public call makes, so
+ *  the hermetic tests check it (convex/tests/liveTasks.test.ts). */
 async function liveTaskChecks(f) {
   const w = run.creds.writeToken
   const { N, N1, N2 } = run.projects
   const read = async (t) => restOk(w, 'GET', `/tasks/${t.key}`)
-  const inProgress = async () =>
-    (await restTasks(w, `/tasks?project=${N1.id}&status=progress&limit=200`)).map((t) => t.id)
   await check('live-tasks/active-sibling', async () => {
     const p = await read(f.p)
     eq(p.is_group, true, 'a parent with a subtask in an active sub-project')
@@ -12716,54 +12767,29 @@ async function liveTaskChecks(f) {
     eq(answer.completion, null, 'an archived project has no completion')
   })
   await check('live-tasks/archived-sibling', async () => {
-    await sameEverywhere(w, f.p, N1, 'is_group', false)
     const p = await read(f.p)
+    eq(p.is_group, true, 'a parent in an archived sub-project stays a group')
+    eq((await toolOk(w, 'get_task', { ref: f.p.key })).is_group, true, 'is_group over MCP')
     same(
       p.subtasks.map((s) => s.id),
       [f.q.id],
-      'the single read still lists the subtask in the archived project',
+      'the single read lists the subtask in the archived project',
     )
     eq(p.subtasks_next_cursor, null, 'the subtask list ends on its first page')
-    eq(p.group_remaining_hours, null, 'a task without a live subtask has no group hours')
-    const g = await read(f.g)
-    same(g.progress, progress(1, 2), 'the group leaves out its subtask in the archived project')
-    eq(g.group_remaining_hours, 3, "the group's hours leave it out too")
-    eq((await read(f.c3)).delay, null, 'a task in an archived project has no delay')
-    const leaves = [...f.leaves1, f.p]
-    for (const p of [N, N1])
+    eq((await read(f.z)).delay, null, 'a task in an archived project has no delay')
+    for (const project of [N, N1])
       same(
-        await countedCompletion(w, p),
-        completion(doneIn(leaves), leaves.length),
-        `${p.name} completion counts the parent as a task`,
+        await countedCompletion(w, project),
+        completion(doneIn(f.leaves1), f.leaves1.length),
+        `${project.name} completion leaves the archived sub-project out`,
       )
-    return 'is_group false on REST and MCP, the subtask still listed, progress, hours and completion follow'
-  })
-  await check('live-tasks/leaf-edits', async () => {
-    const t = await restOk(w, 'PATCH', `/tasks/${f.p.key}`, {
-      status: 'progress',
-      remaining_hours: 5,
-    })
-    eq(t.status, 'progress', 'status')
-    eq(t.remaining_hours, 5, 'its own hours')
-    const start = addDays(f.week, 7)
-    await toolOk(w, 'update_task', { ref: f.p.key, start_week: start, end_week: start })
-    eq((await toolOk(w, 'get_task', { ref: f.p.key })).start_week, start, 'dates over MCP')
-    expect((await inProgress()).includes(f.p.id), 'the status filter leaves the parent out')
+    return 'is_group true on REST and MCP, the subtask listed, completion without the archived sub-project'
   })
   await check('live-tasks/restore-regroups', async () => {
     const answer = await toolOk(w, 'update_project', { project: N2.id, archived: false })
     // the restore starts its family's regroup in the same transaction
     same(answer.completion, COUNTING, 'the restore answer')
-    const p = await read(f.p)
-    eq(p.is_group, true, 'a group again')
-    eq(p.start_week, null, 'group dates come from its unscheduled subtask')
-    expect(!(await inProgress()).includes(f.p.id), 'the status filter lists a group')
-    // background steps clear the own hours moments later
-    expect(
-      await until(async () => (await read(f.p)).remaining_hours === null, 30_000),
-      "the restore did not clear the parent's own hours within 30 seconds",
-    )
-    same((await read(f.g)).progress, progress(1, 3), 'the group counts its subtask again')
+    eq((await read(f.p)).is_group, true, 'still a group')
     const all = [...f.leaves1, ...f.leaves2]
     same(await countedCompletion(w, N), completion(doneIn(all), all.length), 'completion')
     same(
@@ -12771,20 +12797,6 @@ async function liveTaskChecks(f) {
       completion(0, f.leaves2.length),
       'the restored sub-project',
     )
-  })
-  await check('live-tasks/move-out-of-archived', async () => {
-    await restOk(w, 'PATCH', `/projects/${N2.id}`, { archived: true })
-    eq(
-      (await restOk(w, 'PATCH', `/tasks/${f.p.key}`, { remaining_hours: 4 })).remaining_hours,
-      4,
-      'a leaf again',
-    )
-    const q = await restOk(w, 'PATCH', `/tasks/${f.q.key}`, { project: N1.id })
-    eq(q.project_id, N1.id, "the subtask's project")
-    const p = await read(f.p)
-    eq(p.is_group, true, 'a group once its subtask is in an active project')
-    eq(p.remaining_hours, null, 'the move clears its own hours at once')
-    await restOk(w, 'PATCH', `/projects/${N2.id}`, { archived: false })
   })
 }
 

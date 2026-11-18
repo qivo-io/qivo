@@ -186,11 +186,13 @@ or could not load them all, the picker says so, and while their list could
 not load, they stay checked and cannot be taken off there. So does one you
 can no longer change while the picker is open, as after your access
 changed, and if someone else then takes it off, it shows unchecked and
-cannot be chosen there. The pickers list the task's own sub-project first, then the other
-sub-projects of its project, each in the order its tasks were created. If
-the task moves to another project meanwhile, the picker lists them again
-from the start. **Linked tasks** stops at the end of the task's own
-project, and **Search all your projects** goes on into your other projects.
+cannot be chosen there. **Parent** and **Subtasks** list the task's own
+sub-project alone, where a subtask stays with its parent. **Linked tasks**
+lists the task's own sub-project first, then the other sub-projects of its
+project, each in the order its tasks were created. If the task moves to
+another sub-project meanwhile, the picker lists them again from the start.
+**Linked tasks** stops at the end of the task's own project, and **Search
+all your projects** goes on into your other projects.
 A typed task ID, such as QN-12, finds that task first, anywhere you could
 link it. In a large organization a picker can say **Qivo checked part of
 the tasks. Load more continues.**, and **Load more** goes on from there.
@@ -342,13 +344,17 @@ subtasks or no more links for them, its picker says so with the same
 sentence and offers nothing to create. **Remove parent** also appears
 when the parent is outside this view.
 
-A subtask stays in its parent's project, in any of that project's
-sub-projects. Setting a parent changes both tasks, so it needs edit access to
-the subtask and to the parent. The parent and subtask pickers offer only
-tasks of the same project that you can edit, and leave out tasks the limits
-above refuse, also for subtasks that are archived or that you cannot see.
-The current parent shows first so you can remove it, and so does each
-current subtask you can edit, also one stored in another project.
+A subtask stays in its parent's own sub-project. Setting a parent changes
+both tasks, so it needs edit access to the subtask and to the parent. The
+parent and subtask pickers offer only tasks of the task's own sub-project
+that you can edit, and leave out tasks the limits above refuse, also for
+subtasks that are archived or that you cannot see. Links, unlike subtasks,
+can join tasks of any sub-project or project. A task saved before this
+rule can have a subtask in another sub-project of its project, or, saved
+before that, in another project. Such a subtask keeps its parent until it
+moves or leaves it, and the subtask picker shows it first among the
+current subtasks you can edit. The current parent shows first so you can
+remove it.
 Everyone assigned to or reviewing the task or its subtasks must be able to
 see the new parent and every task above it. Qivo checks this when you save
 and, when someone could not, refuses the parent and says what to change. The assignee and
@@ -356,8 +362,9 @@ reviewer pickers on a subtask offer only people who can see every task above
 it. Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
 other. If a task's parent is in an archived project or
-a project you cannot access, **Parent** says the parent task is outside this
-view. Choosing another parent replaces it, and **Remove parent** removes it.
+a project you cannot access, which only a task saved before the rule can
+have, **Parent** says the parent task is outside this view. Choosing
+another parent replaces it, and **Remove parent** removes it.
 
 ## Moving a task
 
@@ -365,9 +372,7 @@ Choose **Move to sub-project…** to move within the task's organization to a
 sub-project you can edit. The window lists those sub-projects under their
 projects, 25 at a time with a search and **Load more**, the task's own
 marked **Current**, and says "No other sub-project you can move it to." when
-there is none. **Move** turns on once Qivo has checked the one you choose,
-and the task's own sub-project and its parent's, which decide what moves
-with it.
+there is none. **Move** turns on once Qivo has checked the one you choose.
 Under the list the window says it is opening that sub-project while it
 checks it, and if the check fails or cannot finish it says so with
 **Retry**. If your access there drops below Edit while the window is open,
@@ -380,16 +385,15 @@ A Remaining estimate that stays with the task keeps its measurement time, so
 the move does not restart its
 [delay projection](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works).
 
-A move between sub-projects of the same project moves only the task. A move
-to a sub-project of another project also moves the task's subtasks,
-archived ones included, unless they are already in that project.
-A subtask moved to another project stops being a subtask of its parent,
-because a subtask stays in its parent's project. The dialog says both before
+A subtask stays in its parent's own sub-project, so a move to any other
+sub-project, in the same project or another one, also moves the task's
+subtasks, archived ones included, unless they are already there. A subtask
+that moves stops being a subtask of its parent. The dialog says both before
 you move. Qivo refuses the move if a subtask that would move is in a
 sub-project you cannot edit (someone who can edit it can move it), or if the
 task has more than 200 subtasks, archived ones included. Restore some
 archived subtasks from **Archived tasks** and remove them from the task
-first, or move the task within its project. A move or a new parent is also refused in
+first. A move or a new parent is also refused in
 the rare case that the task and its subtasks are too large to change at
 once.
 While a subtask that would move is in a project being moved to Deleted
@@ -399,16 +403,15 @@ The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
 before moving. The same holds for each active subtask that moves with the
 task. Moving a group clears an ineligible reviewer instead of refusing the
-move for that reviewer. Everyone assigned to or reviewing a subtask that
-stays where it is needs at least View access at the
-destination, so they can still see the task. Qivo checks everyone on the
-task and its subtasks when you choose **Move**, also on subtasks in projects
-you cannot see, and when someone would lose access it refuses the move,
-names them with the subtasks they work on, and says what to change: give
-them access there, or change who works on those subtasks. It names up to
-five people with up to three subtasks each and counts the rest. A subtask in
-a project you cannot see is counted without its ID. Switched-off people are
-not checked on the subtasks that stay.
+move for that reviewer. Qivo checks everyone on the task and its subtasks
+when you choose **Move**, and when someone cannot work there it refuses the
+move, names them with the subtasks they work on, and says what to change:
+give them Edit access there, or change who works on those subtasks. It
+names up to five people with up to three subtasks each and counts the rest.
+A task saved before the rule can have a subtask already in the destination.
+Everyone assigned to or reviewing such a subtask needs at least View access
+there, so they can still see the task, and Qivo names them the same way when
+they have none. Switched-off people are not checked on those subtasks.
 
 ## Archiving
 
@@ -422,9 +425,10 @@ It sends no inbox update. The task's messages are marked read as with any
 archive.
 
 The sweep archives subtasks before their parents. A Done subtask moved to
-another sub-project of the same project starts its count again, so its Done
-parent archives no earlier than the night after that subtask archives, even
-if the parent itself did not move. Once a group's active subtasks are gone, its saved status
+another sub-project starts its count again. When it keeps its parent, as a
+subtask saved before the rule does when it moves into its parent's
+sub-project, its Done parent archives no earlier than the night after that
+subtask archives, even if the parent itself did not move. Once a group's active subtasks are gone, its saved status
 applies again. A saved Done task can archive on a later sweep when its Done
 age meets the threshold; a saved To Do task returns to To Do.
 
@@ -432,8 +436,9 @@ age meets the threshold; a saved To Do task returns to To Do.
 which needs edit access. **Archive** is selected first. For a task with
 subtasks, the window lists them, and a box such as **Also archive the 3
 subtasks**, selected first, archives the whole subtask tree, including
-subtasks in other sub-projects. Qivo refuses that when one of them is in a
-project you cannot edit, and someone who can edit that project can archive
+subtasks in other sub-projects, which only a task saved before the rule
+that a subtask stays in its parent's sub-project can have. Qivo refuses
+that when one of them is in a project you cannot edit, and someone who can edit that project can archive
 the whole tree instead. While one of them is in a project being moved to Deleted items, Qivo
 refuses it for everyone until that move finishes. Qivo also refuses the whole
 tree when the task and its subtasks are too large to change at once, such as

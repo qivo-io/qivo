@@ -195,8 +195,8 @@ async function checkoutOpen(
 }
 
 /** Sets the first phase, which refuses all access from here on, and starts
- * the steps. */
-async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
+ * the steps. internal/orgReset.ts begins an operator's deletion with it. */
+export async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
   const removal = await orgRemovalFor(ctx, orgId)
   if (!removal || removal.phase !== undefined) return
   const scheduled_id = await ctx.scheduler.runAfter(0, stepRef, { org_id: orgId })

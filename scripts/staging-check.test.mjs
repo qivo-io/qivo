@@ -12,7 +12,7 @@ import {
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
-import { moveHolderRule } from '../convex/model/issues'
+import { moveSubtreeHolderRule } from '../convex/model/issues'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import { endText } from '../src/lib/deletedItems'
 import { LABEL_COLORS } from '../src/lib/labelColors'
@@ -552,12 +552,12 @@ describe('staging check REST contract', () => {
     expect(MOVE_BLOCKERS_STEP).toBe('ui/move-blockers')
     // the sentence the step expects is the one the server sends
     expect(`Ada Lind${moveRefusalTail('QN-7')}`).toBe(
-      moveHolderRule([{ name: 'Ada Lind', tasks: ['QN-7'], hidden: 0 }]),
+      moveSubtreeHolderRule([{ name: 'Ada Lind', tasks: ['QN-7'] }]),
     )
     // must fail: two subtasks, or a second person, end another way
-    expect(
-      moveHolderRule([{ name: 'Ada Lind', tasks: ['QN-7', 'QN-8'], hidden: 0 }]),
-    ).not.toContain(moveRefusalTail('QN-7'))
+    expect(moveSubtreeHolderRule([{ name: 'Ada Lind', tasks: ['QN-7', 'QN-8'] }])).not.toContain(
+      moveRefusalTail('QN-7'),
+    )
     for (const mark of ['aria-label="Task actions"', 'Move to sub-project…'])
       expect(read('../src/panels/IssueDetail.tsx'), mark).toContain(mark)
     expect(read('../src/panels/Modals.tsx')).toContain('submitLabel="Move"')

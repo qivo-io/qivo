@@ -191,34 +191,39 @@ describe('creating a subtask and setting a parent', () => {
     ]
     const before = await allIssues(t, f.org.id)
     for (const [i, project] of [f.sub2.id, backend.id].entries()) {
+      // each call starts once the one before was refused, so none rejects
+      // before its refusal is awaited
       const attempts = [
-        as(t, f.admin).mutation(api.issues.create, {
-          org_id: f.org.id,
-          id: uuid(),
-          project_id: project,
-          title: 'Across',
-          parent_id: parent.id,
-        }),
-        t.mutation(internal.machine.rest.createIssue, {
-          callerId: f.agent.id,
-          access: 'write',
-          keyName: 'drive',
-          body: JSON.stringify({ project, title: 'Across', parent: parent.id }),
-        }),
-        t.mutation(internal.machine.mcp.createIssue, {
-          callerId: f.agent.id,
-          access: 'write',
-          project,
-          title: 'Across',
-          parent: parent.id,
-        }),
+        () =>
+          as(t, f.admin).mutation(api.issues.create, {
+            org_id: f.org.id,
+            id: uuid(),
+            project_id: project,
+            title: 'Across',
+            parent_id: parent.id,
+          }),
+        () =>
+          t.mutation(internal.machine.rest.createIssue, {
+            callerId: f.agent.id,
+            access: 'write',
+            keyName: 'drive',
+            body: JSON.stringify({ project, title: 'Across', parent: parent.id }),
+          }),
+        () =>
+          t.mutation(internal.machine.mcp.createIssue, {
+            callerId: f.agent.id,
+            access: 'write',
+            project,
+            title: 'Across',
+            parent: parent.id,
+          }),
         // setting the parent of a task that is already there
-        appUpdate(t, f, loose[i].id, { parent_id: parent.id }),
-        restPatch(t, f, loose[i].id, { parent: parent.id }),
-        mcpUpdate(t, f, { ref: loose[i].id, parent: parent.id }),
+        () => appUpdate(t, f, loose[i].id, { parent_id: parent.id }),
+        () => restPatch(t, f, loose[i].id, { parent: parent.id }),
+        () => mcpUpdate(t, f, { ref: loose[i].id, parent: parent.id }),
       ]
       for (const attempt of attempts) {
-        const r = await expectRefusal(attempt, 'rule')
+        const r = await expectRefusal(attempt(), 'rule')
         expect(r.data.message).toBe(SUBTASK_PROJECT_RULE)
       }
     }
