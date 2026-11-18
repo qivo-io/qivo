@@ -39,8 +39,8 @@
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). Read the dry run, which writes nothing, then record
- * the ids and check again:
+ * (qivo-internal docs/deployment.md). Read the dry run, which writes
+ * nothing, then record the ids and check again:
  *   "$H" staging npx convex run internal/usedIdsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/usedIdsBackfill:run '{"dry_run": false}'
  * A call stops between two steps once RUN.ms has passed, well inside

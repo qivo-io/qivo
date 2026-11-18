@@ -74,7 +74,7 @@
  * recount mends it. A release before this one keeps no counts, but it
  * cannot run on a deployment once any organization holds
  * overview_counts_at, which its schema does not accept: this release is a
- * backend rollback floor (docs/deployment.md). */
+ * backend rollback floor (qivo-internal docs/deployment.md). */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize } from 'convex/values'

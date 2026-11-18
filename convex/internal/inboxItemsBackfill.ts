@@ -55,9 +55,9 @@
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). On the demo, whose stored key cannot run internal
- * functions, the private with-temp-deploy-key helper runs each command with
- * a short-lived key: `remaining` and `check` need
+ * (qivo-internal docs/deployment.md). On the demo, whose stored key cannot
+ * run internal functions, the private with-temp-deploy-key helper runs each
+ * command with a short-lived key: `remaining` and `check` need
  * deployment:functions:runInternalQueries, and `run`, an internal action,
  * deployment:functions:runInternalActions. A rehearsal belongs on a
  * disposable --local backend.

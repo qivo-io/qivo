@@ -67,8 +67,8 @@ const SITE_SUFFIX = '.convex.site'
  * (appURL.ts resolveExportOrigin), compared whole, port included, and
  * refuses every link without one. A run from source takes HTTPS from a
  * host ending in `.convex.site`, the form every Convex site URL has
- * (docs/deployment.md), and HTTP on a loopback host, a local backend's
- * site. The origin never comes from the page.
+ * (qivo-internal docs/deployment.md), and HTTP on a loopback host, a local
+ * backend's site. The origin never comes from the page.
  */
 export function exportDownloadURL(
   raw: string,

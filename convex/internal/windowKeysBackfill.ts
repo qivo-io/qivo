@@ -11,9 +11,9 @@
  * From that release the app subscribes no task window and holds no task or
  * project, so a key places nothing in the app and no read uses one. A run
  * on a deployment that serves that release or later changes nothing anyone
- * sees, and the deployment needs none (docs/deployment.md). It stays so a
- * deployment can still be brought in line with the rows every new task,
- * project and restore from Deleted items gets (model/deletedItems.ts
+ * sees, and the deployment needs none (qivo-internal docs/deployment.md). It
+ * stays so a deployment can still be brought in line with the rows every new
+ * task, project and restore from Deleted items gets (model/deletedItems.ts
  * storedTaskKey, cleanProject).
  *
  * Check a deployment before changing it. `remaining` is a query, so it
@@ -28,8 +28,8 @@
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). Read the dry run, which writes nothing, then give
- * the keys and check again:
+ * (qivo-internal docs/deployment.md). Read the dry run, which writes
+ * nothing, then give the keys and check again:
  *   "$H" staging npx convex run internal/windowKeysBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/windowKeysBackfill:run '{"dry_run": false}'
  *

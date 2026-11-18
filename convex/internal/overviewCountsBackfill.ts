@@ -52,9 +52,9 @@
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). On the demo, whose stored key cannot run internal
- * functions, the private with-temp-deploy-key helper runs each command with a
- * short-lived key; `run`, an internal action, needs
+ * (qivo-internal docs/deployment.md). On the demo, whose stored key cannot
+ * run internal functions, the private with-temp-deploy-key helper runs each
+ * command with a short-lived key; `run`, an internal action, needs
  * deployment:functions:runInternalActions.
  *
  * A run counts each organization that is not counted yet or has a run left
@@ -70,14 +70,14 @@
  * this one keeps no counts, and its schema does not accept org_ready
  * overview_counts_at, which every new organization and every counted one
  * holds: this release is a backend rollback floor once it deploys
- * (docs/deployment.md), and a fault is fixed forward. Counts that drift
- * for another reason, which a dry run lists in `differ`, are mended by a
- * run with `"recount": true` until `done`. Every call that is no dry run
- * adds one platform_audit_log row
- * (action 'overview_counts_backfill', actor 'system') with its totals and
- * where it stopped, also when a step throws, with the error. Running it
- * again is safe. It writes no activity, sends no task event and changes
- * nothing a person sees. */
+ * (qivo-internal docs/deployment.md), and a fault is fixed forward. Counts
+ * that drift for another reason, which a dry run lists in `differ`, are
+ * mended by a run with `"recount": true` until `done`. Every call that is no
+ * dry run adds one platform_audit_log row (action
+ * 'overview_counts_backfill', actor 'system') with its totals and where it
+ * stopped, also when a step throws, with the error. Running it again is
+ * safe. It writes no activity, sends no task event and changes nothing a
+ * person sees. */
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'

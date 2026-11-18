@@ -1362,9 +1362,10 @@ export default defineSchema({
   // backend first read it whole into a download's response. Neither
   // preparing nor serving an archive sets
   // organizations.last_export_confirmed_at, the record of exports an admin's
-  // app confirmed as saved, which the deletion reminder reads. Code from before the release of served_at, streams and the
-  // step's Deleted items state does not accept a row that holds one
-  // (docs/deployment.md).
+  // app confirmed as saved, which the deletion reminder reads. Code from
+  // before the release of served_at, streams and the step's Deleted items
+  // state does not accept a row that holds one
+  // (qivo-internal docs/deployment.md).
   org_exports: defineTable({
     id: v.string(), // a server uuid
     org_id: v.string(),
@@ -1813,7 +1814,7 @@ export default defineSchema({
    * the task's one row holds the same text. The second release is the
    * third's rollback floor, because it reads the rows; a release before it
    * reads only issues.description and shows no text for a task the third
-   * wrote, edited or cleared (docs/deployment.md).
+   * wrote, edited or cleared (qivo-internal docs/deployment.md).
    *
    * The project and archived copies came after the table, in the same
    * release or a later one. A row holds them once project_id is present
@@ -1824,7 +1825,8 @@ export default defineSchema({
    * (search.ts, lib/mainSearch.ts) reads search_description, and the
    * release whose Search palette first calls it ships only once a dry run
    * from the third release on every deployment reports zero `missing`,
-   * `differ`, `duplicates` and `orphans` (docs/deployment.md). */
+   * `differ`, `duplicates` and `orphans`
+   * (qivo-internal docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows

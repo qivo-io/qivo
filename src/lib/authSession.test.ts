@@ -876,7 +876,7 @@ describe('independent app and admin browser sessions', () => {
   /* The plugin applies the cleared cookies of a completed sign-out to the jar
      as it is when the answer arrives, so they also replace a session another
      tab stored while the request ran. That tab signs in again, a known effect
-     of the plugin's sign-out (docs/better-auth-upgrade.md). */
+     of the plugin's sign-out (qivo-internal docs/better-auth-upgrade.md). */
   it('a completed sign-out also forgets a session another tab stored meanwhile', async () => {
     const { oldToken, newToken, jar } = await signInDuringSignOut()
     expect(service.revoked).toEqual([oldToken])

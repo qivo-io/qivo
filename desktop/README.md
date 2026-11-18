@@ -344,9 +344,7 @@ Local HTTPS proxy tests also verify trusted certificates and reject untrusted
 certificates and hostname mismatches without disabling TLS verification.
 Remove the override once electron-builder's dependency tree no longer needs it.
 
-This affects build tooling, not the installed desktop runtime. Better Auth
-and its Convex adapter are described in
-[the Better Auth notes](../docs/better-auth-upgrade.md).
+This affects build tooling, not the installed desktop runtime.
 
 ## Test builds and release plan
 

@@ -1,12 +1,12 @@
 /* Check and repair, dry run first, of what a rollback past the favorites
- * release leaves in project_favorites (schema.ts; docs/deployment.md, the
- * favorites paragraph). A release before that one knows no favorites, so
- * while it serves, a rename, an archive or a restore leaves a row's copies
- * stale, and a profile removal, a Deleted items purge or an organization's
- * deletion leaves the rows of what it deleted. The readers skip such rows
- * (model/projectFavorites.ts favoriteShows), so a person sees nothing
- * wrong, but a seat later created with a removed seat's id, or a project
- * that takes a purged id back, would list them.
+ * release leaves in project_favorites (schema.ts; qivo-internal
+ * docs/deployment.md, the favorites paragraph). A release before that one
+ * knows no favorites, so while it serves, a rename, an archive or a restore
+ * leaves a row's copies stale, and a profile removal, a Deleted items purge
+ * or an organization's deletion leaves the rows of what it deleted. The
+ * readers skip such rows (model/projectFavorites.ts favoriteShows), so a
+ * person sees nothing wrong, but a seat later created with a removed seat's
+ * id, or a project that takes a purged id back, would list them.
  *
  * Each row falls into the first of these classes that fits, in this order:
  *   org_gone          no organizations row for its org_id. Deleted.

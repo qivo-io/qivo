@@ -32,9 +32,9 @@
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). Read the dry run, which writes nothing, then run it,
- * wait for the scheduled read steps, which take seconds, and read a new dry
- * run, which then reports zero `tasks`:
+ * (qivo-internal docs/deployment.md). Read the dry run, which writes
+ * nothing, then run it, wait for the scheduled read steps, which take
+ * seconds, and read a new dry run, which then reports zero `tasks`:
  *   "$H" staging npx convex run internal/archivedReadsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/archivedReadsBackfill:run '{"dry_run": false}'
  * A call stops between two pages once RUN.ms has passed, well inside

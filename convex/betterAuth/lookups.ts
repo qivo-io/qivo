@@ -8,7 +8,7 @@
  * Each query reads the row findOne reads for the same where clause, through
  * the same index, and answers only the fields its caller uses. Better Auth
  * upgrades re-check them against the release's tables
- * (docs/better-auth-upgrade.md). */
+ * (qivo-internal docs/better-auth-upgrade.md). */
 
 import { v } from 'convex/values'
 import { query } from './_generated/server'

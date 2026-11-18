@@ -187,8 +187,8 @@ export const STORAGE_FINALIZE_RETRY_MS = 3 * DAY_MS
  * period, which keeps the answer as its storage_basis, so a change of the
  * variable acts from each organization's next renewal, and a period
  * already open keeps its basis. Unset on every deployment until the owner
- * switches it on (docs/deployment.md). Billing, and with it this, never
- * runs on the demo (billingEnabled). */
+ * switches it on (qivo-internal docs/deployment.md). Billing, and with it
+ * this, never runs on the demo (billingEnabled). */
 export const dailyStorageBilling = () => process.env.DAILY_STORAGE_BILLING === 'true'
 
 // API responses are normalized by the adapter; serialize their raw-equivalent

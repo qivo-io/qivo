@@ -16,7 +16,8 @@
  * 5xx, so the Vercel build fails: a branch preview before main, staging
  * before a release can use the commit, production and the demo before
  * their domain moves. Convex has already pushed the functions by then; see
- * docs/deployment.md for what a failed check leaves and what to do.
+ * qivo-internal docs/deployment.md for what a failed check leaves and what
+ * to do.
  *
  * The probe sends no credential and nothing that creates a session, an
  * OAuth client or a token. It still reads the database. Better Auth runs
