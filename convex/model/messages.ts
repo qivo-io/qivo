@@ -60,8 +60,10 @@ import { emitTaskEvent } from './taskEvents'
 const REVIEW_READY = 'Ready for your review'
 
 /* The placeholder of the parent-attach line (0114:212) in a change's
- * parts, which the fan-out fills with the parent's key (followerLine). A
- * background step scheduled by an earlier release carries it too. */
+ * parts, which the fan-out fills with the parent's key, or with an
+ * anonymous phrase for a parent recorded in another sub-project
+ * (followerLine). A background step scheduled by an earlier release
+ * carries it too. */
 export const ATTACH_SLOT = '\x01attach'
 
 /* to_char(date, 'FMDD Mon') over the ISO 'YYYY-MM-DD' storage → '5 Aug'. */
@@ -1647,8 +1649,8 @@ export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000, inlineR
 /** What a fan-out tells every follower, before each reader's own lines. A
  * change carries its parts, its assignment and reviewer lines with the
  * assignee and reviewer they name, whether the reviewer was handed the task
- * in this write, and the new parent's key for the attach line. The parent
- * also carries its id and project, which the background step of an earlier
+ * in this write, and the new parent's key and project for the attach line.
+ * The parent also carries its id, which the background step of an earlier
  * release reads, so a step scheduled before a rollback still runs. */
 const vFollowerNote = v.union(
   v.object({ kind: v.literal('comment') }),
@@ -1711,14 +1713,20 @@ function followerLine(notice: FollowerNotice, profileId: string): string | null 
   if (note.kind === 'comment') return mentioned ? null : 'New comment'
   let mine = mentioned ? note.parts.filter((x) => x !== 'Description updated') : [...note.parts]
   if (note.parent !== undefined) {
-    // Every follower reads the parent's key, as it was when the change was
-    // written. Every write that sets a parent keeps the subtask in the
+    // The line names the parent's key, as it was when the change was
+    // written, only when the notice records the parent in the task's own
+    // project then. Every write that sets a parent keeps the subtask in the
     // parent's own sub-project (model/issues.ts sameSubProject), and a
     // reader is told only while they see the task's project then and now,
-    // so they could see the parent when it was set. Messages stored before
-    // that rule keep "a task in another sub-project" or "a task in another
-    // project".
-    const { key } = note.parent
+    // so they could see that parent when it was set. A step scheduled
+    // before that rule can record a parent in another sub-project, which
+    // the reader may never have seen, so it stays anonymous without a
+    // lookup of who sees it. Messages stored before the earlier rule of
+    // one top-level project keep "a task in another project".
+    const key =
+      note.parent.project_id === notice.project_id
+        ? note.parent.key
+        : 'a task in another sub-project'
     mine = mine.map((x) => (x === ATTACH_SLOT ? `Attached under ${key}` : x))
   }
   // unshifted before the assignment line, so it reads second
@@ -1817,7 +1825,8 @@ async function fanOut(
  * both the task's project when it was written and its project now, so a
  * move meanwhile tells nobody what they could not see. A task or project
  * that is gone tells nobody. The attach line names the new parent as the
- * write did, also when the parent moved or went to Deleted items since. The
+ * write did, also when the parent moved or went to Deleted items since, and
+ * keeps a parent the write recorded in another sub-project anonymous. The
  * step stops early once its database calls reach FOLLOWER_FANOUT.stepRoom. */
 export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): Promise<void> {
   const used = { calls: 0 }

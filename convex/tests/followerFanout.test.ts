@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
+import { ATTACH_SLOT, FOLLOWER_FANOUT, postMessage } from '../model/messages'
 import {
   as,
   messagesFor,
@@ -425,6 +425,57 @@ describe('a change told in steps after the task changed', () => {
       .filter(([who]) => who === insider.id)
       .map(([, line]) => line)
     expect(lines.sort()).toEqual([`Attached under QN-${parent.num}`, 'Detached from its parent'])
+  })
+})
+
+describe('an attach step scheduled before a subtask kept to its parent’s sub-project', () => {
+  /* Runs one step of a change that attached a task in Firmware under a new
+   * parent, which the notice records in Firmware ('task') or in a sibling
+   * sub-project the follower cannot see ('hidden'), and returns the parent
+   * and the line the follower reads. */
+  async function attachStep(parentIn: 'task' | 'hidden') {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const insider = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: insider.id,
+        level: 'user',
+      }),
+    )
+    await plantSubscription(t, { issue_id: task.id, profile_id: insider.id })
+    // the insider sees Firmware and Board rev only, not the new sibling
+    const hidden = await plantHiddenSibling(t, f, insider)
+    const parentProjectId = parentIn === 'task' ? f.sub.id : hidden.id
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: parentProjectId })
+    await t.mutation(internal.messages.notifyFollowers, {
+      org_id: f.org.id,
+      issue_id: task.id,
+      task: task._id,
+      project_id: f.sub.id,
+      actor_id: f.admin.id,
+      now: NOW,
+      note: {
+        kind: 'change',
+        parts: [ATTACH_SLOT],
+        handed: false,
+        parent: { id: parent.id, project_id: parentProjectId, key: `QN-${parent.num}` },
+      },
+      mentioned: [],
+    })
+    return { parent, line: new Map(await told(t, task)).get(insider.id) }
+  }
+
+  it("names the parent the notice records in the task's own project", async () => {
+    const { parent, line } = await attachStep('task')
+    expect(line).toBe(`Attached under QN-${parent.num}`)
+  })
+
+  it('keeps anonymous a parent the notice records in another sub-project', async () => {
+    const { line } = await attachStep('hidden')
+    expect(line).toBe('Attached under a task in another sub-project')
   })
 })
 
