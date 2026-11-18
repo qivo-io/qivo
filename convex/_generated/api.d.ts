@@ -67,7 +67,6 @@ import type * as internal_navBackfill from "../internal/navBackfill.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_olderDeletedTasks from "../internal/olderDeletedTasks.js";
 import type * as internal_olderFamilies from "../internal/olderFamilies.js";
-import type * as internal_orgReset from "../internal/orgReset.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
 import type * as internal_overviewCountsBackfill from "../internal/overviewCountsBackfill.js";
@@ -360,7 +359,6 @@ declare const fullApi: ApiFromModules<{
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/olderDeletedTasks": typeof internal_olderDeletedTasks;
   "internal/olderFamilies": typeof internal_olderFamilies;
-  "internal/orgReset": typeof internal_orgReset;
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;
   "internal/overviewCountsBackfill": typeof internal_overviewCountsBackfill;

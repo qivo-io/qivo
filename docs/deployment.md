@@ -82,10 +82,11 @@ Website, docs and app changes all ship the same way.
    `internal/commentCountsBackfill` right after it deploys, on staging, the
    demo and production (see Recovery and compatibility), and the release
    that adds the Overview's counts needs `internal/overviewCountsBackfill`
-   the same way. The release after v0.1.168 needs the reset of the
-   organizations through `internal/orgReset` on development, staging and
-   production, and the count of `internal/olderFamilies` there and on the
-   demo (see Recovery and compatibility).
+   the same way. The release after v0.1.168, v0.1.169, carried the one-time
+   reset of the organizations on development, staging and production, which
+   ran on 18 November 2026, as did the count of `internal/olderFamilies`
+   there and on the demo. The release after v0.1.169 removes the reset's
+   functions (see Recovery and compatibility).
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That
@@ -2666,78 +2667,60 @@ from before the rule stay readable, so returning the backend to an earlier
 release is safe, but that release makes families across sub-projects
 again.
 
-The owner decided the same day that the old data goes. On development and
-staging every organization but Northstar Labs is deleted and Northstar Labs
-is reset from the seed, anchored on Monday 16 November 2026. On production
-every organization is deleted and no demo data is seeded. From then on every
-deployment holds real user data. The release adds two internal functions
-for this, which only a deploy key can call, and a later release removes
-both of them:
+The owner decided the same day that the old data goes. v0.1.169, the
+release after v0.1.168, carried two internal functions for a one-time
+reset, which only a deploy key could call. `internal/orgReset:orgs` listed
+a deployment's organizations with their counts, whether each was the
+Northstar fixture's, any pending deletion and their billing state.
+`internal/orgReset:deleteOrg` deleted one organization at once through the
+steps of an admin's deletion request, without its read-only period and the
+admins' email. The reset ran on 18 November 2026. On development and
+staging the list held only fixture organizations, so `deleteOrg` did not
+run there, and Northstar Labs was reset from the seed, anchored on Monday
+16 November 2026. On production `deleteOrg` deleted every organization,
+Northstar Labs included, and no demo data was seeded. By the owner's
+decision no backup was taken first, as production then held no real user
+data. The demo kept its organizations, which are visitors' own demos that
+its cleanup deletes as they expire. From then on every deployment holds
+real user data.
 
-- `internal/orgReset:orgs` lists the organizations five at a time with
-  their id, name, address, creation time, how many people, projects and
-  active tasks each holds (`capped: true` when a count stopped at its
-  budget), whether it is the Northstar fixture's (`fixture`), its deletion
-  while one is pending or running (`deletion`, with the step's `phase`) and
-  its billing state. It answers no email address and writes nothing. Pass
-  the `cursor` it answers for the next page, until it answers `null`.
-- `internal/orgReset:deleteOrg` deletes one organization now, through the
-  same steps as an admin's deletion request, which delete everything the
-  organization owns, and the organization removal recovery restarts a step
-  that stalls. It skips the request's read-only period and the admins'
-  email, and writes the same `org.deletion_requested` row to the platform
-  audit log, with `operator (deploy key)` as its actor. `confirm` must be the
-  organization's address. It refuses an unknown organization, a wrong
-  address, the fixture's organization unless `allow_fixture` is `true`, and
-  while billing runs an organization whose stored Polar subscription bills
-  or can still bill or that has an open checkout. That is every stored
-  status but `canceled`, until the subscription ends. Billing stores
-  Polar's `incomplete` as `pending`, so a `pending` subscription with a
-  Polar id counts too, and `orgs` shows it with `live_subscription: true`.
-  It cancels nothing, so end that subscription in Polar first, or let the
-  checkout end, and call it again.
-  For an organization that is already being deleted it answers
-  `{"state": "running"}` with the step's phase.
+The production deletions left the Better Auth logins of the organizations'
+people, as every organization deletion does, so they can still sign in and
+then create an organization or join one by an invitation. Qivo Admin's
+Audit page on production lists each deletion as **Requested organization
+deletion** (`org.deletion_requested`) with `operator (deploy key)` as its
+actor, until the row is 90 days old.
 
-After the release deploys, with the owner's approval of each command and
-on production after a verified backup, on each deployment in turn:
+The release after v0.1.169 removes both functions, by the owner's rule that
+no function that deletes an organization at once stays on a production
+deployment with real user data. Of the releases, only v0.1.169 (`5138c16`)
+has them, so a backend that still serves it, or one returned to it, can
+still delete an organization at once through `deleteOrg`. Never call either
+function there.
+Both were internal, so no app calls them, and their removal sets no
+rollback floor, adds nothing to the Instant Rollback list and needs no
+release step.
 
-1. List the organizations and show the list to the owner.
-2. Delete each organization the owner names, with its id and address. The
-   deletion leaves the Better Auth logins of its people, so they can still
-   sign in and then create an organization or join one by an invitation.
-3. List again until no named organization is listed. A deletion that
-   still runs shows its `phase`.
-4. On development and staging, reset Northstar Labs. The reset wipes the
-   fixture's work and seeds it again, and keeps the organization, its
-   logins and its receipt.
-5. Run the count until it answers `done: true`. A call that does not
-   finish within its five minutes answers `done: false` with a `cursor`
-   and the totals so far. Call it again with that whole answer as its
-   arguments, which goes on from the cursor and adds to those totals, so
-   the answer with `done: true` counts the whole deployment. That answer
-   must report no `sibling` and no `other_project` task.
+The read-only count `internal/olderFamilies` stays as an operator's check.
+On 18 November 2026 it found no `sibling`, `other_project`,
+`missing_parent` or `held` task on development, staging, production and
+the demo. To count again, with the owner's approval of each run, call it
+until it answers `done: true`. A call that does not finish within its five
+minutes answers `done: false` with a `cursor` and the totals so far. Call
+it again with that whole answer as its arguments, which goes on from the
+cursor and adds to those totals, so the answer with `done: true` counts the
+whole deployment. That answer must report no `sibling` and no
+`other_project` task.
 
 ```sh
 H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
-"$H" staging npx convex run internal/orgReset:orgs '{}'
-"$H" staging npx convex run internal/orgReset:orgs '{"cursor": "<cursor>"}'
-"$H" staging npx convex run internal/orgReset:deleteOrg \
-  '{"org_id": "<id>", "confirm": "<address>"}'
-"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
-  npm run demo -- reset --staging --confirm northstar-labs --anchor 2026-11-16
 "$H" staging npx convex run internal/olderFamilies:run '{}'
 "$H" staging npx convex run internal/olderFamilies:run '<its whole answer>'
 ```
 
-Development takes the same commands with `development` in place of
-`staging`, and runs the reset as
-`"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-dev" npm run demo -- reset --dev --confirm northstar-labs --anchor 2026-11-16`.
-Production takes `production` and no reset. A Northstar Labs organization
-on production, which `orgs` shows with `fixture: true`, needs
-`"allow_fixture": true` to be deleted. The demo keeps its organizations,
-which are visitors' own demos that its cleanup deletes as they expire; run
-only the count there, with a short-lived key:
+Development and production take the same commands with `development` or
+`production` in place of `staging`. On the demo, run the count with a
+short-lived key:
 
 ```sh
 T="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key"
@@ -2747,28 +2730,20 @@ T="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-k
   npx convex run internal/olderFamilies:run '<its whole answer>'
 ```
 
-The demo may report `sibling` tasks. A visitor's demo lasts 24 hours, and
-one made before the release could put a subtask in a sibling sub-project,
-as the earlier app allowed. A count above zero on the demo can come only
-from such demos, so count again once 24 hours have passed since the
-deploy, when the cleanup has deleted them, and expect no `sibling` and no
-`other_project` task then.
-
 The count reads every task with a parent and reports how many have their
 parent in a sibling sub-project (`sibling`), in another top-level project
 (`other_project`), no live parent (`missing_parent`), or a project that
 Deleted items holds while a project item moves or restores (`held`), with
 up to five example task ids of each, and writes nothing. The staging check
 signs in to Northstar Labs alone and seeds nothing, so it runs as before
-once the reset has seeded Northstar Labs.
+on the Northstar Labs that the reset seeded.
 
-Deleting the fixture's organization itself is not part of this reset. Its
-deletion removes the organization's receipt and frees the ids the seed
+On development and staging the reset kept the fixture's organization.
+Deleting it removes the organization's receipt and frees the ids the seed
 reserved, but leaves the Better Auth logins of the seven Northstar people,
-as every organization deletion leaves its people's logins, which may hold
-seats elsewhere. A later `seed` then refuses with `marketing demo: a demo
-email already belongs to an unowned account` until those logins are
-deleted.
+which may hold seats elsewhere. A later `seed` then refuses with
+`marketing demo: a demo email already belongs to an unowned account` until
+those logins are deleted.
 
 Organizations no longer have the fields `next_issue_num`, `next_project_num`
 and `activity_count`. Every hosted deployment cleared them with the one-time
