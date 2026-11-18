@@ -9456,9 +9456,7 @@ function moveAnswerTask(
     return null
   if (row.project_id === projectId) return null
   const family = PLANNER.familyOf(a.model)
-  // the task's and its parent's projects must have facts, else the move
-  // could not tell a same-project move from one that leaves the parent
-  if (!family || PLANNER.moveWaits(a.model, family) || refusePausedEdit()) return null
+  if (!family || refusePausedEdit()) return null
   const { leavesParent, carried } = PLANNER.moveFamily(a.model, projectId, family)
   const uuid = a.uuid
   const moving = [uuid, ...carried.map((task) => task.uuid)]
@@ -11146,7 +11144,7 @@ export const PLANNER = {
   },
   /* The id of the top-level project a project belongs to, as the server
      reads it (its parent, or itself), or undefined for one outside this
-     view. A subtask stays in its parent's top-level project. */
+     view. */
   topLevelOf: (pid: string | null | undefined): string | undefined => {
     const p = PLANNER.project(pid)
     return p ? p.parent || p.id : undefined
@@ -11299,41 +11297,20 @@ export const PLANNER = {
      (P.viewOwnerChoices),
      the follower popover's Add list (P.followerChoices) and Settings' and
      the dialogs' people pickers. `user` names one of those seats. */
-  /** Where the project cache stands on a project moveFamily needs facts of
-      to judge moving `it`, or null once it can: the task's own sub-project
-      and, for a subtask whose parent the view holds, the parent's, whose
-      top-level projects decide whether the move crosses and leaves the
-      parent. An unknown one never reads as another top-level project, so a
-      move waits (P.moveIssue, the Move window) until the cache has facts of
-      both. A hidden parent counts as being in the task's own top-level
-      project, so it needs none. With `family` (P.familyOf) the task and its
-      parent are the family's. */
-  moveWaits: (
-    it: IssueVM,
-    family?: TaskFamily,
-  ): { project: string; state: CachedState; message: string | null } | null => {
-    const root = family?.root ?? it
-    const byId = family?.byId ?? NO_SUBTASKS
-    const parent = root.parent ? byId[root.parent] : undefined
-    for (const pid of [root.project, parent?.project]) {
-      if (!pid || PLANNER.project(pid)) continue
-      const known = projectCache.look(pid)
-      return { project: pid, state: known.state, message: known.message }
-    }
-    return null
-  },
   /* What moving `it` to `projectId` does to its family, as the server does
-     it. A move within the task's top-level project changes nothing else. A
-     subtask moving to another one leaves its parent (`leavesParent`) unless
-     it lands in the parent's top-level project. A hidden parent counts as
-     being in the task's own top-level project, where every new link is. A
-     move to another top-level project carries the subtasks outside it
-     along. `carried` lists the visible ones, and `carriesSubtasks` also
-     counts active ones hidden from this view. Archived subtasks are not in
-     the view, so the Move window asks the server too
-     (moveCarriesSubtasks). With `family` (P.familyOf) the task, its
-     parent and its subtasks are the family's, as for a task the window
-     shows from its own answer. */
+     it. A subtask stays in its parent's own sub-project, so a subtask that
+     moves leaves its parent (`leavesParent`) unless it lands in the
+     parent's sub-project, which only a family stored before that rule can.
+     A hidden parent counts as being in the task's own sub-project, where
+     every new link is. Every move carries the subtasks outside the
+     destination along. `carried` lists the visible ones, and
+     `carriesSubtasks` also counts active ones hidden from this view, which
+     only such an older family has. Archived subtasks are not in the view,
+     so the Move window asks the server too (moveCarriesSubtasks). The
+     answer compares project ids alone, so it needs no facts of the
+     projects. With `family` (P.familyOf) the task, its parent and its
+     subtasks are the family's, as for a task the window shows from its own
+     answer. */
   moveFamily: (
     it: IssueVM,
     projectId: string,
@@ -11341,24 +11318,22 @@ export const PLANNER = {
   ): { leavesParent: boolean; carriesSubtasks: boolean; carried: IssueVM[] } => {
     const root = family?.root ?? it
     const byId = family?.byId ?? NO_SUBTASKS
-    const dst = PLANNER.topLevelOf(projectId)
-    const crosses = PLANNER.topLevelOf(root.project) !== dst
+    if (root.project === projectId)
+      return { leavesParent: false, carriesSubtasks: false, carried: [] }
     const parent = root.parent ? byId[root.parent] : undefined
-    const parentTop = PLANNER.topLevelOf(parent ? parent.project : root.project)
-    const leavesParent = crosses && (!!root.parent || root.hasHiddenParent) && parentTop !== dst
+    const parentProject = parent ? parent.project : root.project
+    const leavesParent = (!!root.parent || root.hasHiddenParent) && parentProject !== projectId
     const carried: IssueVM[] = []
-    if (crosses) {
-      eachDescendant(
-        root,
-        (child) => {
-          if (PLANNER.topLevelOf(child.project) !== dst) carried.push(child)
-        },
-        byId,
-      )
-    }
+    eachDescendant(
+      root,
+      (child) => {
+        if (child.project !== projectId) carried.push(child)
+      },
+      byId,
+    )
     return {
       leavesParent,
-      carriesSubtasks: crosses && (carried.length > 0 || root.hasHiddenSubtasks),
+      carriesSubtasks: carried.length > 0 || root.hasHiddenSubtasks,
       carried,
     }
   },
@@ -13144,23 +13119,20 @@ export const PLANNER = {
 
   /** Move an issue to another sub-project. Issue numbers are org-scoped and
       immutable, so the key survives the move unchanged — nothing to
-      renumber. A move to another top-level project detaches the task from a
-      parent that stays behind and carries its subtasks along (moveFamily),
-      as the server does. Returns the (unchanged) key, or null for a no-op or
+      renumber. A subtask stays in its parent's sub-project, so the move
+      detaches the task from a parent that stays behind and carries its
+      subtasks along (moveFamily), as the server does. Returns the (unchanged) key, or null for a no-op or
       an invalid target. Whether everyone on the task and its subtasks keeps
       access is the server's to check, at full scope: a refusal
-      (moveHolderRule and moveSubtreeHolderRule, which name the people and
-      their subtasks, ASSIGNEE_RULE or REVIEWER_RULE) is toasted with its
-      sentence and the move taken back,
+      (moveSubtreeHolderRule and moveHolderRule, which name the people and
+      their subtasks, ASSIGNEE_RULE, REVIEWER_RULE or LIMITS.moveSubtree's
+      sentence) is toasted with its sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
       task moved only then. The target must be a sub-project the project
       cache answers `ok` with Edit or Lead. A seeded or loading one, and
       one whose level lacks Edit, as after the caller's access there was
       lowered, sends nothing, so the Move window keeps Move off until the
-      cache answers its chosen row writable. So does a move while the cache
-      has no facts of the task's sub-project or its parent's (P.moveWaits),
-      which would read as another top-level project and detach a subtask
-      from its parent. */
+      cache answers its chosen row writable. */
   moveIssue: (id: string, projectId: string, onSaved?: (saved: boolean) => void) => {
     // the task the window shows from its own answer
     const shown = answerTaskOf(id)

@@ -8,9 +8,10 @@
    workspace's tasks, every one shown to the person, as the benchmark's
    task window reads assume, at the person's one `level`: the opened
    task's own block as a code with no row; the scope in the reader's
-   order, the opened task's own sub-project, the family's other live
-   sub-projects by creation and then its top-level project, and for
-   Linked tasks after Search all your projects (`all_projects`) the
+   order, the opened task's own sub-project, which is the whole scope of
+   the Parent and Subtasks pickers, and for Linked tasks then the family's
+   other live sub-projects by creation and then its top-level project, and
+   after Search all your projects (`all_projects`) the
    organization's other live top-level projects, each with its live
    sub-projects by creation and then itself, offered at every family end
    of Linked tasks whether or not the organization has another project;
@@ -140,15 +141,18 @@ export function relationPickerStandIn(
   if (block)
     return { state: 'ok', rows: [], next: null, all_projects: null, stopped: false, blocked: block }
 
-  // the scope: the family, and for Linked tasks the organization's other
-  // top-level projects after Search all your projects
+  // the scope: the opened task's own sub-project for Parent and Subtasks,
+  // where a subtask stays with its parent, and for Linked tasks the family
+  // and the organization's other top-level projects after Search all your
+  // projects
   const live = (p: Project) => !p.archived_at && p.org_id === task.org_id
   const top = home.parent_id ? projects.get(home.parent_id) : home
   const subsOf = (parent: Project) =>
     snap.projects.filter((p) => p.parent_id === parent.id && live(p)).sort(byCreation)
-  const family: Project[] = top
-    ? [home, ...subsOf(top).filter((p) => p.id !== home.id), ...(top.id === home.id ? [] : [top])]
-    : [home]
+  const family: Project[] =
+    top && args.kind === 'link'
+      ? [home, ...subsOf(top).filter((p) => p.id !== home.id), ...(top.id === home.id ? [] : [top])]
+      : [home]
   const others: Project[] =
     args.kind === 'link' && top
       ? snap.projects

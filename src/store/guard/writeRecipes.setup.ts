@@ -577,12 +577,14 @@ export const recipes: Recipe[] = [
     what: 'a task the window shows from its own answer moved to another sub-project',
     pause: 'P',
     detail: {
-      // movedStamps: no status stamp
-      answer: (args) =>
-        windowAnswer(
-          args ? { project_id: 'work2', status_at: undefined, updated_at: SERVER } : {},
-          { subtasks: { rows: [windowKid()], complete: true } },
-        ),
+      // movedStamps: no status stamp, on the task and on the subtask the
+      // move carries, as every move does
+      answer: (args) => {
+        const moved = { project_id: 'work2', status_at: undefined, updated_at: SERVER }
+        return windowAnswer(args ? moved : {}, {
+          subtasks: { rows: [args ? { ...windowKid(), ...moved } : windowKid()], complete: true },
+        })
+      },
     },
     act: (P) => P.moveIssue('QN-80', 'work2'),
   },

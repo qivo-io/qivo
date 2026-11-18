@@ -4,14 +4,16 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { moveHolderRule } from '../../convex/model/issues'
+import { LIMITS } from '../../convex/lib/limits'
+import { moveSubtreeHolderRule } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The Move window on the real store. WEB holds the FE and BE sub-projects,
-   HW holds FW. The open task has no subtask in this view, as when its only
-   subtasks are archived, so the dialog asks the server whether a move to
-   another top-level project carries any. */
+   HW holds FW. A subtask stays in its parent's sub-project, so every move
+   carries the subtasks. The open task has no subtask in this view, as when
+   its only subtasks are archived, so the dialog asks the server whether a
+   move to another sub-project carries any. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 // the live double of the store that loaded last, whose project cache reads
@@ -337,12 +339,14 @@ describe('the Move window over a task the window shows from its own answer', () 
     expect(move?.disabled).toBe(false)
     // and asks the server by the task's organization and uuid
     expect(asked.at(-1)).toEqual({ org_id: orgId, id: 'far', project_id: ids.fw })
-    // within WEB nothing goes along, and the move is open once the project
-    // cache answered BE, which the task window draws again on
+    // a sibling sub-project in WEB takes the subtask along too, and the move
+    // is open once the project cache answered BE, which the task window
+    // draws again on
     await chooseTarget(ids.be)
     await showMove()
-    expect(notes()).toEqual([])
+    expect(notes()).toEqual([NOTE])
     expect(move?.disabled).toBe(false)
+    expect(asked.at(-1)).toEqual({ org_id: orgId, id: 'far', project_id: ids.be })
     // the server refuses a move whose subtask holder cannot work there,
     // into FW chosen again, which the cache answers for the move
     await chooseTarget(ids.fw)
@@ -352,7 +356,7 @@ describe('the Move window over a task the window shows from its own answer', () 
         : Promise.reject(
             new ConvexError({
               code: 'rule',
-              message: moveHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'], hidden: 0 }]),
+              message: moveSubtreeHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'] }]),
             }),
           ),
     )
@@ -362,7 +366,7 @@ describe('the Move window over a task the window shows from its own answer', () 
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(window.showToast).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Rita Lund (on QN-7) has no access to that sub-project; give them access there, or change who works on that subtask first.',
+        'Rita Lund (on QN-7) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first.',
       ),
       'error',
     )
@@ -370,7 +374,7 @@ describe('the Move window over a task the window shows from its own answer', () 
     expect(shown()?.project).toBe(before)
   })
 
-  it("sends no move while the project cache has no facts of the task's sub-project, and no detach once it has them for a move within the project", async () => {
+  it("moves a subtask to a sibling sub-project only with a detach, which needs no facts of the task's sub-project", async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     carries = false
     byIdsHere = true
@@ -393,23 +397,14 @@ describe('the Move window over a task the window shows from its own answer', () 
       network.mutation.mock.calls
         .filter(([ref]) => getFunctionName(ref) === 'issues:move')
         .map(([, args]) => args)
-    // FE has no facts, so its top-level project is unknown, never another
+    // the parent is in FE, so the subtask leaves it, which the window says
+    // and the move sends, by the projects' ids alone
     expect(P.project(ids.fe)).toBeUndefined()
-    expect(notes()).toEqual(["Couldn't check where this task is, so it cannot move yet."])
-    expect(move()?.disabled).toBe(true)
-    // must fail for a move that reads an unknown project as another
-    // top-level project and detaches the subtask from its parent
-    const shown = () => P.taskDetail('feature')?.view
-    expect(P.moveIssue(shown()?.id ?? '', ids.be)).toBeNull()
-    expect(moves()).toEqual([])
-    // FE answers on Retry, and the move within WEB keeps the parent
-    await act(async () => document.querySelector<HTMLElement>('[data-move-retry]')?.click())
-    await vi.waitFor(() => expect(P.projectState(ids.fe)).toBe('ok'))
-    await showMove('feature')
-    expect(notes()).toEqual([])
+    expect(notes()).toEqual(['QN-42 will no longer be a subtask of QN-41.'])
     expect(move()?.disabled).toBe(false)
+    const shown = () => P.taskDetail('feature')?.view
     expect(P.moveIssue(shown()?.id ?? '', ids.be)).not.toBeNull()
-    expect(moves()).toEqual([expect.not.objectContaining({ detach_parent: true })])
+    expect(moves()).toEqual([expect.objectContaining({ detach_parent: true })])
     expect(moves()[0]).toMatchObject({ id: 'feature', project_id: ids.be })
   })
 
@@ -430,7 +425,7 @@ describe('the Move window over a task the window shows from its own answer', () 
     await load()
     await openFromAnswer(farAnswer())
     await chooseTarget(ids.be)
-    expect(notes()).toEqual([])
+    expect(notes()).toEqual([NOTE])
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
     await act(async () => {
       windowFail?.(new Error('Server Error'))
@@ -457,7 +452,7 @@ describe('Move window', () => {
     expect(asked).toEqual([{ org_id: orgId, id: 'lone', project_id: ids.fw }])
   })
 
-  it('says nothing when none would move, and asks only across top-level projects', async () => {
+  it('says nothing when none would move, and asks for every other sub-project', async () => {
     carries = false
     await load()
     await openFromAnswer(loneAnswer())
@@ -465,7 +460,31 @@ describe('Move window', () => {
     expect(notes()).toEqual([])
     await chooseTarget(ids.be)
     expect(notes()).toEqual([])
-    expect(asked.map((a) => a.project_id)).toEqual([ids.fw])
+    expect(asked.map((a) => a.project_id)).toEqual([ids.fw, ids.be])
+  })
+
+  it('toasts the refusal of a task with more subtasks than a move carries, and takes the move back', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    carries = true
+    await load()
+    await openFromAnswer(loneAnswer())
+    await chooseTarget(ids.be)
+    expect(notes()).toEqual([NOTE])
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'identity:claimMySeats'
+        ? Promise.resolve(null)
+        : Promise.reject(new ConvexError({ code: 'rule', message: LIMITS.moveSubtree.refusal })),
+    )
+    const shown = () => P.taskDetail('lone')?.view
+    P.moveIssue(shown()?.id ?? '', ids.be)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'has more than 200 subtasks, archived ones included, and a move to another sub-project carries them all. Restore some archived subtasks and remove them from this task first.',
+      ),
+      'error',
+    )
+    expect(shown()?.project).toBe(ids.fe)
   })
 
   it('tells two sub-projects of one name apart by their numbers, which the project cache does not hold', async () => {

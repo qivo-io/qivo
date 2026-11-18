@@ -6,7 +6,7 @@ import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
-import { moveHolderRule } from '../../convex/model/issues'
+import { moveSubtreeHolderRule } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
   type LabelsByIdsArgs,
@@ -1982,15 +1982,15 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
   it('says the task moved only once the server took the move, and never after its refusal', async () => {
     await load()
     await openShown(FAM)
-    // the server refuses: a holder of the task would lose access, which
-    // the store logs
+    // the server refuses: someone on a subtask the move carries cannot work
+    // there, which the store logs
     vi.spyOn(console, 'error').mockImplementation(() => {})
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'issues:move'
         ? Promise.reject(
             new ConvexError({
               code: 'rule',
-              message: moveHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'], hidden: 0 }]),
+              message: moveSubtreeHolderRule([{ name: 'Rita Lund', tasks: ['QN-7'] }]),
             }),
           )
         : Promise.resolve(null),
@@ -2001,7 +2001,7 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
       { org_id: snap.orgs[0].id, id: FAM, project_id: 'bench', expected: { project_id: 'work' } },
     ])
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('has no access to that sub-project'),
+      expect.stringContaining('cannot edit that sub-project'),
       'error',
     )
     expect(movedToasts()).toEqual([])
