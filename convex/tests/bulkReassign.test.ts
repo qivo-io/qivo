@@ -969,9 +969,10 @@ describe('a bulk update', () => {
     for (const task of fx.tasks)
       for (const p of [nora, olga])
         await plantSubscription(fx.t, { issue_id: task.id, profile_id: p.id })
+    // in the tasks' own sub-project, as a subtask stays with its parent
     const parent = await plantIssue(fx.t, {
       org_id: fx.org.id,
-      project_id: fx.sub2.id,
+      project_id: fx.sub.id,
       num: 900,
       title: 'Board parent',
     })
@@ -1008,11 +1009,10 @@ describe('a bulk update', () => {
     const single = await handOver(false)
     const { messages, follows } = single
     expect(messages.some((m) => m.includes('Nora') || m.includes('Pia'))).toBe(false)
-    // each branch the preload answers ran: the attach line with and without
-    // the parent's key, and the mention of someone who sees the task
-    expect(messages).toContain(
-      '4 Olga: Assigned to Leo. Attached under a task in another sub-project',
-    )
+    // each branch the preload answers ran: the attach line with the
+    // parent's key, which everyone who sees the task sees, and the mention
+    // of someone who sees the task
+    expect(messages).toContain('4 Olga: Assigned to Leo. Attached under QN-900')
     expect(messages).toContain('4 p13: Assigned to Leo. Attached under QN-900')
     expect(messages).toContain('2 p50: Mentioned you in the description')
     expect(follows).toContain('2 p50')

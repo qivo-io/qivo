@@ -10,8 +10,8 @@
  *   guards      resolve project (not_found) → meta guard → archived-project
  *               arrival → num assign + org pin (0057: the org MUST be pinned
  *               from the project before the parent same-org check can run) →
- *               parent chain guard incl. same-org and same top-level
- *               project → archive-parent guard →
+ *               parent chain guard incl. same-org and same
+ *               sub-project → archive-parent guard →
  *               assignee guard (only when changed) → reviewer guard (only
  *               when changed; refused on a task with subtasks) → remaining
  *               guard (0072: the guard raises BEFORE the stamp) → status
@@ -167,28 +167,22 @@ export const HOLDER_SIGHT_RULE =
   'everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it'
 
 /** Someone whose work on a task's subtasks refuses its move (moveIssueCore):
- * their name, the IDs of the subtasks they are assigned to or reviewing in
- * projects the mover sees, how many more they hold in projects the mover
- * cannot see, and with `unsure` how many more in projects whose sight the
- * move had no room left to check. */
-export type MoveBlocker = { name: string; tasks: string[]; hidden: number; unsure?: number }
+ * their name and the IDs of the subtasks they are assigned to or reviewing.
+ * Every subtask a refusal names is one the mover can see, because it is
+ * one the move carries, which the mover must edit, or one already in the
+ * destination, which the mover edits too. */
+export type MoveBlocker = { name: string; tasks: string[] }
 
 /** How many people a move's refusal names, and how many subtasks beside
  * each. The rest are counted. */
 export const MOVE_NAMES = { people: 5, tasks: 3 }
 
 /* One blocker as a refusal names them, "Aisha Rahman (on QN-14 and 1
- * more)". Subtasks the mover cannot see are told only as that, and where
- * some of the unnamed ones are unsure, only counted. */
+ * more)". */
 function blockerText(b: MoveBlocker): string {
   const shown = b.tasks.slice(0, MOVE_NAMES.tasks)
-  const unsure = b.unsure ?? 0
-  const more = b.tasks.length - shown.length + b.hidden + unsure
-  if (shown.length === 0) {
-    if (more === 0) return b.name
-    const count = more === 1 ? 'a subtask' : `${more} subtasks`
-    return `${b.name} (on ${count}${unsure === 0 ? ' you cannot see' : ''})`
-  }
+  if (shown.length === 0) return b.name
+  const more = b.tasks.length - shown.length
   return `${b.name} (on ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''})`
 }
 
@@ -210,15 +204,19 @@ function blockersSentence(
   const who = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
   // one subtask is "that subtask", also where two people hold it
   const tasks = new Set(blockers.flatMap((b) => b.tasks))
-  const uncounted = blockers.reduce((sum, b) => sum + b.hidden + (b.unsure ?? 0), 0)
-  const one = rest === 0 && !unchecked && tasks.size + uncounted === 1
+  const one = rest === 0 && !unchecked && tasks.size === 1
   return `${who} ${lacks(named.length > 1)}, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
 }
 
 /** The refusal of a move that would take the task out of sight of
- * `blockers`, the people assigned to or reviewing its subtasks who have no
- * access to the destination, by name (owner, 17 November 2026). App, REST
- * and MCP send the same sentence. */
+ * `blockers`, the people assigned to or reviewing its subtasks already in
+ * the destination who have no access there, by name (owner, 17 November
+ * 2026). The move carries every other subtask, and the people on those must
+ * be able to work in the destination (moveSubtreeHolderRule), so only a
+ * family from before the rule that a subtask stays in its parent's
+ * sub-project can meet this, and only through someone left on their tasks
+ * when their access there was removed (model/projectAccess.ts HeldTasks
+ * 'leave'). App, REST and MCP send the same sentence. */
 export const moveHolderRule = (blockers: readonly MoveBlocker[], unchecked = false): string =>
   blockersSentence(
     blockers,
@@ -646,11 +644,11 @@ export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
-/** The refusal of a move to another project whose task and subtasks are
- * too large for one transaction (SUBTREE_ROOM), such as
- * LIMITS.moveSubtree.max subtasks with very long descriptions. */
+/** The refusal of a move whose task and subtasks are too large for one
+ * transaction (SUBTREE_ROOM), such as LIMITS.moveSubtree.max subtasks with
+ * very long descriptions. */
 export const MOVE_TOO_LARGE =
-  'this task and its subtasks are too large to move to another project in one request; remove some subtasks from this task first, restoring archived ones to do so, or move it within its project'
+  'this task and its subtasks are too large to move in one request; remove some subtasks from this task first, restoring archived ones to do so'
 
 /* Refuses with `refusal`, SUBTREE_TOO_LARGE unless a move names its own,
  * once the transaction passed SUBTREE_ROOM's `room`. Run before each step
@@ -767,8 +765,9 @@ const activeSubtasks = (ctx: QueryCtx, parentId: string) =>
  * who hold no new work. A subtask has no subtasks of its own, so each one's
  * reviewer counts, and the walk reads one range of at most
  * LIMITS.subtasks.max active subtasks, under SUBTREE_ROOM, unless the caller
- * already read them all (`kids`, every subtask, archived ones too, which do
- * not count). `refusal` is the room refusal (assertRoom). */
+ * passes the subtasks it read already (`kids`, of which archived ones do not
+ * count), as a move passes those it does not carry. `refusal` is the room
+ * refusal (assertRoom). */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
@@ -994,25 +993,24 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
  * in a hidden project) answers 'parent task not found' before any other
  * guard describes it. Attaching changes the parent (it becomes a group and
  * loses its own hours), so it also needs Edit on the parent's project, like
- * any other change to it. A subtask stays in its parent's top-level project,
- * in any of its sub-projects. */
+ * any other change to it. A subtask stays in its parent's own sub-project
+ * (owner, 18 November 2026). A family stored before that rule may span
+ * sibling sub-projects, and one stored before the earlier rule that kept a
+ * subtask in its parent's top-level project any two projects. Such rows
+ * stay readable, every reader and guard keeps tolerating them, failing
+ * closed, and no write makes or keeps such a link. */
 
-/** The top-level project a project belongs to, which is its parent or itself. */
-export const topLevelOf = (project: Pick<Doc<'projects'>, 'id' | 'parent_id'>): string =>
-  project.parent_id ?? project.id
-
-/** Whether projects `child` and `parent` are in the same top-level project,
- * so that a task in `child` may be a subtask of a task in `parent`.
- * parentChainCheck and the restore from Deleted items (model/deletedItems.ts
+/** Whether a task in project `child` may be a subtask of a task in project
+ * `parent`, which is when both are the same sub-project. parentChainCheck
+ * and the restores from Deleted items (model/deletedItems.ts keptInside and
  * keptParent) share it. */
-export const sameTopLevel = (
-  child: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
-  parent: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
-): boolean => topLevelOf(child) === topLevelOf(parent)
+export const sameSubProject = (
+  child: Pick<Doc<'projects'>, 'id'>,
+  parent: Pick<Doc<'projects'>, 'id'>,
+): boolean => child.id === parent.id
 
-/* Refused by assertParentChain for a parent in another top-level project. */
-export const SUBTASK_PROJECT_RULE =
-  'a subtask must be in the same project as its parent task, in any of its sub-projects'
+/* Refused by assertParentChain for a parent in another sub-project. */
+export const SUBTASK_PROJECT_RULE = 'a subtask must be in the same sub-project as its parent task'
 
 /** Why parentChainCheck refuses a parent, in the order it checks.
  * `parent_is_subtask` means the parent has a parent of its own,
@@ -1081,10 +1079,7 @@ export async function parentChainCheck(
     return no('not_found')
   }
   if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) return no('no_write')
-  const childProject = await byId(ctx, 'projects', child.project_id)
-  if (childProject === null || !sameTopLevel(childProject, parentProject)) {
-    return no('other_project')
-  }
+  if (!sameSubProject({ id: child.project_id }, parentProject)) return no('other_project')
   if (parent.parent_id !== undefined) return no('parent_is_subtask')
   if (await hasAnySubtask(ctx, child.id)) return no('has_subtasks')
   if ((await subtaskCount(ctx, parent.id)) >= LIMITS.subtasks.max) return no('parent_full')
@@ -2085,7 +2080,8 @@ export async function updateIssueCore(
  * order: not-found → meta ("live", not "created" — a different sentence from
  * the insert guard) → cross-org → archived target → the subtask family rule
  * → destination eligibility for the assignee and the reviewer → the carried
- * subtasks → sight for the people on the subtasks. A group's reviewer is
+ * subtasks → sight for the people on the subtasks already in the
+ * destination. A group's reviewer is
  * dormant and hidden in the app, so it never refuses a move: one the
  * destination would refuse is cleared in the move's patch instead (adapt,
  * don't reject, as clearParentRemaining does). num is org-scoped and
@@ -2098,19 +2094,22 @@ export async function updateIssueCore(
  * assignee or reviewer (MachineMove.later) is checked with the people the
  * task ends up with. Attachment rows name no project, so none is written.
  *
- * A subtask stays in its parent's top-level project. A move within the
- * task's top-level project changes nothing else. A move to another one
- * carries every subtask outside the destination's top-level project along,
- * archived ones included, and a subtask must land in its parent's top-level
- * project or leave its parent in the same change, through the app's
- * `detachParent` or a machine update's later parent
- * (MachineMove.laterParent). The carried
+ * A subtask stays in its parent's own sub-project, and tasks live only in
+ * sub-projects, so every move takes the task out of its family's
+ * sub-project. A move carries every subtask that is not already in the
+ * destination along, archived ones included. A subtask must leave its
+ * parent in the same change, through the app's `detachParent` or a machine
+ * update's later parent (MachineMove.laterParent), which may also be a
+ * task in the destination, unless it lands in its parent's sub-project,
+ * which only a subtask stored before the rule can. The carried
  * subtasks are touched and send a task.updated event each. They get no
  * message or activity row of their own, because the task's one message and
- * row tell the move, as the archive cascade does. */
+ * row tell the move, as the archive cascade does. A move of a task whose
+ * family was stored across sub-projects before the rule brings every
+ * subtask into the destination, so the family then follows the rule. */
 
 export const MOVE_SUBTASK_RULE =
-  "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change"
+  "a subtask stays in its parent task's sub-project; to move it to another sub-project, detach it from its parent in the same change"
 export const MOVE_SUBTREE_EDIT_RULE =
   'moving this task would move a subtask in a project you cannot edit; someone who can edit that project can move it'
 /** The refusal of a move that would carry subtasks whose `blockers`, their
@@ -2127,16 +2126,15 @@ export const moveSubtreeHolderRule = (
     unchecked,
     () => 'cannot edit that sub-project; give them Edit access there',
   )
-/* A task moving to another top-level project may have at most
- * LIMITS.moveSubtree.max subtasks, archived ones included. The move reads
- * them all, including any already in the destination's top-level project,
- * and carries the rest. LIMITS.subtasks.max bounds only the active ones, so
- * this bounds what the move reads and writes: LIMITS.subtasks.max active
- * subtasks and as many archived. Each carried subtask is read twice, once by
- * the move and once by its write, and so is its description row, read to
- * price its patch (rowsForPatch) and again by its own write
- * (model/descriptions.ts patchTask). A REST move also keeps room for its
- * answer, which reads the active subtasks again
+/* A task that moves may have at most LIMITS.moveSubtree.max subtasks,
+ * archived ones included. The move reads them all, including any already in
+ * the destination, and carries the rest. LIMITS.subtasks.max bounds only
+ * the active ones, so this bounds what the move reads and writes:
+ * LIMITS.subtasks.max active subtasks and as many archived. Each carried
+ * subtask is read twice, once by the move and once by its write, and so is
+ * its description row, read to price its patch (rowsForPatch) and again by
+ * its own write (model/descriptions.ts patchTask). A REST move also keeps
+ * room for its answer, which reads the active subtasks again
  * (MachineMove.answerReadsSubtasks). LIMITS.moveSubtree.max subtasks whose
  * titles and descriptions are of ordinary length move in one request
  * through the app, REST and MCP (convex/tests/taskLimits.test.ts). What a
@@ -2151,20 +2149,6 @@ export const moveSubtreeHolderRule = (
  * Convex's document size limit included, is refused with MOVE_TOO_LARGE
  * and changes nothing. */
 
-/* Per-call cache from a project id to its top-level project id, null for a
- * missing project. */
-function topLevelCache(ctx: QueryCtx): (projectId: string) => Promise<string | null> {
-  const seen = new Map<string, Promise<string | null>>()
-  return (projectId) => {
-    let top = seen.get(projectId)
-    if (top === undefined) {
-      top = byId(ctx, 'projects', projectId).then((p) => (p === null ? null : topLevelOf(p)))
-      seen.set(projectId, top)
-    }
-    return top
-  }
-}
-
 /* The subtasks of the task `rootId`, active or archived, at most
  * LIMITS.moveSubtree.max + 1 of them, so a caller can tell a task with more than
  * LIMITS.moveSubtree.max. A subtask has no subtasks of its own, so one by_parent
@@ -2176,35 +2160,29 @@ const subtasksOf = (ctx: QueryCtx, rootId: string): Promise<Doc<'issues'>[]> =>
     .take(LIMITS.moveSubtree.max + 1)
 
 /** Whether moving `issue` to `target` would carry subtasks along, for the
- * app's Move window, whose view holds no archived subtasks. A move within
- * the task's top-level project carries none. Past LIMITS.moveSubtree.max, where
- * moveIssueCore refuses, it answers false, because such a move carries
- * nothing. */
+ * app's Move window, whose view holds no archived subtasks: whether any of
+ * its subtasks, archived or not, is outside the destination. Past
+ * LIMITS.moveSubtree.max, where moveIssueCore refuses, it answers false,
+ * because such a move carries nothing. */
 export async function subtasksWouldMove(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   target: Doc<'projects'>,
 ): Promise<boolean> {
-  const source = await byId(ctx, 'projects', issue.project_id)
-  const dst = topLevelOf(target)
-  if (source === null || topLevelOf(source) === dst) return false
-  const topOf = topLevelCache(ctx)
+  if (issue.project_id === target.id) return false
   const below = await subtasksOf(ctx, issue.id)
   if (below.length > LIMITS.moveSubtree.max) return false
-  for (const row of below) {
-    if ((await topOf(row.project_id)) !== dst) return true
-  }
-  return false
+  return below.some((row) => row.project_id !== target.id)
 }
 
 /* The subtasks a move to `target` carries, which are the subtasks of
- * `root`, active or archived, whose project is outside the target's
- * top-level project. Before anything is written, each needs Edit on its
- * project, and an active one needs an assignee and a reviewer who can hold
- * it at the target. A subtask has no subtasks of its own, so its reviewer is
- * never a group's dormant one. Archived subtasks keep their people
- * unchecked, as an archived task's people are. `below` holds every subtask
- * (subtasksOf), and the walk refuses past LIMITS.moveSubtree.max of them.
+ * `root`, active or archived, outside the target. Before anything is
+ * written, each needs Edit on its project, and an active one needs an
+ * assignee and a reviewer who can hold it at the target. A subtask has no
+ * subtasks of its own, so its reviewer is never a group's dormant one.
+ * Archived subtasks keep their people unchecked, as an archived task's
+ * people are. `below` holds every subtask (subtasksOf), and the walk
+ * refuses past LIMITS.moveSubtree.max of them.
  * A subtask the actor cannot edit refuses at once. The people who cannot
  * hold theirs are gathered over every carried subtask, which costs what a
  * move that passes reads, and refuse together by name
@@ -2219,12 +2197,10 @@ async function subtreeToCarry(
     below: readonly Doc<'issues'>[]
     target: Doc<'projects'>
     actor: Doc<'profiles'>
-    topOf: (projectId: string) => Promise<string | null>
   },
 ): Promise<Doc<'issues'>[]> {
   const { below } = a
   if (below.length > LIMITS.moveSubtree.max) throw rule(LIMITS.moveSubtree.refusal)
-  const dst = topLevelOf(a.target)
   const edits = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
   const canHold = (profileId: string): Promise<boolean> => {
@@ -2244,7 +2220,7 @@ async function subtreeToCarry(
       unchecked = true
       break
     }
-    if ((await a.topOf(c.project_id)) === dst) continue
+    if (c.project_id === a.target.id) continue
     const editable = await edits(c.project_id)
     if (editable === null) throw rule(SUBTASK_BEING_DELETED)
     if (!editable) throw rule(MOVE_SUBTREE_EDIT_RULE)
@@ -2260,7 +2236,7 @@ async function subtreeToCarry(
     const blockers: MoveBlocker[] = []
     for (const [holder, tasks] of blocked) {
       const name = blockers.length < MOVE_NAMES.people ? await nameOf(ctx, holder) : ''
-      blockers.push({ name, tasks: tasks.map((task) => issueKey(task.num)), hidden: 0 })
+      blockers.push({ name, tasks: tasks.map((task) => issueKey(task.num)) })
     }
     throw rule(moveSubtreeHolderRule(blockers, unchecked))
   }
@@ -2271,50 +2247,6 @@ async function subtreeToCarry(
  * that is gone. */
 async function nameOf(ctx: QueryCtx, profileId: string): Promise<string> {
   return (await byId(ctx, 'profiles', profileId))?.name ?? 'someone'
-}
-
-/* The people of `blocked`, each with the subtasks they hold, as a move's
- * refusal names them to `me`: a subtask by its ID where `me` sees its
- * project, and otherwise only counted, so the sentence tells nothing of a
- * project `me` cannot see beyond that a subtask is there, which the task
- * window says already. Only the MOVE_NAMES.people the sentence names are
- * read. `me` sees `own`, the moved task's project, which the move checked.
- * A subtask in another project whose sight the transaction has no room
- * left to check (SUBTREE_ROOM) is counted as `unsure`, never named and
- * never left out, so the sentence stays whole. */
-async function moveBlockers(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  own: string,
-  blocked: readonly (readonly [Doc<'profiles'>, readonly Doc<'issues'>[]])[],
-): Promise<MoveBlocker[]> {
-  const seen = new Map<string, boolean | null>([[own, true]])
-  const sees = async (projectId: string): Promise<boolean | null> => {
-    let known = seen.get(projectId)
-    if (known === undefined) {
-      if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) known = null
-      else {
-        const project = await byId(ctx, 'projects', projectId)
-        known = project !== null && (await canSeeProject(ctx, me, project))
-      }
-      seen.set(projectId, known)
-    }
-    return known
-  }
-  const blockers: MoveBlocker[] = []
-  for (const [profile, tasks] of blocked) {
-    const blocker: MoveBlocker = { name: profile.name, tasks: [], hidden: 0 }
-    if (blockers.length < MOVE_NAMES.people) {
-      for (const task of tasks) {
-        const sight = await sees(task.project_id)
-        if (sight === true) blocker.tasks.push(issueKey(task.num))
-        else if (sight === false) blocker.hidden += 1
-        else blocker.unsure = (blocker.unsure ?? 0) + 1
-      }
-    }
-    blockers.push(blocker)
-  }
-  return blockers
 }
 
 /** The stamps a task writes as it moves to another sub-project. A time
@@ -2364,28 +2296,24 @@ export async function moveIssueCore(
   }
   if (target.org_id !== issue.org_id) throw rule('tasks cannot move between organizations')
   assertProjectArrival(target)
-  const topOf = topLevelCache(ctx)
-  const dst = topLevelOf(target)
   const source = await byId(ctx, 'projects', issue.project_id)
-  const crosses = source !== null && topLevelOf(source) !== dst
-  // A subtask moving to another top-level project must land in its parent's
-  // or leave the parent in the same change. A later parent in the
-  // destination's top-level project is checked in full by the write that
-  // sets it. A parent the mover cannot see counts as being in the task's own
-  // top-level project, as the app counts it, so the answer tells nothing
-  // about where it is.
+  // A subtask must land in its parent's sub-project or leave the parent in
+  // the same change. A later parent in the destination is checked in full by
+  // the write that sets it. A parent the mover cannot see counts as being in
+  // the task's own sub-project, as the app counts it, so the answer tells
+  // nothing about where it is.
   const detach = a.detachParent === true && issue.parent_id !== undefined
-  if (crosses && issue.parent_id !== undefined && !detach) {
-    const seenTop = async (task: Doc<'issues'>): Promise<string | null> => {
+  if (issue.parent_id !== undefined && !detach) {
+    const seenIn = async (task: Doc<'issues'>): Promise<string | null> => {
       const project = await byId(ctx, 'projects', task.project_id)
       if (project === null) return null
-      return (await canSeeProject(ctx, me, project)) ? topLevelOf(project) : topLevelOf(source)
+      return (await canSeeProject(ctx, me, project)) ? project.id : issue.project_id
     }
     const parent = await byId(ctx, 'issues', issue.parent_id)
-    if (parent !== null && (await seenTop(parent)) !== dst) {
+    if (parent !== null && (await seenIn(parent)) !== project_id) {
       const laterParent = a.machine?.laterParent
       const next = laterParent ? await byId(ctx, 'issues', laterParent) : null
-      const leaves = laterParent === null || (next !== null && (await seenTop(next)) === dst)
+      const leaves = laterParent === null || (next !== null && (await seenIn(next)) === project_id)
       if (!leaves) throw rule(MOVE_SUBTASK_RULE)
     }
   }
@@ -2405,11 +2333,10 @@ export async function moveIssueCore(
   }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   const live = projectLiveness(ctx)
-  // Which projects are live once the move lands, for the group tests of the
-  // task and its subtasks. A subtask the move carries lands in the
-  // destination, which is active, and every other task stays where it is.
-  const liveAfter: Liveness = async (projectId) =>
-    (crosses && (await topOf(projectId)) !== dst) || (await live(projectId))
+  // Whether the task and its subtasks are in a live project once the move
+  // lands, for their group tests: the move takes every subtask outside the
+  // destination there with the task, so all of them are in the destination.
+  const liveAfter: Liveness = () => live(project_id)
   const holdsOwn = issue.remaining_hours !== undefined || issue.review_at !== undefined
   // only a reviewer can change hands in a move, and only a group must lose
   // its own hours, so the group flag is read only for those
@@ -2434,28 +2361,30 @@ export async function moveIssueCore(
       w.reviewer_id = undefined // ctx.db.patch unsets it
     }
   }
-  // to another top-level project, the subtasks outside it come along. They
-  // are read once, for the carry and the holders below: a subtask's row is
-  // about 2 KB without its text, but about 60 KB within TEXT_MAX while it
-  // still holds a copy of it, and then LIMITS.moveSubtree.max of them take
-  // most of what one transaction may read
-  const below = crosses ? await subtasksOf(ctx, issue.id) : undefined
-  const carried =
-    below !== undefined ? await subtreeToCarry(ctx, { below, target, actor: me, topOf }) : []
-  // whoever works on a subtask must still see this task once it moves, so
-  // every active assignee or reviewer below it needs access to the
-  // destination. Everyone is checked, as a move that passes checks them,
-  // and those without access refuse the move together, by name
-  // (moveHolderRule). Once the transaction has no room for the next person
-  // the move is too large, unless someone already blocks it, whom the
-  // refusal then names with a word that others may too.
+  // the subtasks outside the destination come along. They are read once,
+  // for the carry and the holders below: a subtask's row is about 2 KB
+  // without its text, but about 60 KB within TEXT_MAX while it still holds a
+  // copy of it, and then LIMITS.moveSubtree.max of them take most of what
+  // one transaction may read
+  const below = await subtasksOf(ctx, issue.id)
+  const carried = await subtreeToCarry(ctx, { below, target, actor: me })
+  // whoever works on a subtask must still see this task once it moves. The
+  // carry checked the people on every subtask it takes, who can work in the
+  // destination and so see it, which leaves the active subtasks already
+  // there: each of their active assignees and reviewers needs access to the
+  // destination (moveHolderRule). Everyone is checked, as a move that passes
+  // checks them, and those without access refuse the move together, by
+  // name. Once the transaction has no room for the next person the move is
+  // too large, unless someone already blocks it, whom the refusal then names
+  // with a word that others may too.
+  const stays = below.filter((c) => c.archived_at === undefined && c.project_id === project_id)
   const held = await heldUnder(
     ctx,
     issue.id,
     { group: true },
-    { kids: below, refusal: MOVE_TOO_LARGE },
+    { kids: stays, refusal: MOVE_TOO_LARGE },
   )
-  const blocked: [Doc<'profiles'>, Doc<'issues'>[]][] = []
+  const blocked: MoveBlocker[] = []
   let unchecked = false
   for (const [holder, tasks] of held) {
     if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) {
@@ -2465,28 +2394,23 @@ export async function moveIssueCore(
     }
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
-    if (!(await canSeeProject(ctx, profile, target))) blocked.push([profile, tasks])
+    if (!(await canSeeProject(ctx, profile, target)))
+      blocked.push({ name: profile.name, tasks: tasks.map((task) => issueKey(task.num)) })
   }
-  if (blocked.length > 0) {
-    throw rule(moveHolderRule(await moveBlockers(ctx, me, issue.project_id, blocked), unchecked))
-  }
+  if (blocked.length > 0) throw rule(moveHolderRule(blocked, unchecked))
   // A caller that answers with the task's full read, which reads its
   // active subtasks again (MachineMove.answerReadsSubtasks), gets a move
   // that leaves room for that read. An archived task's read walks under a
   // ceiling instead.
   const answer =
-    a.machine?.answerReadsSubtasks === true &&
-    issue.archived_at === undefined &&
-    below !== undefined
+    a.machine?.answerReadsSubtasks === true && issue.archived_at === undefined
       ? below
           .filter((c) => c.archived_at === undefined)
           .reduce((sum, c) => sum + getDocumentSize(c), 0)
       : 0
-  // a move that read the subtree to carry it reads the description rows of
-  // the task and of each subtask it carries before the first patch, to
-  // price each patch (patchCost)
-  const rootRows =
-    below !== undefined ? await rowsForPatch(ctx, issue, MOVE_TOO_LARGE, answer) : undefined
+  // the move reads the description rows of the task and of each subtask it
+  // carries before the first patch, to price each patch (patchCost)
+  const rootRows = await rowsForPatch(ctx, issue, MOVE_TOO_LARGE, answer)
   const toCarry: { task: Doc<'issues'>; rows: Doc<'issue_descriptions'>[] }[] = []
   for (const task of carried)
     toCarry.push({ task, rows: await rowsForPatch(ctx, task, MOVE_TOO_LARGE, answer) })
@@ -2494,14 +2418,12 @@ export async function moveIssueCore(
   // waited for it alone (model/archiveRechecks.ts)
   if (detach) await recheckParent(ctx, issue)
   const before = { ...issue }
-  // the task and its description row (model/descriptions.ts); a move that
-  // read the subtree to carry it asks the room first, and any other patches
-  // one task, as a single task's update does
-  if (rootRows !== undefined)
-    await assertStepRoom(ctx, patchCost(issue, rootRows), MOVE_TOO_LARGE, answer)
+  // the task and its description row (model/descriptions.ts), once the room
+  // holds the patch
+  await assertStepRoom(ctx, patchCost(issue, rootRows), MOVE_TOO_LARGE, answer)
   // the task and the subtasks it carries were read in this transaction, as
   // their rows were for patchCost, which prices no second read of them
-  await patchTask(ctx.db, issue, w, rootRows, { stored: rootRows !== undefined })
+  await patchTask(ctx.db, issue, w, rootRows, { stored: true })
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
   // one totals row each, however many files they hold

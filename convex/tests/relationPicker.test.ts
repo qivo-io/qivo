@@ -262,8 +262,11 @@ describe('access', () => {
     })
     const open = await task(t, f, f.sub)
     const onPcb = await task(t, f, f.sub2)
-    const usual = await allIds(t, me, open.id, 'parent')
+    // the Linked tasks picker reads the family; the Parent and Subtasks
+    // pickers offer only FW's tasks, and read the family's levels too
+    const usual = await allIds(t, me, open.id, 'link')
     expect(usual).toEqual([onPcb.id])
+    expect(await allIds(t, me, open.id, 'parent')).toEqual([])
     Object.assign(OWN_READS, UNCHECKED)
     for (const kind of ['parent', 'subtask', 'link'] as const)
       expect(await pick(t, me, open.id, kind)).toEqual({
@@ -274,7 +277,7 @@ describe('access', () => {
     // with the task in PCB opened, its own check stops
     expect(await pick(t, me, onPcb.id, 'link')).toEqual({ state: 'unavailable' })
     Object.assign(OWN_READS, ONE_UP)
-    expect(await allIds(t, me, open.id, 'parent')).toEqual(usual)
+    expect(await allIds(t, me, open.id, 'link')).toEqual(usual)
   })
 
   it("answers a typed task ID whose project's check a bound stops as a hidden one, and finds its task in all your projects", async () => {
@@ -362,8 +365,8 @@ describe('access', () => {
 
   /* What the write would accept for `who` from task `open`, by the
    * per-project predicate (lib/access.ts projectLevel), in the picker's
-   * order, the family first and then the rest of the organization for
-   * Linked tasks. */
+   * order: for Parent and Subtasks the opened task's own sub-project, for
+   * Linked tasks the family first and then the rest of the organization. */
   async function expected(
     t: T,
     who: Doc<'profiles'>,
@@ -419,7 +422,8 @@ describe('access', () => {
         const level = await levelOf(x.project_id)
         if (level === null) continue
         const inFamily = (await topOf(x.project_id)) === family
-        if (inFamily && rank(level) >= LEVEL_RANK.user) parentish.push(x)
+        // a parent or a subtask only in the opened task's own sub-project
+        if (x.project_id === open.project_id && rank(level) >= LEVEL_RANK.user) parentish.push(x)
         if (edits || rank(level) >= LEVEL_RANK.user) (inFamily ? linkFamily : linkOthers).push(x)
       }
       return {
@@ -515,10 +519,11 @@ describe('never a hidden task', () => {
       num: 880_005,
     })
     for (const kind of ['parent', 'subtask', 'link'] as const) {
+      // PCB is another sub-project, which only Linked tasks reaches
       expect(
         await allIds(t, f.guest, open.id, kind, { search: 'quokka', all: true }),
         kind,
-      ).toEqual([shown.id])
+      ).toEqual(kind === 'link' ? [shown.id] : [])
       for (const num of [...hidden.map((x) => x.num), 880_005]) {
         const found = await batches(t, f.guest, open.id, kind, { search: issueKey(num), all: true })
         expect(idsOf(found), `${kind} ${num}`).toEqual([])
@@ -555,36 +560,34 @@ describe('the Parent picker', () => {
         level: 'viewer',
       }),
     )
-    const parent = await task(t, f, f.sub, { title: 'Current parent' })
+    const parent = await task(t, f, f.sub2, { title: 'Current parent' })
     const open = await task(t, f, f.sub2, { parent_id: parent.id })
     const inPcb = await task(t, f, f.sub2, { title: 'Top-level in PCB' })
     const inFw = await task(t, f, f.sub, { title: 'Top-level in FW' })
-    const subtask = await task(t, f, f.sub, { title: 'A subtask', parent_id: inFw.id })
+    const subtask = await task(t, f, f.sub2, { title: 'A subtask', parent_id: inPcb.id })
     // 100 active subtasks, 40 the guest cannot see and 10 in an archived
-    // sub-project, count; archived ones do not
-    const full = await task(t, f, f.sub, { title: 'Full' })
-    await subtasksOf(t, f.sub, full, 50)
+    // sub-project, a family stored across sub-projects before the subtask
+    // rule, count; archived ones do not
+    const full = await task(t, f, f.sub2, { title: 'Full' })
+    await subtasksOf(t, f.sub2, full, 50)
     await subtasksOf(t, sibling, full, 40)
     await subtasksOf(t, shelved, full, 10)
-    const roomy = await task(t, f, f.sub, { title: 'Roomy' })
-    await subtasksOf(t, f.sub, roomy, LIMITS.subtasks.max - 1)
-    await plantTasks(t, f.sub, 5, () => ({ parent_id: roomy.id, archived_at: NOW }))
+    const roomy = await task(t, f, f.sub2, { title: 'Roomy' })
+    await subtasksOf(t, f.sub2, roomy, LIMITS.subtasks.max - 1)
+    await plantTasks(t, f.sub2, 5, () => ({ parent_id: roomy.id, archived_at: NOW }))
     const readOnly = await task(t, f, viewed, { title: 'Read-only' })
     const elsewhere = await task(t, f, f.hidden, { title: 'Elsewhere' })
     const onMeta = await task(t, f, f.meta, { title: 'On TBED' })
     const rows = await allIds(t, f.guest, open.id, 'parent')
-    // PCB first, then FW; TBED, which the guest only navigates, and the
-    // viewed sub-project are read-only to the guest
-    expect(rows).toEqual([inPcb.id, inFw.id, roomy.id])
-    for (const out of [open, parent, subtask, full, readOnly, elsewhere, onMeta])
+    // PCB alone, where a subtask stays with its parent
+    expect(rows).toEqual([inPcb.id, roomy.id])
+    for (const out of [open, parent, subtask, full, inFw, readOnly, elsewhere, onMeta])
       expect(rows).not.toContain(out.id)
-    // a lead of TBED also gets the task stored on TBED, after its sub-projects
-    expect(await allIds(t, f.user, open.id, 'parent')).toEqual(
-      expect.arrayContaining([inPcb.id, inFw.id, roomy.id, onMeta.id, readOnly.id]),
-    )
-    expect((await allIds(t, f.user, open.id, 'parent')).at(-1)).toBe(onMeta.id)
-    // by number, the full task and the task elsewhere stay out
-    for (const out of [full, elsewhere, subtask])
+    // a lead of TBED gets the same, and no task of another sub-project or
+    // stored on TBED
+    expect(await allIds(t, f.user, open.id, 'parent')).toEqual([inPcb.id, roomy.id])
+    // by number, the full task, a subtask and the tasks elsewhere stay out
+    for (const out of [full, elsewhere, subtask, inFw, onMeta])
       expect(await allIds(t, f.user, open.id, 'parent', { search: issueKey(out.num) })).toEqual([])
   })
 
@@ -646,17 +649,18 @@ describe('the Subtasks picker', () => {
     const withShelved = await task(t, f, f.sub, { title: 'Only a shelved subtask' })
     await task(t, f, shelved, { parent_id: withShelved.id })
     const answer = okOf(await pick(t, f.guest, open.id, 'subtask'))
+    // FW alone, where a subtask stays with its parent; the task in PCB is
+    // in another sub-project, as only a family from before that rule is
     expect(answer.rows.map((r) => [r.title, r.parent_id ?? null, r.has_hidden_parent])).toEqual([
       ['Plain', null, false],
       ['Of the hidden parent', null, true],
       ['Recent', shownParent.id, false],
-      ['Of the shown parent', shownParent.id, false],
     ])
     for (const out of [current, shownParent, withArchived, withHidden, withShelved])
       expect(answer.rows.map((r) => r.id)).not.toContain(out.id)
     expect(answer.rows.find((r) => r.id === ofHidden.id)).not.toHaveProperty('parent_id')
     expect(answer.rows.map((r) => r.id)).toContain(plain.id)
-    expect(answer.rows.map((r) => r.id)).toContain(ofShown.id)
+    expect(answer.rows.map((r) => r.id)).not.toContain(ofShown.id)
     expect(answer.rows.map((r) => r.id)).toContain(recent.id)
     // the rows carry the window's short row fields and the reader's level
     expect(answer.rows[0]).toMatchObject({
@@ -816,11 +820,12 @@ describe('search', () => {
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub, { num: 1 })
     await task(t, f, f.sub, { num: 7 })
-    const seventy = await task(t, f, f.sub2, { num: 70 })
+    const late = await task(t, f, f.sub, { num: 700 })
+    const seventy = await task(t, f, f.sub, { num: 70 })
     const seven = await task(t, f, f.sub2, { num: 77 })
-    const late = await task(t, f, f.meta, { num: 700 })
     RELATION_PICKER.rows = 1
-    // QN-700 holds QN-70, and QN-7 and QN-77 do not
+    // QN-700 holds QN-70, and QN-7 and QN-77 do not; QN-70 comes first
+    // although QN-700 comes before it in the order
     const list = await batches(t, f.user, open.id, 'parent', { search: 'QN-70' })
     expect(list[0]?.rows).toEqual([expect.objectContaining({ id: seventy.id, exact: true })])
     expect(idsOf(list)).toEqual([seventy.id, late.id])
@@ -835,12 +840,12 @@ describe('Done tasks', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
-    const done = await task(t, f, f.sub2, {
+    const done = await task(t, f, f.sub, {
       title: 'Wombat finished',
       status: 'done',
       done_at: NOW,
     })
-    await task(t, f, f.sub2, {
+    await task(t, f, f.sub, {
       title: 'Wombat filed away',
       status: 'done',
       done_at: NOW,
@@ -864,12 +869,14 @@ describe('order and continuation', () => {
     const inLater = await plantTasks(t, later, 2)
     const onMeta = await plantTasks(t, f.meta, 2)
     RELATION_PICKER.rows = 2
-    const list = await batches(t, f.user, open.id, 'parent')
+    const list = await batches(t, f.user, open.id, 'link')
     const want = [...inPcb, ...inFw, ...inLater, ...onMeta].map((x) => x.id)
     expect(idsOf(list)).toEqual(want)
     expect(list.slice(0, -1).every((b) => b.rows.length === 2 && !b.stopped)).toBe(true)
     // the scope's last row ends the list without one more batch
     expect(list).toHaveLength(Math.ceil(want.length / 2))
+    // the Parent picker's scope is the opened task's sub-project alone
+    expect(await allIds(t, f.user, open.id, 'parent')).toEqual(inPcb.map((x) => x.id))
   })
 
   it('stops after RELATION_PICKER.scan tasks, says so, and goes on', async () => {
@@ -1189,8 +1196,7 @@ describe('what hidden data moves', () => {
     const candidates = await plantTasks(t, f.sub, 8, (i) => ({ title: `Board ${i}` }))
     // parents the guest cannot see, in the family's hidden sibling and in
     // Skunkworks, another top-level project, where only data from before
-    // the rule that a subtask stays in its parent's top-level project has
-    // them
+    // the rule that a subtask stays in its parent's sub-project has them
     const inSibling = await plantTasks(t, sibling, candidates.length)
     const inSkunkworks = await plantTasks(t, f.hidden, candidates.length)
     const runs: [string, (i: number) => Doc<'issues'>][] = [

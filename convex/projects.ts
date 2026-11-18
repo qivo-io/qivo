@@ -24,9 +24,10 @@
  *   'that project is archived, so restore it first' (0106:131/148).
  *
  * parent_id / type / org_id are immutable after create. A subtask stays in
- * its parent task's top-level project (model/issues.ts parentChainCheck), so
- * a sub-project that ever changes parent must carry that rule along, because
- * its tasks' families can span its siblings. Projects and
+ * its parent task's own sub-project (model/issues.ts parentChainCheck), and
+ * a family stored before that rule can span a sub-project's siblings, so a
+ * sub-project that ever changes parent must decide what happens to such a
+ * family. Projects and
  * sub-projects have a lead, never an owning team. Teams and users receive
  * explicit permission grants. team_id remains an optional legacy column so
  * old development rows can be read and cleaned up safely.

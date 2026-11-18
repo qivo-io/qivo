@@ -1717,9 +1717,11 @@ async function followerLine(
     const key = (await seesParent()) ? note.parent.key : 'a task in another sub-project'
     // Keep the hidden parent anonymous while using the same task wording
     // as the inbox and the machine surfaces. A subtask shares its parent's
-    // top-level project (model/issues.ts sameTopLevel), so a parent the
-    // reader cannot see is in a sub-project they cannot see. Messages
-    // stored before that rule keep "a task in another project".
+    // sub-project (model/issues.ts sameSubProject), so only a family stored
+    // across sub-projects before that rule has a parent the reader cannot
+    // see, in a sub-project they cannot see. Messages stored before the
+    // earlier rule of one top-level project keep "a task in another
+    // project".
     mine = mine.map((x) => (x === ATTACH_SLOT ? `Attached under ${key}` : x))
   }
   // unshifted before the assignment line, so it reads second

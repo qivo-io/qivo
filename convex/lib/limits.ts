@@ -514,12 +514,12 @@ export const LIMITS = {
     on: ALL,
   },
   moveSubtree: {
-    label: 'Subtasks a move to another project carries',
+    label: 'Subtasks a move to another sub-project carries',
     group: 'tasks',
     max: 200,
     unit: 'subtasks, archived ones included',
     refusal:
-      'this task has more than 200 subtasks, archived ones included, and a move to another project carries them all. Restore some archived subtasks and remove them from this task first, or move it within its project.',
+      'this task has more than 200 subtasks, archived ones included, and a move to another sub-project carries them all. Restore some archived subtasks and remove them from this task first.',
     on: ALL,
   },
   attachments: {

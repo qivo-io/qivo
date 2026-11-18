@@ -752,11 +752,15 @@ describe('the benchmark server', () => {
       return JSON.parse(posted.find((msg) => msg.to === to).text).rows.map((r) => r.id)
     }
     // task 5 is the parent of tasks 6 and 7 (server.mjs parentOf), and
-    // task 18 is linked to task 21 (the links share)
+    // task 18 is linked to task 21 (the links share), which is in another
+    // sub-project, where Parent and Subtasks offer nothing, as a subtask
+    // stays in its parent's sub-project; task 19 is in task 18's
     expect(await rowsOf('link', 5, 6)).toEqual([id('4', 6)])
     expect(await rowsOf('link', 6, 5)).toEqual([id('4', 5)])
-    expect(await rowsOf('parent', 18, 21)).toEqual([id('4', 21)])
-    expect(await rowsOf('subtask', 18, 21)).toEqual([id('4', 21)])
+    expect(await rowsOf('parent', 18, 21)).toEqual([])
+    expect(await rowsOf('subtask', 18, 21)).toEqual([])
+    expect(await rowsOf('parent', 18, 19)).toEqual([id('4', 19)])
+    expect(await rowsOf('subtask', 18, 19)).toEqual([id('4', 19)])
     // each kind still leaves out its own current relations
     expect(await rowsOf('link', 18, 21)).toEqual([])
     expect(await rowsOf('parent', 6, 5)).toEqual([])

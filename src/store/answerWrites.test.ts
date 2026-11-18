@@ -992,7 +992,8 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     await openFar(family())
     P.showSections({}, true)
     await turn()
-    // another top-level project: the parent stays behind, the subtask comes
+    // another top-level project: the parent stays behind, the subtask comes,
+    // as for any other sub-project
     expect(P.moveIssue(H, 'manuals')).toBe(H)
     expect(last('issues:move').args).toEqual({
       org_id: ORG,
@@ -1006,25 +1007,36 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     expect(P.sections?.subtasks.rows.map((r) => r.project)).toEqual(['manuals'])
     expect(card()?.project).toBe('manuals')
     expect(card(FAR_KID)?.project).toBe('manuals')
-    // within its top-level project nothing else moves
+    // a subtask stays in its parent's sub-project, so a move to a sibling
+    // sub-project leaves the parent behind too and takes the subtask along
     await load(editsManuals)
+    await openBoard([viewRow(far({ parent_id: PARENT })), viewRow(kid(FAR_KID, 42))])
     await openFar(family())
+    P.showSections({}, true)
+    await turn()
     P.moveIssue(H, 'bench')
     expect(last('issues:move').args).toEqual({
       org_id: ORG,
       id: FAR,
       project_id: 'bench',
-      expected: { project_id: 'work' },
-    })
-    // a hidden parent counts as in the task's own top-level project, and
-    // the pair says only that there is one
-    await load(editsManuals)
-    await openFar(okAnswer(far({ has_hidden_parent: true })))
-    P.moveIssue(H, 'manuals')
-    expect(last('issues:move').args).toMatchObject({
       detach_parent: true,
-      expected: { project_id: 'work', parent_id: null, has_hidden_parent: true },
+      expected: { project_id: 'work', parent_id: PARENT, has_hidden_parent: false },
     })
+    expect(shown().parent).toBeNull()
+    expect(P.sections?.subtasks.rows.map((r) => r.project)).toEqual(['bench'])
+    expect(card(FAR_KID)?.project).toBe('bench')
+    // a hidden parent counts as in the task's own sub-project, and the pair
+    // says only that there is one
+    for (const target of ['manuals', 'bench']) {
+      await load(editsManuals)
+      await openFar(okAnswer(far({ has_hidden_parent: true })))
+      P.moveIssue(H, target)
+      expect(last('issues:move').args).toMatchObject({
+        project_id: target,
+        detach_parent: true,
+        expected: { project_id: 'work', parent_id: null, has_hidden_parent: true },
+      })
+    }
   })
 
   it('moves only into a target the project cache answered, never one it only seeded', async () => {

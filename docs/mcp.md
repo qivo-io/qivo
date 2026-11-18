@@ -98,10 +98,14 @@ and `set_following` descriptions: a task has one level of subtasks, at most
 keeps working, and the server refuses such a call with the rule's sentence.
 
 The subtask project rule added a sentence to the `create_task` and
-`update_task` descriptions, which now say that a parent must be in the
-task's top-level project, that a move to another top-level project carries
-the subtasks along, and that a subtask moved there must leave its parent in
-the same call. A client holding the older catalogue keeps working, and the
+`update_task` descriptions, which said that a parent must be in the task's
+top-level project, that a move to another top-level project carries the
+subtasks along, and that a subtask moved there must leave its parent in the
+same call. The rule that a subtask stays in its parent's own sub-project
+(the release after v0.1.168) changed those sentences: a parent must be in
+the same sub-project, every move carries the subtasks along, and a subtask
+that moves must leave its parent in the same call or get one in the
+destination. A client holding an older catalogue keeps working, and the
 server refuses such a call with the rule's sentence, but its model does not
 learn the rule until the client refreshes its tool list.
 
@@ -709,7 +713,7 @@ the range.
 | Limit | Value | Past the limit |
 | --- | --- | --- |
 | Active subtasks per task | 100 active subtasks | the parent task already has 100 active subtasks, the most a task can have. Archive or remove one of them first. |
-| Subtasks a move to another project carries | 200 subtasks, archived ones included | this task has more than 200 subtasks, archived ones included, and a move to another project carries them all. Restore some archived subtasks and remove them from this task first, or move it within its project. |
+| Subtasks a move to another sub-project carries | 200 subtasks, archived ones included | this task has more than 200 subtasks, archived ones included, and a move to another sub-project carries them all. Restore some archived subtasks and remove them from this task first. |
 | Attachments per task | 100 attachments, description images included | this task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
 | Links per task | 100 links | this task already has 100 links, the most a task can have. Remove one of its links first. |
 | Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
@@ -1047,7 +1051,7 @@ Available events are `task.created`, `task.updated`, `task.deleted`,
 Deleted items, and `task.restored` that a person restored it there.
 `task.updated` covers stored task-field changes made through
 the app, REST and MCP model paths, subtree archiving, the subtasks a move
-carries to another top-level project, restoration, automatic
+carries to another sub-project, restoration, automatic
 archiving and profile-removal cleanup. No-op updates do not emit events. A
 group's dates are calculated from its subtasks, so a subtask date change emits
 no event for the group. Comment edits/deletes, labels, links, attachments, project
@@ -1420,8 +1424,8 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_task_related` | One page of one of a task's lists, `list` being `subtasks`, `links`, `followers` or `attachments`, as `{next_cursor, <list>}` with the rows of `get_task`'s same list, in its order, `limit` of them (50 by default, at most 200). Pass `get_task`'s `<list>_next_cursor`, or the page's `next_cursor`, as `cursor` with the same `ref` and `list` until it is `null`. An archived group's subtask page can hold fewer rows than `limit`, or none, while `next_cursor` is set. `offset` is refused unless `0`. Download links are minted for the page's files alone. See [Task results](#task-results) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry. A task holds at most 1,000 comments, and you post at most 10 on one task in any 60 seconds (see [Comments, inbox and following](#comments-inbox-and-following)) |
-| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it` or `restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same sub-project. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; its subtasks move along, and a subtask must leave its parent in the same call or get one in the destination), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it` or `restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the first links, and `list_task_related` the rest |
 | `list_labels` | One page of the organization's labels as `{next_cursor, labels}`, each `id`, `name` and `color`, by name in any case, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)) |
@@ -1771,8 +1775,9 @@ the time a task entering `review` gets. `completion` is the project's
 subtasks in the project, or for a top-level project in its sub-projects you
 can read that are not archived, and `done` counts those that are Done. A
 task with an active subtask in any project that is not archived counts as a
-group and is left out, as in the app, also when that subtask is hidden from
-you or sits in another top-level project. `percent` is rounded, and `0` when
+group and is left out, as in the app, also when that subtask, from older
+versions of Qivo, is in a sub-project hidden from you or in another
+top-level project. `percent` is rounded, and `0` when
 `total` is `0`. Its `status` is `ok`. Qivo keeps these counts as tasks
 change, so they hold whatever the project's size. For a moment after any
 project of the organization is archived, restored, moved to Deleted items
@@ -2440,21 +2445,16 @@ destination sub-project; a destination you can read but not write is
 refused with `your account has no write access to that project`, and one you
 cannot read reads `project "<ref>" not found (or not visible to you)`. The
 task's assignee, and the reviewer of a task without subtasks, must be able to
-work in the destination, and everyone working on its active subtasks must be
-able to see it. The refusal for the people on its subtasks names them, such
-as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on a subtask you cannot
-see) have no access to that sub-project; give them access there, or change
-who works on those subtasks first`. It names up to five people with up to
-three subtasks each and counts the rest, and a subtask in a project you
-cannot see is counted without its ID. An `assignee_id` or `reviewer_id` in the same call, null
+work in the destination. An `assignee_id` or `reviewer_id` in the same call, null
 included, takes the place of the current one in this check, and a new one is
 checked against the destination. A moved task keeps its key, labels, links
 and subtasks.
 
-A move within the task's top-level project moves only the task. A move to a
-sub-project of another top-level project also moves every subtask,
-archived ones included, that is not already in that top-level
-project. You need Edit access on each of their projects (otherwise `moving
+A subtask stays in its parent's own sub-project, and tasks live only in
+sub-projects, so every move also moves every subtask, archived ones
+included, that is not already in the destination, to another sub-project of
+the same project as to another project. You need Edit access on each of
+their projects (otherwise `moving
 this task would move a subtask in a project you cannot edit; someone who can
 edit that project can move it`). A subtask in a project that is being moved
 to Deleted items refuses the move for everyone, admins included, with `a
@@ -2462,30 +2462,35 @@ subtask of this task is being moved to Deleted items; try again when that
 finishes`.
 The assignee and the reviewer of each active subtask must be able to work
 in the destination. Otherwise the refusal names them with their subtasks,
-such as `Aisha Rahman (on QN-14) cannot edit that sub-project; give them
-Edit access there, or change who works on that subtask first`, up to five
-people with up to three subtasks each, the rest counted. A
-group's own reviewer who cannot
+such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16) cannot
+edit that sub-project; give them Edit access there, or change who works on
+those subtasks first`, up to five people with up to three subtasks each,
+the rest counted. A subtask of a task from older versions of Qivo can
+already be in the destination; whoever is assigned to or reviewing it must
+be able to see the destination, otherwise the refusal names them the same
+way, such as `Aisha Rahman (on QN-14) has no access to that sub-project;
+give them access there, or change who works on that subtask first`. A
+group's own reviewer who cannot work there
 is cleared. A task with more than 200 subtasks, archived ones included,
-cannot move to another top-level project (otherwise `this task has more than
-200 subtasks, archived ones included, and a move to another project carries
-them all. Restore some archived subtasks and remove them from this task
-first, or move it within its project.`). A move whose task and subtasks are
-too large for one call is refused with `this task and its subtasks are too
-large to move to another project in one request; remove some subtasks from
-this task first, restoring archived ones to do so, or move it within its
-project`. A task with 200 subtasks, archived ones included, moves in one
+cannot move (otherwise `this task has more than 200 subtasks, archived ones
+included, and a move to another sub-project carries them all. Restore some
+archived subtasks and remove them from this task first.`). A move whose
+task and subtasks are too large for one call is refused with `this task and
+its subtasks are too large to move in one request; remove some subtasks
+from this task first, restoring archived ones to do so`. A task with 200 subtasks, archived ones included, moves in one
 call when their titles and descriptions are of ordinary length. Long
 descriptions on many of them can make a smaller family too large. Any
 other change whose task and subtasks are too
 large for one call, such as an archive, a new parent or a restore, is
 refused with `this task and its subtasks are too large to change in one
 request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only the task
-itself gets an activity row and an inbox message. A subtask moved to another
-top-level project must leave its parent in the same call, with `parent:
-null` or a new parent in the destination's top-level project; otherwise the
-call is refused with `a subtask stays in its parent task's project; to move
-it to another project, detach it from its parent in the same change`.
+itself gets an activity row and an inbox message. A subtask that moves must
+leave its parent in the same call, with `parent: null` or a new parent in
+the destination; otherwise the call is refused with `a subtask stays in its
+parent task's sub-project; to move it to another sub-project, detach it from
+its parent in the same change`. A subtask from older versions of Qivo in
+another sub-project than its parent may also move into its parent's
+sub-project.
 
 A task has one level of subtasks, at most 100 active ones; archived
 subtasks do not count. `parent` is refused with `the parent task is a
@@ -2503,17 +2508,18 @@ because that delete takes every such subtask off the parent. Naming that
 parent as `parent` to keep it is refused with `this task's parent was
 deleted after this task was archived, so the task comes back as a top-level
 task; restore it without naming that parent`. A parent in a project you cannot see counts as being in the subtask's own
-top-level project, so moving such a subtask to another top-level project
-also needs `parent: null` or a new parent there.
+sub-project, so moving such a subtask also needs `parent: null` or a new
+parent in the destination.
 
 `parent` (a task ref) makes the task a subtask of that task, and `null`
 detaches it. You need Edit access on the parent's project, because the
 parent becomes a group and loses its own remaining hours. A parent you
 cannot read reads `parent task "<ref>" not found (or not visible to you)`.
-A subtask stays in its parent's top-level project, in any of its
-sub-projects, so a parent in another top-level project, after any move in
-the same call, is refused with `a subtask must be in the same project as its
-parent task, in any of its sub-projects`.
+A subtask stays in its parent's own sub-project, so a parent in any other
+sub-project, after any move in the same call, is refused with `a subtask
+must be in the same sub-project as its parent task`. Older versions of Qivo
+let a subtask sit in another sub-project than its parent; such tasks keep
+their parent until they move or leave it.
 The task cannot become its own parent, an active task cannot go under an
 archived parent, and a task has one level of subtasks (see above). Everyone assigned to or reviewing the task or its subtasks must be
 able to see the new parent. An `assignee_id` or `reviewer_id` in the same

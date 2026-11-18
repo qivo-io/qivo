@@ -292,7 +292,7 @@ Useful field rules:
 - **Subtask:** create the task with `parent` set to the parent's task
   reference. You need User or Lead access on the parent's project, because the
   parent becomes a group and loses its own remaining hours. A subtask stays in
-  its parent's top-level project, in any of its sub-projects. A task has one
+  its parent's own sub-project, so create it in that sub-project. A task has one
   level of subtasks, at most 100 active ones; archived subtasks do not
   count. A subtask cannot be a parent, a task with subtasks cannot get a
   parent, and a parent with 100 active subtasks takes no more. Each is a
@@ -312,11 +312,10 @@ Useful field rules:
   both sub-projects, and the task's assignee and reviewer must be able to work
   in the destination. If they cannot, send a new `assignee_id` or
   `reviewer_id`, or `null`, in the same request. The task keeps its key. A
-  move to another top-level project carries the task's subtasks along,
-  archived ones included, so a task with more than 200 subtasks cannot make
-  it. A subtask moved there must
+  move carries the task's subtasks along, archived ones included, so a task
+  with more than 200 subtasks cannot move. A subtask that moves must
   leave its parent in the same request, with `parent: null` or a new parent
-  in that project.
+  in the destination sub-project.
 - **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
   `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
   links routes. Two tasks share at most one link; remove a link before

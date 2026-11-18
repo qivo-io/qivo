@@ -1689,7 +1689,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
               parent_id: parent,
             },
           ]),
-          // a subtask stays in its parent's top-level project, so one seeded
+          // a subtask stays in its parent's own sub-project, so one seeded
           // on its own elsewhere moves to the family's sub-project first
           ...job.attach.flatMap((task) => [
             ...(task.project_id === familyProject

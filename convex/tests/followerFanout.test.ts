@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
+import { FOLLOWER_FANOUT, notifyIssueUpdate, postMessage } from '../model/messages'
 import {
   as,
   messagesFor,
@@ -412,13 +412,16 @@ describe('a change told in steps after the task changed', () => {
   it('keeps the new parent anonymous when it moved into sight meanwhile', async () => {
     const { t, f, task, insider } = await scene()
     // the parent sits in a sub-project the insider cannot see when the
-    // change is written, and moves into Firmware before the step
+    // change is written, and moves into Firmware before the step. No write
+    // attaches a task under a parent in another sub-project any more, so
+    // that change, from before the rule, is told as its writer told it
     const hidden = await plantHiddenSibling(t, f, insider)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: hidden.id })
-    await as(t, f.admin).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: task.id,
-      patch: { parent_id: parent.id },
+    await t.run(async (ctx) => {
+      const before = (await ctx.db.get(task._id)) as Doc<'issues'>
+      await ctx.db.patch(task._id, { parent_id: parent.id })
+      const after = (await ctx.db.get(task._id)) as Doc<'issues'>
+      await notifyIssueUpdate(ctx, { before, after, actor: f.admin, now: NOW })
     })
     await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: f.sub.id }))
     await t.finishAllScheduledFunctions(vi.runAllTimers)

@@ -1452,8 +1452,16 @@ describe('Deleted items, project items and subtasks', () => {
 
   it('keeps the count of a subtask a restore hands to its project item, and deletes it with a purged one', async () => {
     const fx = await setup()
+    // families stored across sub-projects before the subtask rule: created
+    // under their parent, then in another sub-project, as no write makes
+    // them any more
+    const across = (task: Doc<'issues'>, project_id: string) =>
+      fx.t.run(async (ctx) => {
+        await ctx.db.patch(task._id, { project_id })
+        return (await ctx.db.get(task._id)) as Doc<'issues'>
+      })
     const root = await createTask(fx.t, fx, 'Root')
-    const sub = await createTask(fx.t, fx, 'Sub', { project_id: fx.sub2.id, parent_id: root.id })
+    const sub = await across(await createTask(fx.t, fx, 'Sub', { parent_id: root.id }), fx.sub2.id)
     await plantComments(fx, 3, { task: sub, counted: true })
     await deleteTask(fx.t, fx, root.id, { subtask_ids: [sub.id] })
     await deleteProject(fx.t, fx, fx.sub2.id)
@@ -1479,7 +1487,7 @@ describe('Deleted items, project items and subtasks', () => {
       parent_id: fx.meta.id,
     })
     const root2 = await createTask(fx.t, fx, 'Root 2')
-    const lost = await createTask(fx.t, fx, 'Lost', { project_id: third.id, parent_id: root2.id })
+    const lost = await across(await createTask(fx.t, fx, 'Lost', { parent_id: root2.id }), third.id)
     await appPost(fx, fx.user, lost)
     await deleteTask(fx.t, fx, root2.id, { subtask_ids: [lost.id] })
     await deleteProject(fx.t, fx, third.id)

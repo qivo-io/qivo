@@ -1488,9 +1488,10 @@ export const restListTeamGrants = internalQuery({
 })
 
 /* A project's parent never changes. A subtask stays in its parent task's
- * top-level project (model/issues.ts parentChainCheck), so allowing a
- * sub-project to change parent would have to carry that rule along, because
- * its tasks' families can span its siblings. */
+ * own sub-project (model/issues.ts parentChainCheck), and a family stored
+ * before that rule can span a sub-project's siblings, so allowing a
+ * sub-project to change parent would have to decide what happens to such a
+ * family. */
 const PARENT_AT_CREATION = "a project's parent is set when it is created, with parent"
 
 /* Projects have no comment thread, so archiving one takes no reason. */

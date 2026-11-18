@@ -32,12 +32,11 @@ import {
   viewOf,
 } from '../model/deletedItems'
 import { descriptionOf } from '../model/descriptions'
-import { HOLDER_SIGHT_RULE, SUBTASK_PROJECT_RULE } from '../model/issues'
+import { SUBTASK_PROJECT_RULE } from '../model/issues'
 import {
   activityFor,
   as,
   chargeFilteredReads,
-  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
@@ -455,7 +454,7 @@ describe('restoring a task item', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantSubscription(t, { issue_id: parent.id, profile_id: f.admin.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, child.id)
@@ -471,10 +470,11 @@ describe('restoring a task item', () => {
     ).toEqual([['Remaining cleared (was 6 h)', f.user.id]])
   })
 
-  it('brings an archived sub-project back under a live parent, which keeps its own hours', async () => {
+  it('brings an archived sub-project back without a live parent in another sub-project, which keeps its own hours', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
     await as(t, f.user).mutation(api.projects.archive, { org_id, id: f.sub2.id })
@@ -484,16 +484,21 @@ describe('restoring a task item', () => {
     await restore(t, f.user, [(await itemFor(t, f.sub2.id)).id])
     await runSteps(t)
     expect((await liveProject(t, f.sub2.id))?.archived_at).toBeDefined()
-    expect((await liveTask(t, child.id))?.parent_id).toBe(parent.id)
+    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
     expect((await liveTask(t, parent.id))?.remaining_hours).toBe(6)
   })
 
-  it('brings a subtask back top-level when the restorer cannot edit its parent', async () => {
+  it('brings a subtask back top-level, and leaves its parent as it was, when the parent is in a sub-project the restorer cannot edit', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Firmware through a grant of its own, and cannot see
-    // the sibling sub-project where the parent is
+    // the sibling sub-project where the parent is, a family stored across
+    // sub-projects before the subtask rule. The rule drops that parent
+    // first (keptParent's sameSubProject). No task item reaches the check
+    // of the restorer's Edit on the parent any more: the restore needs Edit
+    // on every sub-project its tasks go back to (taskItemBlock), and a
+    // parent may only be in the task's own
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -531,7 +536,7 @@ describe('restoring a task item', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, child.id)
     // without its only subtask the parent moves alone, to a sub-project of
@@ -564,7 +569,7 @@ describe('restoring a task item', () => {
     await assertNoDanglingRefs(t, 'after a subtask came back without a parent elsewhere')
   })
 
-  it('keeps a parent that moved to another sub-project of the same top-level project', async () => {
+  it('brings a subtask deleted alone back top-level when its parent moved to another sub-project of the same top-level project', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -577,7 +582,34 @@ describe('restoring a task item', () => {
     expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
     const back = await liveTask(t, child.id)
     expect(back?.project_id).toBe(f.sub.id)
-    expect(back?.parent_id).toBe(parent.id)
+    expect(back?.parent_id).toBeUndefined()
+    // a reparent refuses that parent for the same reason
+    const refused = await expectRefusal(
+      as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: child.id,
+        patch: { parent_id: parent.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(SUBTASK_PROJECT_RULE)
+  })
+
+  it('keeps a parent inside the item only in the same sub-project', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule, deleted
+    // whole, with one subtask beside the root and one in another sub-project
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const beside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
+    const across = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    await deleteTask(t, f, root.id, { subtask_ids: [beside.id, across.id] })
+    expect((await restore(t, f.user, [(await itemFor(t, root.id)).id])).restored).toHaveLength(1)
+    expect((await liveTask(t, beside.id))?.parent_id).toBe(root.id)
+    expect(await liveTask(t, across.id)).toMatchObject({ project_id: f.sub2.id })
+    expect((await liveTask(t, across.id))?.parent_id).toBeUndefined()
+    await assertNoDanglingRefs(t, 'after a family came back split by the subtask rule')
   })
 
   it('keeps a parent only while it is a top-level task, as a reparent requires', async () => {
@@ -695,12 +727,48 @@ describe('restoring a task item', () => {
     ])
   })
 
-  it('keeps a parent only while its assignee can still see it, as a reparent requires', async () => {
+  it('reads no more for who sees a parent than SIGHT_READ allows, and leaves that task without it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    // two subtasks deleted alone: one person works on the first, two on
+    // the second
+    const people = await plantPeople(t, f, 3)
+    const under = (extra: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id, project_id: f.sub.id, parent_id: epic.id, ...extra })
+    const one = await under({ assignee_id: people[0] })
+    const two = await under({ assignee_id: people[1], reviewer_id: people[2] })
+    for (const task of [one, two]) await deleteTask(t, f, task.id)
+    const items = [await itemFor(t, one.id), await itemFor(t, two.id)]
+    // what one person costs fits, what two cost does not
+    SIGHT_READ.ranges = 5
+
+    for (const item of items)
+      expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    expect((await liveTask(t, one.id))?.parent_id).toBe(epic.id)
+    expect((await liveTask(t, two.id))?.parent_id).toBeUndefined()
+    expect(warn.mock.calls).toEqual([
+      [
+        'A deleted item restore cannot check who sees the parent of a task',
+        { item_id: items[1].id, task_id: two.id },
+      ],
+    ])
+    // the task comes back with its people
+    expect(await liveTask(t, two.id)).toMatchObject({
+      assignee_id: people[1],
+      reviewer_id: people[2],
+    })
+  })
+
+  it('keeps no parent in another sub-project, even one its assignee can see', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Board rev through a grant of its own, and sees the
-    // parent's sibling sub-project through another
+    // parent's sibling sub-project through another; the family was stored
+    // across sub-projects before the subtask rule
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const grant = await t.run((ctx) =>
       ctx.db.insert('project_access', {
@@ -722,18 +790,15 @@ describe('restoring a task item', () => {
       expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
       return await liveTask(t, child.id)
     }
-    // the guest sees the whole chain, so the parent stays
-    expect(await deleteAndRestore()).toMatchObject({
-      parent_id: parent.id,
-      assignee_id: f.guest.id,
-    })
-
-    // the guest loses the sibling and keeps Board rev, so the task comes
-    // back without the parent and keeps its assignee
-    await t.run((ctx) => ctx.db.delete(grant))
+    // the guest sees the whole chain, and the task still comes back without
+    // the parent, with its assignee
     const back = await deleteAndRestore()
     expect(back?.parent_id).toBeUndefined()
     expect(back?.assignee_id).toBe(f.guest.id)
+    // the guest loses the sibling and keeps Board rev: the same
+    await t.run((ctx) => ctx.db.delete(grant))
+    expect(await deleteAndRestore()).toMatchObject({ assignee_id: f.guest.id })
+    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
     // an edit refuses that parent for the same reason
     const refused = await expectRefusal(
       as(t, f.user).mutation(api.issues.update, {
@@ -743,17 +808,19 @@ describe('restoring a task item', () => {
       }),
       'rule',
     )
-    expect(refused.data.message).toBe(HOLDER_SIGHT_RULE)
+    expect(refused.data.message).toBe(SUBTASK_PROJECT_RULE)
   })
 
-  it('keeps no parent that someone working on a subtask that comes back with it cannot see', async () => {
+  it('keeps no parent for a task that comes back with a subtask, whoever can see it', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const hiddenSub = await plantHiddenSibling(t, f, f.guest)
-    const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
-    // the admin, who reads TBED by a grant, works on the task; the guest, who
-    // cannot see the parent's sub-project, works on its subtask
+    // a chain stored before one level of subtasks, all in Board rev: the
+    // admin works on the task and the guest on its subtask, and both see
+    // the parent. A task with a subtask takes no parent (workersOf), which
+    // the restore decides before it asks who sees the parent, so it never
+    // asks about the people on a subtask that comes back with the task
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const task = await plantIssue(t, {
       org_id,
       project_id: f.sub2.id,
@@ -766,13 +833,73 @@ describe('restoring a task item', () => {
       parent_id: task.id,
       assignee_id: f.guest.id,
     })
+    // a task beside it without subtasks keeps the parent
+    const alone = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      assignee_id: f.admin.id,
+    })
     await deleteTask(t, f, task.id, { subtask_ids: [subtask.id] })
+    await deleteTask(t, f, alone.id)
     await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    await restore(t, f.user, [(await itemFor(t, alone.id)).id])
     expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
     expect(await liveTask(t, subtask.id)).toMatchObject({
       parent_id: task.id,
       assignee_id: f.guest.id,
     })
+    expect((await liveTask(t, alone.id))?.parent_id).toBe(parent.id)
+  })
+
+  it('brings a subtask back under its parent without a person who lost access to the sub-project', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // the guest edits Firmware and Board rev through grants of their own
+    await plantHiddenSibling(t, f, f.guest)
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const plantSubtask = () =>
+      plantIssue(t, {
+        org_id,
+        project_id: f.sub2.id,
+        parent_id: parent.id,
+        assignee_id: f.guest.id,
+        reviewer_id: f.guest.id,
+      })
+    const deleteAndRestore = async (task: Doc<'issues'>) => {
+      await deleteTask(t, f, task.id)
+      const item = await itemFor(t, task.id)
+      expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+      return await liveTask(t, task.id)
+    }
+    // while the guest can see Board rev, the subtask comes back under the
+    // parent with them
+    expect(await deleteAndRestore(await plantSubtask())).toMatchObject({
+      parent_id: parent.id,
+      assignee_id: f.guest.id,
+      reviewer_id: f.guest.id,
+    })
+    // the guest is left on a subtask after losing Board rev, planted as
+    // rows as an older family is. The restore drops them from it
+    // (keepsHolder) before it asks who sees the parent, so the parent stays
+    // and nobody on the subtask is left without sight of it. Everyone the
+    // task keeps can edit the parent's sub-project, so that check (allSee)
+    // finds no one who cannot see the parent
+    const left = await plantSubtask()
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub2.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      if (grant === null) throw new Error('the guest holds no grant on Board rev')
+      await ctx.db.delete(grant._id)
+    })
+    const back = await deleteAndRestore(left)
+    expect(back?.parent_id).toBe(parent.id)
+    expect([back?.assignee_id, back?.reviewer_id]).toEqual([undefined, undefined])
   })
 
   it(`brings a task back with its ${LIMITS.subtasks.max} subtasks and their people, within the real limits`, async () => {
@@ -782,7 +909,7 @@ describe('restoring a task item', () => {
     chargeFilteredReads()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const epic = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const root = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const people = await plantPeople(t, f, LIMITS.subtasks.max)
     const subtasks = await plantAssigned(t, f, root.id, people)
@@ -882,7 +1009,7 @@ describe('restoring a task item', () => {
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const [assignee, reviewer] = await plantPeople(t, f, 2, await plantTeams(t, f, 60))
     const plantRoot = async () => {
-      const root = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
+      const root = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: epic.id })
       // restoring the comment moves a row before the reveal, so the call
       // asks whether the reveal fits in what it has left (revealFits)
       await comment(t, root)
@@ -914,6 +1041,36 @@ describe('restoring a task item', () => {
       assignee_id: assignee,
       reviewer_id: reviewer,
     })
+  })
+
+  it('reveals in a step of its own when the restore call runs out of reads before it counts the subtasks of the parent', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // a parent of about 14 KB, its text in its task row too, as a rollback
+    // to the second release writes it
+    const parent = await plantCopiedIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      description: 'Field note. '.repeat(1_190),
+    })
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    // restoring the comment moves a row before the reveal, so the call
+    // asks whether the reveal fits in what it has left (revealFits)
+    await comment(t, task)
+    await deleteTask(t, f, task.id)
+    // the call, a quarter of a step, has bytes left after the fill for the
+    // reveal and not for reading the parent and counting its subtasks
+    TRASH_BUDGET.bytes = 32_000
+
+    const item = await itemFor(t, task.id)
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
+    expect(await liveTask(t, task.id)).toBeNull()
+    // the step of its own counts them whole and keeps the parent
+    await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect((await liveTask(t, task.id))?.parent_id).toBe(parent.id)
   })
 
   it('drops references whose uuid now names something created after the delete', async () => {
@@ -1211,6 +1368,7 @@ describe('restoring a task item', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
@@ -1243,9 +1401,11 @@ describe('restoring a task item', () => {
     // and its history with it
     expect((await historyOf(t, sub.id)).map((e) => e.id)).toEqual(subHistory)
 
-    // the project brings it back under its parent, with its file
+    // the project brings it back with its file, without its parent in
+    // another sub-project
     await restore(t, f.user, [projectItem.id])
-    expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
+    expect(await liveTask(t, sub.id)).toMatchObject({ project_id: f.sub2.id })
+    expect((await liveTask(t, sub.id))?.parent_id).toBeUndefined()
     expect(await blobExists(t, file.storage_id)).toBe(true)
     expect(await t.run((ctx) => byId(ctx, 'issue_attachments', file.id))).toMatchObject({
       issue_id: sub.id,
@@ -2288,12 +2448,16 @@ describe('restoring a project item', () => {
       await comment(t, task)
       tasks.push(task)
     }
-    // children planted before their parents, across both sub-projects
-    const leaf = await plantIssue(t, { org_id, project_id: f.sub.id })
+    // children planted before their parents, in one sub-project, and one
+    // under them in the other, which only a family stored before the
+    // subtask rule has
+    const leaf = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const middle = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const top = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const top = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const apart = await plantIssue(t, { org_id, project_id: f.sub.id })
     await patch(t, 'issues', leaf.id, { parent_id: middle.id })
     await patch(t, 'issues', middle.id, { parent_id: top.id })
+    await patch(t, 'issues', apart.id, { parent_id: top.id })
     // a task under a parent in another top-level project, which only a
     // subtask from before the subtask rule has, and a link out
     const outsideParent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
@@ -2314,7 +2478,7 @@ describe('restoring a project item', () => {
           created_at: NOW,
         })
     })
-    const all = [...tasks, leaf, middle, top, edge]
+    const all = [...tasks, leaf, middle, top, apart, edge]
     TRASH_BUDGET.ranges = 60
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -2356,6 +2520,8 @@ describe('restoring a project item', () => {
     for (const task of all) expect(await liveTask(t, task.id)).not.toBeNull()
     expect((await liveTask(t, leaf.id))?.parent_id).toBe(middle.id)
     expect((await liveTask(t, middle.id))?.parent_id).toBe(top.id)
+    // a parent in the item, in another sub-project, is not kept
+    expect((await liveTask(t, apart.id))?.parent_id).toBeUndefined()
     // a parent in another top-level project stays outside for good
     expect((await liveTask(t, edge.id))?.parent_id).toBeUndefined()
     expect((await liveTask(t, outsideParent.id))?.remaining_hours).toBe(4)
@@ -2462,13 +2628,16 @@ describe('restoring a project item', () => {
     await restore(t, f.user, [item.id])
     await runSteps(t)
     for (const task of tasks) expect(await liveTask(t, task.id)).not.toBeNull()
-    expect((await liveTask(t, edge.id))?.parent_id).toBe(outside.id)
+    // its parent is in another sub-project, so it comes back without it
+    expect(await liveTask(t, edge.id)).not.toBeNull()
+    expect((await liveTask(t, edge.id))?.parent_id).toBeUndefined()
     await assertNoDanglingRefs(t, 'after a restore that was sent back')
   })
 
-  it('brings back tasks that hang under one parent outside the project in a few reads each', async () => {
-    // a transaction writes or attaches many tasks under a parent outside,
-    // so it must not read a dozen ranges for each
+  it('brings back tasks that hang under one parent outside the project in a few reads each, without that parent', async () => {
+    // a transaction writes back many tasks that waited for a parent
+    // outside, which is in another sub-project, so it must not read a dozen
+    // ranges for each; the family was stored before the subtask rule
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -2488,13 +2657,15 @@ describe('restoring a project item', () => {
     expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    for (const task of tasks) expect((await liveTask(t, task.id))?.parent_id).toBe(epic.id)
-    // the epic is a group again and lost its hours once
-    expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
-    expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
-      'Remaining cleared (was 8 h)',
-    ])
-    await assertNoDanglingRefs(t, 'after tasks came back under a parent outside')
+    for (const task of tasks) {
+      expect(await liveTask(t, task.id)).not.toBeNull()
+      expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
+    }
+    // the epic stays a leaf with its hours
+    expect((await liveTask(t, epic.id))?.remaining_hours).toBe(8)
+    expect(await messagesFor(t, f.admin.id, epic.id)).toEqual([])
+    expect(await waitingParents(t)).toEqual([])
+    await assertNoDanglingRefs(t, 'after tasks came back without a parent outside')
   })
 
   it('sends a restore whose steps keep failing back to Deleted items rather than stuck', async () => {
@@ -2548,6 +2719,13 @@ describe('restoring a project item', () => {
 })
 
 describe('parents outside a restored project', () => {
+  /* A parent outside a project item is in another sub-project than its
+   * task, so by the rule that a subtask stays in its parent's sub-project
+   * (model/issues.ts sameSubProject) every such family is from before that
+   * rule, and each task that waits for its parent comes back without it,
+   * before the parent table counts its parent's subtasks or asks who sees
+   * it. A task item's restore still runs the whole table (restoring a task
+   * item, above). */
   /** `n` tasks of Board rev under one epic in Firmware, which the user
    * edits as the lead of Testbed platform, with Board rev moved to Deleted
    * items. The epic, a leaf again, holds 8 hours of its own and the admin
@@ -2628,7 +2806,7 @@ describe('parents outside a restored project', () => {
     return low
   }
 
-  it(`brings back 300 tasks of 8 KB under three parents outside the project, ${LIMITS.subtasks.max} each, within limits a quarter of the real ones`, async () => {
+  it(`brings back 300 tasks of 8 KB that waited for three parents outside the project, ${LIMITS.subtasks.max} each, without them, within limits a quarter of the real ones`, async () => {
     // 2.4 MB of tasks under parents outside, which no single transaction
     // can read and write back with their parent under a quarter of the
     // real limits, as 8 MiB could not under the real ones; 300 tasks are
@@ -2685,26 +2863,29 @@ describe('parents outside a restored project', () => {
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     for (const [e, epic] of epics.entries()) {
-      const children = await t.run((ctx) =>
-        ctx.db
-          .query('issues')
-          .withIndex('by_parent', (q) => q.eq('parent_id', epic.id))
-          .collect(),
-      )
-      expect(children.map((c) => c.id).sort()).toEqual([...ids[e]].sort())
+      const back = await t.run(async (ctx) => {
+        const rows: Doc<'issues'>[] = []
+        for (const id of ids[e]) {
+          const row = await byId(ctx, 'issues', id)
+          if (row !== null) rows.push(row)
+        }
+        return rows
+      })
+      // every task is back, without its parent in another sub-project
+      expect(back).toHaveLength(LIMITS.subtasks.max)
+      expect(back.every((c) => c.parent_id === undefined)).toBe(true)
       // each text is back in its description row alone
-      const texts = await t.run((ctx) => Promise.all(children.map((c) => descriptionOf(ctx.db, c))))
+      const texts = await t.run((ctx) => Promise.all(back.map((c) => descriptionOf(ctx.db, c))))
       expect(texts.every((text) => text === description)).toBe(true)
-      expect(children.every((c) => c.description === undefined)).toBe(true)
-      expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
-      expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
-        'Remaining cleared (was 8 h)',
-      ])
+      expect(back.every((c) => c.description === undefined)).toBe(true)
+      // each parent stays a leaf with its hours
+      expect((await liveTask(t, epic.id))?.remaining_hours).toBe(8)
+      expect(await messagesFor(t, f.admin.id, epic.id)).toEqual([])
     }
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('brings a project back whole when a task that waits has more under it than a step can read', async () => {
+  it('brings a project back whole when a task that waits has more under it than a step can read, without the parent outside', async () => {
     // 100 subtasks of 14 KB right under the middle task, 1.4 MB, past a
     // step's quarter budget; the check reads only the first, as one is
     // enough to keep the task from a parent
@@ -2729,16 +2910,17 @@ describe('parents outside a restored project', () => {
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     expect(await liveProject(t, f.sub2.id)).not.toBeNull()
-    // the tasks with subtasks stay without their parent, with their
-    // subtasks under them, and no check stopped short
-    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, epic.id])
+    // each comes back without its parent in another sub-project, the tasks
+    // with subtasks with their subtasks under them, and no check stopped
+    // short
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, undefined])
     expect(warn.mock.calls).toEqual([])
     expect(await subtaskCount(t, light.id)).toBe(1)
     expect(await subtaskCount(t, heavy.id)).toBe(LIMITS.subtasks.max)
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('reads a parent that tasks share once, so they come back whole in one reveal', async () => {
+  it('reads a parent that tasks share once, so they come back whole in one reveal, without it', async () => {
     // 50 tasks under one epic with a description at the cap in Firmware,
     // under limits a 48th of the real ones, as an epic of 900 KiB from
     // before the cap was under them. Read once per task, the epic would
@@ -2767,13 +2949,14 @@ describe('parents outside a restored project', () => {
       expect(i).toBeLessThan(20)
       await step(t, item.id)
     }
-    // the step that showed the project gave every task its parent
-    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => epic.id))
+    // the step that showed the project decided every task, and none keeps
+    // a parent in another sub-project
+    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => undefined))
     expect(await waitingParents(t)).toEqual([])
     expect(await itemById(t, item.id)).toBeNull()
   })
 
-  it('comes back whole in one transaction when its attaches fit there', async () => {
+  it('comes back whole in one transaction when the tasks that wait fit there', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 2)
@@ -2781,23 +2964,22 @@ describe('parents outside a restored project', () => {
     await restore(t, f.user, [item.id])
     expect(await itemById(t, item.id)).toBeNull()
     expect(await jobFor(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined])
+    expect(await waitingParents(t)).toEqual([])
 
-    // after the fill the call, a quarter of a step, has room for one attach,
-    // not two, so the reveal waits for a step of its own, which brings the
-    // project back whole
+    // deleted again, the tasks hold no parent, so none waits and a call of
+    // a quarter of a step brings the project back whole
     await deleteProject(t, f, f.sub2.id)
     const again = await itemFor(t, f.sub2.id)
     TRASH_BUDGET.tasks = 12
     await restore(t, f.user, [again.id])
-    expect(await jobFor(t, again.id)).toMatchObject({ phase: 'restore_reveal' })
-    expect(await liveProject(t, f.sub2.id)).toBeNull()
-    await step(t, again.id)
     expect(await itemById(t, again.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id])
+    expect(await waitingParents(t)).toEqual([])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined])
+    expect((await liveTask(t, epic.id))?.remaining_hours).toBe(8)
   })
 
-  it('attaches them in steps after the reveal, each parent losing its hours once', async () => {
+  it('decides them in steps after the reveal, each parent keeping its hours', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -2821,35 +3003,28 @@ describe('parents outside a restored project', () => {
     TRASH_BUDGET.tasks = 2
     await restore(t, f.user, [item.id])
     let attachSteps = 0
-    let sawDetached = 0
     await stepThrough(t, item.id, async () => {
       if ((await jobFor(t, item.id))?.phase !== 'restore_attach') return
       attachSteps++
-      // the project is back and every task shows, some still without parent
+      // the project is back and every task shows, without its parent
       expect(await liveProject(t, f.sub2.id)).not.toBeNull()
-      const parents = await parentsOf(t, tasks)
-      const detached = parents.filter((p) => p === undefined).length
-      expect(detached).toBe((await waitingParents(t)).length)
-      if (detached > 0) sawDetached++
+      expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => undefined))
     })
     expect(attachSteps).toBeGreaterThan(1)
-    expect(sawDetached).toBeGreaterThan(1)
-    expect(await parentsOf(t, tasks)).toEqual(tasks.map((task) => task.parent_id))
+    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => undefined))
     for (const [epic, hours] of [
       [epics[0], 8],
       [epics[1], 3],
     ] as const) {
-      expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
-      expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
-        `Remaining cleared (was ${hours} h)`,
-      ])
+      expect((await liveTask(t, epic.id))?.remaining_hours).toBe(hours)
+      expect(await messagesFor(t, f.admin.id, epic.id)).toEqual([])
     }
     expect(await itemById(t, item.id)).toBeNull()
     expect(await waitingParents(t)).toEqual([])
-    await assertNoDanglingRefs(t, 'after tasks were attached in steps')
+    await assertNoDanglingRefs(t, 'after the tasks that waited were decided in steps')
   })
 
-  it('leaves a task without its parent when that parent fails the table before its turn', async () => {
+  it('leaves a task without its parent, whatever that parent does before its turn', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -2873,7 +3048,7 @@ describe('parents outside a restored project', () => {
 
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, [kept, ...lost])).toEqual([first.id, ...lost.map(() => undefined)])
+    expect(await parentsOf(t, [kept, ...lost])).toEqual([undefined, ...lost.map(() => undefined)])
     // the user no longer leads Testbed platform and keeps Edit on Firmware
     // and Board rev only, so they cannot see the sibling; the next parent
     // becomes a subtask, so it can have none of its own; the next parent now
@@ -2896,7 +3071,9 @@ describe('parents outside a restored project', () => {
 
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await parentsOf(t, [kept, ...lost])).toEqual([first.id, ...lost.map(() => undefined)])
+    // every parent is in another sub-project, so none is kept
+    expect(await parentsOf(t, [kept, ...lost])).toEqual([undefined, ...lost.map(() => undefined)])
+    expect((await liveTask(t, first.id))?.remaining_hours).toBeUndefined()
     expect((await liveTask(t, loop.id))?.parent_id).toBe(lost[2].id)
     // neither the parent the user can no longer see nor the one in another
     // top-level project became a group
@@ -2917,18 +3094,22 @@ describe('parents outside a restored project', () => {
     } = await oneUnderEach(t, f, [epic, epic, epic])
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, [first, reparented, moved])).toEqual([epic.id, undefined, undefined])
+    expect(await parentsOf(t, [first, reparented, moved])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
     // one gets a parent of its own, the other moves to Firmware
     const other = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await patch(t, 'issues', reparented.id, { parent_id: other.id })
     await patch(t, 'issues', moved.id, { project_id: f.sub.id })
 
     await stepThrough(t, item.id)
-    expect(await parentsOf(t, [first, reparented, moved])).toEqual([epic.id, other.id, undefined])
+    expect(await parentsOf(t, [first, reparented, moved])).toEqual([undefined, other.id, undefined])
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('keeps the parent of a task that waits for it when its project goes to Deleted items again', async () => {
+  it('stores the parent a task waits for when its project goes to Deleted items again, which the next restore leaves', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -2936,7 +3117,7 @@ describe('parents outside a restored project', () => {
     const [, early, late] = tasks
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, undefined])
     // the lead deletes Board rev again; the call, a sixteenth of a step,
     // moves the first task and one that waits, and the restore's next step
     // finds the other hidden
@@ -2955,11 +3136,11 @@ describe('parents outside a restored project', () => {
     expect((await storedIssue(t, late.id))?.parent_id).toBe(epic.id)
     await restore(t, f.user, [again.id])
     await runSteps(t)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, undefined])
     await assertNoDanglingRefs(t, 'after a project went to Deleted items again during an attach')
   })
 
-  it('keeps the parent of a task that waits for it when the task goes to Deleted items alone', async () => {
+  it('stores the parent of a task that waits for it when the task goes to Deleted items alone, which its restore leaves', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -2978,9 +3159,10 @@ describe('parents outside a restored project', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect(await waitingParents(t)).toEqual([])
 
+    expect((await storedIssue(t, waiting.id))?.parent_id).toBe(epic.id)
     for (const task of [waiting, moved])
       expect((await restore(t, f.user, [(await itemFor(t, task.id)).id])).restored).toHaveLength(1)
-    expect(await parentsOf(t, [first, waiting, moved])).toEqual([epic.id, epic.id, undefined])
+    expect(await parentsOf(t, [first, waiting, moved])).toEqual([undefined, undefined, undefined])
   })
 
   it('keeps the parent a task got after the reveal when its project goes and comes back again', async () => {
@@ -2991,9 +3173,9 @@ describe('parents outside a restored project', () => {
     const { tasks, item } = await oneUnderEach(t, f, [epic, epic, epic])
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    // a task that waits gets another parent in Firmware, then Board rev goes to
-    // Deleted items and comes back while the first restore still attaches
-    const story = await plantIssue(t, { org_id, project_id: f.sub.id })
+    // a task that waits gets another parent in Board rev, then Board rev goes
+    // to Deleted items and comes back while the first restore still attaches
+    const story = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await patch(t, 'issues', tasks[1].id, { parent_id: story.id })
     TRASH_BUDGET.tasks = 100
     await deleteProject(t, f, f.sub2.id)
@@ -3010,25 +3192,25 @@ describe('parents outside a restored project', () => {
     await step(t, item.id)
     TRASH_BUDGET.tasks = 100
     await runSteps(t)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, story.id, epic.id])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, story.id, undefined])
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('keeps no parent that needs the restorer once they are gone', async () => {
+  it('keeps no parent outside, with the restorer or once they are gone', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 3)
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    expect((await parentsOf(t, tasks)).filter((p) => p === epic.id)).toHaveLength(1)
+    expect((await parentsOf(t, tasks)).filter((p) => p === epic.id)).toHaveLength(0)
     await patch(t, 'profiles', f.user.id, { active: false })
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect((await parentsOf(t, tasks)).filter((p) => p === epic.id)).toHaveLength(1)
+    expect((await parentsOf(t, tasks)).filter((p) => p === epic.id)).toHaveLength(0)
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('attaches a task only when everyone working under it can see the parent, as a reparent requires', async () => {
+  it('keeps no parent outside, whoever works under the task and whatever it holds', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -3059,62 +3241,13 @@ describe('parents outside a restored project', () => {
     expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
-    expect((await liveTask(t, kept.id))?.parent_id).toBe(epic.id)
+    expect((await liveTask(t, kept.id))?.parent_id).toBeUndefined()
     // each comes back top-level and keeps its people and its subtasks
     expect(await liveTask(t, lost.id)).toMatchObject({ reviewer_id: f.guest.id })
     expect((await liveTask(t, lost.id))?.parent_id).toBeUndefined()
     expect((await liveTask(t, group.id))?.parent_id).toBeUndefined()
     expect((await liveTask(t, below.id))?.parent_id).toBe(group.id)
     expect(await waitingParents(t)).toEqual([])
-  })
-
-  it('counts what the subtask check reads against the step budget', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const heavy = await plantIssue(t, {
-      org_id,
-      project_id: f.sub2.id,
-      parent_id: epic.id,
-      id: '10000000-0000-4000-8000-000000000000',
-    })
-    const description = 'Spec line. '.repeat(1490)
-    const kids: string[] = []
-    for (let i = 0; i < 3; i++)
-      kids.push(
-        (await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: heavy.id, description }))
-          .id,
-      )
-    const light = await plantIssue(t, {
-      org_id,
-      project_id: f.sub2.id,
-      parent_id: epic.id,
-      id: '20000000-0000-4000-8000-000000000000',
-    })
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    TRASH_BUDGET.bytes = 12_000
-    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
-    for (let i = 0; (await jobFor(t, item.id))?.phase === 'restore_tasks'; i++) {
-      expect(i).toBeLessThan(50)
-      await step(t, item.id)
-    }
-    // the subtasks are written back; a release before the third, which
-    // wrote them, writes the copy of their text into their task rows too,
-    // and this release's steps go on from there after a deploy
-    await copyTaskTexts(t, org_id, kids)
-    for (let i = 0; (await jobFor(t, item.id))?.phase !== 'restore_attach'; i++) {
-      expect(i).toBeLessThan(50)
-      await step(t, item.id)
-    }
-    // the check reads the first of the three subtasks of 16 KB under the
-    // first task, which then comes back without its parent, and it spends
-    // the step
-    expect(await parentsOf(t, [heavy, light])).toEqual([undefined, undefined])
-    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([light.id])
-    await stepThrough(t, item.id)
-    expect(await parentsOf(t, [heavy, light])).toEqual([undefined, epic.id])
   })
 
   it('counts what the parents hold against the step budget', async () => {
@@ -3131,48 +3264,19 @@ describe('parents outside a restored project', () => {
       await patch(t, 'issues', story.id, { description: 'Field note. '.repeat(1_425) })
     TRASH_BUDGET.bytes = 10_000
     // the fill reads each story once, a step each, and the reveal's step
-    // checks the first task whole and stops on the bytes it held
+    // reads the first task's parent whole and stops on the bytes it held
     await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([
-      stories[0].id,
-      ...stories.slice(1).map(() => undefined),
-    ])
+    expect(await waitingParents(t)).toHaveLength(stories.length - 1)
     // so does each attach step
     await step(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([
-      ...stories.slice(0, 2).map((story) => story.id),
-      ...stories.slice(2).map(() => undefined),
-    ])
+    expect(await waitingParents(t)).toHaveLength(stories.length - 2)
     await stepThrough(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual(stories.map((story) => story.id))
-  })
-
-  it(`counts the subtasks of each parent after the attaches before it in its step, up to ${LIMITS.subtasks.max}`, async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    // the epic has 97 subtasks in Firmware, and a fifth task waits for it
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantSubtasks(t, f, epic.id, LIMITS.subtasks.max - 3)
-    const tasks = await plantUnder(t, f, [epic, epic, epic, epic])
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    // the reveal's step attaches the first task only, the 98th
-    TRASH_BUDGET.tasks = 1
-    await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined, undefined])
-
-    // one step reads the epic's 98 subtasks once and counts each attach,
-    // so the 99th and the 100th fit and the last does not
-    TRASH_BUDGET.tasks = 100
-    await step(t, item.id)
-    expect(await jobFor(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id, undefined])
-    expect(await subtaskCount(t, epic.id)).toBe(LIMITS.subtasks.max)
     expect(await waitingParents(t)).toEqual([])
+    // and none keeps a parent in another sub-project
+    expect(await parentsOf(t, tasks)).toEqual(stories.map(() => undefined))
   })
 
-  it('attaches 150 tasks under parents in 10 projects that each of 150 people on them can see, within the real limits', async () => {
+  it('brings back 150 tasks that waited for parents in 10 projects with their 150 people, without those parents, within the real limits', async () => {
     // checked for each person and project, who sees the parents read more
     // than the 4,096 index ranges of one transaction, so every retry failed
     // and the attach gave up on the parents
@@ -3200,50 +3304,11 @@ describe('parents outside a restored project', () => {
     expect(result.restored).toEqual([item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    for (const epic of epics) {
-      const ours = tasks.filter((task) => task.parent_id === epic.id)
-      expect(await assignedUnder(t, epic.id)).toEqual(
-        pairs(
-          ours.map((task) => task.id),
-          ours.map((task) => people[tasks.indexOf(task)]),
-        ),
-      )
-    }
+    for (const [i, task] of tasks.entries())
+      expect(await liveTask(t, task.id)).toMatchObject({ assignee_id: people[i] })
+    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => undefined))
+    for (const epic of epics) expect(await assignedUnder(t, epic.id)).toEqual([])
     expect(await waitingParents(t)).toEqual([])
-  })
-
-  it('reads no more for who sees a parent than SIGHT_READ allows, and leaves that task without it', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const tasks = await plantUnder(t, f, [epic, epic])
-    const [one, two] = tasks
-    // one person works on the first task, two on the second
-    const people = await plantPeople(t, f, 3)
-    await patch(t, 'issues', one.id, { assignee_id: people[0] })
-    await patch(t, 'issues', two.id, { assignee_id: people[1], reviewer_id: people[2] })
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    // what one person costs fits, what two cost does not
-    SIGHT_READ.ranges = 5
-
-    await restore(t, f.user, [item.id])
-    await stepThrough(t, item.id)
-    expect(await itemById(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined])
-    expect(warn.mock.calls).toEqual([
-      [
-        'A deleted item restore cannot check who sees the parent of a task',
-        { item_id: item.id, task_id: two.id },
-      ],
-    ])
-    expect(await waitingParents(t)).toEqual([])
-    // the task comes back with its people
-    expect(await liveTask(t, two.id)).toMatchObject({
-      assignee_id: people[1],
-      reviewer_id: people[2],
-    })
   })
 
   it('restores a task and a project under a chain of nineteen large tasks within limits a 48th of the real ones, without that parent', async () => {
@@ -3283,76 +3348,11 @@ describe('parents outside a restored project', () => {
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('checks a task again in the next step when its step runs out of reads during the check', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const tasks = await plantUnder(t, f, [epic, epic, epic])
-    const [, , busy] = tasks
-    // the assignee and the reviewer of the last task are each in 50 teams,
-    // so reading what one of them sees costs more than 100 ranges
-    const [assignee, reviewer] = await plantPeople(t, f, 2, await plantTeams(t, f, 50))
-    await patch(t, 'issues', busy.id, { assignee_id: assignee, reviewer_id: reviewer })
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    // the reveal's step attaches the first task only
-    TRASH_BUDGET.tasks = 1
-    await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
-
-    // the step attaches the second task, and its reads run out while it
-    // checks what the two people see
-    TRASH_BUDGET.tasks = 100
-    TRASH_BUDGET.ranges = 100
-    await step(t, item.id)
-    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_attach' })
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, undefined])
-    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([busy.id])
-    // the next step checks it first, whole, though that passes its budget,
-    // and attaches it
-    await step(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id])
-    expect(await waitingParents(t)).toEqual([])
-    await stepThrough(t, item.id)
-    expect(await itemById(t, item.id)).toBeNull()
-    expect(await liveTask(t, busy.id)).toMatchObject({
-      assignee_id: assignee,
-      reviewer_id: reviewer,
-    })
-  })
-
-  it('checks a task again in the next step when its step runs out of reads before it counts the subtasks of its parent', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // a story of 14 KB, on its description row and its task row
-    const story = await chainOf(t, f, 1, HEAVY)
-    const tasks = await plantUnder(t, f, [epic, epic, story])
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    // the reveal's step attaches the first task only
-    TRASH_BUDGET.tasks = 1
-    await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
-
-    // the step attaches the second task, then reads the story and has no
-    // bytes left to count its subtasks
-    TRASH_BUDGET.tasks = 100
-    TRASH_BUDGET.bytes = 12_000
-    await step(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, undefined])
-    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([tasks[2].id])
-    // the next step checks it first, whole, though that passes its budget,
-    // and attaches it
-    await step(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, story.id])
-    expect(await waitingParents(t)).toEqual([])
-  })
-
-  it('brings back under its parent a subtask that another restore moved into it after its fill', async () => {
+  it('brings back a subtask that another restore moved into it after its fill, without its parent in another sub-project', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     // no rows of its own, which would send the reveal back to restore_rows
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
@@ -3374,7 +3374,8 @@ describe('parents outside a restored project', () => {
 
     await stepThrough(t, projectItem.id)
     expect(await itemById(t, projectItem.id)).toBeNull()
-    expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
+    expect(await liveTask(t, sub.id)).toMatchObject({ project_id: f.sub2.id })
+    expect((await liveTask(t, sub.id))?.parent_id).toBeUndefined()
     expect(await t.run((ctx) => ctx.db.query('deleted_rows').collect())).toEqual([])
     await assertNoDanglingRefs(t, 'after a subtask reached a project item past its fill')
   })
@@ -3397,7 +3398,8 @@ describe('parents outside a restored project', () => {
     await restore(t, f.user, [item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id])
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined])
+    expect((await liveTask(t, epic.id))?.remaining_hours).toBe(8)
     expect(await storedTasks(t, item.id)).toEqual([])
   })
 
@@ -3409,9 +3411,8 @@ describe('parents outside a restored project', () => {
     const { epic, tasks, item } = await underEpic(t, f, 4)
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    const attached = async () =>
-      (await parentsOf(t, tasks)).filter((parent) => parent === epic.id).length
-    expect(await attached()).toBe(1)
+    const waiting = async () => (await waitingParents(t)).length
+    expect(await waiting()).toBe(3)
     // a failed step leaves the job at its last committed progress; the
     // clock starts where the steps above left it
     let now = Date.now()
@@ -3433,7 +3434,7 @@ describe('parents outside a restored project', () => {
     expect((await itemById(t, item.id))?.state).toBe('restoring')
     await step(t, item.id)
     expect(await jobFor(t, item.id)).toMatchObject({ attempts: 0, budget_scale: 1 })
-    expect(await attached()).toBe(2)
+    expect(await waiting()).toBe(2)
 
     // then every step fails until its retries are spent, and it never goes
     // back to moving
@@ -3458,7 +3459,8 @@ describe('parents outside a restored project', () => {
     expect(await waitingParents(t)).toEqual([])
     expect(await liveProject(t, f.sub2.id)).not.toBeNull()
     for (const task of tasks) expect(await liveTask(t, task.id)).not.toBeNull()
-    expect(await attached()).toBe(2)
+    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => undefined))
+    expect((await liveTask(t, epic.id))?.remaining_hours).toBe(8)
     await assertNoDanglingRefs(t, 'after an attach gave up')
   })
 
@@ -3769,6 +3771,7 @@ describe('restore calls', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
@@ -4051,6 +4054,7 @@ describe('where live attachment rows land', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
+    // a family stored across sub-projects before the subtask rule
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await attach(t, sub, 7)
@@ -4074,7 +4078,8 @@ describe('where live attachment rows land', () => {
     // its fill writes the subtask, then its reveal meets the file late
     TRASH_BUDGET.tasks = 1
     await stepThrough(t, projectItem.id)
-    expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
+    expect(await liveTask(t, sub.id)).toMatchObject({ project_id: f.sub2.id })
+    expect((await liveTask(t, sub.id))?.parent_id).toBeUndefined()
     expect(await filesOf(t, sub.id)).toEqual([7])
     expect((await live(t, org_id)).projects[f.sub2.id]).toBe(7)
     await assertNoDanglingRefs(t, 'after a split subtask and its file came back')

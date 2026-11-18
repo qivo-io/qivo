@@ -54,7 +54,9 @@ Tasks have these fields:
   means no work remains. Gaining a first subtask clears the parent's own
   estimate. The parent then shows the total of its unfinished subtasks at any
   depth, marked **Σ**. Done subtasks and linked tasks do not count. The task
-  window totals the subtasks you can see when some are hidden from you, and
+  window totals the subtasks you can see when some are hidden from you,
+  which only a task from before subtasks had to share their parent's
+  sub-project can have, and
   says **Unknown** when it cannot total every subtask, for example a subtask
   stored with subtasks of its own before a task could have only one level of
   subtasks. After the last active subtask leaves, the field
@@ -68,8 +70,9 @@ Tasks have these fields:
 - **Planned period**. Start and end weeks on the Roadmap. Planning uses whole
   weeks ([The Roadmap](./the-roadmap.md)). A task with active subtasks takes
   its planned period from them, from the earliest start to the latest end of
-  the scheduled subtasks you can access. A subtask you cannot access hides
-  the subtasks below it. Its own saved dates are hidden and
+  the scheduled subtasks you can access. A subtask you cannot access, which
+  only a task from before subtasks had to share their parent's sub-project
+  can have, hides the subtasks below it. Its own saved dates are hidden and
   cannot be edited. Removing or archiving the last active subtask, or giving
   it another parent, restores them.
 - **Paused**. Choose **Pause** in the Status menu to hold work without
@@ -83,7 +86,7 @@ Tasks have these fields:
   MCP use the same `paused` flag.
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. A subtask stays in its
-  parent's project, in any of its sub-projects. A task has one level of
+  parent's own sub-project. A task has one level of
   subtasks, at most 100 active ones, and archived subtasks do not count
   ([The details column](./the-task-window.md#the-details-column)). Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link
@@ -94,7 +97,7 @@ Moving a task requires its assignee and reviewer to be eligible in the
 destination. Clear or change either person first if they cannot edit that
 project or are switched off. For a grouping parent, an ineligible reviewer
 saved before it gained subtasks is cleared instead of preventing the move.
-A move to another project takes the task's subtasks along, and a subtask
+A move to another sub-project takes the task's subtasks along, and a subtask
 moved there stops being a subtask of its parent ([Moving a task](./the-task-window.md#moving-a-task)).
 Removing a person from the organization clears their assignments and reviewer
 roles. Qivo clears open tasks at once, or shortly after for someone with
@@ -180,10 +183,12 @@ Restoring a sub-project of an archived top-level project reads all the
 top-level project's sub-projects. Qivo then says so; shorten the longest
 names or descriptions, or delete some of those sub-projects first.
 
-A task in another sub-project whose subtasks were all in the archived one
-becomes an ordinary task again, with its own status, dates and estimate.
-When the sub-project is restored, the task becomes a group again and loses
-its own estimate, as when it gains a subtask.
+A subtask stays in its parent's sub-project, so archiving a sub-project
+archives whole families. A task saved before that rule can sit in another
+sub-project than its subtasks: when all its subtasks were in the archived
+one, it becomes an ordinary task again, with its own status, dates and
+estimate. When the sub-project is restored, the task becomes a group again
+and loses its own estimate, as when it gains a subtask.
 
 If you can access only a sub-project, the archived list shows its archived
 project too, whose **Show sub-projects** lists that sub-project, and a search
@@ -293,14 +298,19 @@ comes back with its title cut to 255 characters and its description to
 20,000 ([Limits](./limits.md)). Labels deleted since then are
 gone, and so are links to work deleted for good and links to a task that has
 reached 100 links since. A subtask deleted on its own
-returns under its parent when the parent still exists, is not a subtask
+returns under its parent when the parent still exists in the subtask's
+sub-project, is not a subtask
 itself and has fewer than 100 active subtasks, the restored task has no subtasks,
 you can edit the parent, and everyone assigned to or reviewing the subtask
 can still see the parent's project. An archived subtask does not count
 toward the 100. Otherwise, or when the parent's
 subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
-from the archive under a full parent does. Work that was archived when it was
+from the archive under a full parent does. A family saved before the rule
+that a subtask stays in its parent's sub-project can be split by a restore,
+because a subtask in another sub-project than its parent's returns as a
+top-level task, also when it was deleted together with that parent or
+with its project. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A restored project shows to its leads and the people and teams it is
 shared with at the same moment, and to organization admins in Settings ›

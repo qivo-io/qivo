@@ -200,7 +200,14 @@ describe('recipient-relative narration', () => {
     await subscribe(t, f.admin, child.id) // admin sees hidden (org admin)
     await subscribe(t, f.guest, child.id) // guest holds no grant on hidden
 
-    await update(t, f.user, child.id, { parent_id: parent.id })
+    // no write attaches a task under a parent in another sub-project any
+    // more, so the notice of such an attach, from before that rule, is sent
+    // as the writer sent it
+    await t.run(async (ctx) => {
+      const before = (await ctx.db.get(child._id)) as Doc<'issues'>
+      const after = { ...before, parent_id: parent.id }
+      await notifyIssueUpdate(ctx, { before, after, actor: f.user, now: NOW })
+    })
 
     expect((await messagesFor(t, f.admin.id, child.id))[0].detail).toBe(
       `Attached under QN-${parent.num}`,
@@ -1460,7 +1467,8 @@ describe('template bytes', () => {
       'Moved to Board rev',
     ])
     await drainMessages(t)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a parent in the sub-project the task moved to
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await step({ parent_id: parent.id }, `Attached under QN-${parent.num}`)
     await step({ parent_id: null }, 'Detached from its parent')
   })
