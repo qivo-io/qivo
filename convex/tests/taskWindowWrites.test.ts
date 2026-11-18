@@ -159,6 +159,13 @@ describe('a write from the task window’s own answer', () => {
       plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: parent.id })
     const detach = (id: string, row: TaskRow) =>
       update(fx, fx.guest, id, { parent_id: null }, expectedFrom(row, ['parent_id']))
+    // no write puts a task under a parent in another sub-project any more,
+    // so the families of these cases, from before that rule, change in place
+    const repoint = (id: string, parent_id: string) =>
+      fx.t.run(async (ctx) => {
+        const row = await byId(ctx, 'issues', id)
+        if (row !== null) await ctx.db.patch(row._id, { parent_id })
+      })
 
     const child = await plant()
     const answer = await answerOf(fx, fx.guest, child.id)
@@ -176,13 +183,7 @@ describe('a write from the task window’s own answer', () => {
     // writes, which the answer cannot tell, and the pair still matches
     const moved = await plant()
     const before = await answerOf(fx, fx.guest, moved.id)
-    await update(
-      fx,
-      fx.admin,
-      moved.id,
-      { parent_id: other.id },
-      { parent_id: parent.id, has_hidden_parent: false },
-    )
+    await repoint(moved.id, other.id)
     await detach(moved.id, before.task)
     expect((await stored(fx, moved.id))?.parent_id).toBeUndefined()
 
@@ -210,18 +211,12 @@ describe('a write from the task window’s own answer', () => {
       { parent_id: null },
       { parent_id: parent.id, has_hidden_parent: false },
     )
-    await update(
-      fx,
-      fx.admin,
-      again.id,
-      { parent_id: other.id },
-      { parent_id: null, has_hidden_parent: false },
-    )
+    await repoint(again.id, other.id)
     await detach(again.id, seenAgain.task)
     expect((await stored(fx, again.id))?.parent_id).toBeUndefined()
     // and a parent the guest is shown since, which the hidden pair does not
     // name, is refused
-    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id })
+    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const third = await plant()
     const seenThird = await answerOf(fx, fx.guest, third.id)
     await update(

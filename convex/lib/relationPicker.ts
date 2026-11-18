@@ -9,10 +9,12 @@
  * pass the write's rules below, and a sealed cursor for the next batch. The
  * scope, in order:
  *
- * 1. the opened task's own sub-project;
- * 2. the other live sub-projects of its top-level project the reader can
- *    see, by creation, then the top-level project itself, where older code
- *    stored tasks (the family);
+ * 1. the opened task's own sub-project, the whole scope of the Parent and
+ *    Subtasks pickers, since a subtask stays in its parent's own sub-project
+ *    (model/issues.ts sameSubProject);
+ * 2. for the Linked tasks picker only, the other live sub-projects of its
+ *    top-level project the reader can see, by creation, then the top-level
+ *    project itself, where older code stored tasks (the family);
  * 3. for the Linked tasks picker only, and only once the person chooses
  *    Search all your projects at the family's end (`all_projects`), the
  *    organization's other live top-level projects by creation, each with
@@ -105,9 +107,11 @@
  *   parent or the parent sits in the family and no question is asked, and
  *   a typed task ID's lookup with one access question, whatever it finds.
  *   Only a parent the batch's scan read before costs nothing, as the reader
- *   is shown it. The question is asked only for a parent outside the
- *   family, which only data stored before the rule that a subtask stays in
- *   its parent's top-level project holds.
+ *   is shown it. A parent outside the opened task's sub-project is in data
+ *   stored before the rule that a subtask stays in its parent's
+ *   sub-project, and the question is asked only for one outside the family,
+ *   which only data stored before the earlier rule of one top-level project
+ *   holds.
  *
  * So where a batch stops follows only the tasks the reader is shown and
  * their own facts. How many subtasks a candidate has that the reader cannot
@@ -665,16 +669,19 @@ const byCreation = (a: Doc<'projects'>, b: Doc<'projects'>) =>
   a._creationTime - b._creationTime || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 /** The family's projects of the scope in their order (see the header),
- * those whose level `fits`. */
+ * those whose level `fits`: only the opened task's own sub-project with
+ * `ownOnly`, as for the Parent and Subtasks pickers. */
 function familyScope(
   family: Family,
   own: Doc<'projects'>,
   fits: (level: AccessLevel | null) => level is AccessLevel,
+  ownOnly: boolean,
 ): ScopeProject[] {
   const scope: ScopeProject[] = []
   const at = (id: string) => family.projects.get(id)
   const ownLevel = at(own.id)?.level ?? null
   if (fits(ownLevel)) scope.push({ place: [0], project: own, level: ownLevel })
+  if (ownOnly) return scope
   const subs = [...family.projects.values()]
     .filter((p) => p.live && p.project.id !== family.top.id && p.project.id !== own.id)
     .map((p) => p.project)
@@ -849,7 +856,7 @@ async function batchOf(
   const others = at !== null && comparePlaces(at.place, OTHERS) >= 0
   const scope = others
     ? await otherScope(ctx, me, family, fits)
-    : familyScope(family, opened.project, fits)
+    : familyScope(family, opened.project, fits, kind !== 'link')
   if (blocked !== null && scope.length > 0) return blockedBatch(blocked)
   // the batch's whole budget, after every read before it, the catalogue's
   // included, which the guard sees at its next look
@@ -888,8 +895,9 @@ async function batchOf(
       if (home !== undefined) shown = home.live && home.level !== null
       else {
         // a parent outside the family, only in data stored before the
-        // rule that a subtask stays in its parent's top-level project;
-        // viewAccess takes the question's room from the guard itself
+        // earlier rule that a subtask stays in its parent's top-level
+        // project; viewAccess takes the question's room from the guard
+        // itself
         shown = (await seat.holds([parent]))[0] === true
       }
     }

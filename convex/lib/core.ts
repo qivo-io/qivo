@@ -2490,8 +2490,8 @@ export function destinationOf(
  * update. The move and the parent are checked with the assignee and
  * reviewer the task ends up with, so the ones `patch` sets or clears take
  * the place of the current ones (model/issues.ts LaterPeople). A subtask
- * moved to another top-level project must leave its parent in the same
- * update, so the move is told the `parent` that follows it
+ * that moves must leave its parent in the same update, or get one in the
+ * destination, so the move is told the `parent` that follows it
  * (MachineMove.laterParent). A move leaves room for the caller's answer
  * when it reads the task's active subtasks again (`answerReadsSubtasks`).
  * Answers the task as written.
@@ -2553,8 +2553,8 @@ export async function applyTaskUpdate(
       issue: task,
       project_id: a.destination.id,
       now,
-      // a subtask may leave its parent's top-level project only when this
-      // update also gives it another parent, or none
+      // a subtask may leave its parent's sub-project only when this update
+      // also gives it another parent there, or none
       machine: {
         provenance,
         later,

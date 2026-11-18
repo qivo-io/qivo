@@ -96,20 +96,26 @@ function record(name: string, f: Figures) {
 }
 
 /** The first batches of `me`'s three pickers for `open`, for a blank
- * search, which fills a batch, and a rare word, which reads the family to
- * its end, and then for Linked tasks the rare word past the family after
- * Search all your projects. Each answers whole within the default budgets. */
+ * search, which fills a batch, and a rare word, which reads the scope to
+ * its end, the opened task's sub-project for Parent and Subtasks and the
+ * family for Linked tasks, and then for Linked tasks the rare word past the
+ * family after Search all your projects. Each answers whole within the
+ * default budgets. `eligible` and `own` are how many tasks the family and
+ * the opened task's sub-project offer. */
 async function pickers(
   t: T,
   name: string,
   me: Doc<'profiles'>,
   open: Doc<'issues'>,
   eligible = 25,
+  own = eligible,
 ) {
   for (const kind of ['parent', 'subtask', 'link'] as RelationKind[]) {
     const blank = await measure(t, me, { issue_id: open.id, kind })
     record(`${name}, ${kind}, no search`, blank.figures)
-    expect(blank.figures.rows, `${name}, ${kind}`).toBe(Math.min(25, eligible))
+    // Parent and Subtasks offer only the opened task's own sub-project
+    const offered = kind === 'link' ? eligible : own
+    expect(blank.figures.rows, `${name}, ${kind}`).toBe(Math.min(25, offered))
     expect(blank.figures.stopped).toBe(false)
     const rare = await measure(t, me, { issue_id: open.id, kind, search: 'quokka' })
     record(`${name}, ${kind}, a rare word`, rare.figures)
@@ -303,7 +309,8 @@ describe('relation picker reads at the design size', () => {
 
   it('reads one project of 30 live sub-projects of 20 tasks each and 40 archived ones', async () => {
     const e = await pickerOrg({ familySubs: 30, familyArchived: 40, familyOpen: () => 20 })
-    await pickers(e.t, 'a project of 30 and 40 sub-projects', e.member, e.open)
+    // the opened task's sub-project holds 19 other tasks
+    await pickers(e.t, 'a project of 30 and 40 sub-projects', e.member, e.open, 25, 19)
   })
 
   it('reads one project with 200 Done tasks not yet archived', async () => {

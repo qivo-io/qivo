@@ -7,10 +7,10 @@
  * (model/overviewCounts.ts hasLiveSubtask, lib/liveTasks.ts countsAsSubtask's
  * rule for a task in a live project). So a project that comes or goes, or
  * stops or starts being live, changes what its tasks add and which of
- * their parents are groups, in any sub-project of its top-level project
- * (model/issues.ts parentChainCheck keeps a subtask in its parent's
- * top-level project) or, for a subtask older code stored elsewhere, of
- * another one, without a task write. The archive, the restore, the
+ * their parents are groups, in the same sub-project (model/issues.ts
+ * parentChainCheck keeps a subtask in its parent's sub-project) or, for a
+ * subtask older code stored elsewhere, in a sibling sub-project or another
+ * top-level project, without a task write. The archive, the restore, the
  * move and the reveal (model/projects.ts archiveProjectCore and
  * unarchiveProjectCore, model/deletedItems.ts moveProjectToTrash and
  * revealProjects) call model/overviewCounts.ts startRegroup in their

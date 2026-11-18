@@ -42,8 +42,8 @@
  * are dropped (sameReference). A parent outside the item stays only by the
  * parent table (keptParent), which also asks, as a reparent does, that
  * everyone working on the task or its subtasks can see that parent. No
- * restore leaves a subtask under a parent in another top-level project
- * (model/issues.ts sameTopLevel), inside the item or outside it. A reveal
+ * restore leaves a subtask under a parent in another sub-project
+ * (model/issues.ts sameSubProject), inside the item or outside it. A reveal
  * whose checks fail sends the item back to moving, and the move takes the
  * rows back.
  *
@@ -159,7 +159,7 @@ import {
 } from './descriptions'
 import { releaseFile } from './fileHolds'
 import { taskItems } from './inboxItems'
-import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
+import { assertCanEdit, clearParentRemaining, detachChild, sameSubProject } from './issues'
 import { tallyAssignment } from './labelCounts'
 import { linksFullAt } from './links'
 import {
@@ -722,9 +722,10 @@ export type Memo = {
   levels: Map<string, Promise<OrgProjectLevels>>
   /** whether a holder stays, keyed `item:profile:project` */
   holders: Map<string, Promise<boolean>>
-  /** whether a task belongs to the project item a step restores, by task
-   * (inThisItem); its answer holds for the whole step */
-  inItem: Map<string, Promise<boolean>>
+  /** the project of a task that belongs to the project item a step
+   * restores, null for a task outside it, by task (inThisItem); its answer
+   * holds for the whole step */
+  inItem: Map<string, Promise<string | null>>
 }
 
 export const newMemo = (): Memo => ({
@@ -2794,7 +2795,10 @@ type HomedTask = StoredTask & { home: Doc<'projects'> }
 
 /* A project item's tasks, written back under its projects, which stay
  * absent until the reveal (design 5.1), so these tasks stay hidden. A task
- * whose parent is in the item keeps it. A task whose parent is outside the
+ * whose parent is in the item keeps it when both are in the same
+ * sub-project (model/issues.ts sameSubProject), and goes back without it
+ * otherwise, which only a family stored across sub-projects before that
+ * rule meets. A task whose parent is outside the
  * item goes back without it, and deleted_item_parents keeps that parent
  * for attachParents, which applies the parent table after the reveal, by
  * the state then (design 5.2). Writing the parent now could make it a group
@@ -2818,8 +2822,14 @@ const restoreTasks = (run: Run): Promise<boolean> =>
         }
         const doc = docOf(row, 'issues')
         const { parent_id } = doc
-        if (parent_id === undefined || (await inThisItem(run, parent_id))) {
-          await writeTask(run, { row, doc }, parent_id)
+        if (parent_id === undefined) {
+          await writeTask(run, { row, doc }, undefined)
+          return true
+        }
+        const home = await inThisItem(run, parent_id)
+        if (home !== null) {
+          const kept = sameSubProject({ id: doc.project_id }, { id: home }) ? parent_id : undefined
+          await writeTask(run, { row, doc }, kept)
           return true
         }
         await writeTask(run, { row, doc }, undefined)
@@ -2831,24 +2841,25 @@ const restoreTasks = (run: Run): Promise<boolean> =>
         return true
       })
 
-/** Whether task `taskId` belongs to this project item while it fills: a
- * task already written back sits under one of its absent projects, the
- * others are still stored in it. Read once per step (Memo.inItem): a task
- * the step writes back stays in the item. Only for project items, whose
- * projects are absent while they restore. */
-function inThisItem(run: Run, taskId: string): Promise<boolean> {
+/** The project of task `taskId` when it belongs to this project item while
+ * it fills, else null: a task already written back sits under one of its
+ * absent projects, the others are still stored in it. Read once per step
+ * (Memo.inItem): a task the step writes back stays in the item, in the
+ * same project. Only for project items, whose projects are absent while
+ * they restore. */
+function inThisItem(run: Run, taskId: string): Promise<string | null> {
   return memoRead(run.memo.inItem, taskId, async () => {
     const issue = await byId(run.ctx, 'issues', taskId)
     if (issue !== null) {
       chargeRead(run.budget, issue)
-      return itemProjectIds(run.item).includes(issue.project_id)
+      return itemProjectIds(run.item).includes(issue.project_id) ? issue.project_id : null
     }
     const stored = await run.ctx.db
       .query('deleted_rows')
       .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', taskId))
       .first()
     if (stored !== null) chargeRead(run.budget, stored)
-    return stored?.item_id === run.item.id
+    return stored?.item_id === run.item.id ? docOf(stored, 'issues').project_id : null
   })
 }
 
@@ -3271,9 +3282,10 @@ async function revealProjects(run: Run): Promise<void> {
 }
 
 /** Writes a task item's stored tasks `tasks` back, parents before
- * children. A task keeps a parent inside the item when both are in the same
- * top-level project (model/issues.ts sameTopLevel), and comes back without
- * it otherwise, which only a subtask stored before that rule meets. A
+ * children. A task keeps a parent inside the item when both come back in
+ * the same sub-project (model/issues.ts sameSubProject), and comes back
+ * without it otherwise, which only a family stored across sub-projects
+ * before that rule meets. A
  * parent outside the item is kept or cleared by the parent table (design
  * 5.2), from what the reveal reads once per parent (outsideParent) and the
  * task's subtasks among `tasks`, with the people they come back with, and
@@ -3292,7 +3304,7 @@ async function revealTasks(
   // the parent inside the item that `t` keeps
   const keptInside = (t: HomedTask): HomedTask | undefined => {
     const parent = t.doc.parent_id === undefined ? undefined : byTask.get(t.doc.parent_id)
-    return parent !== undefined && sameTopLevel(t.home, parent.home) ? parent : undefined
+    return parent !== undefined && sameSubProject(t.home, parent.home) ? parent : undefined
   }
   const children: StoredChildren = new Map()
   for (const t of tasks) {
@@ -3470,11 +3482,11 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
 
 /** The parent `task` of the item keeps from outside it, by the parent table
  * (design 5.2), or undefined to clear it. Only a live parent that is the
- * task the item stored can stay, and only in the top-level project of
- * `home`, the live project the task comes back in, by the subtask rule
- * (model/issues.ts sameTopLevel). A parent that moved to another top-level
- * project since the delete fails it, as can a subtask stored before the
- * rule. The one level of subtasks (lib/limits.ts) also clears a
+ * task the item stored can stay, and only in `home`, the live project the
+ * task comes back in, by the subtask rule (model/issues.ts sameSubProject).
+ * A parent that moved to another sub-project since the delete fails it, as
+ * can a family stored across sub-projects before the rule. The one level
+ * of subtasks (lib/limits.ts) also clears a
  * parent that is a subtask itself, the parent of a task that comes back
  * with subtasks, and, for an active task, a parent that already has
  * LIMITS.subtasks.max active subtasks, as a restore from the archive does
@@ -3512,7 +3524,7 @@ async function keptParent(
   children: StoredChildren,
   reads: ParentReads,
 ): Promise<Kept> {
-  if (outside === null || !sameTopLevel(home, outside.project)) return undefined
+  if (outside === null || !sameSubProject(home, outside.project)) return undefined
   // one level of subtasks (lib/limits.ts): no parent that is a subtask
   if (outside.parent.parent_id !== undefined) return undefined
   const active = outside.parent.archived_at === undefined

@@ -657,8 +657,9 @@ export const readableLiveSubProjects = (t: T, profile: Doc<'profiles'>): Promise
 
 /* A third sub-project of TBED that `profile` cannot see. Their grant on TBED
  * moves onto FW and PCB, which it reached before. A subtask stays in its
- * parent's top-level project, so a parent hidden from someone who sees its
- * subtask sits in a sibling sub-project like this one. */
+ * parent's own sub-project, so only a family stored before that rule has a
+ * parent hidden from someone who sees its subtask, in a sibling sub-project
+ * like this one. */
 export async function plantHiddenSibling(
   t: T,
   f: OrgFixture,

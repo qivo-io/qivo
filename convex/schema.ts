@@ -2597,9 +2597,10 @@ export default defineSchema({
     archived: v.boolean(),
     // a task item's subtask in another project than the item's root: that
     // project, so its lead finds the item (model/deletedItemsPage.ts
-    // taskPlan). It is a sibling sub-project of the root's, or, for a
-    // subtask from before the subtask rule (model/issues.ts sameTopLevel),
-    // any other project.
+    // taskPlan). Only a family stored before the rule that a subtask stays
+    // in its parent's sub-project (model/issues.ts sameSubProject) has one:
+    // a sibling sub-project of the root's, or, from before the earlier rule
+    // of one top-level project, any other project.
     cross_project_id: v.optional(v.string()),
     // the title, a newline and the readable text of the description
     // (model/descriptions.ts deletedSearchText)

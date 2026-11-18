@@ -532,7 +532,9 @@ const leads = (seat: Seat, p: Doc<'projects'> | undefined): boolean =>
  * those are the projects they lead or whose top-level project they lead,
  * which hold every item they see. With some projects they are the
  * projects of the scope they see, whatever their level there. A family
- * from before the subtask rule (model/issues.ts sameTopLevel) can join a
+ * from before the rule of one top-level project, which the rule that a
+ * subtask stays in its parent's sub-project (model/issues.ts
+ * sameSubProject) narrowed later, can join a
  * project of the scope to one they lead outside it, under another
  * top-level project, and they see it through that one, so only the ranges
  * of the scope's own projects name it: its root's range, or the

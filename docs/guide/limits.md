@@ -47,7 +47,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Limit | Value | Past the limit |
 | --- | --- | --- |
 | Active subtasks per task | 100 active subtasks | The parent task already has 100 active subtasks, the most a task can have. Archive or remove one of them first. |
-| Subtasks a move to another project carries | 200 subtasks, archived ones included | This task has more than 200 subtasks, archived ones included, and a move to another project carries them all. Restore some archived subtasks and remove them from this task first, or move it within its project. |
+| Subtasks a move to another sub-project carries | 200 subtasks, archived ones included | This task has more than 200 subtasks, archived ones included, and a move to another sub-project carries them all. Restore some archived subtasks and remove them from this task first. |
 | Attachments per task | 100 attachments, description images included | This task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
 | Links per task | 100 links | This task already has 100 links, the most a task can have. Remove one of its links first. |
 | Labels per task | 20 labels | This task already has 20 labels, the most a task can have. Remove one first. |

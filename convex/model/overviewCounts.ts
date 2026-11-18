@@ -38,8 +38,9 @@
  * (startRegroup, overviewRegroup.ts) that reconcile its tasks and their
  * parents, and every top-level project's counts in the organization answer
  * `counting` until they end (countsReady). A parent shares its subtask's
- * top-level project (model/issues.ts parentChainCheck), except where older
- * code stored the subtask in another one, which nothing records, so the
+ * sub-project (model/issues.ts parentChainCheck), except where older code
+ * stored the subtask in another sub-project or another top-level project,
+ * which nothing records, so the
  * change cannot tell which other top-level projects it reaches without
  * reading every task of its projects.
  *

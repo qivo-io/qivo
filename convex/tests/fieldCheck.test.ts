@@ -429,10 +429,13 @@ describe('who changed it', () => {
   it('names nobody to a member who may not see the row that wrote the value', async () => {
     const fx = await setup()
     const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const hiddenParent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: sibling.id })
+    const hiddenParent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    // the row of the attach names a parent the guest cannot see
+    // the row of the attach names a parent the guest cannot see: the parent
+    // is in a sub-project the guest cannot see since, a family stored
+    // across sub-projects, as only data from before the subtask rule is
     await edit(fx, fx.user, row.id, { parent_id: hiddenParent.id })
+    await fx.t.run((ctx) => ctx.db.patch(hiddenParent._id, { project_id: sibling.id }))
     const stale = { parent_id: null, has_hidden_parent: false }
     const guest = await fieldChanged(edit(fx, fx.guest, row.id, { parent_id: null }, stale))
     expect(guest.changes).toEqual([

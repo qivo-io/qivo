@@ -19,7 +19,7 @@ import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { issueKey } from '../lib/taskRefs'
 import { getProject } from '../machine/rest'
-import { moveSubtreeHolderRule, REVIEWER_RULE } from '../model/issues'
+import { moveSubtreeHolderRule, REVIEWER_RULE, SUBTASK_PROJECT_RULE } from '../model/issues'
 import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import { boardFor, NO_FILTERS, projectScope } from './board.setup'
@@ -733,11 +733,13 @@ describe('writes that change which subtasks count', () => {
     const fx = await setup()
     const parent = await task(fx, { remaining_hours: 4, remaining_set_at: NOW })
     await plantSubscription(fx.t, { issue_id: parent.id, profile_id: fx.user.id })
+    // a family stored across sub-projects before the subtask rule, whose
+    // subtask moves into its parent's sub-project
     const child = await task(fx, { project_id: fx.shelf.id, parent_id: parent.id })
     await as(fx.t, fx.admin).mutation(api.issues.move, {
       org_id: fx.org.id,
       id: child.id,
-      project_id: fx.sub2.id,
+      project_id: fx.sub.id,
     })
     expect((await row(fx, parent.id))?.remaining_hours).toBeUndefined()
     expect(await details(fx, parent.id, fx.user)).toEqual([
@@ -746,8 +748,8 @@ describe('writes that change which subtasks count', () => {
     // a REST update that names the parent the task already has
     const second = await task(fx, { remaining_hours: 4, remaining_set_at: NOW })
     const kid = await task(fx, { project_id: fx.shelf.id, parent_id: second.id })
-    await restPatch(fx, kid.id, { project: fx.sub2.id, parent: second.id })
-    expect(await row(fx, kid.id)).toMatchObject({ project_id: fx.sub2.id, parent_id: second.id })
+    await restPatch(fx, kid.id, { project: fx.sub.id, parent: second.id })
+    expect(await row(fx, kid.id)).toMatchObject({ project_id: fx.sub.id, parent_id: second.id })
     expect((await row(fx, second.id))?.remaining_hours).toBeUndefined()
   })
 
@@ -787,9 +789,10 @@ describe('writes that change which subtasks count', () => {
         level: 'user',
       })
     })
-    // its only subtask is archived away, so its reviewer is its own
+    // its only subtask is archived, so its reviewer is its own, also once
+    // the move carries that subtask along
     const reviewed = await task(fx, { status: 'review', reviewer_id: rita.id })
-    await task(fx, { project_id: fx.shelf.id, parent_id: reviewed.id })
+    await task(fx, { parent_id: reviewed.id, archived_at: NOW })
     await expectRefusal(
       as(fx.t, fx.admin).mutation(api.issues.move, {
         org_id: fx.org.id,
@@ -830,7 +833,7 @@ describe('writes that change which subtasks count', () => {
       'rule',
     )
     expect(refusal.data.message).toBe(
-      moveSubtreeHolderRule([{ name: rita.name, tasks: [issueKey(kid.num)], hidden: 0 }]),
+      moveSubtreeHolderRule([{ name: rita.name, tasks: [issueKey(kid.num)] }]),
     )
     expect(await row(fx, kid.id)).toMatchObject({ project_id: fx.sub.id, reviewer_id: rita.id })
   })
@@ -838,6 +841,7 @@ describe('writes that change which subtasks count', () => {
   it('restoring or attaching a task in an archived project leaves a parent in an active one its own hours', async () => {
     const fx = await setup()
     const own = { remaining_hours: 3, remaining_set_at: NOW }
+    // families stored across sub-projects before the subtask rule
     const parent = await task(fx, { title: 'Parent', ...own })
     const child = await task(fx, {
       project_id: fx.shelf.id,
@@ -857,15 +861,18 @@ describe('writes that change which subtasks count', () => {
     expect((await row(fx, parent.id))?.remaining_hours).toBe(3)
     expect(await row(fx, archivedParent.id)).toMatchObject({ remaining_hours: 3 })
     expect((await row(fx, archivedParent.id))?.archived_at).toBeUndefined()
-    // an attach inside the archived sub-project leaves the parent's hours too
+    // no attach makes such a family again
     const loose = await task(fx, { project_id: fx.shelf.id })
     const second = await task(fx, { title: 'Second', ...own })
-    await as(fx.t, fx.admin).mutation(api.issues.update, {
-      org_id: fx.org.id,
-      id: loose.id,
-      patch: { parent_id: second.id },
-    })
-    expect(await row(fx, loose.id)).toMatchObject({ parent_id: second.id })
+    const refused = await expectRefusal(
+      as(fx.t, fx.admin).mutation(api.issues.update, {
+        org_id: fx.org.id,
+        id: loose.id,
+        patch: { parent_id: second.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(SUBTASK_PROJECT_RULE)
     expect((await row(fx, second.id))?.remaining_hours).toBe(3)
   })
 })

@@ -14,6 +14,7 @@ import {
   GROUP_DATES_RULE,
   GROUP_PAUSE_RULE,
   type IssuePatch,
+  SUBTASK_PROJECT_RULE,
 } from '../model/issues'
 import {
   as,
@@ -315,14 +316,25 @@ describe('issue scheduling and hierarchy', () => {
       ),
     )
     expect(named).toEqual([])
-    // an editable parent in another sub-project attaches as before
+    // an editable parent in another sub-project is refused by the subtask
+    // rule, and one in the task's own sub-project attaches
     const sibling = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const across = await expectRefusal(
+      asGuest.mutation(api.issues.update, {
+        org_id: f.org.id,
+        id: mine.id,
+        patch: { parent_id: sibling.id },
+      }),
+      'rule',
+    )
+    expect(across.data.message).toBe(SUBTASK_PROJECT_RULE)
+    const beside = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await asGuest.mutation(api.issues.update, {
       org_id: f.org.id,
       id: mine.id,
-      patch: { parent_id: sibling.id },
+      patch: { parent_id: beside.id },
     })
-    expect((await issueRow(t, mine.id)).parent_id).toBe(sibling.id)
+    expect((await issueRow(t, mine.id)).parent_id).toBe(beside.id)
   })
 
   it('week pair: both-or-neither and ordering, on create and on a half-clear', async () => {

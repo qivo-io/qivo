@@ -20,6 +20,7 @@ import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   CountMoves,
+  countsKept,
   countsOfRows,
   countsReady,
   countWhole,
@@ -94,6 +95,33 @@ function writers(t: T, f: OrgFixture) {
       as(t, f.user).mutation(api.issues.move, { org_id, id, project_id }),
     archive: (id: string) => as(t, f.user).mutation(api.issues.archive, { org_id, id }),
     unarchive: (id: string) => as(t, f.user).mutation(api.issues.unarchive, { org_id, id }),
+    /* A subtask of `parentId` in `projectId`, another sub-project than its
+     * parent's, as a family stored before the rule that a subtask stays in
+     * its parent's sub-project: created under the parent in the parent's
+     * sub-project, then moved in place with what such a family's counts
+     * would hold, which a write reconciles (model/overviewCounts.ts
+     * reconcileTask). No write makes such a family any more. */
+    older: async (parentId: string, projectId: string, extra: Record<string, unknown> = {}) => {
+      const parent = await t.run((ctx) => byId(ctx, 'issues', parentId))
+      if (parent === null) throw new Error('missing parent')
+      const kid = await as(t, f.user).mutation(api.issues.create, {
+        org_id,
+        id: uuid(),
+        project_id: parent.project_id,
+        title: 'Counted task',
+        parent_id: parentId,
+        ...extra,
+      })
+      await t.run(async (ctx) => {
+        const row = await byId(ctx, 'issues', kid.id)
+        if (row === null) throw new Error('missing subtask')
+        await ctx.db.patch(row._id, { project_id: projectId })
+        if (!(await countsKept(ctx.db, org_id))) return
+        await reconcileTask(ctx.db, org_id, row.id, await ctx.db.get(row._id), 'read')
+        await reconcileTask(ctx.db, org_id, parentId, await byId(ctx, 'issues', parentId), 'read')
+      })
+      return { ...kid, project_id: projectId }
+    },
   }
 }
 
@@ -123,14 +151,13 @@ describe('overview counts', () => {
 
     // a subtask in the sibling sub-project makes its parent a group, and
     // its moves, detach and archive take it back and forth
-    const kid = await w.create({
-      project_id: f.sub2.id,
-      parent_id: a.id,
+    const kid = await w.older(a.id, f.sub2.id, {
       status: 'todo',
       assignee_id: f.user.id,
       remaining_hours: 2,
     })
     await exact('a subtask in the sibling sub-project')
+    // a move into its parent's sub-project brings the family together
     await w.move(kid.id, f.sub.id)
     await exact('the subtask moved')
     await w.update(kid.id, { parent_id: null })
@@ -322,7 +349,7 @@ describe('overview counts', () => {
       assignee_id: f.user.id,
       remaining_hours: 2,
     })
-    await w.create({ project_id: f.sub2.id, parent_id: parent.id, assignee_id: f.user.id })
+    await w.older(parent.id, f.sub2.id, { assignee_id: f.user.id })
     await expectCountsExact(t, org_id, 'a subtask in the sibling')
 
     // the sibling archived: until the step runs its project's counts are
@@ -360,7 +387,7 @@ describe('overview counts', () => {
     Object.assign(OVERVIEW_REGROUP, { tasks: 2, room: 0 })
     for (let n = 0; n < 5; n++) {
       const p = await w.create({ assignee_id: f.admin.id, remaining_hours: n })
-      await w.create({ project_id: f.sub2.id, parent_id: p.id })
+      await w.older(p.id, f.sub2.id)
     }
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     await runSteps(t)
@@ -501,7 +528,7 @@ describe('overview counts', () => {
           remaining_hours: n / 2,
         }),
       )
-    const kid = await w.create({ project_id: f.sub2.id, parent_id: tasks[0].id })
+    const kid = await w.older(tasks[0].id, f.sub2.id)
     await t.run(async (ctx) => {
       for (let shard = 0; shard < 2; shard++)
         await ctx.db.insert('overview_counts', {
@@ -531,7 +558,7 @@ describe('overview counts', () => {
     await w.update(tasks[4].id, { status: 'done' })
     await w.update(tasks[5].id, { assignee_id: f.admin.id })
     await w.archive(kid.id)
-    await w.create({ project_id: f.sub.id, parent_id: tasks[5].id })
+    await w.create({ project_id: f.sub2.id, parent_id: tasks[5].id })
     await w.archive(tasks[3].id)
     await deleteTask(t, f, tasks[2].id)
     await runSteps(t)
@@ -671,7 +698,7 @@ describe('overview counts', () => {
     const w = writers(t, f)
     for (let n = 0; n < 6; n++) {
       const p = await w.create({ assignee_id: f.user.id, remaining_hours: n })
-      await w.create({ project_id: f.sub2.id, parent_id: p.id })
+      await w.older(p.id, f.sub2.id)
     }
     await t.run((ctx) =>
       ctx.db.insert('org_removals', {
@@ -721,7 +748,7 @@ describe('overview counts', () => {
       assignee_id: f.user.id,
       remaining_hours: 2,
     })
-    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await w.older(parent.id, f.sub2.id)
     await expectCountsExact(t, org_id, 'a group through a sibling subtask')
     await deleteProject(t, f, f.sub2.id)
     // the move read the parent again in its own transaction; the readers
@@ -736,7 +763,7 @@ describe('overview counts', () => {
     // the regroup's step reads that sibling
     const sibling = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
     const other = await w.create({ status: 'todo', remaining_hours: 1 })
-    const kid = await w.create({ project_id: sibling.id, parent_id: other.id })
+    const kid = await w.older(other.id, sibling.id)
     await expectCountsExact(t, org_id, 'a second group')
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: sibling.id })
     await w.archive(kid.id)
@@ -754,7 +781,7 @@ describe('overview counts', () => {
     const w = writers(t, f)
     // written while the organization is not counted
     const parent = await w.create({ status: 'todo', remaining_hours: 1 })
-    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await w.older(parent.id, f.sub2.id)
     await w.create({ status: 'progress' })
     Object.assign(COUNT_PAGE, { tasks: 1 })
     const step = (at?: CountPosition) => countStep(t, org_id, at)
@@ -825,7 +852,7 @@ describe('overview counts', () => {
     // three parents in FW, each with its only subtask in PCB
     for (let n = 0; n < 3; n++) {
       const parent = await w.create({ status: 'todo' })
-      await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+      await w.older(parent.id, f.sub2.id)
     }
     await expectCountsExact(t, org_id, 'groups through PCB')
     Object.assign(OVERVIEW_REGROUP, { tasks: 1 })
@@ -889,7 +916,7 @@ describe('overview counts', () => {
     await stamp(t, org_id)
     const w = writers(t, f)
     const parent = await w.create({ status: 'todo' })
-    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await w.older(parent.id, f.sub2.id)
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     const row = await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))
     if (row?.scheduled_id === undefined) throw new Error('no regroup step')

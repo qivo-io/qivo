@@ -1,10 +1,11 @@
-/* A subtask stays in its parent task's top-level project, in any of its
- * sub-projects. Creating a subtask and setting a parent are refused across
- * top-level projects on every surface, a move to another top-level project
- * carries the task's subtasks along, and a subtask moved there must leave
- * its parent in the same change. withOrg's TBED holds FW (f.sub) and PCB
- * (f.sub2); the scene adds a second top-level project, Cloud, with the
- * Backend and Frontend sub-projects. */
+/* A subtask stays in its parent task's own sub-project (owner, 18 November
+ * 2026). Creating a subtask and setting a parent are refused across
+ * sub-projects on every surface, a move to any other sub-project carries the
+ * task's subtasks along, and a subtask that moves must leave its parent in
+ * the same change. A family stored before the rule may span sub-projects;
+ * its rows are planted. withOrg's TBED holds FW (f.sub) and PCB (f.sub2);
+ * the scene adds a second top-level project, Cloud, with the Backend and
+ * Frontend sub-projects. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -101,6 +102,13 @@ const restPatch = (t: T, f: OrgFixture, ref: string, body: Record<string, unknow
     body: JSON.stringify(body),
   })
 
+const mcpUpdate = (
+  t: T,
+  f: OrgFixture,
+  args: { ref: string; project?: string; parent?: string | null },
+) =>
+  t.mutation(internal.machine.mcp.updateIssue, { callerId: f.agent.id, access: 'write', ...args })
+
 /* A task.updated subscription, so each task event lands in the outbox. */
 async function subscribeToUpdates(t: T, f: OrgFixture): Promise<void> {
   const owner = await t.run(async (ctx): Promise<EventOwner> => {
@@ -139,145 +147,161 @@ const updateEvents = (t: T): Promise<string[]> =>
   )
 
 describe('parentChainCheck', () => {
-  it('names a parent in another top-level project and accepts a sibling sub-project', async () => {
+  it('accepts a parent in the same sub-project and names one in any other', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = { id: uuid(), org_id: f.org.id }
-    const [elsewhere, sibling] = await t.run(async (ctx) => [
-      await parentChainCheck(ctx, { ...child, project_id: backend.id }, parent.id, f.admin),
+    const [own, sibling, elsewhere] = await t.run(async (ctx) => [
+      await parentChainCheck(ctx, { ...child, project_id: f.sub.id }, parent.id, f.admin),
       await parentChainCheck(ctx, { ...child, project_id: f.sub2.id }, parent.id, f.admin),
+      await parentChainCheck(ctx, { ...child, project_id: backend.id }, parent.id, f.admin),
     ])
+    expect(own).toMatchObject({ ok: true, parent: { id: parent.id } })
+    expect(sibling).toEqual({ ok: false, problem: 'other_project' })
     expect(elsewhere).toEqual({ ok: false, problem: 'other_project' })
-    expect(sibling).toMatchObject({ ok: true, parent: { id: parent.id } })
   })
 })
 
 describe('creating a subtask and setting a parent', () => {
-  it('accepts a parent in another sub-project of the same top-level project', async () => {
+  it('accepts a parent in the same sub-project', async () => {
     const t = newT()
     const { f } = await scene(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const made = await as(t, f.admin).mutation(api.issues.create, {
       org_id: f.org.id,
       id: uuid(),
-      project_id: f.sub2.id,
-      title: 'Sibling subtask',
+      project_id: f.sub.id,
+      title: 'Own subtask',
       parent_id: parent.id,
     })
-    expect(made).toMatchObject({ project_id: f.sub2.id, parent_id: parent.id })
-    const loose = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    expect(made).toMatchObject({ project_id: f.sub.id, parent_id: parent.id })
+    const loose = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await appUpdate(t, f, loose.id, { parent_id: parent.id })
     expect((await row(t, loose.id)).parent_id).toBe(parent.id)
   })
 
-  it('refuses a parent in another top-level project on every surface', async () => {
+  it('refuses a parent in a sibling sub-project or another top-level project on every surface', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const before = await allIssues(t, f.org.id)
-    const attempts = [
-      as(t, f.admin).mutation(api.issues.create, {
-        org_id: f.org.id,
-        id: uuid(),
-        project_id: backend.id,
-        title: 'Across',
-        parent_id: parent.id,
-      }),
-      t.mutation(internal.machine.rest.createIssue, {
-        callerId: f.agent.id,
-        access: 'write',
-        keyName: 'drive',
-        body: JSON.stringify({ project: backend.id, title: 'Across', parent: parent.id }),
-      }),
-      t.mutation(internal.machine.mcp.createIssue, {
-        callerId: f.agent.id,
-        access: 'write',
-        project: backend.id,
-        title: 'Across',
-        parent: parent.id,
-      }),
+    const loose = [
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }),
+      await plantIssue(t, { org_id: f.org.id, project_id: backend.id }),
     ]
-    for (const attempt of attempts) {
-      const r = await expectRefusal(attempt, 'rule')
-      expect(r.data.message).toBe(SUBTASK_PROJECT_RULE)
+    const before = await allIssues(t, f.org.id)
+    for (const [i, project] of [f.sub2.id, backend.id].entries()) {
+      const attempts = [
+        as(t, f.admin).mutation(api.issues.create, {
+          org_id: f.org.id,
+          id: uuid(),
+          project_id: project,
+          title: 'Across',
+          parent_id: parent.id,
+        }),
+        t.mutation(internal.machine.rest.createIssue, {
+          callerId: f.agent.id,
+          access: 'write',
+          keyName: 'drive',
+          body: JSON.stringify({ project, title: 'Across', parent: parent.id }),
+        }),
+        t.mutation(internal.machine.mcp.createIssue, {
+          callerId: f.agent.id,
+          access: 'write',
+          project,
+          title: 'Across',
+          parent: parent.id,
+        }),
+        // setting the parent of a task that is already there
+        appUpdate(t, f, loose[i].id, { parent_id: parent.id }),
+        restPatch(t, f, loose[i].id, { parent: parent.id }),
+        mcpUpdate(t, f, { ref: loose[i].id, parent: parent.id }),
+      ]
+      for (const attempt of attempts) {
+        const r = await expectRefusal(attempt, 'rule')
+        expect(r.data.message).toBe(SUBTASK_PROJECT_RULE)
+      }
     }
-    // setting the parent of a task that is already there
-    const loose = await plantIssue(t, { org_id: f.org.id, project_id: backend.id })
-    const r1 = await expectRefusal(appUpdate(t, f, loose.id, { parent_id: parent.id }), 'rule')
-    const r2 = await expectRefusal(restPatch(t, f, loose.id, { parent: parent.id }), 'rule')
-    for (const r of [r1, r2]) expect(r.data.message).toBe(SUBTASK_PROJECT_RULE)
-    expect(await allIssues(t, f.org.id)).toEqual(
-      [...before, loose].sort((a, b) => a.id.localeCompare(b.id)),
-    )
+    expect(await allIssues(t, f.org.id)).toEqual(before)
   })
 })
 
-describe('moving a task within its top-level project', () => {
-  it('keeps the parent and leaves the subtasks where they are', async () => {
+describe('moving a task with subtasks', () => {
+  it('carries its subtasks to a sibling sub-project, archived ones included, in one message and one activity row', async () => {
     const t = newT()
     const { f } = await scene(t)
-    const base = { org_id: f.org.id, project_id: f.sub.id }
-    const epic = await plantIssue(t, base)
-    const group = await plantIssue(t, { ...base, parent_id: epic.id })
-    const leaf = await plantIssue(t, { ...base, parent_id: group.id })
-    await appMove(t, f, group.id, f.sub2.id)
-    expect(await row(t, group.id)).toMatchObject({ project_id: f.sub2.id, parent_id: epic.id })
-    expect(await row(t, leaf.id)).toEqual(leaf)
-    expect(await row(t, epic.id)).toEqual(epic)
-  })
-})
-
-describe('moving a task to another top-level project', () => {
-  it('carries its subtasks, archived ones included, in one message and one activity row', async () => {
-    const t = newT()
-    const { f, backend } = await scene(t)
     await subscribeToUpdates(t, f)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const root = await plantIssue(t, { ...base, title: 'Release' })
-    const kid = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: root.id })
+    const kid = await plantIssue(t, { ...base, parent_id: root.id })
     const sibling = await plantIssue(t, { ...base, parent_id: root.id })
     const old = await plantIssue(t, { ...base, parent_id: root.id, archived_at: ARCHIVED })
     for (const id of [root.id, kid.id])
       await plantSubscription(t, { issue_id: id, profile_id: f.user.id })
-    await appMove(t, f, root.id, backend.id)
+    await appMove(t, f, root.id, f.sub2.id)
     for (const moved of [root, kid, sibling, old]) {
       const after = await row(t, moved.id)
-      expect(after.project_id).toBe(backend.id)
+      expect(after.project_id).toBe(f.sub2.id)
       expect([after.parent_id, after.archived_at]).toEqual([moved.parent_id, moved.archived_at])
     }
     // the task's followers hear about the move once; the subtasks' do not
     expect((await messagesFor(t, f.user.id, root.id)).map((m) => m.detail)).toEqual([
-      'Moved to Backend',
+      'Moved to Board rev',
     ])
     expect(await messagesFor(t, f.user.id, kid.id)).toEqual([])
     const rows = (await activityFor(t, f.org.id)).filter((e) => e.verb === 'moved')
     expect(rows.map((e) => [e.target_id, e.detail])).toEqual([
-      [root.id, 'to the Backend sub-project (from Firmware) with its subtasks'],
+      [root.id, 'to the Board rev sub-project (from Firmware) with its subtasks'],
     ])
     // one task.updated for the task and one for each subtask that moved
     expect((await updateEvents(t)).sort()).toEqual([root.id, kid.id, sibling.id, old.id].sort())
   })
 
-  it('refuses a subtask that would stay under its parent, unless it leaves it in the app', async () => {
+  it('refuses by name when a subtask it carries has an assignee who cannot edit the destination', async () => {
+    const t = newT()
+    const { f } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    // Nia edits Firmware alone
+    const nia = await plantSeat(t, { org_id: f.org.id, name: 'Nia None' })
+    await grant(t, f.sub.id, nia.id)
+    const root = await plantIssue(t, base)
+    const kid = await plantIssue(t, { ...base, parent_id: root.id, assignee_id: nia.id })
+    const before = await allIssues(t, f.org.id)
+    const r = await expectRefusal(appMove(t, f, root.id, f.sub2.id), 'rule')
+    expect(r.data.message).toBe(
+      `Nia None (on ${issueKey(kid.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
+    )
+    expect(await allIssues(t, f.org.id)).toEqual(before)
+    // once she edits the destination too, the move carries her subtask there
+    await grant(t, f.sub2.id, nia.id)
+    await appMove(t, f, root.id, f.sub2.id)
+    expect(await row(t, kid.id)).toMatchObject({
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      assignee_id: nia.id,
+    })
+  })
+
+  it('refuses a subtask that would leave its parent behind, unless it leaves it in the app', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, base)
     const child = await plantIssue(t, { ...base, parent_id: parent.id })
     const before = await allIssues(t, f.org.id)
-    for (const detach of [undefined, false]) {
-      const r = await expectRefusal(appMove(t, f, child.id, backend.id, detach), 'rule')
-      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
-    }
+    for (const project of [f.sub2.id, backend.id])
+      for (const detach of [undefined, false]) {
+        const r = await expectRefusal(appMove(t, f, child.id, project, detach), 'rule')
+        expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
+      }
     expect(await allIssues(t, f.org.id)).toEqual(before)
-    await appMove(t, f, child.id, backend.id, true)
+    await appMove(t, f, child.id, f.sub2.id, true)
     const after = await row(t, child.id)
-    expect(after.project_id).toBe(backend.id)
+    expect(after.project_id).toBe(f.sub2.id)
     expect(after.parent_id).toBeUndefined()
     const rows = (await activityFor(t, f.org.id)).filter((e) => e.target_id === child.id)
     expect(rows.map((e) => [e.verb, e.detail])).toEqual([
-      ['moved', 'to the Backend sub-project (from Firmware)'],
+      ['moved', 'to the Board rev sub-project (from Firmware)'],
       ['detached', `from QN-${parent.num}`],
     ])
     // only the detach names a task
@@ -291,21 +315,16 @@ describe('moving a task to another top-level project', () => {
     const parent = await plantIssue(t, base)
     const first = await plantIssue(t, { ...base, parent_id: parent.id })
     const second = await plantIssue(t, { ...base, parent_id: parent.id })
-    const elsewhere = await plantIssue(t, { ...base, project_id: f.sub2.id })
-    const there = await plantIssue(t, { ...base, project_id: backend.id })
-    const mcpUpdate = (args: { ref: string; project: string; parent?: string | null }) =>
-      t.mutation(internal.machine.mcp.updateIssue, {
-        callerId: f.agent.id,
-        access: 'write',
-        ...args,
-      })
+    const elsewhere = await plantIssue(t, { ...base, project_id: backend.id })
+    const there = await plantIssue(t, { ...base, project_id: f.sub2.id })
     const before = await allIssues(t, f.org.id)
     const refusals = [
-      restPatch(t, f, first.id, { project: backend.id }),
-      restPatch(t, f, first.id, { project: backend.id, parent: parent.id }),
-      mcpUpdate({ ref: second.id, project: backend.id }),
-      // a new parent that is not in the destination's top-level project
-      mcpUpdate({ ref: second.id, project: backend.id, parent: elsewhere.id }),
+      restPatch(t, f, first.id, { project: f.sub2.id }),
+      // the parent it has stays in Firmware
+      restPatch(t, f, first.id, { project: f.sub2.id, parent: parent.id }),
+      mcpUpdate(t, f, { ref: second.id, project: f.sub2.id }),
+      // a new parent that is not in the destination
+      mcpUpdate(t, f, { ref: second.id, project: f.sub2.id, parent: elsewhere.id }),
     ]
     for (const attempt of refusals) {
       const r = await expectRefusal(attempt, 'rule')
@@ -313,15 +332,15 @@ describe('moving a task to another top-level project', () => {
     }
     // a top-level task moved there with a parent elsewhere meets the parent rule
     const r = await expectRefusal(
-      mcpUpdate({ ref: elsewhere.id, project: backend.id, parent: parent.id }),
+      mcpUpdate(t, f, { ref: elsewhere.id, project: f.sub2.id, parent: parent.id }),
       'rule',
     )
     expect(r.data.message).toBe(SUBTASK_PROJECT_RULE)
     expect(await allIssues(t, f.org.id)).toEqual(before)
-    const patched = await restPatch(t, f, first.id, { project: backend.id, parent: null })
-    expect(patched).toMatchObject({ project_id: backend.id, parent_id: null })
-    await mcpUpdate({ ref: second.id, project: backend.id, parent: there.id })
-    expect(await row(t, second.id)).toMatchObject({ project_id: backend.id, parent_id: there.id })
+    const patched = await restPatch(t, f, first.id, { project: f.sub2.id, parent: null })
+    expect(patched).toMatchObject({ project_id: f.sub2.id, parent_id: null })
+    await mcpUpdate(t, f, { ref: second.id, project: f.sub2.id, parent: there.id })
+    expect(await row(t, second.id)).toMatchObject({ project_id: f.sub2.id, parent_id: there.id })
   })
 
   it('refuses subtasks the caller cannot edit, people who cannot work there and too many', async () => {
@@ -332,6 +351,7 @@ describe('moving a task to another top-level project', () => {
     const editor = await plantSeat(t, { org_id: f.org.id, auth_user_id: `editor_${uuid()}` })
     for (const project of [f.sub.id, backend.id]) await grant(t, project, editor.id)
     const root = await plantIssue(t, base)
+    // a subtask stored in PCB before the rule, which the editor cannot edit
     const inPcb = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: root.id })
     const asEditor = as(t, editor).mutation(api.issues.move, {
       org_id: f.org.id,
@@ -349,51 +369,45 @@ describe('moving a task to another top-level project', () => {
     expect(Object.keys(docs)).toHaveLength(2)
     for (const [path, text] of Object.entries(docs))
       expect(text.replace(/\s+/g, ' '), path).toContain(MOVE_SUBTREE_EDIT_RULE)
-    // the guest edits TBED but nothing in Cloud
     await t.run(async (ctx) => {
-      await ctx.db.patch(inPcb._id, { assignee_id: f.guest.id })
+      await ctx.db.delete(inPcb._id)
     })
-    const named = moveSubtreeHolderRule([
-      { name: f.guest.name, tasks: [issueKey(inPcb.num)], hidden: 0 },
-    ])
+    // the guest edits TBED but nothing in Cloud
+    const kid = await plantIssue(t, { ...base, parent_id: root.id, assignee_id: f.guest.id })
+    const named = moveSubtreeHolderRule([{ name: f.guest.name, tasks: [issueKey(kid.num)] }])
     expect(named).toBe(
-      `${f.guest.name} (on ${issueKey(inPcb.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
+      `${f.guest.name} (on ${issueKey(kid.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
     )
     const holder = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(holder.data.message).toBe(named)
     // a subtask has no subtasks of its own, so its reviewer is checked too
     await t.run(async (ctx) => {
-      await ctx.db.patch(inPcb._id, { assignee_id: undefined, reviewer_id: f.guest.id })
+      await ctx.db.patch(kid._id, { assignee_id: undefined, reviewer_id: f.guest.id })
     })
     const reviewer = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(reviewer.data.message).toBe(named)
     // two people who cannot work there are named together, each once
     const nia = await plantSeat(t, { org_id: f.org.id, name: 'Nia None' })
     await t.run(async (ctx) => {
-      await ctx.db.patch(inPcb._id, { assignee_id: nia.id })
+      await ctx.db.patch(kid._id, { assignee_id: nia.id })
     })
     const both = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(both.data.message).toBe(
-      `Nia None (on ${issueKey(inPcb.num)}) and ${f.guest.name} (on ${issueKey(inPcb.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
+      `Nia None (on ${issueKey(kid.num)}) and ${f.guest.name} (on ${issueKey(kid.num)}) cannot edit that sub-project; give them Edit access there, or change who works on that subtask first`,
     )
     await t.run(async (ctx) => {
-      await ctx.db.patch(inPcb._id, { assignee_id: undefined })
+      await ctx.db.patch(kid._id, { assignee_id: undefined })
     })
     // with no room left once someone blocks the move, the walk stops there
     // and says that others may block it too, where a move with room names
     // the next subtask's person as well
-    const second = await plantIssue(t, {
-      ...base,
-      project_id: f.sub2.id,
-      parent_id: root.id,
-      assignee_id: nia.id,
-    })
+    const second = await plantIssue(t, { ...base, parent_id: root.id, assignee_id: nia.id })
     const saved = { ...SUBTREE_ROOM }
     Object.assign(SUBTREE_ROOM, { room: 0 })
     try {
       const stopped = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
       expect(stopped.data.message).toBe(
-        `${f.guest.name} (on ${issueKey(inPcb.num)}) and possibly others cannot edit that sub-project; give them Edit access there, or change who works on those subtasks first`,
+        `${f.guest.name} (on ${issueKey(kid.num)}) and possibly others cannot edit that sub-project; give them Edit access there, or change who works on those subtasks first`,
       )
     } finally {
       Object.assign(SUBTREE_ROOM, saved)
@@ -401,18 +415,16 @@ describe('moving a task to another top-level project', () => {
     const whole = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(whole.data.message).toBe(
       moveSubtreeHolderRule([
-        { name: f.guest.name, tasks: [issueKey(inPcb.num)], hidden: 0 },
-        { name: 'Nia None', tasks: [issueKey(second.num)], hidden: 0 },
+        { name: f.guest.name, tasks: [issueKey(kid.num)] },
+        { name: 'Nia None', tasks: [issueKey(second.num)] },
       ]),
     )
     await t.run(async (ctx) => {
       await ctx.db.delete(second._id)
-    })
-    await t.run(async (ctx) => {
-      await ctx.db.patch(inPcb._id, { reviewer_id: undefined })
+      await ctx.db.patch(kid._id, { reviewer_id: undefined })
     })
     // more than the limit at one level, archived subtasks included: with
-    // inPcb, LIMITS.subtasks.max active ones and the rest archived
+    // kid, LIMITS.subtasks.max active ones and the rest archived
     await t.run(async (ctx) => {
       for (let i = 0; i < LIMITS.moveSubtree.max; i++) {
         await ctx.db.insert('issues', {
@@ -432,8 +444,11 @@ describe('moving a task to another top-level project', () => {
       }
     })
     const crowded = await allIssues(t, f.org.id)
-    const tooMany = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(tooMany.data.message).toBe(LIMITS.moveSubtree.refusal)
+    // every move of the task carries them, to a sibling sub-project too
+    for (const project of [backend.id, f.sub2.id]) {
+      const tooMany = await expectRefusal(appMove(t, f, root.id, project), 'rule')
+      expect(tooMany.data.message).toBe(LIMITS.moveSubtree.refusal)
+    }
     expect(await allIssues(t, f.org.id)).toEqual(crowded)
     // at the limit the move lands, every subtask with it
     const last = crowded.find((i) => i.title === `Step ${LIMITS.moveSubtree.max - 1}`)!
@@ -452,8 +467,8 @@ describe('moving a task to another top-level project', () => {
   })
 })
 
-describe("older subtasks outside their parent's top-level project", () => {
-  it('stay editable and move within their project and into their parent one', async () => {
+describe("older subtasks outside their parent's sub-project", () => {
+  it("stay editable, and move only into their parent's sub-project or away from their parent", async () => {
     const t = newT()
     const { f, backend, frontend } = await scene(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -462,21 +477,51 @@ describe("older subtasks outside their parent's top-level project", () => {
       project_id: backend.id,
       parent_id: parent.id,
     })
-    await appUpdate(t, f, stray.id, { title: 'Still editable', status: 'progress' })
-    await appMove(t, f, stray.id, frontend.id)
-    expect(await row(t, stray.id)).toMatchObject({ project_id: frontend.id, parent_id: parent.id })
-    await appMove(t, f, stray.id, f.sub2.id)
-    expect(await row(t, stray.id)).toMatchObject({
+    const sibling = await plantIssue(t, {
+      org_id: f.org.id,
       project_id: f.sub2.id,
       parent_id: parent.id,
-      title: 'Still editable',
-      status: 'progress',
     })
+    await appUpdate(t, f, stray.id, { title: 'Still editable', status: 'progress' })
+    // another sub-project than the parent's, in its own top-level project or not
+    for (const [task, project] of [
+      [stray, frontend.id],
+      [sibling, backend.id],
+    ] as const) {
+      const r = await expectRefusal(appMove(t, f, task.id, project), 'rule')
+      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
+    }
+    // into the parent's sub-project, which brings the family together
+    for (const task of [stray, sibling]) {
+      await appMove(t, f, task.id, f.sub.id)
+      expect(await row(t, task.id)).toMatchObject({ project_id: f.sub.id, parent_id: parent.id })
+    }
+    expect(await row(t, stray.id)).toMatchObject({ title: 'Still editable', status: 'progress' })
+  })
+
+  it('come along when their parent moves, wherever they are', async () => {
+    const t = newT()
+    const { f, backend, frontend } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const parent = await plantIssue(t, base)
+    const inPcb = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: parent.id })
+    const inBackend = await plantIssue(t, { ...base, project_id: backend.id, parent_id: parent.id })
+    const archived = await plantIssue(t, {
+      ...base,
+      project_id: frontend.id,
+      parent_id: parent.id,
+      archived_at: ARCHIVED,
+    })
+    await appMove(t, f, parent.id, f.sub2.id)
+    for (const task of [parent, inPcb, inBackend, archived])
+      expect((await row(t, task.id)).project_id).toBe(f.sub2.id)
+    // the subtask already there is left as it was
+    expect(await row(t, inPcb.id)).toEqual(inPcb)
   })
 })
 
 describe('an older subtask whose parent the mover cannot see', () => {
-  it('moves to another top-level project only when it leaves the parent, wherever the parent is', async () => {
+  it('moves only when it leaves the parent, wherever the parent is', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
     // Vault's Open sub-project is the agent's; its Closed one is not, so the
@@ -554,14 +599,13 @@ describe('a move, archive or parent change too large for one transaction', () =>
       // each walk of the root's three subtasks checks once before its range
       // and once after each row, so the third row finds the transaction full
       for (const [change, sentence] of [
-        // a move within TBED, for the subtasks' holders
+        // a move to a sibling sub-project, before each task it patches
         [() => appMove(t, f, root.id, f.sub2.id), MOVE_TOO_LARGE],
         // a new subtask, for the count of the parent's subtasks
         [() => appUpdate(t, f, newKid.id, { parent_id: root.id }), SUBTREE_TOO_LARGE],
         // an archive, for the subtasks it archives with the task
         [() => archive(root.id), SUBTREE_TOO_LARGE],
-        // a move to another top-level project checks before each subtask it
-        // carries
+        // a move to another top-level project, the same way
         [() => appMove(t, f, carrier.id, backend.id), MOVE_TOO_LARGE],
       ] as const) {
         const r = await expectRefusal(change(), 'rule')
@@ -570,9 +614,9 @@ describe('a move, archive or parent change too large for one transaction', () =>
     })
     expect(await allIssues(t, f.org.id)).toEqual(before)
     // with room to spare, all four pass
-    await appMove(t, f, root.id, f.sub2.id)
     await appUpdate(t, f, newKid.id, { parent_id: root.id })
     expect((await row(t, newKid.id)).parent_id).toBe(root.id)
+    await appMove(t, f, root.id, f.sub2.id)
     await appMove(t, f, carrier.id, backend.id)
     for (const moved of [carrier, carried]) {
       expect((await row(t, moved.id)).project_id).toBe(backend.id)
@@ -585,7 +629,10 @@ describe('a move, archive or parent change too large for one transaction', () =>
       (i) => i.id === root.id || i.parent_id === root.id,
     )
     expect(family).toHaveLength(5)
-    for (const task of family) expect(task.archived_at).toBeDefined()
+    for (const task of family) {
+      expect(task.archived_at).toBeDefined()
+      expect(task.project_id).toBe(f.sub2.id)
+    }
   })
 
   it('reads only the active subtasks under a real limit, however many are archived', async () => {
@@ -595,7 +642,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
     const t = newT({ transactionLimits: { documentsRead: 400 } })
     const { f, backend } = await scene(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < LIMITS.subtasks.max + 1000; i++)
         await ctx.db.insert('issues', {
@@ -626,18 +673,18 @@ describe('a move, archive or parent change too large for one transaction', () =>
               .collect()
           ).length,
       )
-    // a move within TBED reads the active subtasks for their holders
-    await appMove(t, f, root.id, f.sub2.id)
-    expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
     // a new subtask counts no further than the limit, and is refused there
     const p = await expectRefusal(appUpdate(t, f, other.id, { parent_id: root.id }), 'rule')
     expect(p.data.message).toBe(LIMITS.subtasks.refusal)
     expect(await row(t, other.id)).toEqual(other)
-    // a move to another top-level project, which carries the archived ones
-    // too, stops reading past LIMITS.moveSubtree.max
-    const m = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(m.data.message).toBe(LIMITS.moveSubtree.refusal)
-    expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
+    // a move, which carries the archived ones too, stops reading past
+    // LIMITS.moveSubtree.max, to a sibling sub-project as to another
+    // top-level project
+    for (const project of [f.sub2.id, backend.id]) {
+      const m = await expectRefusal(appMove(t, f, root.id, project), 'rule')
+      expect(m.data.message).toBe(LIMITS.moveSubtree.refusal)
+    }
+    expect((await row(t, root.id)).project_id).toBe(f.sub.id)
     // the archive takes the active subtasks with it
     expect(await activeUnder()).toBe(LIMITS.subtasks.max)
     await as(t, f.admin).mutation(api.issues.archive, {
@@ -649,7 +696,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
     expect(await activeUnder()).toBe(0)
   })
 
-  it('checks sooner after a subtask with a long description', async () => {
+  it("checks sooner after a subtask with a long description, as it counts the parent's subtasks", async () => {
     const t = newT({ transactionLimits: true })
     const { f } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
@@ -659,26 +706,20 @@ describe('a move, archive or parent change too large for one transaction', () =>
     // its task row holds the text, as a rollback to the second release
     // writes it
     await plantCopiedIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(7000) })
-    const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
-    const another = await plantIssue(t, base)
+    const [one, two] = [await plantIssue(t, base), await plantIssue(t, base)]
     // no check by count, only by size: 6 KiB is past the long subtask's
     // task row alone, and short of the short one's
     await crowdedRoom(
       1e9,
       async () => {
-        // a move walks the subtasks for their holders
-        const r = await expectRefusal(appMove(t, f, long.id, f.sub2.id), 'rule')
-        expect(r.data.message).toBe(MOVE_TOO_LARGE)
-        await appMove(t, f, short.id, f.sub2.id)
+        const r = await expectRefusal(appUpdate(t, f, one.id, { parent_id: long.id }), 'rule')
+        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        await appUpdate(t, f, two.id, { parent_id: short.id })
       },
       6 * 1024,
     )
-    // a new subtask's count of the parent's subtasks is checked the same way
-    // (below, under a real read limit)
-    await appUpdate(t, f, another.id, { parent_id: short.id })
-    expect((await row(t, another.id)).parent_id).toBe(short.id)
-    expect((await row(t, other.id)).parent_id).toBeUndefined()
-    expect((await row(t, long.id)).project_id).toBe(f.sub.id)
+    expect((await row(t, one.id)).parent_id).toBeUndefined()
+    expect((await row(t, two.id)).parent_id).toBe(short.id)
   })
 })
 
@@ -717,7 +758,7 @@ describe('a parent whose subtasks are too large to count', () => {
 })
 
 describe('asking whether a move carries subtasks', () => {
-  it('counts archived subtasks, which the app cannot see, and nothing else', async () => {
+  it('counts archived subtasks, which the app cannot see, for any other sub-project', async () => {
     const t = newT()
     const { f, backend, frontend } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
@@ -726,14 +767,14 @@ describe('asking whether a move carries subtasks', () => {
     // the only subtask is archived
     const root = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: root.id, archived_at: ARCHIVED })
-    expect(await ask(root.id, backend.id)).toBe(true)
-    // within the top-level project nothing moves along
-    expect(await ask(root.id, f.sub2.id)).toBe(false)
-    // no subtasks, or only an older one already in the destination's project
+    for (const project of [backend.id, f.sub2.id]) expect(await ask(root.id, project)).toBe(true)
+    // no subtasks, or only an older one already in the destination
     const lone = await plantIssue(t, base)
     const settledRoot = await plantIssue(t, base)
     await plantIssue(t, { ...base, project_id: frontend.id, parent_id: settledRoot.id })
-    for (const id of [lone.id, settledRoot.id]) expect(await ask(id, backend.id)).toBe(false)
+    expect(await ask(lone.id, backend.id)).toBe(false)
+    expect(await ask(settledRoot.id, frontend.id)).toBe(false)
+    expect(await ask(settledRoot.id, backend.id)).toBe(true)
     // the guest edits TBED but not Cloud, so the answer tells them nothing
     expect(await ask(root.id, backend.id, f.guest)).toBe(false)
   })

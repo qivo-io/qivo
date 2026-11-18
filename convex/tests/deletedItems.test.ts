@@ -573,7 +573,7 @@ describe("the Deleted items page's fields on each stored task", () => {
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // under another top-level project, for a subtask from before the
-    // subtask rule (model/issues.ts sameTopLevel)
+    // subtask rule (model/issues.ts sameSubProject)
     const elsewhere = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     const root = await plantIssue(t, {
       org_id,

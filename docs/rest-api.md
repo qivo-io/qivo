@@ -376,7 +376,7 @@ into the range.
 | Limit | Value | Past the limit |
 | --- | --- | --- |
 | Active subtasks per task | 100 active subtasks | the parent task already has 100 active subtasks, the most a task can have. Archive or remove one of them first. |
-| Subtasks a move to another project carries | 200 subtasks, archived ones included | this task has more than 200 subtasks, archived ones included, and a move to another project carries them all. Restore some archived subtasks and remove them from this task first, or move it within its project. |
+| Subtasks a move to another sub-project carries | 200 subtasks, archived ones included | this task has more than 200 subtasks, archived ones included, and a move to another sub-project carries them all. Restore some archived subtasks and remove them from this task first. |
 | Attachments per task | 100 attachments, description images included | this task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
 | Links per task | 100 links | this task already has 100 links, the most a task can have. Remove one of its links first. |
 | Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
@@ -645,8 +645,8 @@ finds an object; read its `projects` and follow `next_cursor` until it is
   top-level project in its sub-projects you can read that are not archived,
   and `done` counts those that are Done. A task with an active subtask in
   any project that is not archived counts as a group and is left out, as in
-  the app, also when that subtask is hidden from you or sits in another
-  top-level project. `percent` is rounded, and `0` when `total` is `0`. Its
+  the app, also when that subtask, from older versions of Qivo, is in a
+  sub-project hidden from you or in another top-level project. `percent` is rounded, and `0` when `total` is `0`. Its
   `status` is `ok`. Qivo keeps these counts as tasks change, so they hold
   whatever the project's size. For a moment after any project of the
   organization is archived, restored, moved to Deleted items or brought
@@ -1690,10 +1690,11 @@ access on the parent's project, because the parent becomes a group and
 loses its own remaining hours. A parent the caller cannot read answers `400` with `parent
 task not found`; one it can read but not edit answers `403` with `no write
 access to the parent task`. The new task's project still comes from
-`project` and `sub_project`. A subtask may live in another sub-project than
-its parent, but not in another top-level project. Such a parent answers
-`400` with `a subtask must be in the same project as its parent task, in any
-of its sub-projects`. A task has one level of subtasks, at most 100 active
+`project` and `sub_project`, and a subtask lives in its parent's own
+sub-project, so name that sub-project. A parent in any other sub-project
+answers `400` with `a subtask must be in the same sub-project as its parent
+task`. Older versions of Qivo let a subtask sit in another sub-project than
+its parent; such tasks keep their parent until they move or leave it. A task has one level of subtasks, at most 100 active
 ones; archived subtasks do not count. A parent that is a subtask itself
 answers `400` with `the parent task is a subtask, and a subtask cannot have
 subtasks of its own`, and a parent with 100 active subtasks `400` with `the
@@ -1764,24 +1765,18 @@ caller needs Edit access on both the current and the destination sub-project;
 a readable destination it cannot write answers `403`, and one it cannot read
 answers like an unknown one. An archived destination is a `400`. The task's
 assignee, and the reviewer of a task without subtasks, must be able to work in
-the destination, and everyone assigned to or reviewing its active subtasks
-must be able to see it; otherwise the PATCH is a `400` and nothing changes.
-The `400` for the people on its subtasks names them, such as `Aisha Rahman
-(on QN-14, QN-15) and Leo Martins (on a subtask you cannot see) have no
-access to that sub-project; give them access there, or change who works on
-those subtasks first`. It names up to five people with up to three subtasks
-each and counts the rest, and a subtask in a project you cannot see is
-counted without its ID. A
+the destination; otherwise the PATCH is a `400` and nothing changes. A
 group's own reviewer who cannot work there is cleared. An `assignee_id` or
 `reviewer_id` in the same PATCH, `null` included, takes the place of the
 current one in this check, and a new one is checked against the destination.
 A moved task keeps its number, its labels, its links and its subtasks.
 Naming the current sub-project changes nothing.
 
-A move within the task's top-level project moves only the task. A move to a
-sub-project of another top-level project also moves every subtask,
-archived ones included, that is not already in that top-level
-project. The caller needs Edit access on each of their projects (otherwise
+A subtask stays in its parent's own sub-project, and tasks live only in
+sub-projects, so every move also moves every subtask, archived ones
+included, that is not already in the destination, to another sub-project of
+the same project as to another project. The caller needs Edit access on each
+of their projects (otherwise
 `400`, `moving this task would move a subtask in a project you cannot edit;
 someone who can edit that project can move it`). A subtask in a project that is being
 moved to Deleted items refuses the move for everyone, admins included, with
@@ -1789,18 +1784,23 @@ moved to Deleted items refuses the move for everyone, admins included, with
 when that finishes`. The assignee and the reviewer of
 each active subtask must be able to work in the
 destination. Otherwise the PATCH is a `400` that names them with their
-subtasks, such as `Aisha Rahman (on QN-14) cannot edit that sub-project;
-give them Edit access there, or change who works on that subtask first`,
-up to five people with up to three subtasks each, the rest counted. A group's own reviewer who cannot
-is cleared. A task with more than 200 subtasks, archived ones included,
-cannot move to another top-level project (otherwise `400`, `this task has
+subtasks, such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16)
+cannot edit that sub-project; give them Edit access there, or change who
+works on those subtasks first`, up to five people with up to three subtasks
+each, the rest counted. A subtask of a task from older versions of Qivo can
+already be in the destination; whoever is assigned to or reviewing it must
+be able to see the destination, otherwise the `400` names them the same way,
+such as `Aisha Rahman (on QN-14) has no access to that sub-project; give
+them access there, or change who works on that subtask first`. A task with
+more than 200 subtasks, archived ones included,
+cannot move (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
-project carries them all. Restore some archived subtasks and remove them
-from this task first, or move it within its project.`). A move whose task and subtasks are
+sub-project carries them all. Restore some archived subtasks and remove them
+from this task first.`). A
+move whose task and subtasks are
 too large for one request is a `400` with `this task and its subtasks are
-too large to move to another project in one request; remove some subtasks
-from this task first, restoring archived ones to do so, or move it within
-its project`. A task with 200 subtasks, archived ones included, moves in
+too large to move in one request; remove some subtasks from this task
+first, restoring archived ones to do so`. A task with 200 subtasks, archived ones included, moves in
 one request when their titles and descriptions are of ordinary length.
 Long descriptions on many of them can make a smaller family too large. A
 REST move reaches that point sooner than the same move through MCP or the
@@ -1810,14 +1810,15 @@ large for one request, such as an archive, a new parent or a restore, is a
 `400` with `this task and its subtasks are too large to change in one
 request; detach some subtasks first`. Each moved subtask
 sends `task.updated`, but only the task itself gets an activity row and an
-inbox message. A subtask moved to
-another top-level project must leave its parent in the same request, with
-`parent: null` or a new parent in the destination's top-level project;
-otherwise the PATCH is a `400` with `a subtask stays in its parent task's
-project; to move it to another project, detach it from its parent in the
-same change`. A parent in a project you cannot see counts as being in the
-subtask's own top-level project, so moving such a subtask to another
-top-level project also needs `parent: null` or a new parent there.
+inbox message. A subtask that moves must leave its parent in the same
+request, with `parent: null` or a new parent in the destination; otherwise
+the PATCH is a `400` with `a subtask stays in its parent task's sub-project;
+to move it to another sub-project, detach it from its parent in the same
+change`. A subtask from older versions of Qivo in another sub-project than
+its parent may also move into its parent's sub-project. A parent in a
+project you cannot see counts as being in the subtask's own sub-project, so
+moving such a subtask also needs `parent: null` or a new parent in the
+destination.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST, against
@@ -1953,8 +1954,9 @@ so it never gets one.
 PATCH also accepts `archived: true | false` (0070 — the Active/Archived axis,
 orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
-Both reach subtasks and parents in other projects, so the caller needs User
-access on every project the cascade changes. Otherwise the PATCH is a `400`
+Older versions of Qivo let a subtask sit in another project than its parent,
+so both can reach other projects, and the caller needs User access on every
+project the cascade changes. Otherwise the PATCH is a `400`
 with `archiving this task would change a subtask in a project you cannot edit;
 someone who can edit that project can archive it` or `restoring this task
 would change a parent task in a project you cannot edit; someone who can

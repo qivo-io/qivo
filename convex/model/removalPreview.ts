@@ -626,8 +626,9 @@ async function effectOf(
  * task's project (model/projectAccess.ts assertCanTakeOver, model/issues.ts
  * assertAssigneeRule), and hold a level on the project of every task above
  * a lost subtask (the chain check of model/issues.ts updateIssueCore,
- * ASSIGNEE_SIGHT_RULE and REVIEWER_SIGHT_RULE). A subtask may sit in
- * another sub-project of its parent's top-level project, so the second
+ * ASSIGNEE_SIGHT_RULE and REVIEWER_SIGHT_RULE). A subtask stored before
+ * the rule that keeps it in its parent's sub-project may sit in another
+ * sub-project, so the second
  * check can leave out someone the first lets in, and it answers about a
  * project the caller may not see, which the write's refusal answers for
  * one chosen person too. The chain check also counts the sight a

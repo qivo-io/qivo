@@ -480,8 +480,8 @@ describe('task history visibility', () => {
 
   it('a row that names another task reaches only people who can access that task where it is now', async () => {
     const subOnly = await seatOn(f.sub.id)
-    // a subtask stays in its parent's top-level project, so the parent the
-    // seats cannot see is in a third sub-project of Testbed
+    // a subtask stays in its parent's sub-project, so the rows that name a
+    // task the seats cannot see are links to a third sub-project of Testbed
     const bothSubs = await seatOn(f.sub.id)
     await t.run((ctx) =>
       ctx.db.insert('project_access', {
@@ -498,10 +498,9 @@ describe('task history visibility', () => {
     const task = (project_id: string) => plantIssue(t, { org_id: f.org.id, project_id })
     const child = await task(f.sub.id)
     const sameParent = await task(f.sub.id)
-    const siblingParent = await task(f.sub2.id)
-    const hiddenParent = await task(hiddenSub.id)
     const linkSame = await task(f.sub.id)
     const linkSibling = await task(f.sub2.id)
+    const linkHidden = await task(hiddenSub.id)
     const writer = as(t, f.user) // leads f.meta
     const reparent = (parent_id: string | null) =>
       writer.mutation(api.issues.update, { org_id: f.org.id, id: child.id, patch: { parent_id } })
@@ -514,25 +513,17 @@ describe('task history visibility', () => {
         type: 'relates',
       })
     await reparent(sameParent.id)
-    await reparent(siblingParent.id)
-    await reparent(hiddenParent.id)
     await reparent(null)
     await link(linkSame.id)
     await link(linkSibling.id)
-    // back under the hidden parent, then away to a visible one: the row
-    // still names the hidden parent it came from
-    await reparent(hiddenParent.id)
-    await reparent(sameParent.id)
+    await link(linkHidden.id)
     const key = (i: Doc<'issues'>) => `QN-${i.num}`
     const rowsAbout = {
       A: `moved under ${key(sameParent)}`,
-      B: `moved under ${key(siblingParent)} (from ${key(sameParent)})`,
-      C: `moved under ${key(hiddenParent)} (from ${key(siblingParent)})`,
-      D: `detached from ${key(hiddenParent)}`,
+      B: `detached from ${key(sameParent)}`,
       E: `linked (relates to ${key(linkSame)})`,
       F: `linked (relates to ${key(linkSibling)})`,
-      G: `moved under ${key(hiddenParent)}`,
-      H: `moved under ${key(sameParent)} (from ${key(hiddenParent)})`,
+      G: `linked (relates to ${key(linkHidden)})`,
     }
     const seenRows = async (p: Doc<'profiles'>) => {
       const mine = new Set((await historyOf(p, child.id)).map((a) => `${a.verb} ${a.detail}`))
@@ -540,22 +531,22 @@ describe('task history visibility', () => {
         .filter(([, row]) => mine.has(row))
         .map(([name]) => name)
     }
-    const all = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+    const all = ['A', 'B', 'E', 'F', 'G']
     for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(all)
     expect(await seenRows(bothSubs)).toEqual(['A', 'B', 'E', 'F'])
-    expect(await seenRows(subOnly)).toEqual(['A', 'E'])
+    expect(await seenRows(subOnly)).toEqual(['A', 'B', 'E'])
     // the named task's CURRENT project decides
     await writer.mutation(api.issues.move, {
       org_id: f.org.id,
       id: linkSibling.id,
       project_id: f.sub.id,
     })
-    expect(await seenRows(subOnly)).toEqual(['A', 'E', 'F'])
+    expect(await seenRows(subOnly)).toEqual(['A', 'B', 'E', 'F'])
     // a deleted named task, or wording no writer produces, reaches no
     // client, an admin's included
     await writer.mutation(api.issues.deleteDeep, { org_id: f.org.id, id: sameParent.id })
     expect(await seenRows(bothSubs)).toEqual(['E', 'F'])
-    for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(['C', 'D', 'E', 'F', 'G'])
+    for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(['E', 'F', 'G'])
   })
 
   it('a relation row reaches the people who can read every task its list names', async () => {

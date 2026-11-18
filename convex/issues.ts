@@ -376,9 +376,9 @@ export const createLinked = orgMutation({
  * checks its project. A destination the caller cannot write answers 'no
  * write access to this project' whether it is missing, hidden, read-only or
  * in another organization, so no guard describes it. `detach_parent` also
- * clears the task's parent, which a subtask moving to another top-level
- * project needs (the Move window says so); a move to another top-level
- * project carries the task's subtasks along. */
+ * clears the task's parent, which a subtask needs to move, since it stays
+ * in its parent's sub-project (the Move window says so); a move carries
+ * the task's subtasks along. */
 export const move = orgMutation({
   args: {
     id: v.string(),

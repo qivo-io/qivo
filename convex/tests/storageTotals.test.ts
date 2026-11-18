@@ -9,8 +9,8 @@
  *      dropped description image, a purge step by step, a restore that
  *      drops a subtask whose project is gone, an organization's deletion
  *      and deleteOrgDeep. A dropped image counts until its reap.
- *   3. A move between projects moves the bytes, with every subtask a move
- *      to another top-level project carries. A move to Deleted items and a
+ *   3. A move between projects moves the bytes, with every subtask the
+ *      move carries. A move to Deleted items and a
  *      restore change nothing, step by step. A rename renames the
  *      project's row.
  *   4. A task or project id stays taken while its totals row holds it, in
@@ -754,7 +754,7 @@ describe('deleting files', () => {
 })
 
 describe('moving tasks', () => {
-  it("moves a task's bytes to its new project, with the subtasks a move to another top-level project carries", async () => {
+  it("moves a task's bytes to its new project, with the subtasks every move carries", async () => {
     const { t, f } = await setup()
     // led by the admin, who moves tasks there
     const cloud = await plantProject(t, {
@@ -790,7 +790,7 @@ describe('moving tasks', () => {
     }
     expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 195, files: 62 })
 
-    // within its top-level project the task moves alone
+    // to a sibling sub-project its subtasks come along
     await as(t, f.admin).mutation(api.issues.move, {
       org_id: f.org.id,
       id: root.id,
@@ -799,12 +799,12 @@ describe('moving tasks', () => {
     expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 195, files: 62 })
     expect((await rowsOf(t, f.org.id)).projects).toEqual(
       [
-        { project_id: f.sub.id, name: 'Firmware', bytes: 95, files: 61 },
-        { project_id: f.sub2.id, name: 'Board rev', bytes: 100, files: 1 },
+        { project_id: f.sub.id, name: 'Firmware', bytes: 5, files: 1 },
+        { project_id: f.sub2.id, name: 'Board rev', bytes: 190, files: 61 },
       ].sort((x, y) => x.project_id.localeCompare(y.project_id)),
     )
 
-    // to another top-level project its subtasks come along
+    // and to another top-level project
     await as(t, f.admin).mutation(api.issues.move, {
       org_id: f.org.id,
       id: root.id,
