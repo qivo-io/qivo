@@ -306,7 +306,11 @@ can still see the parent's project. An archived subtask does not count
 toward the 100. Otherwise, or when the parent's
 subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
-from the archive under a full parent does. Work that was archived when it was
+from the archive under a full parent does. A family saved before the rule
+that a subtask stays in its parent's sub-project can be split by a restore,
+because a subtask in another sub-project than its parent's returns as a
+top-level task, also when it was deleted together with that parent or
+with its project. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A restored project shows to its leads and the people and teams it is
 shared with at the same moment, and to organization admins in Settings ›

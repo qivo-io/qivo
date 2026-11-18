@@ -352,7 +352,8 @@ subtasks that are archived or that you cannot see. Links, unlike subtasks,
 can join tasks of any sub-project or project. A task saved before this
 rule can have a subtask in another sub-project of its project, or, saved
 before that, in another project. Such a subtask keeps its parent until it
-moves or leaves it, and the subtask picker shows it first among the
+moves or leaves it, or until a restore from Deleted items brings it back
+as a top-level task. The subtask picker shows it first among the
 current subtasks you can edit. The current parent shows first so you can
 remove it.
 Everyone assigned to or reviewing the task or its subtasks must be able to
