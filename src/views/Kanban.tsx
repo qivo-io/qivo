@@ -1069,8 +1069,7 @@ function KanbanBoard({
      or null when the cell refuses it. The browser does not judge the
      person a patch names, a new assignee or reviewer. The write checks
      them, and its refusal takes the painted drop back with the server's
-     sentence (P.updateIssue). The store's chain check still refuses,
-     before the paint, a holder who cannot see a task above that it holds. */
+     sentence (P.updateIssue). */
   const dropPatchFor = (id: string, statusId: string, { projectIds, owner }: CardDropTarget) => {
     const task = P.anyTask(id)
     if (!task || P.isGroup(task) || !P.canWrite(task.project)) return null

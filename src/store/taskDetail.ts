@@ -9,8 +9,8 @@
    its labels in the task index's order, the caller's follow, and its links
    and files while the window's sections read them for the same task. The
    answer's parent and subtasks shape the same way (shapeShortTask), for
-   the store's checks before a write, such as a new holder's sight of the
-   parent and what a move takes along (answerFamily).
+   the store's checks before a write, such as what a move, an archive or a
+   delete takes along (answerFamily).
 
    A group's dates and Done state follow the workspace's rules
    (lib/issueGroups.ts groupSpan and isIssueDone) over the answer's subtask

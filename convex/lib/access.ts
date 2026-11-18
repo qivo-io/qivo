@@ -1375,7 +1375,8 @@ export async function projectLevelsForOrg(
  * accessFlags), through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
  * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
- * Deleted items' steps with SIGHT_READ and the step budget. */
+ * Deleted items' steps with the step budget, which counts the ranges of
+ * every read a step makes (model/deletedItems.ts TRASH_BUDGET). */
 export async function accessRowsOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1751,10 +1752,9 @@ export async function canBeAssignedFor(
  * adds no budget or refusal of its own; a caller stops it with its guard.
  * A profile of another organization answers false, and a missing parent or
  * a cycle throws not found, as rootMetaOf does. Team sync's mention
- * recipients (model/pickers.ts recipientRule) and the task owner pickers'
- * sight of the tasks above a subtask (ownerRule) ask it; notice fan-outs
- * ask projectSightForProfiles, which reads what it needs for each follower
- * it is asked about. */
+ * recipients (model/pickers.ts recipientRule), the mention popup and the
+ * task followers list ask it; notice fan-outs ask projectSightForProfiles,
+ * which reads what it needs for each follower it is asked about. */
 export async function canSeeProjectFor(
   ctx: QueryCtx,
   project: Doc<'projects'>,

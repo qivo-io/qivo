@@ -59,7 +59,7 @@ import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { indexAfter, type ListBatch, listBatch, mergeNamed, namedCeiling } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
-import { ancestorsFrom, NO_WRITE_ACCESS } from './issues'
+import { NO_WRITE_ACCESS } from './issues'
 import { nameKeysReady, profileRoleIndex } from './nameKeys'
 import {
   type AccessSubject,
@@ -149,11 +149,8 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * the task update's holder rules). The write checks a new holder's standing
  * on each task's project (assertCanTakeOver) before the caller's Edit
  * access, so a new holder who fails that is refused with their own
- * sentence, marked HELD_TASKS_REFUSED. It checks whether the new holder can
- * see a subtask's parent only after the caller's Edit access
- * (updateIssueCore), so where the caller loses Edit the write refuses with
- * the caller's sentence first. The write runs those checks after it deletes
- * the removed rows, in the same transaction, and the preview writes
+ * sentence, marked HELD_TASKS_REFUSED. The write runs those checks after it
+ * deletes the removed rows, in the same transaction, and the preview writes
  * nothing, so it reads the new holder's access with those rows left out
  * (takerRule). Asked with `reassign_to`, it answers
  * `reassign.holder_eligible`, whether that person could take every task
@@ -361,14 +358,13 @@ const bySortOrder = (a: Doc<'projects'>, b: Doc<'projects'>) =>
   a.sort_order - b.sort_order || a.id.localeCompare(b.id)
 
 /* A removal read as the preview answers it, with what a check of a new
- * holder reads further: the holdings the write would settle, the rows it
- * takes away and the organization's projects findLost read. */
+ * holder reads further: the holdings the write would settle and the rows
+ * it takes away. */
 type Taken = {
   state: 'taken'
   effect: RemovalEffect
   lost: readonly Lost[]
   without: RemovedAccess
-  orgProjects: readonly Doc<'projects'>[]
 }
 
 /* The preview's reads of removing `change`, as `me`, and the effect they
@@ -389,8 +385,7 @@ async function removalOf(
   const readOnly = block?.message ?? null
   const plan = await planOf(ctx, me, change)
   if (plan === 'unavailable') return { state: 'unavailable' }
-  if (plan === null)
-    return { state: 'taken', effect: nothing(readOnly), lost: [], without: {}, orgProjects: [] }
+  if (plan === null) return { state: 'taken', effect: nothing(readOnly), lost: [], without: {} }
   const read = await withinRoom(() => effectOf(ctx, me, plan, readOnly))
   // an answer too large to send says so, as one too large to work out does
   if (!fits(read.effect)) return { state: 'too_large', message: REMOVAL_FULL }
@@ -403,8 +398,8 @@ async function removalOf(
  * answer also says whether that person could take every task the removal
  * takes out of sight once the access is gone (reassign.holder_eligible,
  * takerRule), false for an unknown or foreign id and while Reassign is
- * refused. That check reads the levels of the lost tasks' projects and of
- * the projects of the tasks above them, in the same room as the rest.
+ * refused. That check reads the levels of the lost tasks' projects, in the
+ * same room as the rest.
  */
 export async function previewRemoval(
   ctx: QueryCtx,
@@ -447,16 +442,15 @@ function nothing(readOnly: string | null): RemovalEffect {
   }
 }
 
-/* The effect of `plan`, with the holdings it found and the organization's
- * projects findLost read. `readOnly`, the read-only block's sentence,
- * refuses both choices. It checks the room before each read of its own, so
- * call it within withinRoom. */
+/* The effect of `plan`, with the holdings it found. `readOnly`, the
+ * read-only block's sentence, refuses both choices. It checks the room
+ * before each read of its own, so call it within withinRoom. */
 async function effectOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   plan: Plan,
   readOnly: string | null,
-): Promise<{ effect: RemovalEffect; lost: Lost[]; orgProjects: Doc<'projects'>[] }> {
+): Promise<{ effect: RemovalEffect; lost: Lost[] }> {
   // what a 'leave' write of a grant or member removal reads to find who
   // loses sight; it settles nothing
   const found = await findLost(ctx, {
@@ -611,7 +605,7 @@ async function effectOf(
     },
     reassign: { allowed: reassignRefusal === null, refusal: reassignRefusal, permitted: edits },
   }
-  return { effect, lost, orgProjects: found.orgProjects }
+  return { effect, lost }
 }
 
 /**
@@ -622,33 +616,19 @@ async function effectOf(
  * organization, an agent with the user role included), are not one of the
  * people who lose sight of those tasks (row 329 of the design
  * specification; the level rule below leaves them out anyway, since each
- * lost sight of a listed task's project), hold User or Lead on every lost
- * task's project (model/projectAccess.ts assertCanTakeOver, model/issues.ts
- * assertAssigneeRule), and hold a level on the project of every task above
- * a lost subtask (the chain check of model/issues.ts updateIssueCore,
- * ASSIGNEE_SIGHT_RULE and REVIEWER_SIGHT_RULE). A subtask stored before
- * the rule that keeps it in its parent's sub-project may sit in another
- * sub-project, so the second
- * check can leave out someone the first lets in, and it answers about a
- * project the caller may not see, which the write's refusal answers for
- * one chosen person too. The chain check also counts the sight a
- * top-level project gives, read-only, to whoever reaches one of its
- * sub-projects (lib/access.ts canSeeProject), and so does this rule. That
- * sight decides only for a parent task that older code stored directly
- * under a top-level project.
+ * lost sight of a listed task's project), and hold User or Lead on every
+ * lost task's project (model/projectAccess.ts assertCanTakeOver,
+ * model/issues.ts assertAssigneeRule).
  *
- * It reads the tasks above each lost subtask (model/issues.ts
- * ancestorsFrom) and, once for each of those projects and each lost task's
- * project, every profile's level from the project's side (lib/access.ts
- * projectLevelsForProfiles with the removal's rows left out), and for such
- * a parent's top-level project also each of its sub-projects, live and
- * archived. It shares the reads of a top-level project and of a team
- * between them, then answers each person without a read. Levels come only
- * from levelsFrom, so an organization admin takes a task only with
- * ordinary access to its project, like anyone else. It checks the room
- * before each read, so call it within
- * withinRoom. With nothing lost it lets in everyone who can hold work, as
- * the write then checks no new holder.
+ * It reads, once for each lost task's project, every profile's level from
+ * the project's side (lib/access.ts projectLevelsForProfiles with the
+ * removal's rows left out), sharing the reads of a top-level project and of
+ * a team between them, then answers each person without a read. Levels
+ * come only from levelsFrom, so an organization admin takes a task only
+ * with ordinary access to its project, like anyone else. It checks the
+ * room before each read, so call it within withinRoom. With nothing lost it
+ * lets in everyone who can hold work, as the write then checks no new
+ * holder.
  */
 async function takerRule(
   ctx: QueryCtx,
@@ -657,59 +637,18 @@ async function takerRule(
 ): Promise<(profile: Doc<'profiles'>) => boolean> {
   const { lost, without } = taken
   const losing = new Set(taken.effect.people.map((p) => p.id))
-  const projects = new Map(taken.orgProjects.map((p) => [p.id, p]))
   const guard = () => assertRoom(ctx)
-  // the projects whose Edit the write asks of a new holder, and those whose
-  // sight its chain check asks
+  // the projects whose Edit the write asks of a new holder
   const edit = new Map(lost.map((h) => [h.project.id, h.project]))
-  const sight = new Set<string>()
-  const parents = new Set<string>()
-  for (const h of lost) {
-    const parent = h.task.parent_id
-    if (parent === undefined || parents.has(parent)) continue
-    parents.add(parent)
-    for (const above of await ancestorsFrom(ctx, parent, guard)) sight.add(above.project_id)
-  }
   const reads = projectLevelReads()
-  const levels = new Map<string, (profile: Doc<'profiles'>) => AccessLevel | null>()
-  for (const id of new Set([...edit.keys(), ...sight])) {
-    const project = edit.get(id) ?? projects.get(id)
-    // the chain check lets nobody in for a task above whose project is gone
-    levels.set(
-      id,
-      project === undefined
-        ? () => null
-        : await projectLevelsForProfiles(ctx, project, { without, guard, reads }),
-    )
-  }
-  const levelOn = (id: string, profile: Doc<'profiles'>) => levels.get(id)?.(profile) ?? null
-  // A top-level project shows, read-only, to whoever holds a level on one
-  // of its sub-projects of their own or leads it (lib/access.ts
-  // projectLevel's navigation), and the chain check counts that. A level on
-  // a sub-project that comes from the top-level project itself shows it
-  // anyway, so any level on a sub-project counts here.
-  const reaches = new Map<string, ((profile: Doc<'profiles'>) => AccessLevel | null)[]>()
-  for (const id of sight) {
-    const top = projects.get(id)
-    if (top === undefined || top.parent_id !== undefined) continue
-    const subs: ((profile: Doc<'profiles'>) => AccessLevel | null)[] = []
-    for (const sub of taken.orgProjects) {
-      if (sub.parent_id !== id) continue
-      subs.push(
-        levels.get(sub.id) ?? (await projectLevelsForProfiles(ctx, sub, { without, guard, reads })),
-      )
-    }
-    reaches.set(id, subs)
-  }
-  const sees = (id: string, profile: Doc<'profiles'>) =>
-    levelOn(id, profile) !== null ||
-    (reaches.get(id) ?? []).some((level) => level(profile) !== null)
+  const levels: ((profile: Doc<'profiles'>) => AccessLevel | null)[] = []
+  for (const project of edit.values())
+    levels.push(await projectLevelsForProfiles(ctx, project, { without, guard, reads }))
   return (profile) =>
     profile.org_id === me.org_id &&
     canHoldWork(profile) &&
     !losing.has(profile.id) &&
-    [...edit.keys()].every((id) => levelRank(levelOn(id, profile)) >= levelRank('user')) &&
-    [...sight].every((id) => sees(id, profile))
+    levels.every((levelOn) => levelRank(levelOn(profile)) >= levelRank('user'))
 }
 
 /** What the Reassign picker answers: one of Unanswered as the preview
@@ -779,11 +718,9 @@ function changeScope(change: RemovalChange): string[] {
  * With nothing left to remove no task is lost and the write checks no new
  * holder, so the batch lists everyone who can hold work.
  *
- * Its reads are the preview's (accessRemovals.preview), the tasks above
- * the lost subtasks, a few index ranges for each of their projects and
- * the lost tasks' projects (and for a parent stored directly under a
- * top-level project, each of its sub-projects) and each team that shares
- * them, and the profiles it walks. tests/reassignChoices.test.ts ("the
+ * Its reads are the preview's (accessRemovals.preview), a few index ranges
+ * for each lost task's project and each team that shares it, and the
+ * profiles it walks. tests/reassignChoices.test.ts ("the
  * Reassign picker inside Convex's limits") reads a first batch, a search's
  * batch and the preview at the design size under Convex's transaction
  * limits, one figure at a time, checks that each answers whole and logs

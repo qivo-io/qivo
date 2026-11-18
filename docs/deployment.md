@@ -2535,6 +2535,38 @@ that release on, never return the backend to v0.1.169, which would bring
 both back; roll forward instead. The release changes no table, field or
 index and has no backfill and no release step.
 
+From the release after v0.1.170, the server no longer asks who can see a
+subtask's parent. A subtask is in its parent's own sub-project, and a new
+assignee or reviewer needs Edit there, so they see the parent already. The
+removed checks refused a write only for a family stored across
+sub-projects before v0.1.169, for someone left on a task after an access
+removal with `on_held_tasks: 'leave'`, who sees neither task, and in a
+restore from Deleted items whose check of the task's people ran past its
+read budget. Those writes now pass: a new parent through `issues.update`,
+REST `PATCH /v1/tasks/{ref}` or MCP `update_task` while someone left on
+the task holds it, a new assignee or reviewer of an older subtask whose
+parent is in another sub-project, a move of a task with such a subtask
+already in the destination, and a restore that keeps the task's parent
+outside the restored item. No write
+sends `a subtask can only be assigned to someone who can see every task
+above it`, `a subtask can only be reviewed by someone who can see every
+task above it`, `everyone assigned to or reviewing this task or its
+subtasks must be able to see the new parent and every task above it` or a
+move's `… has no access to that sub-project; give them access there, …`
+any more. `pickers.taskOwners` and `pickers.canOwn` for an assignee or
+reviewer, `accessRemovals.reassignChoices` and the
+`reassign.holder_eligible` of `accessRemovals.preview` let in everyone
+who can hold work with Edit on each task's project, as the writes do, and
+no longer read the tasks above a subtask. Every follower of a task that
+gets a parent reads `Attached under` with the parent's key, also when a
+background step tells them after the parent moved or went to Deleted
+items. An
+earlier app against this backend, such as a tab left open, works as
+before, because it shows each refusal as the server sends it. The release
+changes no table, field, index, public function, argument or answer field,
+and has no backfill and no release step. Returning the backend to v0.1.170
+brings the checks back and is safe.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

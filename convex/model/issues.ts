@@ -131,7 +131,6 @@ import {
   newNotifyPreload,
   notifyIssueInsert,
   notifyIssueUpdate,
-  orgProfile,
   scheduleArchivedReads,
 } from './messages'
 import { numberNewTask, tallyRow, tallyRows } from './orgs'
@@ -157,20 +156,11 @@ export const ASSIGNEE_RULE =
   'a task can only be assigned to an active user with Edit permission or higher on its project'
 export const REVIEWER_RULE =
   'a task can only be reviewed by an active user with Edit permission or higher on its project'
-/* The parent carries a subtask's context, so whoever works on a subtask
- * must be able to see every task above it. */
-export const ASSIGNEE_SIGHT_RULE =
-  'a subtask can only be assigned to someone who can see every task above it'
-export const REVIEWER_SIGHT_RULE =
-  'a subtask can only be reviewed by someone who can see every task above it'
-export const HOLDER_SIGHT_RULE =
-  'everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it'
 
 /** Someone whose work on a task's subtasks refuses its move (moveIssueCore):
  * their name and the IDs of the subtasks they are assigned to or reviewing.
  * Every subtask a refusal names is one the mover can see, because it is
- * one the move carries, which the mover must edit, or one already in the
- * destination, which the mover edits too. */
+ * one the move carries, which the mover must edit. */
 export type MoveBlocker = { name: string; tasks: string[] }
 
 /** How many people a move's refusal names, and how many subtasks beside
@@ -188,14 +178,9 @@ function blockerText(b: MoveBlocker): string {
 
 /* The sentence of a move's refusal over `blockers`, at least one: the first
  * MOVE_NAMES.people by name with their subtasks and the others counted,
- * then `lacks`, which takes the verb's form, and what to change. `unchecked`
- * says the move stopped checking before the last person, so others may
- * block it too. */
-function blockersSentence(
-  blockers: readonly MoveBlocker[],
-  unchecked: boolean,
-  lacks: (several: boolean) => string,
-): string {
+ * then what they lack and what to change. `unchecked` says the move stopped
+ * checking before the last person, so others may block it too. */
+function blockersSentence(blockers: readonly MoveBlocker[], unchecked: boolean): string {
   const named = blockers.slice(0, MOVE_NAMES.people).map(blockerText)
   const rest = blockers.length - named.length
   if (rest > 0)
@@ -205,25 +190,9 @@ function blockersSentence(
   // one subtask is "that subtask", also where two people hold it
   const tasks = new Set(blockers.flatMap((b) => b.tasks))
   const one = rest === 0 && !unchecked && tasks.size === 1
-  return `${who} ${lacks(named.length > 1)}, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
+  return `${who} cannot edit that sub-project; give them Edit access there, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
 }
 
-/** The refusal of a move that would take the task out of sight of
- * `blockers`, the people assigned to or reviewing its subtasks already in
- * the destination who have no access there, by name (owner, 17 November
- * 2026). The move carries every other subtask, and the people on those must
- * be able to work in the destination (moveSubtreeHolderRule), so only a
- * family from before the rule that a subtask stays in its parent's
- * sub-project can meet this, and only through someone left on their tasks
- * when their access there was removed (model/projectAccess.ts HeldTasks
- * 'leave'). App, REST and MCP send the same sentence. */
-export const moveHolderRule = (blockers: readonly MoveBlocker[], unchecked = false): string =>
-  blockersSentence(
-    blockers,
-    unchecked,
-    (several) =>
-      `${several ? 'have' : 'has'} no access to that sub-project; give them access there`,
-  )
 export const REVIEWER_ON_GROUP =
   'a task with subtasks has no reviewer of its own; set reviewers on its subtasks'
 
@@ -569,68 +538,11 @@ export async function assertAssigneeRule(
   }
 }
 
-/** The tasks from `parentId` up, nearest first, whose projects the chain
- * check reads (chainSight). Under the one level of subtasks that is the
- * parent alone; the seen set stops a corrupt cycle. `guard`, when given,
- * runs before each read, as the removal window's Reassign picker checks the
- * room (model/removalPreview.ts). */
-export async function ancestorsFrom(
-  ctx: QueryCtx,
-  parentId: string | undefined,
-  guard: () => Promise<void> = async () => {},
-): Promise<Doc<'issues'>[]> {
-  const chain: Doc<'issues'>[] = []
-  const seen = new Set<string>()
-  let cur = parentId
-  while (cur !== undefined && !seen.has(cur)) {
-    seen.add(cur)
-    await guard()
-    const row = await byId(ctx, 'issues', cur)
-    if (row === null) break
-    chain.push(row)
-    cur = row.parent_id
-  }
-  return chain
-}
-
-/* Whether a person can see every task in `chain`, through their own access
- * to each task's project. Answers per person, read once per project. A bulk
- * writer's `bulk` serves the profiles and projects from its preload and
- * keeps each sight that passed (sightKey), so a handover of many subtasks
- * asks it once per person and project. */
-function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkUpdate) {
-  const projectIds = [...new Set(chain.map((t) => t.project_id))]
-  const orgId = chain[0]?.org_id
-  const known = new Map<string, Promise<boolean>>()
-  return (profileId: string): Promise<boolean> => {
-    let sees = known.get(profileId)
-    if (sees === undefined) {
-      sees = (async () => {
-        const profile =
-          bulk === undefined || orgId === undefined
-            ? await byId(ctx, 'profiles', profileId)
-            : ((await orgProfile(ctx, bulk.preload.profiles, orgId, profileId)) ?? null)
-        if (profile === null) return false
-        for (const id of projectIds) {
-          const key = sightKey(profileId, id)
-          if (bulk?.checked.has(key)) continue
-          const project = bulk?.preload.projects.get(id) ?? (await byId(ctx, 'projects', id))
-          if (project === null || !(await canSeeProject(ctx, profile, project))) return false
-          bulk?.checked.add(key)
-        }
-        return true
-      })()
-      known.set(profileId, sees)
-    }
-    return sees
-  }
-}
-
 /** How full a change that walks a task's subtasks may let its transaction
  * get (lib/db.ts usedMoreThan). Every walk has a fixed bound: at most
  * LIMITS.subtasks.max active subtasks, and a move carries at most LIMITS.moveSubtree.max
- * subtasks. The room is the backstop for the rest, such as the sight checks
- * of every person working on them or a write whose earlier work filled the
+ * subtasks. The room is the backstop for the rest, such as the checks of
+ * every person working on them or a write whose earlier work filled the
  * transaction. The walk asks every `every` queries or rows, and sooner once
  * the rows since it last asked may hold `bytes`. Past `room` the change is
  * refused with SUBTREE_TOO_LARGE rather than failing on one of Convex's
@@ -652,8 +564,8 @@ export const MOVE_TOO_LARGE =
 
 /* Refuses with `refusal`, SUBTREE_TOO_LARGE unless a move names its own,
  * once the transaction passed SUBTREE_ROOM's `room`. Run before each step
- * of a change whose cost has no fixed bound, such as one holder's sight
- * check, and through roomCheck for walks. */
+ * of a change whose cost has no fixed bound, such as one subtask's detach
+ * with its notices, and through roomCheck for walks. */
 async function assertRoom(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): Promise<void> {
   if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(refusal)
 }
@@ -758,52 +670,6 @@ const activeSubtasks = (ctx: QueryCtx, parentId: string) =>
     .withIndex('by_parent_archived', (q) =>
       q.eq('parent_id', parentId).eq('archived_at', undefined),
     )
-
-/* The people working on a task and its active subtasks: each assignee, and
- * each reviewer of a task that is no group (a group's reviewer is dormant).
- * `self` holds the task's own next values. Callers skip switched-off people,
- * who hold no new work. A subtask has no subtasks of its own, so each one's
- * reviewer counts, and the walk reads one range of at most
- * LIMITS.subtasks.max active subtasks, under SUBTREE_ROOM, unless the caller
- * passes the subtasks it read already (`kids`, of which archived ones do not
- * count), as a move passes those it does not carry. `refusal` is the room
- * refusal (assertRoom). */
-async function holdersUnder(
-  ctx: QueryCtx,
-  rootId: string,
-  self: { assignee_id?: string; reviewer_id?: string; group: boolean },
-  read: { kids?: readonly Doc<'issues'>[]; refusal?: string } = {},
-): Promise<string[]> {
-  return [...(await heldUnder(ctx, rootId, self, read)).keys()]
-}
-
-/* holdersUnder's people, each with the active subtasks they are assigned to
- * or reviewing, in the walk's order; the task's own people hold none of
- * them. A move names the people who block it by these. */
-async function heldUnder(
-  ctx: QueryCtx,
-  rootId: string,
-  self: { assignee_id?: string; reviewer_id?: string; group: boolean },
-  read: { kids?: readonly Doc<'issues'>[]; refusal?: string } = {},
-): Promise<Map<string, Doc<'issues'>[]>> {
-  const held = new Map<string, Doc<'issues'>[]>()
-  const holds = (holder: string, subtask?: Doc<'issues'>) => {
-    const tasks = held.get(holder) ?? []
-    if (subtask !== undefined && !tasks.includes(subtask)) tasks.push(subtask)
-    held.set(holder, tasks)
-  }
-  if (self.assignee_id !== undefined) holds(self.assignee_id)
-  if (self.reviewer_id !== undefined && !self.group) holds(self.reviewer_id)
-  const room = roomCheck(ctx, read.refusal)
-  await room()
-  const kids = read.kids?.filter((c) => c.archived_at === undefined) ?? activeSubtasks(ctx, rootId)
-  for await (const c of kids) {
-    await room(getDocumentSize(c))
-    if (c.assignee_id !== undefined) holds(c.assignee_id, c)
-    if (c.reviewer_id !== undefined) holds(c.reviewer_id, c)
-  }
-  return held
-}
 
 /* The predicate behind assertAssigneeRule: an active same-org profile with
  * Edit or higher on the project. */
@@ -1478,8 +1344,8 @@ export async function browserVerbDetail(
  *   move    detail = the browser's destination sentence plus the provenance
  *   delete  model/deletedItems.ts moveTasksToTrash's `provenance` is the
  *           'deleted' row's detail
- *   move's and update's `later` name the people a later write of the same
- *           machine update sets (LaterPeople)
+ *   move's `later` names the people a later write of the same machine
+ *           update sets (LaterPeople)
  *   move's `laterParent` is the parent the same machine update sets after
  *           the move (a task id, or null to detach); absent when the update
  *           leaves the parent alone */
@@ -1487,7 +1353,6 @@ export type MachineNarration = { provenance: string }
 export type MachineUpdate = MachineNarration & {
   archive?: boolean
   appGrammar?: boolean
-  later?: LaterPeople
   /** The update names the task's current parent, so a restore under it
    * that is full is refused with LIMITS.subtasks' sentence rather than
    * leaving it. */
@@ -1509,11 +1374,11 @@ export type MachineMove = MachineNarration & {
 /**
  * The assignee and reviewer that a later write of the same machine update
  * sets (lib/core.ts applyTaskUpdate's field patch), with IssuePatch's
- * presence rule, so a key present replaces the field and null clears it. A move
- * or a parent change does not check a person this replaces, because the task
- * will not keep them. The later write checks the replacement at the task's
- * project and against its parents, as any change of assignee or reviewer is
- * checked, and the whole update rolls back if it is refused.
+ * presence rule, so a key present replaces the field and null clears it. A
+ * move does not check a person this replaces, because the task will not
+ * keep them. The later write checks the replacement at the task's project,
+ * as any change of assignee or reviewer is checked, and the whole update
+ * rolls back if it is refused.
  */
 export type LaterPeople = Pick<IssuePatch, 'assignee_id' | 'reviewer_id'>
 
@@ -1601,12 +1466,6 @@ export async function createIssueCore(
   if (assignee_id !== undefined) await assertAssigneeRule(ctx, project, assignee_id)
   const reviewer_id = args.reviewer_id ?? undefined
   if (reviewer_id !== undefined) await assertAssigneeRule(ctx, project, reviewer_id, 'reviewer')
-  // whoever holds a subtask must see every task above it
-  if (parent_id !== undefined && (assignee_id !== undefined || reviewer_id !== undefined)) {
-    const sees = chainSight(ctx, await ancestorsFrom(ctx, parent_id))
-    if (assignee_id !== undefined && !(await sees(assignee_id))) throw rule(ASSIGNEE_SIGHT_RULE)
-    if (reviewer_id !== undefined && !(await sees(reviewer_id))) throw rule(REVIEWER_SIGHT_RULE)
-  }
   // Browser callers expose no override. Machine callers may credit a real
   // profile with access at creation; omission uses the authenticated actor.
   // Reporter attribution is immutable after this write, including on moves.
@@ -1713,10 +1572,9 @@ export type IssuePatch = {
 /** Reused answers for a bulk writer that runs updateIssueCore for many
  * tasks in one transaction, which changes no profile, project, grant, team or
  * team membership while it runs (model/messages.ts NotifyPreload). `checked`
- * holds the checks already passed, under gateKey, holderKey and sightKey, so
- * the write gate runs once per project, and each assignee or reviewer rule
- * and each sight of a parent chain's project once per person and project.
- * No single task write passes one. */
+ * holds the checks already passed, under gateKey and holderKey, so the write
+ * gate runs once per project, and each assignee or reviewer rule once per
+ * person and project. No single task write passes one. */
 export type BulkUpdate = { preload: NotifyPreload; checked: Set<string> }
 
 /* The BulkUpdate key of `actorId`'s passed write gate on a project. */
@@ -1729,9 +1587,6 @@ export const holderKey = (
   profileId: string,
   projectId: string,
 ): string => `holder:${role}:${profileId}:${projectId}`
-
-/* The BulkUpdate key of a profile's passed sight of a project (chainSight). */
-const sightKey = (profileId: string, projectId: string): string => `sight:${profileId}:${projectId}`
 
 /* Runs `check` unless the bulk writer already passed `key`, and records the
  * key once it passes. Without a bulk writer it always runs. */
@@ -1862,38 +1717,6 @@ export async function updateIssueCore(
       }
     }
     w.reviewer_id = next
-  }
-  // whoever holds a subtask must see every task above it: a new assignee or
-  // reviewer is checked against the chain, and a new parent against
-  // everyone holding this task or its subtasks. Someone a later write of the
-  // same machine update replaces (LaterPeople) holds nothing; that write
-  // checks the replacement against the chain.
-  const heldAssignee = 'assignee_id' in patch ? w.assignee_id : issue.assignee_id
-  const heldReviewer = 'reviewer_id' in patch ? w.reviewer_id : issue.reviewer_id
-  const newAssignee = heldAssignee !== undefined && heldAssignee !== issue.assignee_id
-  const newReviewer = heldReviewer !== undefined && heldReviewer !== issue.reviewer_id
-  const newParent =
-    'parent_id' in patch && nextParent !== undefined && nextParent !== issue.parent_id
-  if (nextParent !== undefined && (newAssignee || newReviewer || newParent)) {
-    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent), bulk)
-    if (newAssignee && !(await sees(heldAssignee))) throw rule(ASSIGNEE_SIGHT_RULE)
-    if (newReviewer && !(await sees(heldReviewer))) throw rule(REVIEWER_SIGHT_RULE)
-    if (newParent) {
-      // `later` only speaks for a field this write leaves alone
-      const replaced = (field: keyof LaterPeople): boolean =>
-        !(field in patch) && replacedLater(issue, a.machine?.later, field)
-      const holders = await holdersUnder(ctx, issue.id, {
-        assignee_id: replaced('assignee_id') ? undefined : heldAssignee,
-        reviewer_id: replaced('reviewer_id') ? undefined : heldReviewer,
-        group: await isGroup(),
-      })
-      for (const holder of holders) {
-        await assertRoom(ctx)
-        // a switched-off person holds no new work, so their sight is not checked
-        if (!(await byId(ctx, 'profiles', holder))?.active) continue
-        if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
-      }
-    }
   }
   if ('remaining_hours' in patch) {
     const next = cleanRemaining(patch.remaining_hours)
@@ -2080,8 +1903,7 @@ export async function updateIssueCore(
  * order: not-found → meta ("live", not "created" — a different sentence from
  * the insert guard) → cross-org → archived target → the subtask family rule
  * → destination eligibility for the assignee and the reviewer → the carried
- * subtasks → sight for the people on the subtasks already in the
- * destination. A group's reviewer is
+ * subtasks. A group's reviewer is
  * dormant and hidden in the app, so it never refuses a move: one the
  * destination would refuse is cleared in the move's patch instead (adapt,
  * don't reject, as clearParentRemaining does). num is org-scoped and
@@ -2106,7 +1928,9 @@ export async function updateIssueCore(
  * message or activity row of their own, because the task's one message and
  * row tell the move, as the archive cascade does. A move of a task whose
  * family was stored across sub-projects before the rule brings every
- * subtask into the destination, so the family then follows the rule. */
+ * subtask into the destination, so the family then follows the rule. A
+ * subtask already in the destination does not move, so its people are not
+ * checked. */
 
 export const MOVE_SUBTASK_RULE =
   "a subtask stays in its parent task's sub-project; to move it to another sub-project, detach it from its parent in the same change"
@@ -2120,12 +1944,7 @@ export const MOVE_SUBTREE_EDIT_RULE =
 export const moveSubtreeHolderRule = (
   blockers: readonly MoveBlocker[],
   unchecked = false,
-): string =>
-  blockersSentence(
-    blockers,
-    unchecked,
-    () => 'cannot edit that sub-project; give them Edit access there',
-  )
+): string => blockersSentence(blockers, unchecked)
 /* A task that moves may have at most LIMITS.moveSubtree.max subtasks,
  * archived ones included. The move reads them all, including any already in
  * the destination, and carries the rest. LIMITS.subtasks.max bounds only
@@ -2362,42 +2181,12 @@ export async function moveIssueCore(
     }
   }
   // the subtasks outside the destination come along. They are read once,
-  // for the carry and the holders below: a subtask's row is about 2 KB
+  // for the carry and the answer's room below: a subtask's row is about 2 KB
   // without its text, but about 60 KB within TEXT_MAX while it still holds a
   // copy of it, and then LIMITS.moveSubtree.max of them take most of what
   // one transaction may read
   const below = await subtasksOf(ctx, issue.id)
   const carried = await subtreeToCarry(ctx, { below, target, actor: me })
-  // whoever works on a subtask must still see this task once it moves. The
-  // carry checked the people on every subtask it takes, who can work in the
-  // destination and so see it, which leaves the active subtasks already
-  // there: each of their active assignees and reviewers needs access to the
-  // destination (moveHolderRule). Everyone is checked, as a move that passes
-  // checks them, and those without access refuse the move together, by
-  // name. Once the transaction has no room for the next person the move is
-  // too large, unless someone already blocks it, whom the refusal then names
-  // with a word that others may too.
-  const stays = below.filter((c) => c.archived_at === undefined && c.project_id === project_id)
-  const held = await heldUnder(
-    ctx,
-    issue.id,
-    { group: true },
-    { kids: stays, refusal: MOVE_TOO_LARGE },
-  )
-  const blocked: MoveBlocker[] = []
-  let unchecked = false
-  for (const [holder, tasks] of held) {
-    if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) {
-      if (blocked.length === 0) throw rule(MOVE_TOO_LARGE)
-      unchecked = true
-      break
-    }
-    const profile = await byId(ctx, 'profiles', holder)
-    if (!profile?.active) continue
-    if (!(await canSeeProject(ctx, profile, target)))
-      blocked.push({ name: profile.name, tasks: tasks.map((task) => issueKey(task.num)) })
-  }
-  if (blocked.length > 0) throw rule(moveHolderRule(blocked, unchecked))
   // A caller that answers with the task's full read, which reads its
   // active subtasks again (MachineMove.answerReadsSubtasks), gets a move
   // that leaves room for that read. An archived task's read walks under a

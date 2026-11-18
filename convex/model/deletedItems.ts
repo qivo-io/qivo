@@ -40,12 +40,10 @@
  * item first hands each subtask whose project is no longer live to the item
  * that holds that project. References that no longer name what the item stored
  * are dropped (sameReference). A parent outside the item stays only by the
- * parent table (keptParent), which also asks, as a reparent does, that
- * everyone working on the task or its subtasks can see that parent. No
- * restore leaves a subtask under a parent in another sub-project
- * (model/issues.ts sameSubProject), inside the item or outside it. A reveal
- * whose checks fail sends the item back to moving, and the move takes the
- * rows back.
+ * parent table (keptParent). No restore leaves a subtask under a parent in
+ * another sub-project (model/issues.ts sameSubProject), inside the item or
+ * outside it. A reveal whose checks fail sends the item back to moving, and
+ * the move takes the rows back.
  *
  * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
  * seat sees of an item, restoreBlock why that seat cannot restore it, and
@@ -65,7 +63,7 @@
  * notifications included. The parent checks of a restore (keptParent) also
  * count the bytes they read, and a check that runs out of the step's reads
  * waits for the next step, where it comes first and runs whole within
- * COUNT_READ and SIGHT_READ. Progress is counted in rows. A
+ * COUNT_READ. Progress is counted in rows. A
  * step always moves at least one row, and most phases read a range from
  * its start, in one pass (drain), rather than keep a cursor, because moving
  * a row takes it out of the range. The person's own mutation spends a
@@ -356,7 +354,7 @@ function chargeRead(b: Budget, doc: unknown): number {
 
 /** Whether a step has no reads left, once it has moved a row and spent its
  * index ranges or bytes. A parent check that would read past them waits
- * for the next step (liveSubtasks, allSee). */
+ * for the next step (liveSubtasks). */
 const readsSpent = (b: Budget): boolean => b.moved && (b.ranges <= 0 || b.bytes <= 0)
 
 /** Clears the rows of `rows`, an index range read in one pass, until it
@@ -1590,15 +1588,13 @@ async function purgeLeft(run: Run): Promise<boolean> {
 
 /* --------------------------------------------------------------- restores */
 
-/* The index ranges a reveal may read per task it writes back or attaches.
- * A task item of 41 tasks with holders, a parent outside, task.restored
- * subscriptions and the Restored notice measured about 6. With a different
- * assignee and reviewer on each task, 80 people who must all see the
- * parent's project (keptParent), it measured about 22, most of it each
- * person's assignment check (keepsHolder). Since then each task also reads
- * the used_ids row of its id (lib/db.ts insertUsed), one range more.
+/* The index ranges a reveal may read per task it writes back or attaches:
+ * the assignment check of its assignee and reviewer (keepsHolder), a
+ * parent outside, task.restored subscriptions, the Restored notice and the
+ * used_ids row of its id (lib/db.ts insertUsed). With a different assignee
+ * and reviewer on each task, most of it is each person's assignment check.
  * Convex's 4,096 ranges leave room for that above TRASH_BUDGET's 2,500, and
- * a check of who sees a parent that runs out of what the budget has left
+ * a count of a parent's subtasks that runs out of what the budget has left
  * makes the reveal wait for a step of its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
@@ -3288,8 +3284,8 @@ async function revealProjects(run: Run): Promise<void> {
  * before that rule meets. A
  * parent outside the item is kept or cleared by the parent table (design
  * 5.2), from what the reveal reads once per parent (outsideParent) and the
- * task's subtasks among `tasks`, with the people they come back with, and
- * each parent the restore makes a group loses its own hours once. Every
+ * task's subtasks among `tasks`, and each parent the restore makes a group
+ * loses its own hours once. Every
  * parent is decided before the first task is written, and no decision
  * reads a task the reveal writes. Returns the ids of the tasks written, or
  * null, with nothing written, when a check runs out of the reads the
@@ -3333,10 +3329,9 @@ async function revealTasks(
       continue
     }
     const outside = await memoRead(reads.parents, parentId, () =>
-      outsideParent(run, parentId, restorer, reads),
+      outsideParent(run, parentId, reads),
     )
-    const task = { ...t.doc, ...(await restoredHolders(run, t.doc)) }
-    const kept = await keptParent(run, task, t.home, outside, children, reads)
+    const kept = await keptParent(run, t.doc, t.home, outside, children, reads)
     if (kept === 'later') return null
     if (kept?.grouped) grouped.add(parentId)
     decided.set(t.doc.id, kept?.id)
@@ -3359,14 +3354,15 @@ type LiveTasks = Map<string, Doc<'issues'> | null>
 /** What one reveal or attach step reads once for the parent table, after
  * the reveal wrote back what it writes. That is the live parents it reads,
  * each parent's OutsideParent and its subtasks, the organization's projects
- * (liveProjects) and what each person sees of them (seenBy). */
+ * (liveProjects) and what the restorer sees of them (seenBy). */
 type ParentReads = {
   tasks: LiveTasks
   /* each parent's subtasks as the step leaves them (liveSubtasks) */
   subtasks: Map<string, number>
   parents: Map<string, Promise<OutsideParent | null>>
   projects: Promise<Doc<'projects'>[]> | undefined
-  people: Map<string, Promise<Seen>>
+  /* what the restorer sees (seenBy) */
+  seen: Promise<OrgProjectLevels | null> | undefined
 }
 
 const newParentReads = (): ParentReads => ({
@@ -3374,7 +3370,7 @@ const newParentReads = (): ParentReads => ({
   subtasks: new Map(),
   parents: new Map(),
   projects: undefined,
-  people: new Map(),
+  seen: undefined,
 })
 
 /** Live task `id` from `live`, read and charged to the step's budget the
@@ -3404,27 +3400,26 @@ function liveProjects(run: Run, reads: ParentReads): Promise<Doc<'projects'>[]> 
   return reads.projects
 }
 
-/** What one person sees for the parent table, their levels on the
- * organization's projects (null for someone switched off or gone), with
- * what reading them costs from the start. SIGHT_READ counts that cost
- * whether the step read them for an earlier task or not. */
-type Seen = { levels: OrgProjectLevels | null; cost: Cost }
-
-/** What profile `id` sees (Seen), read once per reveal or attach step. It
- * reads the profile, then its grants and team shares in one batched read
+/** What the step's restorer (`run.actor`) sees for the parent table, their
+ * levels on the organization's projects, or null without a restorer or for
+ * one switched off or gone, read once per reveal or attach step. It reads
+ * the profile, then its grants and team shares in one batched read
  * (lib/access.ts projectLevelsForOrg), which answers every project at once.
- * The step's budget counts the ranges and the bytes of every document read. */
-function seenBy(run: Run, reads: ParentReads, id: string): Promise<Seen> {
-  return memoRead(reads.people, id, async () => {
-    const profile = await profileOf(run, id)
-    const cost: Cost = { ranges: 1, bytes: profile === null ? 0 : chargeRead(run.budget, profile) }
-    if (profile === null || !profile.active) return { levels: null, cost }
+ * The step's budget counts the ranges and the bytes of every document
+ * read. */
+function seenBy(run: Run, reads: ParentReads): Promise<OrgProjectLevels | null> {
+  reads.seen ??= (async () => {
+    if (run.actor === undefined) return null
+    const profile = await profileOf(run, run.actor.id)
+    if (profile !== null) chargeRead(run.budget, profile)
+    if (profile === null || !profile.active) return null
     const projects = await liveProjects(run, reads)
     const read: Cost = { ranges: 0, bytes: 0 }
     const levels = await projectLevelsForOrg(measured(run.ctx, read), profile, projects)
     run.budget.bytes -= read.bytes
-    return { levels, cost: { ranges: cost.ranges + read.ranges, bytes: cost.bytes + read.bytes } }
-  })
+    return levels
+  })()
+  return reads.seen
 }
 
 /** A live task outside the item that tasks of the item name as their
@@ -3443,13 +3438,12 @@ type OutsideParent = {
 
 /** The OutsideParent for `parentId`, or null when no task of the item can
  * keep it: it is not live, or it is not the task the item stored (the
- * reference predicate). Without a restorer, whose profile is gone since the
- * reveal, it edits nothing. The restorer's level comes from what they see
- * (seenBy). */
+ * reference predicate). Without a restorer (`run.actor`), whose profile is
+ * gone since the reveal, it edits nothing. The restorer's level comes from
+ * what they see (seenBy). */
 async function outsideParent(
   run: Run,
   parentId: string,
-  restorer: Doc<'profiles'> | undefined,
   reads: ParentReads,
 ): Promise<OutsideParent | null> {
   const parent = await liveTaskOf(run, reads.tasks, parentId)
@@ -3457,7 +3451,7 @@ async function outsideParent(
   const project = await byId(run.ctx, 'projects', parent.project_id)
   if (project === null) return null
   chargeRead(run.budget, project)
-  const levels = restorer === undefined ? null : (await seenBy(run, reads, restorer.id)).levels
+  const levels = await seenBy(run, reads)
   return {
     parent,
     project,
@@ -3466,18 +3460,17 @@ async function outsideParent(
   }
 }
 
-/** A task as the parent table reads its people: its assignee and reviewer
- * as they come back (a stored task's through keepsHolder, a live task's as
- * they are), and whether it is archived. */
-type Worker = Pick<Doc<'issues'>, 'id' | 'archived_at' | 'assignee_id' | 'reviewer_id'>
+/** A task as the parent table reads it: its id and whether it is
+ * archived. */
+type ParentedTask = Pick<Doc<'issues'>, 'id' | 'archived_at'>
 
 /** A task item's stored tasks by the id of their parent among them. */
 type StoredChildren = Map<string, Stored<'issues'>[]>
 
 /** What the parent table answers for one task. That is the parent it keeps
  * from outside the item, undefined to clear it, or 'later' when the check
- * ran out of the step's reads (liveSubtasks, allSee) and must run again in the
- * next step. */
+ * ran out of the step's reads (liveSubtasks) and must run again in the next
+ * step. */
 type Kept = { id: string; grouped: boolean } | undefined | 'later'
 
 /** The parent `task` of the item keeps from outside it, by the parent table
@@ -3506,19 +3499,13 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * calling it. It asks issues whether the task has subtasks, and a task
  * item's subtasks are not there yet. It also needs a restorer, and their
  * Edit even on an archived parent. This table reads the same facts within
- * the step's budget instead.
- *
- * Whoever works on the task must also see the parent, the rule a reparent
- * follows (model/issues.ts updateIssueCore, HOLDER_SIGHT_RULE). Where an
- * edit refuses, the task comes back without the parent and keeps its
- * people, as for the table's other refusals. Whether the task has a
- * subtask (workersOf) is read only for a parent that passes the rest, and
- * who sees the parent (allSee) last. The count of the parent's subtasks and
- * who sees it answer 'later' when the step's reads run out before they read
- * what the step has not read yet. */
+ * the step's budget instead. Whether the task has a subtask (hasSubtask) is
+ * read only for a parent that passes the rest, and the count of the
+ * parent's subtasks last, which answers 'later' when the step's reads run
+ * out before it reads what the step has not read yet. */
 async function keptParent(
   run: Run,
-  task: Worker,
+  task: ParentedTask,
   home: Doc<'projects'>,
   outside: OutsideParent | null,
   children: StoredChildren,
@@ -3532,21 +3519,18 @@ async function keptParent(
   if (!active && taskActive) return undefined
   if ((active || outside.clears) && !outside.edits) return undefined
   // nor a task with subtasks under one
-  const workers = await workersOf(run, task, children)
-  if (workers === null) return undefined
+  if (await hasSubtask(run, task, children)) return undefined
   // only an active task counts toward the parent's LIMITS.subtasks.max
   const subtasks = taskActive ? await liveSubtasks(run, reads, outside.parent.id) : 0
   if (subtasks === 'later') return 'later'
   if (subtasks >= LIMITS.subtasks.max) return undefined
-  const sees = await allSee(run, reads, task, workers, outside.parent.project_id)
-  if (sees === 'later') return 'later'
-  if (sees && taskActive) reads.subtasks.set(outside.parent.id, subtasks + 1)
+  if (taskActive) reads.subtasks.set(outside.parent.id, subtasks + 1)
   // the attach makes the parent a group only when the task counts for it
   const grouped = countsAsSubtask(
     { archived: !active, projectLive: outside.project.archived_at === undefined },
     { archived: !taskActive, projectLive: home.archived_at === undefined },
   )
-  return sees ? { id: outside.parent.id, grouped } : undefined
+  return { id: outside.parent.id, grouped }
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
@@ -3594,91 +3578,30 @@ async function liveSubtasks(
   return count
 }
 
-/** The most one check of who sees a parent (allSee) reads, counted from the
- * start. Each person counts their profile and the batched read of their
- * levels (seenBy), whether the step read them for an earlier task or not,
- * so the answer depends only on the data. A check past it does not fit, so
- * its task keeps no parent from outside, with a warning, as for COUNT_READ,
- * and a retry answers the same. Someone with Edit can still give the task
- * that parent by hand. A person without teams costs 3 ranges and each team
- * 2 more, so 2,000 ranges hold several hundred people. The first check of a
- * step, which never waits, then reads at most these 2,000 ranges and 2 MiB,
- * the parent (under 1 MiB), the first subtask under the task (under 1 MiB)
- * and the parent's subtasks (COUNT_READ, 8 MiB), within Convex's 4,096
- * ranges and 16 MiB. A mutable object, so tests can lower it. */
-export const SIGHT_READ = { ranges: 2000, bytes: 2 * 1024 * 1024 }
-
 /**
- * Whether everyone in `people`, the people working on `task` (workersOf),
- * can see `projectId`, the parent's project (model/issues.ts chainSight),
- * passing over someone switched off or gone, as a reparent does, because
- * they take on no new work. Each person costs one read of what they see
- * (seenBy).
- *
- * A step whose reads run out (readsSpent) before the check has read
- * everyone answers 'later', and the task waits for the next step. There it
- * comes first, before the step has moved a row, so its check runs whole. A
- * check that reads past SIGHT_READ answers false, with a warning naming the
- * item and the task.
- */
-async function allSee(
-  run: Run,
-  reads: ParentReads,
-  task: Worker,
-  people: Set<string>,
-  projectId: string,
-): Promise<boolean | 'later'> {
-  const cost: Cost = { ranges: 0, bytes: 0 }
-  for (const id of people) {
-    if (!reads.people.has(id) && readsSpent(run.budget)) return 'later'
-    const seen = await seenBy(run, reads, id)
-    cost.ranges += seen.cost.ranges
-    cost.bytes += seen.cost.bytes
-    if (cost.ranges > SIGHT_READ.ranges || cost.bytes > SIGHT_READ.bytes) {
-      console.warn('A deleted item restore cannot check who sees the parent of a task', {
-        item_id: run.item.id,
-        task_id: task.id,
-      })
-      return false
-    }
-    const { levels } = seen
-    if (levels === null) continue
-    if (levels.levelOf({ id: projectId, org_id: run.item.org_id }) === null) return false
-  }
-  return true
-}
-
-/**
- * The people who work on task `task` once it is back, as model/issues.ts
- * holdersUnder names them for a reparent: its assignee and reviewer. Null
- * when the task has a subtask, because one level of subtasks
- * (lib/limits.ts) keeps a task with subtasks from taking a parent. Its
- * subtasks are its children among the tasks the reveal writes (`children`)
- * and, for a project item, the tasks under it in issues, which restore_tasks
- * wrote back or, after the reveal, anyone attached. Only the first one
- * found is read, and charged to the step's budget. A task item's tasks are
- * read too: its delete detached every active child outside it, but its
- * archived children leave in steps after the delete
+ * Whether task `task` has a subtask once it is back, because one level of
+ * subtasks (lib/limits.ts) keeps a task with subtasks from taking a
+ * parent. Its subtasks are its children among the tasks the reveal writes
+ * (`children`) and, for a project item, the tasks under it in issues, which
+ * restore_tasks wrote back or, after the reveal, anyone attached. Only the
+ * first one found is read, and charged to the step's budget. A task item's
+ * tasks are read too: its delete detached every active child outside it,
+ * but its archived children leave in steps after the delete
  * (detachArchivedChildren), which a quick restore can overtake.
  */
-async function workersOf(
+async function hasSubtask(
   run: Run,
-  task: Worker,
+  task: ParentedTask,
   children: StoredChildren,
-): Promise<Set<string> | null> {
-  if ((children.get(task.id) ?? []).length > 0) return null
+): Promise<boolean> {
+  if ((children.get(task.id) ?? []).length > 0) return true
   const kid = await run.ctx.db
     .query('issues')
     .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
     .first()
-  if (kid !== null) {
-    chargeRead(run.budget, kid)
-    return null
-  }
-  const people = new Set<string>()
-  if (task.assignee_id !== undefined) people.add(task.assignee_id)
-  if (task.reviewer_id !== undefined) people.add(task.reviewer_id)
-  return people
+  if (kid === null) return false
+  chargeRead(run.budget, kid)
+  return true
 }
 
 /* What a reveal tells (design 5.4). A task item sends task.restored for
@@ -3807,7 +3730,7 @@ type Attach = ParentReads & {
  * helpers a task item's reveal uses. Each step stays within its budget,
  * however many tasks wait. A task whose check runs out of the step's reads
  * keeps its row for the next step, where it comes first and its check runs
- * whole (liveSubtasks, allSee). work runs the first in the reveal's own transaction, so
+ * whole (liveSubtasks). work runs the first in the reveal's own transaction, so
  * a small item comes back whole there, and steps do the rest just after.
  * Meanwhile the tasks show without their parent, and a parent that fails
  * the table by the time its turn comes leaves them that way. Each parent a
@@ -3856,7 +3779,7 @@ async function attachParent(
   )
   if (home === null) return await settle(await holderOf(run, task.project_id))
   const outside = await memoRead(step.parents, row.parent_id, () =>
-    outsideParent(run, row.parent_id, run.actor, step),
+    outsideParent(run, row.parent_id, step),
   )
   const kept = await keptParent(run, task, home, outside, new Map(), step)
   if (kept === 'later') return false
@@ -4019,8 +3942,8 @@ async function actorOf(
  * reveal and attach fit what the transaction has left comes back whole in
  * it. It counts tasks, not the bytes their parents and subtasks
  * hold. An attach that spends the bytes left stops there, as any step
- * does, and steps finish it. A parent check whose subtask count or people
- * (liveSubtasks, allSee) run out of what is left waits too, a task item's
+ * does, and steps finish it. A parent check whose subtask count
+ * (liveSubtasks) runs out of what is left waits too, a task item's
  * reveal for a step of its own and a project item's task for the next
  * attach step. It reads at most
  * one more waiting task than the budget holds. */

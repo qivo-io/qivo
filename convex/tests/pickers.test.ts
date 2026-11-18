@@ -600,80 +600,6 @@ describe("the owner pickers' rule", () => {
       expect(all.rows.find((r) => r.id === pending.id)?.pending).toBe(true)
     }
   })
-
-  it("offers for a subtask only who sees its parent's sub-project, also one the caller cannot see", async () => {
-    const b = await base()
-    // Lena leads Firmware alone and cannot see Board rev
-    const lena = await b.person('Lena')
-    await b.t.run((ctx) => ctx.db.patch(b.f.sub._id, { lead_id: lena.id }))
-    const parent = await b.task(b.f.sub2, { title: 'Board bring-up' })
-    const subtask = await b.task(b.f.sub, { parent_id: parent.id })
-    const quinn = await b.person('Quinn')
-    await b.grant(b.f.sub, quinn)
-    const rae = await b.person('Rae')
-    await b.grant(b.f.sub, rae)
-    await b.grant(b.f.sub2, rae, 'viewer')
-    await b.keyed()
-    const all = await listAll((after) => owners(b.t, lena, subtask.id, 'assignee', { after }))
-    // Lena edits the subtask but cannot see its parent, as Quinn
-    expect(namesOf(all.rows)).toEqual(['Rae', 'admin', 'guest', 'user'])
-  })
-
-  it("offers whoever reaches a parent's top-level project, its own or another through a sub-project", async () => {
-    const b = await base()
-    // a parent older code stored on TBED itself, which User on Firmware
-    // shows for navigation
-    const own = await b.task(b.f.meta, { title: 'Legacy plan' })
-    const underOwn = await b.task(b.f.sub, { parent_id: own.id })
-    const xena = await b.person('Xena')
-    await b.grant(b.f.sub, xena)
-    // a parent stored on another top-level project, reached through its
-    // sub-project only
-    const away = await b.elsewhere()
-    const far = await b.task(away.meta, { title: 'Far plan' })
-    const underFar = await b.task(b.f.sub, { parent_id: far.id })
-    const yuri = await b.person('Yuri')
-    await b.grant(b.f.sub, yuri)
-    await b.grant(away.sub, yuri, 'viewer')
-    await b.keyed()
-    const list = async (id: string) =>
-      namesOf((await listAll((after) => owners(b.t, b.f.user, id, 'reviewer', { after }))).rows)
-    expect(await list(underOwn.id)).toEqual(['Xena', 'Yuri', 'admin', 'guest', 'user'])
-    // the admin leads Elsewhere; Xena, the guest and the lead do not reach it
-    expect(await list(underFar.id)).toEqual(['Yuri', 'admin'])
-  })
-
-  it('offers nobody for a subtask whose parent sits in a project that is gone, or under one', async () => {
-    const b = await base()
-    const gone = await b.task(b.f.sub, { project_id: uuid() })
-    const loose = await plantProject(b.t, {
-      org_id: b.f.org.id,
-      type: 'project',
-      parent_id: uuid(),
-    })
-    const orphaned = await b.task(loose)
-    const first = await b.task(b.f.sub, { parent_id: gone.id })
-    const second = await b.task(b.f.sub, { parent_id: orphaned.id })
-    await b.keyed()
-    for (const subtask of [first, second]) {
-      expect(await owners(b.t, b.f.user, subtask.id, 'assignee')).toEqual({
-        state: 'ready',
-        rows: [],
-        next: null,
-        stopped: false,
-      })
-      expect(
-        checked(await canOwn(b.t, b.f.user, subtask.id, 'reviewer', [b.f.admin.id])).rows[0]
-          .eligible,
-      ).toBe(false)
-      // the recipients ask nothing of the tasks above
-      expect(namesOf(ready(await recipients(b.t, b.f.user, subtask.id)).rows)).toEqual([
-        'admin',
-        'guest',
-        'viewer',
-      ])
-    }
-  })
 })
 
 describe("the recipient picker's rule", () => {
@@ -786,8 +712,7 @@ describe('canOwn', () => {
 
   it('agrees with each list paged to its end, for every person of the organization', async () => {
     const b = await base()
-    const away = await b.elsewhere()
-    const parent = await b.task(away.sub, { title: 'Far plan' })
+    const parent = await b.task(b.f.sub, { title: 'Bring-up plan' })
     const subtask = await b.task(b.f.sub, { parent_id: parent.id })
     const plant = async (name: string, extra: Partial<Doc<'profiles'>>, level: GrantLevel) => {
       const p = await b.person(name, extra)
@@ -795,11 +720,10 @@ describe('canOwn', () => {
       return p
     }
     await plant('Ada', {}, 'user')
-    await b.grant(away.sub, await plant('Bea', {}, 'user'), 'viewer')
     await plant('Vic', {}, 'viewer')
     await plant('Ivy', { active: false }, 'user')
     await plant('Bot', { kind: 'agent' }, 'user')
-    await b.grant(away.meta, await plant('Ola', { org_role: 'viewer' }, 'viewer'), 'viewer')
+    await plant('Ola', { org_role: 'viewer' }, 'viewer')
     await b.keyed()
     const everyone = await b.t.run((ctx) =>
       ctx.db
@@ -1189,41 +1113,6 @@ describe("the pickers inside Convex's limits", () => {
       syncRecipientsOf(ctx, f.user, { issue_id: issue.id }),
     )
     expect(mentions.batch.rows).toHaveLength(LIST_BATCH)
-  }, 60_000)
-
-  it('reads the reviewers of a subtask whose parent sits on a top-level project of 30 live and 40 archived sub-projects', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const atlas = await projectWith(t, f, 'Atlas', 30, 40)
-    const platform = await keyedTeam(t, f, 'Platform')
-    const ops = await keyedTeam(t, f, 'Ops')
-    await keyOrg(t, f.org.id)
-    // three teams a person, the everyday value; no team shares a project here
-    const [pia, rae] = await people(t, f, ['Pia', 'Rae'], [f.team.id, platform, ops])
-    for (const p of [pia, rae]) await grant(t, f.sub, p)
-    // the lead and Rae reach Atlas through its last archived sub-project
-    for (const p of [f.user, rae]) await grant(t, atlas.all[69], p, 'viewer')
-    // Atlas's sub-projects hold no task. The everyday 30 open tasks a
-    // sub-project would put 900 under Atlas, past the design size of 800
-    // open tasks a project with all its sub-projects, and the pickers read
-    // no task here but the subtask, its parent and its own subtasks.
-    // Firmware holds 30 with the subtask.
-    await openTasks(t, f, f.sub, 29)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
-    const subtask = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-    })
-    const first = await whole(
-      'owners, a reviewer under a parent on 30 and 40 archived sub-projects',
-      t,
-      (ctx) => taskOwnersOf(ctx, f.user, { issue_id: subtask.id, field: 'reviewer' }),
-      true,
-    )
-    // the admin, who leads Atlas, the lead and Rae; Pia and the guest do
-    // not see Atlas
-    expect(namesOf(first.batch.rows)).toEqual(['Rae', 'admin', 'user'])
   }, 60_000)
 
   it('reads the recipients and the gate of a task stored on a top-level project of 30 live and 40 archived sub-projects', async () => {

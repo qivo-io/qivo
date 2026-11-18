@@ -25,7 +25,7 @@ import { byId } from '../lib/db'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
 import { postComment } from '../model/comments'
-import { ASSIGNEE_SIGHT_RULE, REVIEWER_SIGHT_RULE, updateIssueCore } from '../model/issues'
+import { updateIssueCore } from '../model/issues'
 import {
   canOwnOf,
   type PeopleBatch,
@@ -34,17 +34,7 @@ import {
   taskOwnersOf,
 } from '../model/pickers'
 import { SHAPES } from './accessShapes.setup'
-import {
-  NOW,
-  newT,
-  type OrgFixture,
-  plantIssue,
-  plantProject,
-  plantSeat,
-  type T,
-  uuid,
-  withOrg,
-} from './helpers.setup'
+import { NOW, newT, plantIssue, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 
 /* What a write throws at its end so convex-test rolls it back. */
@@ -163,18 +153,10 @@ const COMBOS = PROFILE_KINDS.flatMap((kind) =>
   ),
 )
 
-/* A subtask on Firmware without holders, under a new parent on `project`. */
-async function firmwareSubtask(t: T, f: OrgFixture, project: Doc<'projects'>) {
-  const parent = await plantIssue(t, { org_id: f.org.id, project_id: project.id })
-  return await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
-}
-
 /* withOrg with Writer, who edits TBED and its sub-projects through a grant
  * on TBED, and a task without holders on Firmware, on Board rev and on
- * TBED itself, where older code stored tasks. Two subtasks of Firmware
- * without holders sit under a parent on TBED and under one on Firmware,
- * the projects whose sight the owner picker does not ask again
- * (model/pickers.ts ownerRule) and the write's chain check does. */
+ * TBED itself, where older code stored tasks, and a subtask of Firmware
+ * without holders under a parent there. */
 async function scene(t: T) {
   const f = await withOrg(t)
   const writer = await plantSeat(t, {
@@ -194,8 +176,11 @@ async function scene(t: T) {
     FW: await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
     PCB: await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }),
     TBED: await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id }),
-    'FW under TBED': await firmwareSubtask(t, f, f.meta),
-    'FW under FW': await firmwareSubtask(t, f, f.sub),
+    'FW subtask': await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id,
+    }),
   }
   return { f, writer, tasks }
 }
@@ -324,98 +309,5 @@ describe('the pickers against the writes, over every access shape', () => {
     expect(await notifies(t, writer, tasks.TBED.id, sam)).toBe(true)
     expect(pickers.assignee).toEqual({ offered: false, checked: false })
     expect(typeof (await accepts(t, writer, tasks.TBED.id, 'assignee', sam.id))).toBe('string')
-  })
-})
-
-describe('the owner pickers against the chain check', () => {
-  /* Subtasks of Firmware under a parent on Board rev, on Skunkworks, which
-   * Writer cannot see, and on Elsewhere, a top-level project some reach
-   * only through its sub-project, with people who see some of them. */
-  async function chain() {
-    const t = newT()
-    const { f, writer } = await scene(t)
-    const elsewhere = await plantProject(t, {
-      org_id: f.org.id,
-      name: 'Elsewhere',
-      lead_id: f.admin.id,
-    })
-    const elsewhereSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: elsewhere.id,
-      name: 'Elsewhere sub',
-    })
-    const grant = (project: Doc<'projects'>, who: Doc<'profiles'>, level: 'user' | 'viewer') =>
-      t.run((ctx) =>
-        ctx.db.insert('project_access', { project_id: project.id, profile_id: who.id, level }),
-      )
-    const person = async (name: string, sees: Doc<'projects'>[]) => {
-      const p = await plantSeat(t, { org_id: f.org.id, name, auth_user_id: uuid() })
-      await grant(f.sub, p, 'user')
-      for (const project of sees) await grant(project, p, 'viewer')
-      return p
-    }
-    await person('Ann', [])
-    await person('Ben', [f.sub2])
-    await person('Cy', [f.hidden])
-    await person('Di', [elsewhereSub])
-    await person('Ed', [elsewhere])
-    const subtasks = {
-      sibling: await firmwareSubtask(t, f, f.sub2),
-      hidden: await firmwareSubtask(t, f, f.hidden),
-      navigation: await firmwareSubtask(t, f, elsewhere),
-    }
-    await keyOrg(t, f.org.id)
-    return { t, f, writer, subtasks }
-  }
-
-  it('offers for each subtask exactly the seats the write accepts, and refuses the rest with the sight rule', async () => {
-    const { t, f, writer, subtasks } = await chain()
-    const seats = await t.run((ctx) =>
-      ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-        .collect(),
-    )
-    const offered: Record<string, string[]> = {}
-    for (const [key, subtask] of Object.entries(subtasks)) {
-      for (const field of ['assignee', 'reviewer'] as const) {
-        // a transaction answers Convex values, so the set comes out as an array
-        const read = await t.run(async (ctx) => {
-          const ids = await listed((after) =>
-            taskOwnersOf(ctx, writer, { issue_id: subtask.id, field, after }),
-          )
-          return typeof ids === 'string' ? ids : [...ids]
-        })
-        if (typeof read === 'string') throw new Error(`the list answered ${read}`)
-        const list = new Set(read)
-        const checks = await t.run((ctx) =>
-          canOwnOf(ctx, writer, { issue_id: subtask.id, field, ids: seats.map((s) => s.id) }),
-        )
-        if (checks.state !== 'ready') throw new Error(`canOwn answered ${checks.state}`)
-        const sight = field === 'assignee' ? ASSIGNEE_SIGHT_RULE : REVIEWER_SIGHT_RULE
-        let refusedForSight = 0
-        for (const [i, seat] of seats.entries()) {
-          const outcome = await accepts(t, writer, subtask.id, field, seat.id)
-          expect(list.has(seat.id), `${key} ${field} ${seat.name}: ${outcome}`).toBe(
-            outcome === true,
-          )
-          expect(checks.rows[i].eligible, `${key} ${field} ${seat.name}`).toBe(outcome === true)
-          if (outcome === sight) refusedForSight++
-        }
-        expect(refusedForSight, `${key} ${field}`).toBeGreaterThan(0)
-        offered[`${key} ${field}`] = seats
-          .filter((s) => list.has(s.id))
-          .map((s) => s.name)
-          .sort()
-      }
-    }
-    // the people with Edit on Firmware, each where they see the parent; the
-    // admin, who leads Elsewhere and holds nothing on Firmware, is in none
-    expect(offered['sibling assignee']).toEqual(['Ben', 'Writer', 'guest', 'user'])
-    expect(offered['hidden assignee']).toEqual(['Cy', 'user'])
-    expect(offered['navigation assignee']).toEqual(['Di', 'Ed'])
-    for (const key of Object.keys(subtasks))
-      expect(offered[`${key} reviewer`]).toEqual(offered[`${key} assignee`])
   })
 })

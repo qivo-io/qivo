@@ -9235,9 +9235,9 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     if (!Object.keys(patch).length) return Promise.resolve(true)
   }
   if (refusePausedEdit()) return Promise.resolve(false)
-  // a new holder's sight of the tasks above is the server's to check, which
-  // refuses with its sentence and takes the paint back (ASSIGNEE_SIGHT_RULE,
-  // REVIEWER_SIGHT_RULE): the store holds nobody else to judge
+  // a new holder is the server's to check, which refuses with its sentence
+  // and takes the paint back (ASSIGNEE_RULE, REVIEWER_RULE): the store holds
+  // nobody else to judge
   const wire = mapIssuePatch(patch)
   if (!wire) return Promise.resolve(false)
   const shown: Record<string, unknown> = { ...row }
@@ -9766,8 +9766,8 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
     Parent picker offered, named by its uuid with its row in
     `opts.parentRow`, which the window's Parent row shows at once; a
     parent without that row is refused (PARENT_UNKNOWN). The rules read
-    from the answer: the text caps (a new holder's sight of the tasks above
-    is the server's to check), a group's dates and own hours dropped and its
+    from the answer: the text caps (a new holder is the server's to
+    check), a group's dates and own hours dropped and its
     status left out of the paint, where the answer's view model counts a
     subtask list that is not whole as a group, and each field equal to what
     the person saw left unsent. A group's status, Pause or new reviewer
@@ -13124,8 +13124,8 @@ export const PLANNER = {
       subtasks along (moveFamily), as the server does. Returns the (unchanged) key, or null for a no-op or
       an invalid target. Whether everyone on the task and its subtasks keeps
       access is the server's to check, at full scope: a refusal
-      (moveSubtreeHolderRule and moveHolderRule, which name the people and
-      their subtasks, ASSIGNEE_RULE, REVIEWER_RULE or LIMITS.moveSubtree's
+      (moveSubtreeHolderRule, which names the people and their subtasks,
+      ASSIGNEE_RULE, REVIEWER_RULE or LIMITS.moveSubtree's
       sentence) is toasted with its sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
       task moved only then. The target must be a sub-project the project

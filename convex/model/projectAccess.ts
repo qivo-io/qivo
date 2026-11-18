@@ -602,7 +602,7 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * `keepRefusal`, when set, refuses that choice instead. `reassign_to` hands
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
- * Edit access and sight of every task above once the access is gone. A
+ * Edit access once the access is gone. A
  * handover of more than LIMITS.reassign.max tasks, or one that fills
  * REASSIGN_ROOM of the transaction before its last task, is refused with
  * reassignTooLarge, which blames its size rather than the tasks. Viewer

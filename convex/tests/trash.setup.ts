@@ -17,15 +17,7 @@ import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
 import { REMOVAL_BUDGET } from '../model/cascade'
-import {
-  CALL,
-  COUNT_READ,
-  EXPIRY,
-  LEGACY_READ,
-  RETRY,
-  SIGHT_READ,
-  TRASH_BUDGET,
-} from '../model/deletedItems'
+import { CALL, COUNT_READ, EXPIRY, LEGACY_READ, RETRY, TRASH_BUDGET } from '../model/deletedItems'
 import {
   as,
   keepHeldFiles,
@@ -46,7 +38,6 @@ export const HOUR = 3_600_000
 export const DEFAULT_BUDGET = { ...TRASH_BUDGET }
 const DEFAULT_RETRY = { ...RETRY }
 const DEFAULT_COUNT_READ = { ...COUNT_READ }
-const DEFAULT_SIGHT_READ = { ...SIGHT_READ }
 const DEFAULT_EXPIRY = { ...EXPIRY }
 const DEFAULT_PURGE_ORG = { ...PURGE_ORG }
 const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
@@ -54,9 +45,9 @@ const DEFAULT_CALL = { ...CALL }
 const DEFAULT_LEGACY_READ = { ...LEGACY_READ }
 
 /** Fake timers from START for each test of the suite, no scheduled erase of
- * held files, and the default budget, call share, legacy read, chain, depth
- * and sight checks, retries, expiry batch, purgeOrg batch and organization
- * deletion budget back after it. */
+ * held files, and the default budget, call share, legacy read, subtask
+ * count, retries, expiry batch, purgeOrg batch and organization deletion
+ * budget back after it. */
 export function installTrashTimers(): void {
   keepHeldFiles()
   beforeEach(() => {
@@ -66,7 +57,6 @@ export function installTrashTimers(): void {
   afterEach(() => {
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     Object.assign(COUNT_READ, DEFAULT_COUNT_READ)
-    Object.assign(SIGHT_READ, DEFAULT_SIGHT_READ)
     Object.assign(RETRY, DEFAULT_RETRY)
     Object.assign(EXPIRY, DEFAULT_EXPIRY)
     Object.assign(PURGE_ORG, DEFAULT_PURGE_ORG)

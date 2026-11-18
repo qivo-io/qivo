@@ -2460,18 +2460,13 @@ edit that project can move it`). A subtask in a project that is being moved
 to Deleted items refuses the move for everyone, admins included, with `a
 subtask of this task is being moved to Deleted items; try again when that
 finishes`.
-The assignee and the reviewer of each active subtask must be able to work
-in the destination. Otherwise the refusal names them with their subtasks,
+The assignee and the reviewer of each active subtask the move carries must
+be able to work in the destination. Otherwise the refusal names them with their subtasks,
 such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16) cannot
 edit that sub-project; give them Edit access there, or change who works on
 those subtasks first`, up to five people with up to three subtasks each,
-the rest counted. A subtask of a task from older versions of Qivo can
-already be in the destination; whoever is assigned to or reviewing it must
-be able to see the destination, otherwise the refusal names them the same
-way, such as `Aisha Rahman (on QN-14) has no access to that sub-project;
-give them access there, or change who works on that subtask first`. A
-group's own reviewer who cannot work there
-is cleared. A task with more than 200 subtasks, archived ones included,
+the rest counted. A group's own reviewer who cannot work there is
+cleared. A task with more than 200 subtasks, archived ones included,
 cannot move (otherwise `this task has more than 200 subtasks, archived ones
 included, and a move to another sub-project carries them all. Restore some
 archived subtasks and remove them from this task first.`). A move whose
@@ -2521,9 +2516,7 @@ must be in the same sub-project as its parent task`. Older versions of Qivo
 let a subtask sit in another sub-project than its parent; such tasks keep
 their parent until they move or leave it.
 The task cannot become its own parent, an active task cannot go under an
-archived parent, and a task has one level of subtasks (see above). Everyone assigned to or reviewing the task or its subtasks must be
-able to see the new parent. An `assignee_id` or `reviewer_id` in the same
-call, null included, counts in place of the current one.
+archived parent, and a task has one level of subtasks (see above).
 
 `add_labels` and `remove_labels` take label ids or names in any case from
 `list_labels`. Labels change one at a time, never as a replacement list, and
@@ -3082,10 +3075,7 @@ permission downgrade, a switched-off account and updates that omit
 and passes even when that person is no longer eligible, as in the app. Any
 other non-null `assignee_id` requires current eligibility.
 `reviewer_id` follows the same rule: only a row with `assignable: true` may be
-a reviewer, and `null` clears it. On a subtask, a new assignee or reviewer
-must also be able to see every task above it, which `assignable` does not
-check; otherwise the call is refused with `a subtask can only be assigned to
-someone who can see every task above it` (or `… reviewed by …`). The refusal sentences are the assignee's,
+a reviewer, and `null` clears it. The refusal sentences are the assignee's,
 except that the Edit-permission one ends `to review work`. A reviewer may be
 the same user as the assignee.
 The browser always uses its signed-in user as reporter and never offers a

@@ -1711,12 +1711,8 @@ always uses its signed-in user and never offers a reporter picker.
 The selected reporter must have access to the destination project. It may
 be inactive or an organization viewer because reporting is attribution rather
 than workload. A non-null `assignee_id` must name a row from the same route
-whose `assignable` flag is true. On a subtask, a new assignee or reviewer
-must also be able to see every task above it; otherwise the request is a
-`400` with `a subtask can only be assigned to someone who can see every task
-above it` (or `… reviewed by …` for `reviewer_id`). `assignable` does not
-check this, because it describes the project, not the task. Thus neither field can point at a source-system-only identity or a Qivo
-user who cannot see the project. Malformed ids return `400`; unknown and
+whose `assignable` flag is true. Thus neither field can point at a
+source-system-only identity or a Qivo user who cannot see the project. Malformed ids return `400`; unknown and
 foreign ids return `user "<uuid>" not found in your organization`, while a
 same-organization profile without project access returns
 `user "<uuid>" has no access to this project`. The API never substitutes a
@@ -1782,18 +1778,13 @@ someone who can edit that project can move it`). A subtask in a project that is 
 moved to Deleted items refuses the move for everyone, admins included, with
 `400` `a subtask of this task is being moved to Deleted items; try again
 when that finishes`. The assignee and the reviewer of
-each active subtask must be able to work in the
+each active subtask the move carries must be able to work in the
 destination. Otherwise the PATCH is a `400` that names them with their
 subtasks, such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16)
 cannot edit that sub-project; give them Edit access there, or change who
 works on those subtasks first`, up to five people with up to three subtasks
-each, the rest counted. A subtask of a task from older versions of Qivo can
-already be in the destination; whoever is assigned to or reviewing it must
-be able to see the destination, otherwise the `400` names them the same way,
-such as `Aisha Rahman (on QN-14) has no access to that sub-project; give
-them access there, or change who works on that subtask first`. A task with
-more than 200 subtasks, archived ones included,
-cannot move (otherwise `400`, `this task has
+each, the rest counted. A task with more than 200 subtasks, archived ones
+included, cannot move (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
 sub-project carries them all. Restore some archived subtasks and remove them
 from this task first.`). A
@@ -1827,10 +1818,7 @@ parent to the task itself is a `400`, and so is a parent that is archived
 while the task is active. A task with subtasks, archived ones included,
 cannot get a parent: `400` with `this task has subtasks, so it cannot become
 a subtask; a subtask cannot have subtasks of its own`. `null` always
-detaches. A new parent must be
-visible to the task's assignee and reviewer and to everyone working on its
-subtasks. An `assignee_id` or `reviewer_id` in the same PATCH, `null`
-included, counts in place of the current one.
+detaches.
 
 **Labels.** `add_labels` and `remove_labels` are arrays of label ids or
 names (any case) from `GET /v1/labels`. A task's labels change one label at

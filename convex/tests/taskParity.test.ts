@@ -38,8 +38,6 @@ import { issueKey } from '../lib/taskRefs'
 import { sha256hex } from '../machine/auth'
 import {
   ASSIGNEE_RULE,
-  ASSIGNEE_SIGHT_RULE,
-  HOLDER_SIGHT_RULE,
   type IssuePatch,
   moveSubtreeHolderRule,
   REPORTER_IMMUTABLE_SENTENCE,
@@ -735,21 +733,21 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect((await row(fx.t, top.id)).parent_id).toBeUndefined()
   })
 
-  it('a parent or a new assignee checks who works on the task against every task above it', async () => {
+  it('sets a parent while someone left on the task holds it, and gives them no new work', async () => {
     const fx = await setup()
-    const { fwOnly, fwOther, parent, held, under } = await leftOn(fx)
-    // the assignee left on the task cannot see the parent
-    await refused(restPatch(fx, held.id, { parent: parent.id }), 'rule', HOLDER_SIGHT_RULE)
-    expect((await row(fx.t, held.id)).parent_id).toBeUndefined()
-    // the same update passes when it also replaces that assignee, whom the
-    // parent step then leaves to the check of the new one
-    expect(
-      await restPatch(fx, held.id, { parent: parent.id, assignee_id: fwOnly.id }),
-    ).toMatchObject({ parent_id: parent.id, assignee_id: fwOnly.id })
-    // a new assignee must see every task above; one who may work in FW sees
-    // a parent there, so only an older family's parent elsewhere refuses
-    await refused(restPatch(fx, under.id, { assignee_id: fwOther.id }), 'rule', ASSIGNEE_SIGHT_RULE)
-    expect((await row(fx.t, under.id)).assignee_id).toBeUndefined()
+    const { left, parent, held } = await leftOn(fx)
+    // the assignee left on the task sees neither it nor the parent
+    expect(await restPatch(fx, held.id, { parent: parent.id })).toMatchObject({
+      parent_id: parent.id,
+      assignee_id: left.id,
+    })
+    // and the parent takes no work of theirs
+    await refused(
+      restPatch(fx, parent.id, { assignee_id: left.id }),
+      'bad_request',
+      `user "${left.id}" has no access to this project`,
+    )
+    expect((await row(fx.t, parent.id)).assignee_id).toBeUndefined()
   })
 
   it('sets and clears the parent through the app rules, narrated with the task keys', async () => {
@@ -894,24 +892,13 @@ async function handover(fx: Fx) {
   return { fwOnly, fwOther, pcbOnly, pcbParent }
 }
 
-/* handover's people with tasks planted as rows, as in
- * tests/parentSight.test.ts: `held`, a task of FW whose assignee was left on
- * it after losing access to FW, beside `parent`, a task of FW, and `under`,
- * a task of FW whose parent is in a sibling sub-project the FW seats cannot
- * see, an older family stored before the subtask rule. */
+/* Tasks planted as rows: `held`, a task of FW whose assignee `left` was
+ * left on it after losing access to FW, beside `parent`, a task of FW. */
 async function leftOn(fx: Fx) {
-  const people = await handover(fx)
   const parent = await task(fx, { title: 'FW parent' })
   const left = await withSeat(fx, 'left on')
   const held = await task(fx, { assignee_id: left.id })
-  const sibling = await plantProject(fx.t, {
-    org_id: fx.org.id,
-    type: 'project',
-    parent_id: fx.meta.id,
-  })
-  const older = await task(fx, { project_id: sibling.id, title: 'Older parent' })
-  const under = await task(fx, { parent_id: older.id })
-  return { ...people, parent, held, under }
+  return { left, parent, held }
 }
 
 /* ------------------------------------------------- 4. REST links and labels */
@@ -1266,24 +1253,24 @@ describe('MCP task parity', () => {
     })
   })
 
-  it('update_task with a parent or a new assignee checks who works on the task against every task above it', async () => {
+  it('update_task sets a parent while someone left on the task holds it, and gives them no new work', async () => {
     const fx = await setup()
-    const { fwOnly, fwOther, parent, held, under } = await leftOn(fx)
+    const { left, parent, held } = await leftOn(fx)
     const update = (args: Record<string, unknown>) =>
       mcpWrite(fx, internal.machine.mcp.updateIssue, args)
-    // the assignee left on the task cannot see the parent
-    await refused(update({ ref: held.id, parent: parent.id }), 'rule', HOLDER_SIGHT_RULE)
-    expect((await row(fx.t, held.id)).parent_id).toBeUndefined()
-    // the same update passes when it also replaces that assignee
-    await update({ ref: held.id, parent: parent.id, assignee_id: fwOnly.id })
+    // the assignee left on the task sees neither it nor the parent
+    await update({ ref: held.id, parent: parent.id })
     expect(await row(fx.t, held.id)).toMatchObject({
       parent_id: parent.id,
-      assignee_id: fwOnly.id,
+      assignee_id: left.id,
     })
-    // a new assignee must see every task above, here an older family's
-    // parent in a sibling sub-project
-    await refused(update({ ref: under.id, assignee_id: fwOther.id }), 'rule', ASSIGNEE_SIGHT_RULE)
-    expect((await row(fx.t, under.id)).assignee_id).toBeUndefined()
+    // and the parent takes no work of theirs
+    await refused(
+      update({ ref: parent.id, assignee_id: left.id }),
+      'bad_request',
+      `user "${left.id}" has no access to this project`,
+    )
+    expect((await row(fx.t, parent.id)).assignee_id).toBeUndefined()
   })
 
   it('refuses arguments the schema does not know before the tool runs, unless it takes none', async () => {
