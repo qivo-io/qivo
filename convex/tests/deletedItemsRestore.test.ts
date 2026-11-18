@@ -3233,9 +3233,12 @@ describe('parents outside a restored project', () => {
   })
 
   it('brings back 150 tasks that waited for parents in 10 projects with their 150 people, without those parents, within the real limits', async () => {
-    // checked for each person and project, who sees the parents read more
-    // than the 4,096 index ranges of one transaction, so every retry failed
-    // and the attach gave up on the parents
+    // each task of Board rev has a person of its own and waits for a parent
+    // in another sub-project. The restore's steps check each person's Edit
+    // to keep them on their task, and the attach steps read each parent and
+    // the restorer's levels once, all within one transaction's real limits.
+    // No parent stays, because a subtask stays in its parent's own
+    // sub-project
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withReadingAdmin(t)

@@ -222,6 +222,8 @@ describe('task holders in the store', () => {
     await vi.waitFor(() => expect(P.taskDetail(row.id, row.org_id)?.view).toBeTruthy())
     const task = P.taskDetail(row.id, row.org_id)?.view
     if (!task) throw new Error('the window shows no task')
+    // the store holds nobody but the signed-in person, so it judges no one else
+    expect(P.users.map((u) => u.id)).toEqual(P.myProfileIds)
     const viewer = P.users.find((u) => u.name === 'Direct View')
     expect(viewer).toBeUndefined()
     expect(task.assignee).toBeTruthy()

@@ -3329,7 +3329,7 @@ async function revealTasks(
       continue
     }
     const outside = await memoRead(reads.parents, parentId, () =>
-      outsideParent(run, parentId, restorer, reads),
+      outsideParent(run, parentId, reads),
     )
     const kept = await keptParent(run, t.doc, t.home, outside, children, reads)
     if (kept === 'later') return null
@@ -3361,7 +3361,8 @@ type ParentReads = {
   subtasks: Map<string, number>
   parents: Map<string, Promise<OutsideParent | null>>
   projects: Promise<Doc<'projects'>[]> | undefined
-  people: Map<string, Promise<OrgProjectLevels | null>>
+  /* what the restorer sees (seenBy) */
+  seen: Promise<OrgProjectLevels | null> | undefined
 }
 
 const newParentReads = (): ParentReads => ({
@@ -3369,7 +3370,7 @@ const newParentReads = (): ParentReads => ({
   subtasks: new Map(),
   parents: new Map(),
   projects: undefined,
-  people: new Map(),
+  seen: undefined,
 })
 
 /** Live task `id` from `live`, read and charged to the step's budget the
@@ -3399,15 +3400,17 @@ function liveProjects(run: Run, reads: ParentReads): Promise<Doc<'projects'>[]> 
   return reads.projects
 }
 
-/** What profile `id` sees for the parent table, their levels on the
- * organization's projects, or null for someone switched off or gone, read
- * once per reveal or attach step. It reads the profile, then its grants and
- * team shares in one batched read (lib/access.ts projectLevelsForOrg), which
- * answers every project at once. The step's budget counts the ranges and
- * the bytes of every document read. */
-function seenBy(run: Run, reads: ParentReads, id: string): Promise<OrgProjectLevels | null> {
-  return memoRead(reads.people, id, async () => {
-    const profile = await profileOf(run, id)
+/** What the step's restorer (`run.actor`) sees for the parent table, their
+ * levels on the organization's projects, or null without a restorer or for
+ * one switched off or gone, read once per reveal or attach step. It reads
+ * the profile, then its grants and team shares in one batched read
+ * (lib/access.ts projectLevelsForOrg), which answers every project at once.
+ * The step's budget counts the ranges and the bytes of every document
+ * read. */
+function seenBy(run: Run, reads: ParentReads): Promise<OrgProjectLevels | null> {
+  reads.seen ??= (async () => {
+    if (run.actor === undefined) return null
+    const profile = await profileOf(run, run.actor.id)
     if (profile !== null) chargeRead(run.budget, profile)
     if (profile === null || !profile.active) return null
     const projects = await liveProjects(run, reads)
@@ -3415,7 +3418,8 @@ function seenBy(run: Run, reads: ParentReads, id: string): Promise<OrgProjectLev
     const levels = await projectLevelsForOrg(measured(run.ctx, read), profile, projects)
     run.budget.bytes -= read.bytes
     return levels
-  })
+  })()
+  return reads.seen
 }
 
 /** A live task outside the item that tasks of the item name as their
@@ -3434,13 +3438,12 @@ type OutsideParent = {
 
 /** The OutsideParent for `parentId`, or null when no task of the item can
  * keep it: it is not live, or it is not the task the item stored (the
- * reference predicate). Without a restorer, whose profile is gone since the
- * reveal, it edits nothing. The restorer's level comes from what they see
- * (seenBy). */
+ * reference predicate). Without a restorer (`run.actor`), whose profile is
+ * gone since the reveal, it edits nothing. The restorer's level comes from
+ * what they see (seenBy). */
 async function outsideParent(
   run: Run,
   parentId: string,
-  restorer: Doc<'profiles'> | undefined,
   reads: ParentReads,
 ): Promise<OutsideParent | null> {
   const parent = await liveTaskOf(run, reads.tasks, parentId)
@@ -3448,7 +3451,7 @@ async function outsideParent(
   const project = await byId(run.ctx, 'projects', parent.project_id)
   if (project === null) return null
   chargeRead(run.budget, project)
-  const levels = restorer === undefined ? null : await seenBy(run, reads, restorer.id)
+  const levels = await seenBy(run, reads)
   return {
     parent,
     project,
@@ -3776,7 +3779,7 @@ async function attachParent(
   )
   if (home === null) return await settle(await holderOf(run, task.project_id))
   const outside = await memoRead(step.parents, row.parent_id, () =>
-    outsideParent(run, row.parent_id, run.actor, step),
+    outsideParent(run, row.parent_id, step),
   )
   const kept = await keptParent(run, task, home, outside, new Map(), step)
   if (kept === 'later') return false

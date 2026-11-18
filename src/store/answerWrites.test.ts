@@ -624,7 +624,7 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
       'error',
     )
     expect(shown().assignee).not.toBe(EMIL)
-    // a parent the answer leaves out is the server's to check
+    // a hidden parent changes nothing, and the store sends the write
     await load()
     await openFar(okAnswer(far({ has_hidden_parent: true })))
     void P.updateIssue(H, { assignee: EMIL })

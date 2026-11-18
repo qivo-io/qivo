@@ -178,14 +178,9 @@ function blockerText(b: MoveBlocker): string {
 
 /* The sentence of a move's refusal over `blockers`, at least one: the first
  * MOVE_NAMES.people by name with their subtasks and the others counted,
- * then `lacks`, which takes the verb's form, and what to change. `unchecked`
- * says the move stopped checking before the last person, so others may
- * block it too. */
-function blockersSentence(
-  blockers: readonly MoveBlocker[],
-  unchecked: boolean,
-  lacks: (several: boolean) => string,
-): string {
+ * then what they lack and what to change. `unchecked` says the move stopped
+ * checking before the last person, so others may block it too. */
+function blockersSentence(blockers: readonly MoveBlocker[], unchecked: boolean): string {
   const named = blockers.slice(0, MOVE_NAMES.people).map(blockerText)
   const rest = blockers.length - named.length
   if (rest > 0)
@@ -195,7 +190,7 @@ function blockersSentence(
   // one subtask is "that subtask", also where two people hold it
   const tasks = new Set(blockers.flatMap((b) => b.tasks))
   const one = rest === 0 && !unchecked && tasks.size === 1
-  return `${who} ${lacks(named.length > 1)}, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
+  return `${who} cannot edit that sub-project; give them Edit access there, or change who works on ${one ? 'that subtask' : 'those subtasks'} first`
 }
 
 export const REVIEWER_ON_GROUP =
@@ -1949,12 +1944,7 @@ export const MOVE_SUBTREE_EDIT_RULE =
 export const moveSubtreeHolderRule = (
   blockers: readonly MoveBlocker[],
   unchecked = false,
-): string =>
-  blockersSentence(
-    blockers,
-    unchecked,
-    () => 'cannot edit that sub-project; give them Edit access there',
-  )
+): string => blockersSentence(blockers, unchecked)
 /* A task that moves may have at most LIMITS.moveSubtree.max subtasks,
  * archived ones included. The move reads them all, including any already in
  * the destination, and carries the rest. LIMITS.subtasks.max bounds only
