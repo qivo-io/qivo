@@ -19,8 +19,7 @@
  *      number another organization's live or stored project holds.
  *   4. Its search ignores accents, case and word order over the whole list
  *      and answers only this organization's rows; a row whose bytes cross
- *      the cursor between calls is missed or answered again, as the owner
- *      accepted.
+ *      the cursor between calls is missed or answered again.
  *   5. Both queries refuse anyone but an active admin of the organization,
  *      an organization being deleted, a long search and a foreign or
  *      malformed cursor (the demo's refusal is in demo.test.ts); Storage by

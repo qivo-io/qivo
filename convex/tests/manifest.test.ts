@@ -1227,12 +1227,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // few people by id. Each runs the write's own gate and rule, and is read
   // once a batch, never subscribed. The editor's mention suggestions take
   // the task and offer the people with access to its project, behind the
-  // same gate, by name alone (the owner's decision of 12 November 2026);
-  // the view filter's people (viewOwners) take the project a Board or a
-  // Roadmap selects and are the owners of its tasks, for a caller whose
-  // views select it; the follower popover's Add list takes the task and
-  // runs the follow write's gate and rule. No picker lists every person
-  // of the organization.
+  // same gate, by name alone; the view filter's people (viewOwners) take
+  // the project a Board or a Roadmap selects and are the owners of its
+  // tasks, for a caller whose views select it; the follower popover's
+  // Add list takes the task and runs the follow write's gate and rule.
+  // No picker lists every person of the organization.
   pickers: {
     canOwn: 'orgQuery',
     mentions: 'orgQuery',

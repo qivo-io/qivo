@@ -859,12 +859,12 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
  * in a hidden project) answers 'parent task not found' before any other
  * guard describes it. Attaching changes the parent (it becomes a group and
  * loses its own hours), so it also needs Edit on the parent's project, like
- * any other change to it. A subtask stays in its parent's own sub-project
- * (owner, 18 November 2026). A family stored before that rule may span
- * sibling sub-projects, and one stored before the earlier rule that kept a
- * subtask in its parent's top-level project any two projects. Such rows
- * stay readable, every reader and guard keeps tolerating them, failing
- * closed, and no write makes or keeps such a link. */
+ * any other change to it. A subtask stays in its parent's own sub-project.
+ * A family stored before that rule may span sibling sub-projects, and one
+ * stored before the earlier rule that kept a subtask in its parent's
+ * top-level project any two projects. Such rows stay readable, every
+ * reader and guard keeps tolerating them, failing closed, and no write
+ * makes or keeps such a link. */
 
 /** Whether a task in project `child` may be a subtask of a task in project
  * `parent`, which is when both are the same sub-project. parentChainCheck
@@ -1937,10 +1937,10 @@ export const MOVE_SUBTASK_RULE =
 export const MOVE_SUBTREE_EDIT_RULE =
   'moving this task would move a subtask in a project you cannot edit; someone who can edit that project can move it'
 /** The refusal of a move that would carry subtasks whose `blockers`, their
- * assignees and reviewers, cannot work in the destination, by name (owner,
- * 17 November 2026). The mover edits every carried subtask, so each is
- * named. `unchecked` says the move stopped checking before the last
- * subtask, so others may block it too. */
+ * assignees and reviewers, cannot work in the destination, by name. The
+ * mover edits every carried subtask, so each is named. `unchecked` says
+ * the move stopped checking before the last subtask, so others may block
+ * it too. */
 export const moveSubtreeHolderRule = (
   blockers: readonly MoveBlocker[],
   unchecked = false,

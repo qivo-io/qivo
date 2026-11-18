@@ -12,9 +12,9 @@ deployment.
 
 From October 24 to November 13, 2026, Qivo ran its own copy of the adapter in
 `vendor/convex-better-auth/`, because the official adapter did not support
-Better Auth 1.7 yet. Its release `0.13.0` of November 4, 2026 does, and the
-owner decided on November 13, 2026 to use it and delete the copy, so that
-Qivo keeps no adapter code of its own. Two things follow from that.
+Better Auth 1.7 yet. Its release `0.13.0` of November 4, 2026 does, and
+Qivo now uses it and keeps no adapter code of its own. Two things follow
+from that.
 
 - **The OAuth provider's link index is declared as an ordinary index.** The
   adapter refuses a schema that declares a unique index of several fields,
@@ -181,9 +181,8 @@ source of `0.13.0` on November 13, 2026, for a later release to recheck:
 - **Sign-out.** Ending a browser session ends the OAuth access tokens
   issued in it, whether the session ends at sign-out, at a ban, when Better
   Auth deletes it after it expired or in any call that ends many sessions at
-  once. A password reset ends no session. The owner decided on 25 October
-  2026 that a reset, most often for a forgotten password, keeps every
-  session, OAuth connection and token, so
+  once. A password reset ends no session. A reset, most often for a forgotten
+  password, keeps every session, OAuth connection and token, so
   `emailAndPassword.revokeSessionsOnPasswordReset` in `convex/auth.ts` is
   `false`. Better Auth's reset calls `deleteUserSessions` only when that
   option is set; an upgrade that changes the option's meaning or default
@@ -240,22 +239,21 @@ source of `0.13.0` on November 13, 2026, for a later release to recheck:
   client forgets the session in the browser as it sends the sign-out, so the
   person is signed out there whatever the server answers, also offline
   (`signOut` in `src/lib/authSession.ts`). Better Auth answers a sign-out
-  whose session delete failed with HTTP `200`, and Qivo adds nothing to that
-  (owner decision, November 13, 2026). Such a failure is rare, nobody can use
-  the session from that browser, and it ends at its expiry, at most 7 days
-  later. Until then the access tokens issued in it keep working, each for at
-  most an hour. Qivo's before hook on `/sign-out` (`oauthHooks`) drops the
-  signed authorization request that the app's OAuth client adds to a
-  sign-out from the connect page, which the provider would refuse once it
-  expires. A press while a sign-out runs joins it, and the controls show that
-  it runs. The client applies the cleared cookies of a completed sign-out to
-  the browser's stored session as it is when the answer arrives. A session
-  that another tab of the same page stored while the request ran is therefore
-  forgotten too, and that tab signs in again. Qivo's copy kept such a
-  session. The app and the operator console store their sessions apart, so
-  neither signs the other out. A login removal from the console deletes the
-  login and then its sessions and tokens, and `/mcp` refuses every token of a
-  missing or banned login.
+  whose session delete failed with HTTP `200`, and Qivo adds nothing to that.
+  Such a failure is rare, nobody can use the session from that browser, and
+  it ends at its expiry, at most 7 days later. Until then the access tokens
+  issued in it keep working, each for at most an hour. Qivo's before hook on
+  `/sign-out` (`oauthHooks`) drops the signed authorization request that the
+  app's OAuth client adds to a sign-out from the connect page, which the
+  provider would refuse once it expires. A press while a sign-out runs joins
+  it, and the controls show that it runs. The client applies the cleared
+  cookies of a completed sign-out to the browser's stored session as it is
+  when the answer arrives. A session that another tab of the same page stored
+  while the request ran is therefore forgotten too, and that tab signs in
+  again. Qivo's copy kept such a session. The app and the operator console
+  store their sessions apart, so neither signs the other out. A login removal
+  from the console deletes the login and then its sessions and tokens, and
+  `/mcp` refuses every token of a missing or banned login.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
   smoke cleanup and the demo purge) also delete the client's resource links.
   The operator's and the console's login deletes keep the clients, as before.

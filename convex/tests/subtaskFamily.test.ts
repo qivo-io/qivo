@@ -1,11 +1,10 @@
-/* A subtask stays in its parent task's own sub-project (owner, 18 November
- * 2026). Creating a subtask and setting a parent are refused across
- * sub-projects on every surface, a move to any other sub-project carries the
- * task's subtasks along, and a subtask that moves must leave its parent in
- * the same change. A family stored before the rule may span sub-projects;
- * its rows are planted. withOrg's TBED holds FW (f.sub) and PCB (f.sub2);
- * the scene adds a second top-level project, Cloud, with the Backend and
- * Frontend sub-projects. */
+/* A subtask stays in its parent task's own sub-project. Creating a subtask
+ * and setting a parent are refused across sub-projects on every surface, a
+ * move to any other sub-project carries the task's subtasks along, and a
+ * subtask that moves must leave its parent in the same change. A family
+ * stored before the rule may span sub-projects; its rows are planted.
+ * withOrg's TBED holds FW (f.sub) and PCB (f.sub2); the scene adds a second
+ * top-level project, Cloud, with the Backend and Frontend sub-projects. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'

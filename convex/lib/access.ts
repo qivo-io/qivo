@@ -169,8 +169,7 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
  * design size's sum and tested there (tests/accessFlags.test.ts, "the
  * navigation walk"). Past the design size Convex's own read limit refuses
  * the call with a generic server error, which widens nothing and shows
- * nothing as complete (agent decision, 5 November 2026, closing
- * t3/limits-reach-access-checks). The figure is per call, so a request that
+ * nothing as complete. The figure is per call, so a request that
  * asks about one parent twice walks it twice, as a REST or MCP sub-project
  * create does for a caller who does not manage the parent
  * (machine/projects.ts managedProject, then model/projects.ts
@@ -1369,8 +1368,7 @@ export async function projectLevelsForOrg(
  * with room, and past it Convex's own read limit refuses the call with a
  * generic server error, which widens nothing and shows nothing as complete,
  * where a bounded design would add refusal paths and a second level rule
- * beside levelsFrom for sizes the design size says not to build for (agent
- * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
+ * beside levelsFrom for sizes the design size says not to build for. Its
  * readers are the REST and MCP task routes' access flags (lib/core.ts
  * accessFlags), through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at

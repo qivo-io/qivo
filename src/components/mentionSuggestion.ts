@@ -13,10 +13,9 @@
    task's project, the caller too, and searches them with the popup's
    match: every word of the text in the name or the initials, in any
    order, ignoring case but not accents. It sends no email, and a row
-   shows the name alone, for everyone (the owner's decision of 12 November
-   2026). An editor that names no task reads nothing and lists nobody,
-   and a read for the person's own new task waits until the server took
-   its create.
+   shows the name alone, for everyone. An editor that names no task reads
+   nothing and lists nobody, and a read for the person's own new task waits
+   until the server took its create.
    The renderer reads
    through the shared paged list's `once` engine (lib/pagedList.ts
    onceList), so TipTap's own fetch (`items`) answers nothing and can never

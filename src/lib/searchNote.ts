@@ -19,8 +19,8 @@ export type SearchCoverage =
     button that moves to its Search in choice, when the lines offer one. */
 export type SearchNote = { lines: string[]; offer: string | null }
 
-/** The owner's note for a search that may have missed matches in what it
-    searched (owner decision, 2026-10-28). */
+/** The note for a search that may have missed matches in what it
+    searched. */
 export const MIGHT_BE_MISSING = 'Some results might be missing. Choose a project to search in.'
 
 /** The note for a search of a chosen project that may have missed

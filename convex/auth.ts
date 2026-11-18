@@ -225,9 +225,9 @@ export const createAuthOptions = (
       requireEmailVerification: true,
       /* A reset, also from the operator's recovery link, ends no session,
        * so the access tokens issued in them, OAuth connections, personal
-       * tokens and agent keys keep working (owner decision, 2026-10-25: most
-       * resets are a forgotten password, not a stolen one). Signing out, a
-       * ban and deleting the login still end sessions as before. */
+       * tokens and agent keys keep working (most resets are a forgotten
+       * password, not a stolen one). Signing out, a ban and deleting the
+       * login still end sessions as before. */
       revokeSessionsOnPasswordReset: false,
       sendResetPassword: async ({ user, url }) => {
         // The operator's recovery link is returned, never mailed.

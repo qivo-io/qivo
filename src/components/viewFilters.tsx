@@ -204,15 +204,14 @@ function FilterSearch({
    The people come from the server (pickers.viewOwners, P.viewOwnerChoices):
    the owners of the tasks of the project the view selects, the reviewer
    of a task In review and else its assignee, and nobody else of the
-   organization (the owner's decision of 12 November 2026), all at once in
-   name order, with a search over names and initials, read once while the
-   menu is open and the page shows. The chosen people come first, checked
-   and named (useChosenPeople, also one a filter carried from another
-   project chose there, who may own no task here), whatever the answer
-   holds; the listed rows are drawn from their own initials and color and
-   named by no one, so opening the menu loads no face or picture. A pick
-   toggles, and the Board's and the Roadmap's reads filter by the ids on
-   the server (`owners`).
+   organization, all at once in name order, with a search over names and
+   initials, read once while the menu is open and the page shows. The
+   chosen people come first, checked and named (useChosenPeople, also one
+   a filter carried from another project chose there, who may own no task
+   here), whatever the answer holds; the listed rows are drawn from their
+   own initials and color and named by no one, so opening the menu loads
+   no face or picture. A pick toggles, and the Board's and the Roadmap's
+   reads filter by the ids on the server (`owners`).
 
    It says "Me ONLY" because that is what distinguishes it from the roster
    underneath, where your own name would be one pick among several: this row

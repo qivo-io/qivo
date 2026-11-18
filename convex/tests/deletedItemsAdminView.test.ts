@@ -8,13 +8,12 @@
  * these cases. The rows come from deletedItems.item and the page, the only
  * reads of the items since deletedItems.list and matches went.
  *
- * Two of the review points for this view are agent decisions of the admin
- * access split (7 November 2026): an admin's probe for rows stored before
- * the page stays organization-wide (model/deletedItemsPage.ts Seat.admin,
- * olderRows), so `legacy` can come from projects they cannot read, and the
- * admin's assignee index can end a short page at a row it dropped, which
- * the next page's cursor moves past. Both say nothing a task they cannot
- * read holds.
+ * Two rules of this view come with the admin access split. An admin's
+ * probe for rows stored before the page stays organization-wide
+ * (model/deletedItemsPage.ts Seat.admin, olderRows), so `legacy` can come
+ * from projects they cannot read, and the admin's assignee index can end a
+ * short page at a row it dropped, which the next page's cursor moves past.
+ * Both say nothing a task they cannot read holds.
  *
  * The last block reads at the design size, one figure raised a case, and
  * logs its reads as tests/deletedItemsPageReads.test.ts does. */
@@ -639,7 +638,7 @@ describe('an admin by ordinary access', () => {
     // the stored rows give the admin the top-level project for navigation
     // to Lab, which counts as it does in anyone else's view of a project
     // item, so its own tasks show, as they do to a member, one rule for
-    // every seat (agent decision of the admin access split, 7 November 2026)
+    // every seat
     expect(await titles('Kickoff')).toEqual(['Kickoff notes'])
   })
 

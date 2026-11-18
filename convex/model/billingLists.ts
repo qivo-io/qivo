@@ -22,11 +22,11 @@
  * read share of its own (API_ACCOUNTS, ACCOUNT_NAMES) and answers
  * `stopped` where the share ended it.
  *
- * Calls change while an admin browses, and nothing freezes a snapshot (the
- * owner, 31 October 2026). An account whose calls grow past the cursor
- * between two batches is missed until the list starts again, and one a
- * re-rank lowers past it is answered twice, which the app shows once. The
- * figures never depend on the rows loaded. */
+ * Calls change while an admin browses, and nothing freezes a snapshot. An
+ * account whose calls grow past the cursor between two batches is missed
+ * until the list starts again, and one a re-rank lowers past it is
+ * answered twice, which the app shows once. The figures never depend on
+ * the rows loaded. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

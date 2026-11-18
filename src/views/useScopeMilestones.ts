@@ -7,10 +7,8 @@
    (views/useMilestoneSection.ts) of convex/milestones.ts section on a kept
    page's two fixed slots. A project or sub-project reads its top-level
    project's milestones, and My view reads `mine`, which the server
-   resolves to the projects that hold the person's own work (coordinator,
-   7 November 2026). The agenda lists the Overview's
-   sections, an agent decision of 7 November 2026 that confirms the
-   coordinator's assumption of 28 October 2026.
+   resolves to the projects that hold the person's own work. The agenda
+   lists the Overview's sections.
 
    The Overview also shows the next milestone, Upcoming's first row while
    the section has not moved on, else a one-row read of the same base on a

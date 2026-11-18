@@ -48,10 +48,9 @@ export type SectionSizes = { batch: number; rows: number }
 export const MILESTONE_SECTION: SectionSizes = { batch: 25, rows: MILESTONE_READ_ROWS }
 
 /** The sizes of the Overview's and the phone agenda's sections: 10
-    upcoming milestones at first and 10 more for each Load more, and a
-    Past of 25 at a time, the owner's batches of 24 October 2026 (the
-    window's decision leaves the Overview's 10 as they are), each up to the
-    server's cap. Tests and the perf page lower these and restore them. */
+    upcoming milestones at first and 10 more for each Load more, and a Past
+    of 25 at a time, each up to the server's cap. Tests and the perf page
+    lower these and restore them. */
 export const OVERVIEW_MILESTONES: { upcoming: SectionSizes; past: SectionSizes } = {
   upcoming: { batch: 10, rows: MILESTONE_READ_ROWS },
   past: { batch: 25, rows: MILESTONE_READ_ROWS },

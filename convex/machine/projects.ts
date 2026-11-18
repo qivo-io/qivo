@@ -645,12 +645,11 @@ async function* placed<Row>(
  * credential of `access`).
  *
  * The order is the tree's: each top-level project by key, followed by its
- * sub-projects on the list by key, the project ids breaking ties (owner,
- * 28 October 2026). Keys compare by their UTF-8 bytes (lib/namedPages.ts
- * compareNamed), so digits come before capital letters and a key before
- * the longer keys it begins. A position is the top-level project's key
- * with a tie of its id and, inside its sub-projects, a sub-project's key
- * and id (ProjectTie).
+ * sub-projects on the list by key, the project ids breaking ties. Keys
+ * compare by their UTF-8 bytes (lib/namedPages.ts compareNamed), so
+ * digits come before capital letters and a key before the longer keys it
+ * begins. A position is the top-level project's key with a tie of its id
+ * and, inside its sub-projects, a sub-project's key and id (ProjectTie).
  *
  * Who is listed. The active list (`archived` false) holds every live
  * top-level project the caller sees by lib/access.ts canSeeProject's rule
@@ -1074,7 +1073,7 @@ export type HiddenHoldingsJson = { tasks: number; user_ids: string[] }
  * caller who removed their own access leaves out what they no longer see,
  * and `hidden` counts the distinct tasks left out and names their holders,
  * so a caller without access learns the counts and the owners and no
- * title (the owner's rule for an admin without Edit). The sight is one
+ * title (the rule for an admin without Edit). The sight is one
  * lib/access.ts accessOf instance asked about the distinct projects of the
  * holdings, at most the projects the removal reaches: a top-level project
  * and its sub-projects for a project grant, 70 at the design size, or for

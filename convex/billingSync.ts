@@ -1010,8 +1010,8 @@ async function daysClosed(
 }
 
 /** Records the storage of daily period `period` once, from its
- * organization's daily samples (model/storageSamples.ts), by the owner's
- * rules (periodAverage). The period's days are the UTC dates from its
+ * organization's daily samples (model/storageSamples.ts), by
+ * periodAverage's rules. The period's days are the UTC dates from its
  * start's date up to the day before its end's date (periodDays).
  *
  * Before its deadline, STORAGE_FINALIZE_LEAD_MS before its end, it records

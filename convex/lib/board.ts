@@ -110,8 +110,8 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * selection of thousands of tasks or candidates with long texts reaches the
  * budget, and a filter that keeps subtasks under many parents sooner, as it
  * reads each such parent's subtasks again. Each answers over_budget, and
- * the owner chose on 31 October 2026 that the Board then asks the person to
- * narrow. The tests reach those answers by lowering `reads`.
+ * the Board then asks the person to narrow. The tests reach those answers
+ * by lowering `reads`.
  *
  * `context` caps the groups among the rows and the shown parents together,
  * the rows a Board holds beside its BOARD.ceiling cards. They count in
@@ -349,9 +349,8 @@ async function boardAnswer(
  * My view the top-level projects of the person's Backlog and Done tasks
  * (their assignee ranges, where the assignee is the owner). A project
  * selection answers its sub-projects in its order, My view its top-level
- * projects by id. Owner lanes come from the rows (the coordinator's answer
- * of 2026-10-31), so a person whose only scoped tasks Focus hides gets no
- * lane.
+ * projects by id. Owner lanes come from the rows, so a person whose only
+ * scoped tasks Focus hides gets no lane.
  */
 async function heldLanes(
   ctx: QueryCtx,

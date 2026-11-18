@@ -330,8 +330,7 @@ export async function archivedTasksAfter(
  * inside the request's room rather than refusing like the active lists
  * (activeTaskPage.ts TASK_LIST_UNREADABLE). Inside the design size the room
  * moves no page stop, and a refusal could give no advice that works,
- * because the reads before the page do not depend on the project named
- * (coordinator, 2026-11-03).
+ * because the reads before the page do not depend on the project named.
  *
  * An organization admin who reads the 200 live sub-projects one person can
  * read through grants gets one All projects page, merged side by side and
@@ -595,13 +594,13 @@ export const profileNamesIn = (
 /** How many of the organization's labels a search reads at once. When the
  * organization has at most `scan` labels, a search reads them all in one
  * range and reads a task's labels only when one of them holds a piece of
- * the search. Past it, as labels have no cap (the owner's choice of 24
- * October 2026, design-spec §9.2), it reads instead the labels of each task
- * whose own fields, text and assignee did not match, by id. A label stores
- * a name of at most 40 characters, its lowercase copy, a color and two ids,
- * so 1,000 labels at the longest names read one range and under 300 KiB
- * (convex/tests/archived.test.ts pins both). The scan reads one label more
- * to tell whether that was all. Tests lower it. */
+ * the search. Past it, as labels have no cap (design-spec §9.2), it reads
+ * instead the labels of each task whose own fields, text and assignee did
+ * not match, by id. A label stores a name of at most 40 characters, its
+ * lowercase copy, a color and two ids, so 1,000 labels at the longest names
+ * read one range and under 300 KiB (convex/tests/archived.test.ts pins
+ * both). The scan reads one label more to tell whether that was all. Tests
+ * lower it. */
 export const ARCHIVE_LABELS = { scan: 1000 }
 
 /** The organization's labels whose lowercased name holds one of `pieces`,
@@ -826,10 +825,10 @@ export const ARCHIVED_PAGE_ROWS = 25
  * which count toward no bound but `rows`. To find them it reads the
  * project_reach rows of the caller's seat and of at most `teams` of their
  * teams, and at most `rows` such rows and sub-project rows in all, skipped
- * and repeated ones included. A family has no cap on sub-projects (the
- * owner's choice of 24 October 2026, design-spec §9.2), so past those
- * bounds a page answers that the scope is too wide, for every caller, an
- * organization admin included (ArchiveScope). REST and MCP archived lists
+ * and repeated ones included. A family has no cap on sub-projects
+ * (design-spec §9.2), so past those bounds a page answers that the
+ * scope is too wide, for every caller, an organization admin included
+ * (ArchiveScope). REST and MCP archived lists
  * of more than `subProjects` projects answer the same. At the design size
  * `subProjects` is the 200 live sub-projects one person can read, so such a
  * person's All projects merges side by side, one page, whether their grants

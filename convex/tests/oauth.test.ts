@@ -1841,9 +1841,8 @@ describe('OAuth revocation, replay and live account checks', () => {
     }
   })
 
-  // The owner decided on 2026-10-25 that a reset ends no session,
-  // connection or token, since most resets are a forgotten password, not a
-  // stolen one.
+  // A reset ends no session, connection or token, since most resets are a
+  // forgotten password, not a stolen one.
   it('keeps every session, the OAuth connection and a personal token working at a password reset', async () => {
     const f = await fixture()
     const c = await connect(f)

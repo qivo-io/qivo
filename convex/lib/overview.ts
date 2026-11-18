@@ -20,10 +20,9 @@
  * status distribution), paused leaves and Left. Figures that follow the day
  * or the reader are read from the tasks within OVERVIEW.reads, and a figure
  * whose reads do not fit answers `unavailable`, never a smaller number. So
- * do the counts while they are not whole (`counting`). That is the owner's
- * rule of 1 November 2026, which holds for every view like this one: a view
- * shows a figure it cannot read whole within one request as unavailable,
- * never as a partial total.
+ * do the counts while they are not whole (`counting`). The same rule holds
+ * for every view like this one. A view shows a figure it cannot read whole
+ * within one request as unavailable, never as a partial total.
  *
  * - Overdue counts the scope's tasks, groups included, that are not done for
  *   the reader and are due before the reader's day: a leaf by its stored
@@ -165,9 +164,9 @@ export { type Figure, type Missing, WEEK_STARTS } from './viewLoads'
  * every figure given in each case. Sorted by Name it judges only the rows
  * it answers.
  *
- * Delayed and Slipping read the loads of the owners the order needs, so, by
- * the owner's rule of 1 November 2026 for figures that follow workloads,
- * they answer unavailable past this measured size inside the design size.
+ * Delayed and Slipping read the loads of the owners the order needs. A
+ * figure that depends on people's workloads may answer unavailable past its
+ * measured size inside the design size, and these two do past this one.
  * An everyday project's 10 owners hold the organization's open tasks, half
  * of them scheduled. Beside the project's own 90, those tasks are in
  * sub-projects of 30 open tasks, three to a project, so each owner's

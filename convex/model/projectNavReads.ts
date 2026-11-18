@@ -32,9 +32,8 @@
  * sub-project the seat sees (visible) (seatSight shows). A project the seat
  * sees only through an archived sub-project, which lib/access.ts counts for
  * navigation, has nothing live to lead to and stays out of every read, the
- * search included (coordinator, 4 November 2026). A sub-project shows when
- * it and its parent are live and the seat sees it, which shows its parent
- * too.
+ * search included. A sub-project shows when it and its parent are live and
+ * the seat sees it, which shows its parent too.
  *
  * Where candidates come from. The page reads each seat's live favorites
  * (project_favorites by_profile_list) and the live root reach rows of the

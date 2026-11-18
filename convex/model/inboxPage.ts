@@ -107,8 +107,8 @@ import { inboxScope, unreadChange } from './inboxReads'
 
 /**
  * The bounds of one Inbox page, which tests lower and set back with
- * structuredClone. `rows`: the groups a page holds, the owner's 50
- * (lib/limits.ts INBOX_PAGE_ROWS, the registry's inboxPage).
+ * structuredClone. `rows`: the groups a page holds, 50 (lib/limits.ts
+ * INBOX_PAGE_ROWS, the registry's inboxPage).
  * `reads`: what one call may read, NAMED_READ's share (2,000 index ranges,
  * 8,000 documents and 4 MiB) for a subscription list that runs again on
  * every change of what it read, which lib/namedPages.ts namedCeiling also

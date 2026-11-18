@@ -48,8 +48,8 @@
  *   Edit check, since a comment's author may edit it as a Viewer, and it
  *   offers the active profiles, people and agents, who have access to the
  *   task's project, the caller too, by the sight the mention fan-out
- *   asks of a recipient (the owner's decision of 12 November 2026). Its rows hold
- *   the initials and color and no email (model/pickers.ts mentionsOf).
+ *   asks of a recipient. Its rows hold the initials and color and no email
+ *   (model/pickers.ts mentionsOf).
  * - viewOwners: the people the view filter's Assignee menu offers above a
  *   Board or a Roadmap, the owners of the tasks of the project the view
  *   selects, with the same match and rows, all at once

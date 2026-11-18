@@ -366,9 +366,8 @@ export type PageDelayRow = { issue: Doc<'issues'>; project: Doc<'projects'>; gro
  * was not read, whose load was unavailable, or whose access check a bound
  * stopped is UNAVAILABLE_DELAY, also on a passed due date, as a single read is.
  * So the rows of a person with very much open work can say unavailable on every
- * page while the single read judges them, which is the agreed rule for figures
- * that depend on people's workloads (the owner's choice of 1 November 2026,
- * design-spec §9.1).
+ * page while the single read judges them, which is the rule for figures that
+ * depend on people's workloads (design-spec §9.1).
  */
 export async function pageForecaster(
   ctx: QueryCtx,

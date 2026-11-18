@@ -77,8 +77,7 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * answer unavailable, and an owner past the owner reader's bounds answers
  * unavailable at once. That a row of a person with very much open work says
  * unavailable on every page, while the task's own read judges it, is the
- * agreed rule for figures that depend on people's workloads (the owner's
- * choice of 1 November 2026, design-spec §9.1). */
+ * rule for figures that depend on people's workloads (design-spec §9.1). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,

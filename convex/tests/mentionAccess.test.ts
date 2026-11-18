@@ -1,12 +1,11 @@
 /* Who the editor's @ mention popup offers (pickers.mentions,
  * model/pickers.ts mentionsOf): only the people with access to the project
  * of the task whose text holds the "@", by name alone, never an email, for
- * every caller (the owner's decision of 12 November 2026). It holds the
- * gate that runs before any person is read, the rule, the rows and the
- * match, the cursors, readiness and the rule's read budget.
- * tests/pickers.test.ts measures its reads at the design size beside the
- * other task pickers', and tests/viewOwners.test.ts holds the view
- * filter's people, the owners of a project's tasks. */
+ * every caller. It holds the gate that runs before any person is read, the
+ * rule, the rows and the match, the cursors, readiness and the rule's read
+ * budget. tests/pickers.test.ts measures its reads at the design size
+ * beside the other task pickers', and tests/viewOwners.test.ts holds the
+ * view filter's people, the owners of a project's tasks. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it } from 'vitest'

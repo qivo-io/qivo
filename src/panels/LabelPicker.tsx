@@ -3,8 +3,7 @@
    The picker reads the labels it offers from the server a batch at a time
    (labels.picker, through P.labelChoices), as the store holds no label, on
    the rules the window's other pickers follow
-   (panels/RelationPicker.tsx, the coordinator's decisions of 4 and 6
-   November 2026):
+   (panels/RelationPicker.tsx):
 
    - A typed search rests for SEARCH_DELAY_MS and starts a list with one
      read, an empty one at once, through the shared paged list

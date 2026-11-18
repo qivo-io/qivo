@@ -57,17 +57,16 @@
  * Search. Every term must match a whole word, the last also as a prefix,
  * and a task reference its number, with accents exact (lib/searchTerms.ts),
  * which is main Search's rule, kept here for project entries too, rather
- * than the substring match of Settings lists (coordinator, 2026-11-05). A
- * project entry matches by the names and keys its row shows. Task entries
- * come from the task numbers the text names and from search_text queries,
- * each filtered to the items of one of the seat's sources, with fixed
- * allowances set before any reads (gatherTasks); the cross-project items no
- * query covers are read whole. A candidate counts only in a project the
- * seat may read in its view of the item (ItemView readable), so an
- * admin's search keeps its sources and drops the tasks they cannot read,
- * which is how it narrows an admin's search (coordinator, 2026-11-05).
- * Every page gathers the same candidates and orders them, and is the
- * entries after its cursor.
+ * than the substring match of Settings lists. A project entry matches by
+ * the names and keys its row shows. Task entries come from the task numbers
+ * the text names and from search_text queries, each filtered to the items
+ * of one of the seat's sources, with fixed allowances set before any reads
+ * (gatherTasks); the cross-project items no query covers are read whole. A
+ * candidate counts only in a project the seat may read in its view of the
+ * item (ItemView readable), so an admin's search keeps its sources and
+ * drops the tasks they cannot read, which is how it narrows an admin's
+ * search. Every page gathers the same candidates and orders them, and is
+ * the entries after its cursor.
  *
  * Stops. A browse or scan that spends its budget ends the page with
  * next_cursor at the last item it looked at, also with no entries. A page
@@ -79,10 +78,9 @@
  * a seat's sources, or the page went past an entry whose row its budget
  * could not build, and `matches` on every search page, an admin's
  * included, never computed from a stop, since every seat's search sources
- * hold tasks hidden from it (owner, 2026-10-28, as main Search). Rows
- * stored before v0.1.122, the first release that wrote the page's fields,
- * hold none of them, so only their number finds them; `legacy` says so
- * (olderRows). */
+ * hold tasks hidden from it (as main Search). Rows stored before
+ * v0.1.122, the first release that wrote the page's fields, hold none of
+ * them, so only their number finds them; `legacy` says so (olderRows). */
 
 import type { IndexRange } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -128,23 +126,22 @@ type Profile = Doc<'profiles'>
  * one they lead or whose top-level project they lead; with some projects
  * it is any they see, whatever their level there. The assignee scan reads
  * both kinds in each of these ranges, so it counts each once, as the
- * browse does. The bound is the design size's sum for one person
- * (coordinator, 2026-11-05): the 200 live and 500 archived sub-projects one
- * person may read, each led one by one, the organization's 200 live and
- * 300 archived top-level projects, each led, and their own deletes, 1,201
- * ranges, which also holds a scope of all the projects they can read.
- * Inside it they browse, filter by assignee and search; past it they get
- * too_wide, and a scope of fewer projects serves them. `adminSources`
- * bounds the ranges an admin's scope of some projects opens, the ordered
- * and the cross-project ranges together (taskPlan, searchPlan). Past it the admin reads the
- * organization's range of the kind and keeps the scope in code, and
- * searches the organization in one query, which leaves the search's room
- * to its results. `searches` search queries one call plans, past which the
- * seat's search reads its organization through one query and judges every
- * candidate. `candidates` results one search query reads at most, below
- * the 1,024 one Convex search query can scan, and `results` the results
- * the call's search queries read together, split into equal allowances
- * before any of them reads.
+ * browse does. The bound is the design size's sum for one person: the 200
+ * live and 500 archived sub-projects one person may read, each led one by
+ * one, the organization's 200 live and 300 archived top-level projects,
+ * each led, and their own deletes, 1,201 ranges, which also holds a scope
+ * of all the projects they can read. Inside it they browse, filter by
+ * assignee and search; past it they get too_wide, and a scope of fewer
+ * projects serves them. `adminSources` bounds the ranges an admin's scope
+ * of some projects opens, the ordered and the cross-project ranges together
+ * (taskPlan, searchPlan). Past it the admin reads the organization's range
+ * of the kind and keeps the scope in code, and searches the organization in
+ * one query, which leaves the search's room to its results. `searches`
+ * search queries one call plans, past which the seat's search reads its
+ * organization through one query and judges every candidate. `candidates`
+ * results one search query reads at most, below the 1,024 one Convex search
+ * query can scan, and `results` the results the call's search queries read
+ * together, split into equal allowances before any of them reads.
  *
  * Convex stops a query at 16 MiB, 32,000 documents or 4,096 ranges. `call`
  * covers every read of the call but the rows of the page's entries and
@@ -1169,7 +1166,7 @@ const scanEntry =
  * projects the admin cannot read, which it drops, so no entry, hit or count
  * comes from them; a stop can then end a short page at such a row, which
  * tells only that the person was assigned deleted work there, the owners
- * an admin keeps (owner, 2026-10-29).
+ * an admin keeps.
  */
 async function assigneeEntries(run: Run, seat: Seat, scope: Scoped, from: At | null) {
   const person = run.a.assignee
@@ -1504,15 +1501,15 @@ class Stop extends Error {}
  * Whether the page says that its search or assignee filter may miss tasks
  * stored before v0.1.122, the first release that wrote the page's fields
  * (`legacy`). Such rows hold none of them, so only their number finds
- * them, and no backfill writes the fields (owner, 2026-10-28). Items
- * expire in 30 days, but a stuck item never does, so no date stands in for
- * a look: an admin's page asks the organization once whether it holds such
- * a row (by_org_assignee with neither field), and anyone else's always says
- * so, as the look also sees rows hidden from them. This probe, `legacy` and
- * the read-only count (internal/olderDeletedTasks.ts count) go together
- * once a run of the count finds no such row on any deployment, the demo
- * included, after the last ready item's purge_after has passed (the
- * later-work entry on olderRows of 9 November 2026 in qivo-internal).
+ * them, and no backfill writes the fields. Items expire in 30 days, but a
+ * stuck item never does, so no date stands in for a look: an admin's page
+ * asks the organization once whether it holds such a row (by_org_assignee
+ * with neither field), and anyone else's always says so, as the look also
+ * sees rows hidden from them. This probe, `legacy` and the read-only count
+ * (internal/olderDeletedTasks.ts count) go together once a run of the
+ * count finds no such row on any deployment, the demo included, after the
+ * last ready item's purge_after has passed (the later-work entry on
+ * olderRows of 9 November 2026 in qivo-internal).
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
   if (!seat.admin) return true

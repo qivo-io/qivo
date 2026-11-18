@@ -53,7 +53,7 @@
    - An upload's ticket and confirm, a background (uploadAppearanceImage)
      and a profile picture (setAvatar), are two calls of one upload, an
      action of fixed steps.
-   - The organization export is a server job, the owner's exception.
+   - The organization export is a server job, outside this rule.
    - The operator console (src/admin/) sends single calls. */
 
 /** The most lanes of large actions the app runs at once, so it has at

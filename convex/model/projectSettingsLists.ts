@@ -25,11 +25,11 @@
  * projects they find and the sub-projects of the projects it sees for a
  * reason of its own. Such a seat never reads an organization-wide range,
  * so where a batch ends and how far its budget goes depend only on its own
- * rows and the projects they find (archived pages fail closed, 29 October
- * 2026). An archived top-level project shows to it when it sees it for a
- * reason of its own (accessible), or through an archived sub-project
- * beneath it that it sees (archivedSight), as lib/access.ts counts archived
- * sub-projects for navigation.
+ * rows and the projects they find (archived pages fail closed). An archived
+ * top-level project shows to it when it sees it for a reason of its own
+ * (accessible), or through an archived sub-project beneath it that it sees
+ * (archivedSight), as lib/access.ts counts archived sub-projects for
+ * navigation.
  *
  * Rights. Each row's rights are the writes' rule, lib/access.ts managesIn
  * of the project in its tree, never the sight that found it: an admin
@@ -39,10 +39,10 @@
  * and projects.deleteDeep of an Archived projects entry. A sub-project
  * beneath an archived parent, which only a search lists, carries its
  * parent's `can_restore`, the action a search hit takes (restoring the
- * parent brings it back when `with_parent`), and no right of its own
- * (coordinator, 5 November 2026). They are the writes' own rule, since
- * the writes ask this predicate (model/projects.ts assertManages and
- * subProjectParent, projects.deleteDeep and removalSummary).
+ * parent brings it back when `with_parent`), and no right of its own.
+ * They are the writes' own rule, since the writes ask this predicate
+ * (model/projects.ts assertManages and subProjectParent,
+ * projects.deleteDeep and removalSummary).
  *
  * Orders and cursors. Settings › Projects and its search are in name key
  * byte order (lib/namedPages.ts compareNamed), tied by the project id and

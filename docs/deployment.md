@@ -789,7 +789,7 @@ check's log and a screenshot of each failed step for 7 days. The run uses no
 secret and reaches no hosted deployment. The backend's keys and the fixture
 logins are made on the runner and go with it.
 
-By the owner's decision of 12 November 2026 it runs with each release.
+It runs with each release.
 Whoever runs the staging check for a release starts this job from main at
 the same time, while main is at the release's commit, and reports its
 `FAIL`, `SKIP` and `NOTE search-lost` lines with the release. They hold no
@@ -2471,45 +2471,44 @@ because the app reads nothing these changes removed. The release needs no
 backfill and no release step.
 
 From the release after v0.1.165, no list of people that any seat reads
-sends or matches an email, and two lists are narrower (owner decisions, 12
-November 2026). The @ mention popup offers only the people who have access
-to the project of the task whose description or comment holds the **@**, by
-name alone. `pickers.mentions` takes the task (`issue_id`), answers nobody
-for a task the caller cannot see, and answers the active people and agents
-who see the task's project, the caller too, with the name, initials and
-color. The **Assignee** filter above the Board and the Roadmap lists only
-the people who hold a task of the selected project, through the new
-`pickers.viewOwners`, which takes the project, reads its active tasks
-within the Board's read budget and answers their owners with the same
-fields, all at once. Both match names and initials. The **+ Add** list
-under **Subscribers** (`pickers.taskFollowers`) matches names alone. The
-app of that release sends `issue_id` and calls `pickers.viewOwners`, so
-that release is the backend's floor for its app. An app from it, against a
-backend before it, says **Couldn't load people.** in every mention popup
-and in the Assignee menu, until the backend rolls forward. An earlier app
-against this backend says the same in both, as
-[Rollback and hotfixes](#rollback-and-hotfixes) lists. From that release
-on, never return the backend to a commit before it while its app is
-served; roll forward instead. The release changes no table, field or index
-and has no backfill and no release step.
+sends or matches an email, and two lists are narrower. The @ mention popup
+offers only the people who have access to the project of the task whose
+description or comment holds the **@**, by name alone. `pickers.mentions`
+takes the task (`issue_id`), answers nobody for a task the caller cannot
+see, and answers the active people and agents who see the task's project,
+the caller too, with the name, initials and color. The **Assignee** filter
+above the Board and the Roadmap lists only the people who hold a task of
+the selected project, through the new `pickers.viewOwners`, which takes the
+project, reads its active tasks within the Board's read budget and answers
+their owners with the same fields, all at once. Both match names and
+initials. The **+ Add** list under **Subscribers**
+(`pickers.taskFollowers`) matches names alone. The app of that release
+sends `issue_id` and calls `pickers.viewOwners`, so that release is the
+backend's floor for its app. An app from it, against a backend before it,
+says **Couldn't load people.** in every mention popup and in the Assignee
+menu, until the backend rolls forward. An earlier app against this backend
+says the same in both, as [Rollback and hotfixes](#rollback-and-hotfixes)
+lists. From that release on, never return the backend to a commit before it
+while its app is served; roll forward instead. The release changes no
+table, field or index and has no backfill and no release step.
 
 From the release after v0.1.166, **Deleted by** and **Assigned to** on
 Deleted items list only the people who appear on a deleted item the seat
 sees, as its deleter or as the holder of a deleted task it may read, and
-nobody else of the organization (owner decision, 12 November 2026).
-`deletedItems.people` takes which of the two lists it answers (`of`), no
-cursor any more, and answers every such person at once, or the people found
-so far with `stopped` when its read budget ends first. The app of that
-release sends `of`, so that release is the backend's floor for its app. An
-app from it, against a backend before it, and an earlier app against this
-backend, such as a tab left open, say **Couldn't load people.** in both
-menus until the tab reloads or the backend rolls forward. The release changes
-no table, field or index and has no backfill and no release step.
+nobody else of the organization. `deletedItems.people` takes which of the two
+lists it answers (`of`), no cursor any more, and answers every such person at
+once, or the people found so far with `stopped` when its read budget ends
+first. The app of that release sends `of`, so that release is the backend's
+floor for its app. An app from it, against a backend before it, and an
+earlier app against this backend, such as a tab left open, say **Couldn't
+load people.** in both menus until the tab reloads or the backend rolls
+forward. The release changes no table, field or index and has no backfill and
+no release step.
 
 From the release after v0.1.166, Qivo runs the official Convex adapter for
 Better Auth, `@convex-dev/better-auth` 0.13.0, with Better Auth 1.7.21, in
-place of its own copy of the adapter and Better Auth 1.7.12 (owner decision,
-13 November 2026, [Better Auth and the Convex adapter](better-auth-upgrade.md)).
+place of its own copy of the adapter and Better Auth 1.7.12
+([Better Auth and the Convex adapter](better-auth-upgrade.md)).
 Logins, password hashes, sessions, OAuth clients, consents, grants and tokens
 are stored as before, so nobody signs in again and no MCP client reconnects.
 A sign-in answers without a token cookie and clears the one the browser
@@ -2673,34 +2672,34 @@ clients no longer need them. A public function, argument or answer field the
 app stops using stays through the release that ships the app's replacement,
 so tabs and desktop windows loaded before it keep working until they reload.
 A later release may remove it and adds it to the Instant Rollback list in
-Rollback and hotfixes. Two releases broke that rule on purpose, by the
-owner's decision while Qivo had no users: v0.1.52 and the release after it,
-which replaced `snapshot.forMe` with the workspace parts. A tab open across
-either deploy shows wrong load or cannot load until it reloads, and each is a
-rollback floor (see Rollback and hotfixes). Later changes keep the rule,
-with one exception. By the owner's decision of 7 November 2026, while
-nobody uses the app, a change removes an old function, part or answer field
-in the same release that stops using it, as the release after v0.1.159
-removes the milestones of the workspace projects part and the release after
-v0.1.160 the workspace's people and catalog parts, and its deployment
-paragraph names only the floor a later rollback needs.
+Rollback and hotfixes. Two releases broke that rule on purpose: v0.1.52 and
+the release after it, which replaced `snapshot.forMe` with the workspace
+parts. A tab open across either deploy shows wrong load or cannot load until
+it reloads, and each is a rollback floor (see Rollback and hotfixes). Later
+changes keep the rule, except some of the releases from the one after
+v0.1.159 to v0.1.169, which remove an old function, part or answer field, or
+start to require an argument, in the same release that stops using the old
+form. The releases after v0.1.159, v0.1.160, v0.1.161, v0.1.165 and v0.1.166
+do. A tab open across such a deploy cannot load, or cannot load the part
+that changed, until it reloads, and each release's paragraph in Rollback and
+hotfixes says what an earlier app does and names the floor a later rollback
+needs. From the release after v0.1.170 on, every change keeps the rule.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.
 
 From the release after v0.1.168 a subtask stays in its parent task's own
-sub-project (owner, 18 November 2026). Every write that makes or keeps a
-parent link refuses a parent in another sub-project, every move carries the
-task's subtasks to the destination, and a restore from Deleted items brings
-a task back without a parent in another sub-project. The release changes no
-table, field or index, and the app and backend ship together. An app from
-before it against this backend offers parents and subtasks of the sibling
-sub-projects, which the server refuses with the rule's sentence, sends a
-subtask's move within its project without leaving the parent, which the
-server refuses the same way, and paints a task's move within its project
-without its subtasks, which the server carries, until it reloads. Rows
-from before the rule stay readable, so returning the backend to an earlier
-release is safe, but that release makes families across sub-projects
-again.
+sub-project. Every write that makes or keeps a parent link refuses a parent
+in another sub-project, every move carries the task's subtasks to the
+destination, and a restore from Deleted items brings a task back without a
+parent in another sub-project. The release changes no table, field or
+index, and the app and backend ship together. An app from before it against
+this backend offers parents and subtasks of the sibling sub-projects, which
+the server refuses with the rule's sentence, sends a subtask's move within
+its project without leaving the parent, which the server refuses the same
+way, and paints a task's move within its project without its subtasks,
+which the server carries, until it reloads. Rows from before the rule stay
+readable, so returning the backend to an earlier release is safe, but that
+release makes families across sub-projects again.
 
 v0.1.169 (`5138c16`) also carried two internal functions,
 `internal/orgReset:orgs` and `internal/orgReset:deleteOrg`, which listed a

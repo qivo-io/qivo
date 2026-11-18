@@ -6,8 +6,7 @@
  * name-ordered grant lists (lib/namedPages.ts readBatch, which refuses a
  * position that does not move), so a project with such rows cannot be read
  * or updated over REST and MCP until they are repaired. The closing review
- * runs this once on each hosted deployment, under the owner's decision of
- * 7 November 2026 that such reports run there and not before a release.
+ * runs this once on each hosted deployment, and not before a release.
  *
  * `count` walks one table's holder index (by_project_profile or
  * by_project_team) in pages of `page_size` rows, never through the access
