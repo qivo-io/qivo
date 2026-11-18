@@ -5,8 +5,8 @@
  * groups by the subtasks among them (groupTest), the load rows of them all
  * through the one fence (orgLoadRows over lib/loadRows.ts loadRowFor), and
  * each person's weekly hours from those rows (fenceWorkload). REST and MCP
- * workload read the organization this way until t3/limits-workload-pages,
- * which reads each person's own open tasks instead, so no production code
+ * workload read the organization this way until the workload pages, which
+ * read each person's own open tasks instead, so no production code
  * reads all of an organization's live tasks any more and this copy stays
  * here, unbounded, for the tests alone.
  *

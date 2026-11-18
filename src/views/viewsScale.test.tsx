@@ -502,9 +502,9 @@ const designProject = (snap: Snapshot) => {
     }
 }
 
-/* Each case keeps to vitest's default timeout (vitest.config.mts). On 6
-   November 2026 the three cases at 1,000 rows took 4.0 to 5.3 s each, the
-   others under 0.4 s, on a large Boat sandbox. */
+/* Each case keeps to vitest's default timeout (vitest.config.mts). The three
+   cases at 1,000 rows take 4.0 to 5.3 s each, the others under 0.4 s, on a
+   large Boat sandbox. */
 describe('the Roadmap at the design size', () => {
   it("shows a project's 800 open and 200 Done tasks at their sum, from its answer", async () => {
     const board = await loadBoard(network, designProject, { scope: 'plan' })

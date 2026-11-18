@@ -31,8 +31,8 @@ async function flush(cache: ReturnType<typeof createAvatarImageCache>) {
 }
 
 describe('persistent account profile image bytes', () => {
-  // Changed with the roster cache stage: an entry of a profile the store
-  // does not know stays, unread, where the cache used to prune it
+  // An entry of a profile the store does not know stays, unread, where the
+  // cache used to prune it
   it('reads only the keys the store knows and replaces a storage-version key, keeping unknown profiles', async () => {
     const f = fixture({
       scope,

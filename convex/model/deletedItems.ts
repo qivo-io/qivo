@@ -1792,9 +1792,9 @@ const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
       : undefined
 
 /* Items deleted before this can hold grants and shares stored without a
- * grantee: the release that added deleted_rows.grantee reached every
- * hosted deployment on 22 October 2026. The expiry purges such items by 22
- * November 2026, after which no item is older than this. */
+ * grantee. Every item deleted from this time on stores the grantee of each
+ * of them. The expiry purges such items by 22 November 2026, after which no
+ * item is older than this. */
 const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
 
 /** The most stored rows without a grantee one read takes for an item and
@@ -2939,9 +2939,9 @@ async function writeTask(
  * parent outside it once (outsideParent), reading nothing back after a
  * write. It reads none of the item's deleted_tasks rows, which hold each
  * task's searchable text, so it reads about what a reveal read before they
- * held it, which a timing on a local backend on 5 November 2026 found
- * inside Convex's limits for a task with LIMITS.subtasks.max subtasks whose
- * descriptions are at the cap in a three-byte script. */
+ * held it, which stays inside Convex's limits on a local backend for a task
+ * with LIMITS.subtasks.max subtasks whose descriptions are at the cap in a
+ * three-byte script. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {
     const late = await run.ctx.db

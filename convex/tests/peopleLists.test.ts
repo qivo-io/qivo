@@ -1591,8 +1591,7 @@ async function measurePages(
 }
 
 /* The organization of the people figure: withOrg's 5 and 995 more, 1,000
- * people at the design size, everything else at everyday values. The
- * coordinator's timing plants it too. */
+ * people at the design size, everything else at everyday values. */
 async function plantRoster(fx: Fx) {
   return await plantMany(fx.t, fx.org.id, 995)
 }

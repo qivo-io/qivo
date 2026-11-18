@@ -1025,16 +1025,15 @@ export async function removeMessages(
  * unread message outside the batch and a newest read one: the batch reads
  * each marked message four times (the range, its patch, the prune's read
  * and its delete), the newer unread message the prune seeks and the read
- * one. On 28 October 2026 the batch was sized with every message as long
- * as a change notice can be, the longest title and names in a three-byte
- * script, about 3.9 KB, past the design size. That is about 23.6 KB a
- * marked message, so 177 fit below a quarter of the 16 MiB read limit.
- * convex/tests/inboxBulk.test.ts ("one batch at INBOX_BATCH") runs one
- * batch at 160 with notices that carry every fragment in ordinary text, in
- * its worst case and the other cases, and each stays below a quarter of
- * each of Convex's transaction limits. These are convex-test's counts,
- * which count the document a patch or a delete reads; a hosted deployment
- * was not measured. */
+ * one. The batch is sized with every message as long as a change notice can
+ * be, the longest title and names in a three-byte script, about 3.9 KB, past
+ * the design size. That is about 23.6 KB a marked message, so 177 fit below
+ * a quarter of the 16 MiB read limit. convex/tests/inboxBulk.test.ts ("one
+ * batch at INBOX_BATCH") runs one batch at 160 with notices that carry every
+ * fragment in ordinary text, in its worst case and the other cases, and each
+ * stays below a quarter of each of Convex's transaction limits. These are
+ * convex-test's counts, which count the document a patch or a delete reads;
+ * a hosted deployment was not measured. */
 export const INBOX_BATCH = 160
 
 /** The two bulk inbox actions: Mark all as read (`read`) and Remove all

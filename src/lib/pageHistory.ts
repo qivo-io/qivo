@@ -607,8 +607,8 @@ export function installPageHistory(target: Window = window) {
   target.addEventListener('popstate', onPop)
   const guardsAll = !firesBeforeUnload(target)
   const nav = navigationOf(target)
-  /* The reload guard, measured on 2026-10-25 in Chromium 153, WebKit 26.6
-     and Firefox 155. The browser's Reload fires no navigate event, and a
+  /* The reload guard, measured in Chromium 153, WebKit 26.6 and Firefox 155.
+     The browser's Reload fires no navigate event, and a
      script's location.reload() fires its navigate event before its
      beforeunload. Only WebKit runs a return merged with a person's move
      once more, as a reload of the entry the return reached, whose

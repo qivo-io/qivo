@@ -1,7 +1,7 @@
 /* The projects a caller sees, kept as the tests' reference data now that no
  * workspace part sends them: the reader the workspace's projects part ran
- * before t3/limits-projects-part removed it, without its windows, splits or
- * budgets. For every seat of the caller's login, in seat order, the
+ * before that part was removed, without its windows, splits or budgets. For
+ * every seat of the caller's login, in seat order, the
  * organization's projects the seat sees by lib/access.ts accessOf visible
  * (navigation included, so an archived project and a top-level project
  * seen only through a sub-project are there), oldest first, with every

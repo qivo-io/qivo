@@ -6845,9 +6845,9 @@ const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
    (LIMITS.restoreBatch, LIMITS.purgeBatch): a restore call spends one
    budget shared by its items, a quarter of a step's
    (convex/model/deletedItems.ts CALL), and leaves the rest of a large item
-   to its steps, so more ids make a call no longer than its budget, and a
-   timing on a local backend on 5 November 2026 restored the widest item
-   family whole in a few seconds. Its progress is P.deletedAction, which the
+   to its steps, so more ids make a call no longer than its budget, and on a
+   local backend the action restores the widest item family whole in a few
+   seconds. Its progress is P.deletedAction, which the
    page shows however often it is left and opened again; `resend`, the
    second send of a deferred item, keeps out of it.
 
@@ -10722,7 +10722,7 @@ export const PLANNER = {
   }),
   /** What the project cache holds now (store/projectCache.ts): its
       entries and the ids of each live projectNav.byIds read, for the
-      benchmark page's measurement, the tests and the closing review. */
+      benchmark page's measurement and the tests. */
   cacheStats: () => ({ cached: projectCache.size(), reads: projectCache.reads() }),
   setInboxOpener,
   get roadmapUndo() {

@@ -638,7 +638,7 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * which the popover says. The people a manager may add come from
  * pickers.taskFollowers, a batch at a time, never from this answer.
  *
- * The closing review's report in qivo-internal
+ * A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "View
  * visibility") holds its timed figures. */
 export const subscribers = orgQuery({

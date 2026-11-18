@@ -11,8 +11,7 @@
  *      search against the copy, readiness and the audience.
  *   4. addable: the people who may join, members left out however their
  *      copy stands, and the refusals of the add.
- *   5. Reads at the design size, one figure a case, logged for the
- *      coordinator's timing and recorded in the report. */
+ *   5. Reads at the design size, one figure a case, logged. */
 
 import { ConvexError, compareValues } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'

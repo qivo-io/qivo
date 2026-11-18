@@ -78,8 +78,7 @@ export const get = orgQuery({
  * since each was looked up. More than BY_IDS_MAX (100) ids are refused
  * (model/peopleSettings.ts peopleByIdsOf). Any active seat of the
  * organization reads it. It reads one profile an id, so its reads follow
- * the ids asked, not the organization's people. The closing review's
- * report in qivo-internal
+ * the ids asked, not the organization's people. A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "View
  * visibility") holds its timed figures. */
 export const byIds = orgQuery({

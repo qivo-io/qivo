@@ -35,8 +35,8 @@ type Window = (opened: string | null, close: () => void, open: (id: string) => v
 const AT = '2026-09-14T08:00:00.000Z'
 
 /** A test's budget on the Board, below vitest.config.mts's 60 s default.
-    On 2 November 2026 the Board cases that use it took 1.6 s at most each
-    under a shard's load on a Boat sandbox. */
+    The Board cases that use it take 1.6 s at most each under a shard's load
+    on a Boat sandbox. */
 export const BOARD_TEST_TIMEOUT = 20_000
 
 /* The test-build probe of the store the last loadBoard loaded. */

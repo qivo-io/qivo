@@ -59,11 +59,13 @@
  * profile, team, project, agent key or personal token name gets the name key
  * of its new form, and the copies of a profile's or team's follow it
  * (model/nameKeys.ts). It leaves a project's favorites rows
- * (model/projectFavorites.ts) as they are: its checks of 2026-10-22 found
- * no live project name over the cap on any deployment, every writer has
- * refused one since v0.1.49, and favorites are written only from the release
- * that added them, so no favorite names a project this would cut. It lowers remaining hours to the cap, stores each
- * task description trimmed, and rewrites an address to its punycode form
+ * (model/projectFavorites.ts) as they are: every writer has refused a
+ * project name over the cap since the release that added the caps
+ * (v0.1.49), and this check exists for the rows from before it. A favorite
+ * of a project the fix cuts keeps the old name key, so the readers skip it
+ * (favoriteShows) until internal/favoritesRepair patches its copies
+ * (stale_copies). It lowers remaining hours to the cap, stores each task
+ * description trimmed, and rewrites an address to its punycode form
  * (asciiEmail). A label or address
  * whose fixed form another row of its organization already has is skipped,
  * for a person to rename or merge. It never cuts a task description, comment

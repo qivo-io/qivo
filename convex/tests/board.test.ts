@@ -1106,8 +1106,8 @@ describe('a reached budget', () => {
 
 /* ------------------------------------------------------------- real limits */
 
-/** The reads of each real-limit case, printed for the report and the
- * figures in BOARD's docstring. */
+/** The reads of each real-limit case, printed for the figures in
+ * BOARD's docstring. */
 const FIGURES: Record<string, ReadFigures & { state: string }> = {}
 const record = (name: string, answer: BoardAnswer, read: ReadFigures) => {
   FIGURES[name] = { state: stateOf(answer).state, ...read }

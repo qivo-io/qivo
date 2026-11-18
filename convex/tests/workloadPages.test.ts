@@ -1307,9 +1307,8 @@ describe('at the design size', () => {
  * with 15 of them ("at the design size"). It runs outside the normal
  * suite because seeding the whole figure takes about 40 s on a large Boat
  * sandbox beside the other tests, near vitest's 60 s on a slower runner.
- * Run on demand with QIVO_WORKLOAD_ORG_OPEN=1. On 4 November 2026 it took
- * 6 pages of 9 or 10 people, the heaviest 1,999 ranges, 2,119 documents
- * and 1.2 MB. */
+ * Run on demand with QIVO_WORKLOAD_ORG_OPEN=1. It takes 6 pages of 9 or 10
+ * people, the heaviest 1,999 ranges, 2,119 documents and 1.2 MB. */
 describe.runIf(process.env.QIVO_WORKLOAD_ORG_OPEN === '1')(
   "the organization's open tasks, on demand",
   () => {

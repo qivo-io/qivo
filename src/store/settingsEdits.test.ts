@@ -130,8 +130,8 @@ describe('settings edits through the client store', () => {
   }
 
   describe('updateLabel', () => {
-    // Changed with the roster cache stage: the store reads no catalogue for
-    // a duplicate, and the server refuses a name another label holds
+    // The store reads no catalogue for a duplicate, and the server refuses
+    // a name another label holds
     it('sends a name another label in the organization has, leaving the refusal to the server', () => {
       expect(
         P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(snap, 'l-feat')),

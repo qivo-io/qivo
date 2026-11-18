@@ -38,8 +38,8 @@ import { checkoutDeadline } from './model/orgRetention'
  * profile of the organization, and answers a few dozen fields. The names of who
  * counts toward the bill and who does not come from billing.accountList, only
  * while a list is open. What it reads at the design size's people is logged by
- * convex/tests/billingLists.test.ts ("reads at the design size"), and the
- * closing review's report in qivo-internal
+ * convex/tests/billingLists.test.ts ("reads at the design size"), and a
+ * report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "View
  * visibility") holds its timed figures.
  */

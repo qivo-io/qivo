@@ -56,8 +56,7 @@
  *   a legacy writer stored a task on are not, and their real size counts;
  * - in an organization whose reach rows are not complete yet (org_ready
  *   nav_at), the sub-projects the access reads of such a top-level project
- *   on the legacy path, which every deployment left behind with
- *   internal/navBackfill;
+ *   on the legacy path, which internal/navBackfill leaves behind;
  * - and a view's own reads that follow the organization or a task's links,
  *   as the filter row's search through a label's assignments
  *   (lib/viewFilters.ts filterSearch) and the Roadmap's dependency read

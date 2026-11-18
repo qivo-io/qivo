@@ -29,9 +29,8 @@
    It imports nothing from the store, so node tests drive it with fakes
    (src/lib/batchRunner.test.ts).
 
-   The audit of the other app actions that send several writes (4 to 6
-   November 2026, every store method and every view and panel loop that
-   sends writes):
+   The other app actions that send several writes (every store method and
+   every view and panel loop that sends writes):
 
    - The Inbox's row actions on one item (readItem, unreadItem, removeItem,
      snoozeItem) send one call a press, naming the item by its organization

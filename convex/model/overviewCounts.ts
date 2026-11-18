@@ -58,15 +58,10 @@
  *
  * A sub-project's leaves, and each person's leaves in it, are split over
  * OVERVIEW_SHARDS rows by task number (rowKeysOf), so two concurrent edits
- * there write the same row about a quarter as often. On local backends,
- * two and four writers changing statuses of one person's tasks in one
- * sub-project in tight loops lost at most 0.2% and 1.4% of their calls to
- * write conflicts after Convex's retries, and of five people's tasks none
- * and at most 2.3%, where the release before the counts lost none
- * (2026-11-01). With one row a person in a sub-project they lost 5% to
- * 27%. People editing by hand stay far below those rates. If Convex
- * Insights shows conflicts on overview_counts, the next step is delta rows
- * that writers insert and never read, which a scheduled step folds in.
+ * there write the same row about a quarter as often, which keeps write
+ * conflicts rare for people editing by hand. If Convex Insights shows
+ * conflicts on overview_counts, the next step is delta rows that writers
+ * insert and never read, which a scheduled step folds in.
  *
  * A row that would go below zero is a bug. It is written as it is and
  * logged, and the readers answer `counting` for its scope, never a clamped

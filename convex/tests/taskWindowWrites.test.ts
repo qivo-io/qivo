@@ -2,8 +2,8 @@
  * write the app sends from it checks: the app builds every expected value
  * from the ok answer's row (src/store/planner.ts updateAnswerTask,
  * expectedOf), and what Move and Archive or delete take along from its
- * whole subtask list (P.familyOf). This stage changes no server function;
- * these pin that the answer is enough, and that the server refuses a write
+ * whole subtask list (P.familyOf). These pin that the answer is enough,
+ * and that the server refuses a write
  * whose values the answer no longer holds, as it does any other. */
 
 import { afterEach, describe, expect, it } from 'vitest'

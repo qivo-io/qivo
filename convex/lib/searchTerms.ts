@@ -12,9 +12,9 @@ import { INT4_MAX, ISSUE_PREFIX } from './taskRefs'
  * are part of a letter) and digits (Unicode Number). Every other character,
  * a hyphen, an apostrophe, an underscore, an accent left combining after its
  * letter, ends a word, as in Tantivy's SimpleTokenizer, which Convex uses.
- * A local backend probe (2026-10-29) split "torque-sensor", "Nora's",
- * "snake_case" and "QN-482", kept "rev2board" as one word, and kept a text
- * without spaces, such as Japanese, as one word. */
+ * A local backend splits "torque-sensor", "Nora's", "snake_case" and
+ * "QN-482", keeps "rev2board" as one word, and keeps a text without spaces,
+ * such as Japanese, as one word. */
 const WORD = /[\p{Alphabetic}\p{N}]+/gu
 
 /** A task reference as the search box takes it, QN-482 or a bare 482, when
@@ -183,8 +183,8 @@ const plain = (word: string): boolean => /^[\p{Alphabetic}\p{N}]+$/u.test(word)
  * lowercase of the word they stand in: the capital dotted I, whose lowercase
  * adds a combining dot that is no letter, and the capital sigma, which
  * lowercases to a final sigma at the end of a word but not before an
- * apostrophe or a full stop and a letter. A check of every code point in
- * Node (2026-10-29) found no other. */
+ * apostrophe or a full stop and a letter. No other code point does so
+ * in Node. */
 const RECASED = /[\u0130\u03a3]/
 
 /* inWords over `text`, a text without RECASED characters, lowercased

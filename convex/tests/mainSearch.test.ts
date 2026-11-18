@@ -8,8 +8,7 @@
  * So these cases test ranking, caps and coverage through the server's own
  * logic, with lowered MAIN_SEARCH values, and a description that must be a
  * candidate for a word only its hidden parts hold spaces those parts out,
- * so convex-test returns it. The local backend probe checked Convex's own
- * behavior (the stage report). */
+ * so convex-test returns it. */
 
 import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'

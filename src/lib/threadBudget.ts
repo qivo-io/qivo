@@ -76,11 +76,10 @@ import { LIMITS } from '../../convex/lib/limits'
     median longest frame after a delivered comment and after a Show earlier
     press stays under 100 ms under Comments and under All, and never less
     than 150, which holds the live window, the live page and one more page.
-    The closing review's sweep, with the window's comment rows memoized,
-    found no candidate that meets it, so the figure is the rule's floor.
-    So the app shows frames over the rule after a delivered comment and
-    after a Show earlier press. Design specification row 441 holds the
-    budget and the rule. Tests lower it and restore it. */
+    No candidate meets it with the window's comment rows memoized, so the
+    figure is the rule's floor. So the app shows frames over the rule after a
+    delivered comment and after a Show earlier press. Design specification
+    row 441 holds the budget and the rule. Tests lower it and restore it. */
 export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of

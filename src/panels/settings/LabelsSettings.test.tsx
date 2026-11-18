@@ -900,8 +900,8 @@ describe('a label name on the draft model', () => {
     expect(field().value).toBe('Firmware E')
   })
 
-  // Changed with the roster cache stage: a rename to a name another label
-  // holds goes to the server, which refuses it, and the text stays
+  // A rename to a name another label holds goes to the server, which
+  // refuses it, and the text stays
   it('keeps a name over the cap unsent, and one another label holds typed after the server refuses it', async () => {
     await load((snap) => {
       labelRow(snap, 'fw', 'Firmware')

@@ -1004,8 +1004,8 @@ export const taskWithText = (t: T, id: string): Promise<TaskWithText | null> =>
 /** Gives each live task of organization `orgId`, or only those of `ids`
  * among them, the copy of its text in issues.description, equal to its
  * first description row's text, reading and patching ten tasks a
- * transaction in creation order. Every deployment has run
- * internal/descriptionsBackfill's clear, so only a rollback to the second
+ * transaction in creation order. After
+ * internal/descriptionsBackfill's clear, only a rollback to the second
  * release of the description move writes that copy, on each task it
  * creates or whose description it edits, until the next clear. A test that
  * measures that state or needs the copy plants it here, and a copy on every

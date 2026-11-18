@@ -1002,8 +1002,8 @@ describe("the delivery inside Convex's limits", () => {
     expect(full.ranges - half.ranges).toBe(more)
     expect(full.documents - half.documents).toBe(2 * more)
     // so the 4,000 parts of the real cap read under Convex's 4,096 ranges
-    // and answer under 1 MB (4,007 ranges and 477 KiB with the cap's parts
-    // planted, 6 November 2026)
+    // and answer under 1 MB (4,007 ranges and 477 KiB with the cap's
+    // parts planted)
     const atCap = DEFAULT_LIMITS.parts - EXPORT_LIMITS.parts
     const perPart = (full.answerBytes - half.answerBytes) / more
     console.info('delivery: deliveryOf at a lowered EXPORT_LIMITS.parts', {

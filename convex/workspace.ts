@@ -19,7 +19,7 @@
  *   deleted (the task number in org_counters). It sends no other person's
  *   profile, membership or Team sync stamp, and no team the caller is not
  *   in, so it reads the same at the design size's people as at everyday
- *   values. The closing review's report in qivo-internal
+ *   values. A report in qivo-internal
  *   (evaluations/limits/closing-review-2026-11-09/closing-report.md,
  *   "Task windows retirement") holds its timed figures.
  *

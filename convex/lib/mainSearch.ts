@@ -100,8 +100,7 @@ import {
  *
  * An organization admin's search costs the same as a standard user's with
  * the same rows. A seat that sees more than `projects` is searched whole
- * and reports coverage `projects`. The closing review's report in
- * qivo-internal
+ * and reports coverage `projects`. A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md,
  * "Search") holds the timed figures, at everyday values and against the
  * archive's size.

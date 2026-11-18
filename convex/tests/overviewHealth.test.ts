@@ -1128,7 +1128,7 @@ async function plantOpen(
   }))
 }
 
-/* What one health read took, logged for the stage's report. */
+/* What one health read took, logged. */
 const record = (label: string, took: Took, answer: HealthAnswer) =>
   console.log(
     `health reads, ${label}: ${JSON.stringify(took)} ${JSON.stringify(

@@ -13,8 +13,7 @@
  *   5. projectCreators: who can create projects, two named and the rest
  *      counted exactly up to 100, under the saved setting.
  *   6. The last-admin rule at the writes, over the admins alone.
- *   7. Reads at the design size, one figure a case, logged for the
- *      coordinator's timing and recorded in the report. */
+ *   7. Reads at the design size, one figure a case, logged. */
 
 import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'

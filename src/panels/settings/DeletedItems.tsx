@@ -341,7 +341,7 @@ export function DeletedItemsPage() {
     null
   /** Where focus goes after an action on row `k`: back to the row while it
       is there, else the next row's Restore, the previous row's, or the
-      search box (the review's keyboard rules). */
+      search box. */
   const targetAround = (k: string, sides: Around, prefer?: string) => {
     const here = findLine(k)
     if (here) return controlOf(here, prefer)

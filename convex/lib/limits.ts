@@ -113,9 +113,7 @@ export const NAME_MAX = 80
  * Writers keep rows within those caps (model/projects.ts cleanProjectName
  * and projectDescription, model/teams.ts cleanTeamName, through LIMITS since
  * v0.1.49, before every rollback floor). Only a row stored over the caps
- * could pass it, and the 2026-10-29 dry runs found no project row over 614
- * bytes, no team row over 273 and no Deleted items copy over 755 on any
- * deployment. Every row a project or team read brings along is smaller: a
+ * could pass it. Every row a project or team read brings along is smaller: a
  * grant, a team share or a membership with its name key copy is at most
  * about 2.8 KB, a reach row about 3 KB and a favorite about 2.9 KB. Not in
  * LIMITS, as nobody meets it; tests/rowBounds.test.ts checks it against the

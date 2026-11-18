@@ -28,7 +28,7 @@
  * kept (model/overviewCounts.ts), as the fixture is counted, it reassigned
  * 260 tasks inside the limits and was refused at 320 for filling the
  * transaction (REASSIGN_ROOM), where it reassigned 400 and was refused at
- * 500 without them (convex-test, 1 November 2026). */
+ * 500 without them (convex-test). */
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
