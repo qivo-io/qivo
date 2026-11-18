@@ -1,10 +1,9 @@
 /* The view filter's Assignee menu's people (pickers.viewOwners,
  * model/pickers.ts viewOwnersOf): the owners of the tasks of the project a
- * Board or a Roadmap selects, and nobody else of the organization (the
- * owner's decision of 12 November 2026). It holds who is an owner, the
- * selection a caller reads, the rows and the match, the states and the
- * read budget, and closes with the reads at the design size's tasks of one
- * project. */
+ * Board or a Roadmap selects, and nobody else of the organization. It
+ * holds who is an owner, the selection a caller reads, the rows and the
+ * match, the states and the read budget, and closes with the reads at the
+ * design size's tasks of one project. */
 /// <reference types="vite/client" />
 
 import { compareValues } from 'convex/values'

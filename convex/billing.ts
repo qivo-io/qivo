@@ -128,13 +128,13 @@ export const usageFigures = orgQuery({
  * search are refused too. Answers `counting` while the bucket's usage rows
  * are not all ranked, never a partial list.
  *
- * Calls change while an admin browses, and nothing freezes a snapshot (the
- * owner, 31 October 2026), so an account whose calls grow past the cursor
- * between two batches can be missed until the list starts again, or come
- * back after a re-rank, which the app shows once. A batch reads at most
- * API_ACCOUNTS.reads and answers `stopped` where that ended it, with a
- * `next` that goes on. It reads no credential, task or file. The app reads
- * each batch once (convex.query) and never subscribes to it.
+ * Calls change while an admin browses, and nothing freezes a snapshot, so
+ * an account whose calls grow past the cursor between two batches can be
+ * missed until the list starts again, or come back after a re-rank, which
+ * the app shows once. A batch reads at most API_ACCOUNTS.reads and answers
+ * `stopped` where that ended it, with a `next` that goes on. It reads no
+ * credential, task or file. The app reads each batch once (convex.query)
+ * and never subscribes to it.
  */
 export const apiAccounts = orgQuery({
   args: { period: v.string(), search: v.optional(v.string()), cursor: v.optional(v.string()) },
@@ -191,13 +191,13 @@ export const accountList = orgQuery({
  * `counting` while the organization's totals are not complete, never a
  * partial list.
  *
- * Bytes change while an admin browses, and nothing freezes a snapshot (the
- * owner, 31 October 2026), so a project whose bytes cross the cursor
- * between two batches can be missed until the list starts again, or
- * answered twice, which the app shows once. A batch reads at most
- * STORAGE_PROJECTS.reads and answers `stopped` where that ended it, with a
- * `next` that goes on. It reads no task, file, comment or person. The app
- * reads each batch once (convex.query) and never subscribes to it.
+ * Bytes change while an admin browses, and nothing freezes a snapshot, so
+ * a project whose bytes cross the cursor between two batches can be missed
+ * until the list starts again, or answered twice, which the app shows
+ * once. A batch reads at most STORAGE_PROJECTS.reads and answers `stopped`
+ * where that ended it, with a `next` that goes on. It reads no task, file,
+ * comment or person. The app reads each batch once (convex.query) and
+ * never subscribes to it.
  */
 export const storageProjects = orgQuery({
   args: { search: v.optional(v.string()), cursor: v.optional(v.string()) },

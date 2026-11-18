@@ -129,20 +129,20 @@ import {
  *
  * The loads' measured size is 3,000 open tasks held by the scope's 10
  * owners across the organization, at which every walker's week is given. By
- * the owner's rule of 1 November 2026 for figures that follow workloads, a
- * walker's week and a row's verdict that needs a load may answer
- * unavailable past it, inside the design size. It is measured for an
- * everyday project of 3 sub-projects of 30 open tasks whose 10 owners hold
- * the organization's open tasks, half of them scheduled, in sub-projects of
- * 30, three to a project (the on-demand cases, QIVO_AGENDA_ORG_OPEN=1,
- * which log what each size reads). From 3,500 the owners last in owner id
- * order pass the verdicts' room of OWNER_LOADS.call, 2,000 ranges, so their
- * weeks and the verdicts that need them answer unavailable (`loads`,
- * `unknown`), one owner at 3,500 and about half at 5,000. By 6,500 each
- * owner's scheduled work is in more than the 200 live projects the owner
- * reader reads for one owner (OWNER_LOADS.projects), and every week and
- * every such verdict answers unavailable. Inside the measured size the
- * everyday team reads every walker's load.
+ * the rule for figures that follow workloads, a walker's week and a row's
+ * verdict that needs a load may answer unavailable past it, inside the
+ * design size. It is measured for an everyday project of 3 sub-projects of
+ * 30 open tasks whose 10 owners hold the organization's open tasks, half of
+ * them scheduled, in sub-projects of 30, three to a project (the on-demand
+ * cases, QIVO_AGENDA_ORG_OPEN=1, which log what each size reads). From
+ * 3,500 the owners last in owner id order pass the verdicts' room of
+ * OWNER_LOADS.call, 2,000 ranges, so their weeks and the verdicts that need
+ * them answer unavailable (`loads`, `unknown`), one owner at 3,500 and
+ * about half at 5,000. By 6,500 each owner's scheduled work is in more than
+ * the 200 live projects the owner reader reads for one owner
+ * (OWNER_LOADS.projects), and every week and every such verdict answers
+ * unavailable. Inside the measured size the everyday team reads every
+ * walker's load.
  *
  * The Done tasks the reading floor loads beyond the page's exact reading
  * point count toward the ceiling, so a meeting whose certain tasks fit and
@@ -845,12 +845,11 @@ async function blockersOf(
  * (readAll) within the verdicts' room, lib/ownerLoads.ts OWNER_LOADS.call
  * inside the agenda's guard. A row whose verdict needs a load not read is
  * `unknown`, and so is a walker's week, `loads`. An organization Viewer, the
- * only other seat that reaches here, reads no load (the coordinator's
- * answer of 5 November 2026). Their rows whose verdict needs one are
- * `unknown`, the others judged, and every week `loads`. A row in a project
- * that does not track delay has no verdict. Should a read here pass the
- * guard, every row of a project that tracks delay is `unknown` and every
- * week `budget`.
+ * only other seat that reaches here, reads no load. Their rows whose
+ * verdict needs one are `unknown`, the others judged, and every week
+ * `loads`. A row in a project that does not track delay has no verdict.
+ * Should a read here pass the guard, every row of a project that tracks
+ * delay is `unknown` and every week `budget`.
  */
 async function loadsOf(
   v: ReturnType<typeof verdicts>,

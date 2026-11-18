@@ -1,9 +1,9 @@
 /* A read-only count of the subtasks stored in another sub-project than
  * their parent task's, from before the rule that a subtask stays in its
- * parent's own sub-project (owner, 18 November 2026; model/issues.ts
- * sameSubProject). It writes nothing. It shows, on each deployment, that no
- * task has a parent in another sub-project once the old data is gone
- * (docs/deployment.md, the release after v0.1.168).
+ * parent's own sub-project (model/issues.ts sameSubProject). It writes
+ * nothing. It shows, on each deployment, that no task has a parent in
+ * another sub-project once the old data is gone (docs/deployment.md, the
+ * release after v0.1.168).
  *
  * It reads the tasks that have a parent, a page at a time, in the order of
  * the by_parent index, over every organization of the deployment. A page

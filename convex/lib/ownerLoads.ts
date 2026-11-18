@@ -114,8 +114,7 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * guest's or Viewer's own, and the paused ones in projects the caller can
  * see), or past `open` rows, an owner is unavailable in
  * planning.ownerLoads, their paused weeks with their hours, as for any
- * figure that depends on people's workloads (the owner's choice of
- * 1 November 2026). Tests lower these. */
+ * figure that depends on people's workloads. Tests lower these. */
 export const OWNER_LOADS = {
   owners: 50,
   open: 2000,

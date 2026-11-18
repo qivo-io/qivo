@@ -14,11 +14,10 @@
  * the batch reads under a read share (STORAGE_PROJECTS) and answers
  * `stopped` where the share ended it.
  *
- * Bytes change while an admin browses, and nothing freezes a snapshot (the
- * owner, 31 October 2026). A project whose bytes cross the cursor between
- * two batches can be missed until the list starts again, or answered
- * twice, which the app shows once. The organization's total never depends
- * on the rows loaded.
+ * Bytes change while an admin browses, and nothing freezes a snapshot. A
+ * project whose bytes cross the cursor between two batches can be missed
+ * until the list starts again, or answered twice, which the app shows
+ * once. The organization's total never depends on the rows loaded.
  *
  * Nothing subscribes to it. The app reads each batch once (convex.query),
  * so attaches, moves and purges rerun nothing. */

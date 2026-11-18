@@ -664,18 +664,18 @@ export async function readBatch(
 /* ---------------------------------------------- the Deleted items section
  * The job's last ten sections (lib/orgExport.ts DELETED_SECTIONS) read the
  * organization's retained Deleted items under the export's exception for
- * the whole organization (owner, 25 October 2026), whatever an admin's
- * role reads on the Deleted items page. Each stored table is read on its
- * own from deleted_rows by table and organization (by_table_org_owner) with
- * one cursor, every row's item read once a batch, so a row is read once
- * whichever item holds it then: a restore's split that moves a subtask's
- * rows to another item (model/deletedItems.ts splitOff) patches item_id
- * and leaves them where they are in that index. Only a link a reveal hands
- * to another item (placeLinkBy) changes owner_id, and can then be read
- * twice or missed, which the README says. Both write the receiving item's
- * received_at, so the items section calls an item partial that took rows
- * after collection began and before the section read it. The items come
- * last (`itemsBatch`), each with how much of it the archive holds. */
+ * the whole organization, whatever an admin's role reads on the Deleted
+ * items page. Each stored table is read on its own from deleted_rows by
+ * table and organization (by_table_org_owner) with one cursor, every row's
+ * item read once a batch, so a row is read once whichever item holds it
+ * then: a restore's split that moves a subtask's rows to another item
+ * (model/deletedItems.ts splitOff) patches item_id and leaves them where
+ * they are in that index. Only a link a reveal hands to another item
+ * (placeLinkBy) changes owner_id, and can then be read twice or missed,
+ * which the README says. Both write the receiving item's received_at, so
+ * the items section calls an item partial that took rows after collection
+ * began and before the section read it. The items come last (`itemsBatch`),
+ * each with how much of it the archive holds. */
 
 /** What a Deleted items batch knows of its job: when collection started,
  * when each live section's read ended (step.ended), the live sections any

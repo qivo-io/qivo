@@ -3,7 +3,7 @@
  * records once a UTC day from each counted organization's stored-byte
  * totals (model/storageTotals.ts). A sample is an actual reading only, so
  * an organization and day without one has no reading, never a zero. A paid
- * period on the daily basis averages its days' samples by the owner's rules
+ * period on the daily basis averages its days' samples by the rules
  * for missing days and the cutoff (periodAverage, billingSync.ts
  * finalizeStorage). */
 
@@ -199,9 +199,9 @@ function ceilAverage(values: readonly number[]): number {
 }
 
 /** The average of a daily period's `days` (periodDays) from `readings`, the
- * organization's actual samples of those days by day, by the owner's rules
- * of 25 October 2026 (design-spec §9.3). A day with its own reading is
- * measured, a reading of 0 bytes included. A day without one takes the
+ * organization's actual samples of those days by day, by the rules
+ * of design-spec §9.3. A day with its own reading is measured, a
+ * reading of 0 bytes included. A day without one takes the
  * first later actual reading, of a later day of the period or `later`, the
  * organization's first sample after the period's last day, and records its
  * day in `from`; consecutive missing days take the same one, each counted

@@ -8,7 +8,7 @@
  *      projects the reader can see by the same two sources, for random
  *      organizations, readers and owners, and on Northstar.
  *   2. Guests and Viewers get another person's visible work and none of
- *      their hidden work (lib/loadRows.ts loadShown, the owner's option A),
+ *      their hidden work (lib/loadRows.ts loadShown),
  *      and no one gets a paused task of a project they cannot see; hidden
  *      rows below the bounds change nothing in their answer, and past the
  *      bounds the answer is unavailable and nothing more.

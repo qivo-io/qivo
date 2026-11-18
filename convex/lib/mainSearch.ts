@@ -91,13 +91,13 @@ import {
  * page parses up to `pageParse` more, a page of descriptions at
  * LIMITS.description, and always its first row. Every search result costs
  * an index range, so `ranges` binds first, and each result costs more as
- * the search index grows. The owner set `ranges` on 29 October 2026 from a
- * timing on a local backend in an organization past the design size, so
- * that a call's results stay well inside the 1 s Convex gives a query's own
- * code. Planning counts against `ranges` too, and in convex-test three
- * seats of a member in 25 teams that each share every top-level project the
- * member sees each kept room for their search queries. Parsing `parse`
- * characters of descriptions full of links takes a small part of that time.
+ * the search index grows. `ranges` comes from a timing on a local backend
+ * in an organization past the design size, so that a call's results stay
+ * well inside the 1 s Convex gives a query's own code. Planning counts
+ * against `ranges` too, and in convex-test three seats of a member in 25
+ * teams that each share every top-level project the member sees each kept
+ * room for their search queries. Parsing `parse` characters of descriptions
+ * full of links takes a small part of that time.
  *
  * An organization admin's search costs the same as a standard user's with
  * the same rows. A seat that sees more than `projects` is searched whole
@@ -408,7 +408,7 @@ type Stops = {
  * The coverage a search reports for its stops, the one place that decides
  * it. It never depends on tasks the caller cannot see, as Qivo's access
  * rule fails closed, and it says nothing of how many candidates a source
- * judged or left out (owner decision, 2026-10-28).
+ * judged or left out.
  *
  * A source read over a whole organization returns tasks and projects the
  * caller cannot see too, and they count toward its cap and the budget, so

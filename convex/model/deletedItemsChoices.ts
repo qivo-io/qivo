@@ -172,16 +172,15 @@ const showsTask = (view: ItemView, task: Doc<'deleted_tasks'>): boolean =>
 /**
  * The people Deleted by (`of: 'deleters'`) or Assigned to (`'assignees'`)
  * offers the login's seat in organization `org_id`: only those who appear
- * on a deleted item the seat sees, and nobody else of the organization
- * (the owner's decision of 12 November 2026). The deleters are the people
- * who deleted an item the seat's viewOf shows. The assignees are the
- * people who hold a deleted task in a project that view lets the seat read
- * (ItemView readable), the tasks the assignee filter itself lists. A
- * profile counts only while it is the one the item named
- * (model/deletedItems.ts sameReference), so a seat that reuses a removed
- * person's id is not offered for their items. Rows are person rows in name
- * key order, ties by id, people, agents and switched-off seats alike.
- * `search` keeps those whose name holds every whitespace-separated
+ * on a deleted item the seat sees, and nobody else of the organization.
+ * The deleters are the people who deleted an item the seat's viewOf shows.
+ * The assignees are the people who hold a deleted task in a project that
+ * view lets the seat read (ItemView readable), the tasks the assignee
+ * filter itself lists. A profile counts only while it is the one the item
+ * named (model/deletedItems.ts sameReference), so a seat that reuses a
+ * removed person's id is not offered for their items. Rows are person rows
+ * in name key order, ties by id, people, agents and switched-off seats
+ * alike. `search` keeps those whose name holds every whitespace-separated
  * fragment of it, ignoring case and accents.
  *
  * A search longer than LIMITS.search is refused first, then an

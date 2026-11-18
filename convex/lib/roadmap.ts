@@ -167,15 +167,13 @@ export const ROADMAP = {
  * run out and Auto-move's inputs answer over_budget. `tasks` comes after it
  * inside the design size and bounds the bytes sent.
  *
- * The owner chose on 1 November 2026 that a figure that depends on the day
- * or on workloads may answer unavailable past a measured size inside the
- * design size. Auto-move is a scheduling calculation over other tasks'
- * dates, and design-spec §9.2 asks to make such a calculation explicitly
- * unavailable rather than derive it from incomplete inputs, so its inputs
- * answer over_budget past the size above, an agent decision of 5 November
- * 2026 that borrows choice 1's measured and documented size. The design
- * size has no link figure, so the measured size uses the perf seed's
- * share. */
+ * A figure that depends on the day or on workloads may answer unavailable
+ * past a measured size inside the design size. Auto-move is a scheduling
+ * calculation over other tasks' dates, and design-spec §9.2 asks to make
+ * such a calculation explicitly unavailable rather than derive it from
+ * incomplete inputs, so, as for those figures, its inputs answer
+ * over_budget past the measured and documented size above. The design size
+ * has no link figure, so the measured size uses the perf seed's share. */
 export const DEPENDENCIES = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   tasks: 2000,
@@ -489,8 +487,7 @@ export async function readRoadmap(
  * (lib/viewFilters.ts filterRead). A task is a row where
  * isRoadmapTaskVisible keeps it in `win`, a group by its facts, its
  * effective completion and calculated span, and every row counts toward
- * ROADMAP.ceiling, groups included (the coordinator's decision of 31
- * October 2026).
+ * ROADMAP.ceiling, groups included.
  */
 const roadmapRule = (win: Window): RowRule => ({
   facts: true,
@@ -757,9 +754,9 @@ async function roadmapAnswer(
  * moves it gives over every task the workspace holds within that part, as
  * parts share no task and the solver's pushes follow only edges. Parts with
  * no selected task are left out, so Auto-move no longer moves tasks with no
- * tie to the selection, an agent decision of 5 November 2026, which the
- * Roadmap guide states (docs/guide/the-roadmap.md) since the app's
- * Auto-move works on this read (src/views/roadmap/autoMoveInputs.ts).
+ * tie to the selection, which the Roadmap guide states
+ * (docs/guide/the-roadmap.md) since the app's Auto-move works on this read
+ * (src/views/roadmap/autoMoveInputs.ts).
  *
  * The selected tasks are a project selection's active tasks, every status,
  * or in My view those the person owns by the Reviewer rule, never the

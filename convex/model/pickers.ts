@@ -484,9 +484,8 @@ export async function canOwnOf(
 /** A person as the editor's @ mention popup and the view filter's Assignee
  * menu show and match them: the name, the initials and the color of their
  * portrait (a legacy color sent as gray, model/people.ts shownAvatarColor).
- * It holds no email, which neither list shows or matches for anyone (the
- * owner's decision of 12 November 2026), and no team, level, task or
- * project. */
+ * It holds no email, which neither list shows or matches for anyone, and
+ * no team, level, task or project. */
 export type MentionRow = {
   id: string
   name: string
@@ -543,14 +542,13 @@ const MENTIONS_CURSOR =
  * pickers.mentions for `me`: one batch of MENTION_BATCH people the editor's
  * @ mention popup offers in a text of task `a.issue_id`, its description or
  * one of its comments, in name order. It offers only the people who have
- * access to the task's project (the owner's decision of 12 November 2026):
- * an active profile that sees the project, navigation included
- * (lib/access.ts canSeeProjectFor, the sight the mention fan-out asks of
- * a recipient), a person or an agent, the caller too. An agent without an
- * inbox (lib/access.ts keepsInbox), such as a Viewer agent, is offered
- * too and can be named in a text, and the fan-out neither notifies nor
- * subscribes it, as before. A switched-off profile and
- * anyone without a level on the project are left out, an organization
+ * access to the task's project: an active profile that sees the project,
+ * navigation included (lib/access.ts canSeeProjectFor, the sight the
+ * mention fan-out asks of a recipient), a person or an agent, the caller
+ * too. An agent without an inbox (lib/access.ts keepsInbox), such as a
+ * Viewer agent, is offered too and can be named in a text, and the fan-out
+ * neither notifies nor subscribes it, as before. A switched-off profile
+ * and anyone without a level on the project are left out, an organization
  * admin without one included. In order:
  *
  * 1. The arguments: a search past LIMITS.search is refused with that
@@ -628,8 +626,7 @@ export type ViewOwnersArgs = { project_id: string; search?: string }
 /**
  * pickers.viewOwners for `me`: the people the view filter's Assignee menu
  * offers above the Board or the Roadmap of project `a.project_id`, who are
- * the owners of that selection's tasks and nobody else (the owner's
- * decision of 12 November 2026). In order:
+ * the owners of that selection's tasks and nobody else. In order:
  *
  * 1. The arguments: a search past LIMITS.search is refused with that
  *    limit's sentence.
@@ -772,9 +769,8 @@ const FOLLOWERS_CURSOR =
  * 5. The walk over every profile of the organization in name order
  *    (profileIndex), keeping each person the rule lets in whose name
  *    holds every word of the search in any order, ignoring case and
- *    accents, never their email (the owner's decision of 12 November
- *    2026), and whose follow of the task one lookup finds missing. Past
- *    NAMED_READ it stops and says so.
+ *    accents, never their email, and whose follow of the task one
+ *    lookup finds missing. Past NAMED_READ it stops and says so.
  *
  * The app reads it once a batch while the Add list is open and never
  * subscribes. The write checks again.

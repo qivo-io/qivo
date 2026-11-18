@@ -6,8 +6,7 @@
  * projects or each sub-project one by one, a person in 5 teams, a team that
  * shares 50 live and 150 archived projects, the catalogue of 2,000
  * projects every seat's sight reads, and 1,000 people. Deleted items has
- * no figure of its own; it holds the work of these (coordinator,
- * 2026-11-05, question 13).
+ * no figure of its own; it holds the work of these.
  *
  * Each case prints what its pages read, as convex-test counts it and as
  * the page counts it (pageFor's spend), and checks that the page answered
