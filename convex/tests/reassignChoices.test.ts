@@ -24,7 +24,7 @@ import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
-import { ASSIGNEE_RULE, ASSIGNEE_SIGHT_RULE, NO_WRITE_ACCESS } from '../model/issues'
+import { ASSIGNEE_RULE, NO_WRITE_ACCESS } from '../model/issues'
 import {
   type HeldTasks,
   REASSIGN_ROOM,
@@ -461,55 +461,6 @@ describe('the Reassign picker against the write', () => {
     })
     expect(sorted(listed)).toEqual(['Lena', 'admin', 'user'])
   })
-
-  it("leaves out who cannot see a lost subtask's parent in another sub-project, also one the caller cannot see", async () => {
-    const b = await base()
-    // Lena leads Firmware alone and cannot see Board rev
-    const lena = await b.person('Lena')
-    await b.t.run((ctx) => ctx.db.patch(b.f.sub._id, { lead_id: lena.id }))
-    const pia = await b.person('Pia')
-    await b.grant(b.f.sub, pia)
-    await b.grant(b.f.sub2, pia)
-    const parent = await b.task(b.f.sub2, { title: 'Board bring-up', assignee_id: b.f.user.id })
-    await b.task(b.f.sub, {
-      title: 'Flash the bootloader',
-      parent_id: parent.id,
-      assignee_id: pia.id,
-    })
-    // Edit on Firmware, and with sight of Board rev or without
-    const quinn = await b.person('Quinn')
-    await b.grant(b.f.sub, quinn)
-    const rae = await b.person('Rae')
-    await b.grant(b.f.sub, rae)
-    await b.grant(b.f.sub2, rae, 'viewer')
-    await b.keyed()
-    const change = { kind: 'user_grant', project_id: b.f.sub.id, user_id: pia.id } as const
-    const { listed, p, outcomes } = await expectAgainstWrite({ ...b, caller: lena, change })
-    expect(p.hidden).toBe(0)
-    expect(p.items.map((i) => i.title)).toEqual(['Flash the bootloader'])
-    // Lena edits the task but cannot see its parent, so the write refuses
-    // her as it refuses Quinn
-    expect(sorted(listed)).toEqual(['Rae', 'admin', 'guest', 'user'])
-    expect(outcomes.get('Quinn')).toBe(ASSIGNEE_SIGHT_RULE)
-    expect(outcomes.get('Lena')).toBe(ASSIGNEE_SIGHT_RULE)
-  })
-
-  it("lists who sees a legacy parent's top-level project only through one of its sub-projects, as the write accepts them", async () => {
-    const b = await base()
-    const pia = await b.person('Pia')
-    await b.grant(b.f.sub, pia)
-    // older code stored this parent directly under TBED
-    const parent = await b.task(b.f.meta, { title: 'Legacy plan', assignee_id: b.f.user.id })
-    await b.task(b.f.sub, { title: 'Flash it', parent_id: parent.id, assignee_id: pia.id })
-    // Edit on Firmware alone, so TBED shows to Xena only for navigation
-    const xena = await b.person('Xena')
-    await b.grant(b.f.sub, xena)
-    await b.keyed()
-    const change = { kind: 'user_grant', project_id: b.f.sub.id, user_id: pia.id } as const
-    const { listed, outcomes } = await expectAgainstWrite({ ...b, caller: b.f.user, change })
-    expect(outcomes.get('Xena')).toBe(true)
-    expect(sorted(listed)).toEqual(['Xena', 'admin', 'guest', 'user'])
-  })
 })
 
 describe("the Reassign picker's gate", () => {
@@ -807,42 +758,25 @@ describe("the Reassign picker's states", () => {
   })
 
   it('answers too_large when the check of who can take the tasks passes the room the preview left', async () => {
-    // Pia's grant on TBED goes. She holds 30 subtasks in Firmware whose
-    // parents, held by TBED's lead, sit in Board rev, so the check of a new
-    // holder (takerRule) reads the 30 parents and the levels of both
-    // sub-projects past the preview's own reads
+    // Pia's grant on TBED goes. She holds a task in each of eight of its
+    // sub-projects, so the check of a new holder (takerRule) reads the
+    // levels of eight projects past the preview's own reads
     const spread = async (t: T) => {
       const b = await base(t)
       const pia = await b.person('Pia')
       await b.grant(b.f.meta, pia)
-      await b.t.run(async (ctx) => {
-        for (let i = 0; i < 30; i++) {
-          const task = { org_id: b.f.org.id, title: `Bring-up step ${i}`, description: '' }
-          const rest = { status: 'todo', priority: 'medium', paused: false } as const
-          const parent = uuid()
-          await ctx.db.insert('issues', {
-            ...task,
-            ...rest,
-            id: parent,
-            project_id: b.f.sub2.id,
-            num: 2000 + 2 * i,
-            assignee_id: b.f.user.id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
-          await ctx.db.insert('issues', {
-            ...task,
-            ...rest,
-            id: uuid(),
-            project_id: b.f.sub.id,
-            num: 2001 + 2 * i,
-            parent_id: parent,
-            assignee_id: pia.id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
-        }
-      })
+      const subs = [b.f.sub, b.f.sub2]
+      for (let i = 0; i < 6; i++)
+        subs.push(
+          await plantProject(b.t, {
+            org_id: b.f.org.id,
+            type: 'project',
+            parent_id: b.f.meta.id,
+            name: `Bring-up ${i}`,
+          }),
+        )
+      for (const [i, sub] of subs.entries())
+        await b.task(sub, { title: `Bring-up step ${i}`, assignee_id: pia.id })
       await b.keyed()
       const change = { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id } as const
       return { ...b, change }
@@ -859,14 +793,14 @@ describe("the Reassign picker's states", () => {
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
     // a limit whose room holds the preview and 15 index ranges more, which
-    // the check of a new holder passes while it reads the parents
+    // the check of a new holder passes while it reads the projects' levels
     const b = await spread(
       newT({ transactionLimits: { databaseQueries: Math.ceil((alone + 15) / REASSIGN_ROOM) } }),
     )
     expect(await preview(b.t, b.f.admin, b.change)).toMatchObject({
       state: 'ok',
       pending: true,
-      tasks: 30,
+      tasks: 8,
       reassign: { allowed: true },
     })
     const tooLarge = { state: 'too_large', message: REMOVAL_FULL }

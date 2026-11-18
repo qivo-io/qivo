@@ -84,8 +84,8 @@ const vListArgs = {
 
 /** One batch, in name order, of the people issues.update accepts as task
  * `issue_id`'s new assignee or reviewer (`field`), the active admins, users
- * and guests with User or Lead on the task's project who see the project
- * of every task above it (model/pickers.ts taskOwnersOf). A reviewer asked
+ * and guests with User or Lead on the task's project (model/pickers.ts
+ * taskOwnersOf). A reviewer asked
  * for a task with an active subtask is refused with the write's sentence.
  * Answers `unavailable`, `refused`, `not_ready`, `over_budget`, or `ready`
  * with the rows, `next` and `stopped` (lib/namedPages.ts ListBatch). */

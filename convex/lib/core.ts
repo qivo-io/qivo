@@ -852,9 +852,8 @@ export type ProjectUsersPageJson = { next_cursor: string | null; users: ProjectU
  * sub-project; people of the caller's organization alone. A reporter may be
  * anyone listed. `assignable` is lib/access.ts canBeAssignedFor, the
  * write's rule for a new assignee or reviewer on this project, an active
- * admin, user or guest with User or Lead there; a subtask's holder must also
- * see every task above it, which `assignable` does not show. Both are
- * decided before the page is cut, from the project's own access rows: its
+ * admin, user or guest with User or Lead there. Both are decided before
+ * the page is cut, from the project's own access rows: its
  * and its top-level project's grants and shares and each sharing team's
  * members (projectLevelsForProfiles), read once within the owner pickers'
  * share (model/pickers.ts PICKERS.rule), past which the call is refused
@@ -2487,9 +2486,9 @@ export function destinationOf(
  * an `archive` that matches the task's state change nothing. Each step that changes something writes
  * its own activity row signed with `provenance`, and each runs the model's
  * own rules and write gate, so a refusal at any step undoes the whole
- * update. The move and the parent are checked with the assignee and
- * reviewer the task ends up with, so the ones `patch` sets or clears take
- * the place of the current ones (model/issues.ts LaterPeople). A subtask
+ * update. The move is checked with the assignee and reviewer the task ends
+ * up with, so the ones `patch` sets or clears take the place of the current
+ * ones (model/issues.ts LaterPeople). A subtask
  * that moves must leave its parent in the same update, or get one in the
  * destination, so the move is told the `parent` that follows it
  * (MachineMove.laterParent). A move leaves room for the caller's answer
@@ -2569,7 +2568,7 @@ export async function applyTaskUpdate(
       issue: task,
       patch: { parent_id: a.parent },
       now,
-      machine: { provenance, appGrammar: true, later },
+      machine: { provenance, appGrammar: true },
     })
     parentChosen = a.parent !== null
   }

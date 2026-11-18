@@ -1751,10 +1751,9 @@ export async function canBeAssignedFor(
  * adds no budget or refusal of its own; a caller stops it with its guard.
  * A profile of another organization answers false, and a missing parent or
  * a cycle throws not found, as rootMetaOf does. Team sync's mention
- * recipients (model/pickers.ts recipientRule) and the task owner pickers'
- * sight of the tasks above a subtask (ownerRule) ask it; notice fan-outs
- * ask projectSightForProfiles, which reads what it needs for each follower
- * it is asked about. */
+ * recipients (model/pickers.ts recipientRule), the mention popup and the
+ * task followers list ask it; notice fan-outs ask projectSightForProfiles,
+ * which reads what it needs for each follower it is asked about. */
 export async function canSeeProjectFor(
   ctx: QueryCtx,
   project: Doc<'projects'>,

@@ -27,8 +27,8 @@ import {
  * a size or read-only sentence says first (model/removalPreview.ts
  * RemovalEffect). Reassigning is answered for a new holder who can take
  * every task once the access is gone; the write checks the new holder's
- * standing on each task's project before the caller's Edit access, and
- * their sight of a subtask's parent after it. With `reassign_to`, the
+ * standing on each task's project before the caller's Edit access. With
+ * `reassign_to`, the
  * answer says whether that person can take them
  * (reassign.holder_eligible), by the rule reassignChoices lists people by.
  * The write itself reports how many tasks it stranded
@@ -73,8 +73,8 @@ export const preview = orgQuery({
  * a time with a search, for the removal window's Reassign picker
  * (model/removalPreview.ts reassignChoicesOf). A person is listed when the
  * write's handover would accept them: someone who can hold work, with User
- * or Lead on every lost task's project and sight of every task above a lost
- * subtask, never one of the people who lose sight of those tasks. It works
+ * or Lead on every lost task's project, never one of the people who lose
+ * sight of those tasks. It works
  * the removal out from the change on every batch, with the preview's own
  * checks in the write's order, and answers the preview's `unavailable`,
  * `refused` and `too_large`, `refused` with Reassign's own sentence while

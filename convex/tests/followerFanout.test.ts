@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { FOLLOWER_FANOUT, notifyIssueUpdate, postMessage } from '../model/messages'
+import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
 import {
   as,
   messagesFor,
@@ -392,8 +392,8 @@ describe('a change told in steps after the task changed', () => {
     expect(new Map(await told(t, task)).get(insider.id)).toBeUndefined()
   })
 
-  it('keeps the new parent anonymous once it moved out of sight meanwhile', async () => {
-    const { t, f, task, insider } = await scene()
+  it('names the new parent as the change was written, once it moved out of sight meanwhile', async () => {
+    const { t, f, task, outsider, insider } = await scene()
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await as(t, f.admin).mutation(api.issues.update, {
       org_id: f.org.id,
@@ -404,30 +404,27 @@ describe('a change told in steps after the task changed', () => {
     const hidden = await plantHiddenSibling(t, f, insider)
     await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: hidden.id }))
     await t.finishAllScheduledFunctions(vi.runAllTimers)
-    expect(new Map(await told(t, task)).get(insider.id)).toBe(
-      'Attached under a task in another sub-project',
-    )
+    const byPerson = new Map(await told(t, task))
+    expect(byPerson.get(insider.id)).toBe(`Attached under QN-${parent.num}`)
+    // the outsider never saw Firmware, so they read nothing of it
+    expect(byPerson.get(outsider.id)).toBeUndefined()
   })
 
-  it('keeps the new parent anonymous when it moved into sight meanwhile', async () => {
+  it('names the new parent as the change was written, once it went to Deleted items meanwhile', async () => {
     const { t, f, task, insider } = await scene()
-    // the parent sits in a sub-project the insider cannot see when the
-    // change is written, and moves into Firmware before the step. No write
-    // attaches a task under a parent in another sub-project any more, so
-    // that change, from before the rule, is told as its writer told it
-    const hidden = await plantHiddenSibling(t, f, insider)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: hidden.id })
-    await t.run(async (ctx) => {
-      const before = (await ctx.db.get(task._id)) as Doc<'issues'>
-      await ctx.db.patch(task._id, { parent_id: parent.id })
-      const after = (await ctx.db.get(task._id)) as Doc<'issues'>
-      await notifyIssueUpdate(ctx, { before, after, actor: f.admin, now: NOW })
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await as(t, f.admin).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: task.id,
+      patch: { parent_id: parent.id },
     })
-    await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: f.sub.id }))
+    // the parent goes to Deleted items before the step, which detaches the task
+    await deleteTask(t, f, parent.id)
     await t.finishAllScheduledFunctions(vi.runAllTimers)
-    expect(new Map(await told(t, task)).get(insider.id)).toBe(
-      'Attached under a task in another sub-project',
-    )
+    const lines = (await told(t, task))
+      .filter(([who]) => who === insider.id)
+      .map(([, line]) => line)
+    expect(lines.sort()).toEqual([`Attached under QN-${parent.num}`, 'Detached from its parent'])
   })
 })
 

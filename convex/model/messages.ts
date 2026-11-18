@@ -59,9 +59,9 @@ import { emitTaskEvent } from './taskEvents'
 /* The line a reviewer reads when a task becomes theirs to review. */
 const REVIEW_READY = 'Ready for your review'
 
-/* The per-recipient placeholder for the parent-attach line (0114:212):
- * two followers of one task can differ on whether they may see the parent's
- * project, so the narration holds its place until the fan-out. */
+/* The placeholder of the parent-attach line (0114:212) in a change's
+ * parts, which the fan-out fills with the parent's key (followerLine). A
+ * background step scheduled by an earlier release carries it too. */
 export const ATTACH_SLOT = '\x01attach'
 
 /* to_char(date, 'FMDD Mon') over the ISO 'YYYY-MM-DD' storage → '5 Aug'. */
@@ -1647,7 +1647,9 @@ export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000, inlineR
 /** What a fan-out tells every follower, before each reader's own lines. A
  * change carries its parts, its assignment and reviewer lines with the
  * assignee and reviewer they name, whether the reviewer was handed the task
- * in this write, and the new parent's project and key for the attach line. */
+ * in this write, and the new parent's key for the attach line. The parent
+ * also carries its id and project, which the background step of an earlier
+ * release reads, so a step scheduled before a rollback still runs. */
 const vFollowerNote = v.union(
   v.object({ kind: v.literal('comment') }),
   v.object({
@@ -1702,26 +1704,21 @@ const followersFrom = (ctx: QueryCtx, issueId: string, after: string | undefined
 /* The line follower `profileId` reads of `notice`, or null for none. A
  * comment's mentioned people read their mention instead, and a fresh
  * mention replaces the bare description line, as they read it in the
- * message view. `seesParent` tells whether the reader can see the new
- * parent. */
-async function followerLine(
-  notice: FollowerNotice,
-  profileId: string,
-  seesParent: () => Promise<boolean>,
-): Promise<string | null> {
+ * message view. */
+function followerLine(notice: FollowerNotice, profileId: string): string | null {
   const { note } = notice
   const mentioned = notice.mentioned.includes(profileId)
   if (note.kind === 'comment') return mentioned ? null : 'New comment'
   let mine = mentioned ? note.parts.filter((x) => x !== 'Description updated') : [...note.parts]
   if (note.parent !== undefined) {
-    const key = (await seesParent()) ? note.parent.key : 'a task in another sub-project'
-    // Keep the hidden parent anonymous while using the same task wording
-    // as the inbox and the machine surfaces. A subtask shares its parent's
-    // sub-project (model/issues.ts sameSubProject), so only a family stored
-    // across sub-projects before that rule has a parent the reader cannot
-    // see, in a sub-project they cannot see. Messages stored before the
-    // earlier rule of one top-level project keep "a task in another
+    // Every follower reads the parent's key, as it was when the change was
+    // written. Every write that sets a parent keeps the subtask in the
+    // parent's own sub-project (model/issues.ts sameSubProject), and a
+    // reader is told only while they see the task's project then and now,
+    // so they could see the parent when it was set. Messages stored before
+    // that rule keep "a task in another sub-project" or "a task in another
     // project".
+    const { key } = note.parent
     mine = mine.map((x) => (x === ATTACH_SLOT ? `Attached under ${key}` : x))
   }
   // unshifted before the assignment line, so it reads second
@@ -1741,10 +1738,8 @@ async function followerLine(
  * actor's own copy, anyone who has left the organization and anyone who
  * can no longer see the project. `cx` holds what the caller read already,
  * and a bulk writer's guard, run before each follower. A reader must also
- * see each of `cx.also`, and reads the new parent's key only when they see
- * each of `cx.parent`; an empty `cx.parent` keeps it anonymous. Once
- * `cx.room` answers false it stops, after the first follower, and returns
- * how many of `subs` it handled. */
+ * see each of `cx.also`. Once `cx.room` answers false it stops, after the
+ * first follower, and returns how many of `subs` it handled. */
 async function tellFollowers(
   ctx: MutationCtx,
   notice: FollowerNotice,
@@ -1753,7 +1748,6 @@ async function tellFollowers(
     issue: Doc<'issues'>
     project: Doc<'projects'> | null
     also: readonly Doc<'projects'>[]
-    parent: readonly Doc<'projects'>[]
     profiles: ProfileCache
     visibility: RecipientSight
     trims: ItemTrims
@@ -1775,11 +1769,7 @@ async function tellFollowers(
       return true
     }
     if (cx.also.length > 0 && !(await seesAll(cx.also))) continue
-    const line = await followerLine(
-      notice,
-      s.profile_id,
-      async () => cx.parent.length > 0 && (await seesAll(cx.parent)),
-    )
+    const line = followerLine(notice, s.profile_id)
     if (line === null) continue
     await postMessage(ctx, {
       org_id: notice.org_id,
@@ -1825,9 +1815,9 @@ async function fanOut(
  * FOLLOWER_FANOUT.step followers after profile `after` about the task as it
  * is now, and schedules the next step while more follow. A reader must see
  * both the task's project when it was written and its project now, so a
- * move meanwhile tells nobody what they could not see, and reads the new
- * parent's key only when they see its project then and now. Anything gone
- * that the notice names tells nobody, or keeps the parent anonymous. The
+ * move meanwhile tells nobody what they could not see. A task or project
+ * that is gone tells nobody. The attach line names the new parent as the
+ * write did, also when the parent moved or went to Deleted items since. The
  * step stops early once its database calls reach FOLLOWER_FANOUT.stepRoom. */
 export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): Promise<void> {
   const used = { calls: 0 }
@@ -1841,21 +1831,12 @@ export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): P
   const then =
     notice.project_id === project.id ? project : await byId(ctx, 'projects', notice.project_id)
   if (then === null) return
-  const parent: Doc<'projects'>[] = []
-  const { note } = notice
-  if (note.kind === 'change' && note.parent !== undefined) {
-    const was = await byId(ctx, 'projects', note.parent.project_id)
-    const row = await byId(ctx, 'issues', note.parent.id)
-    const is = row === null ? null : await byId(ctx, 'projects', row.project_id)
-    if (was !== null && is !== null) parent.push(...(was.id === is.id ? [was] : [was, is]))
-  }
   const trims = newItemTrims()
   const subs = await followersFrom(ctx, issue.id, after, FOLLOWER_FANOUT.step + 1)
   await fanOut(ctx, notice, subs, FOLLOWER_FANOUT.step, {
     issue,
     project,
     also: then === project ? [] : [then],
-    parent,
     profiles: new Map(),
     visibility: new Map(),
     trims,
@@ -2079,7 +2060,6 @@ export async function notifyFollowersOfChange(
       issue,
       project,
       also: [],
-      parent: [],
       profiles: new Map(),
       visibility: new Map(),
       trims,
@@ -2401,9 +2381,8 @@ export async function notifyIssueUpdate(
   if (after.project_id !== before.project_id) {
     parts.push(`Moved to ${project?.name ?? 'another project'}`)
   }
-  // the new parent, for the attach line each reader reads from their side
+  // the new parent, for the attach line every reader reads alike
   let parent: { id: string; project_id: string; key: string } | undefined
-  let parentProject: Doc<'projects'> | null = null
   if (after.parent_id !== before.parent_id) {
     if (after.parent_id === undefined) {
       parts.push('Detached from its parent')
@@ -2411,7 +2390,6 @@ export async function notifyIssueUpdate(
       const row = await byId(ctx, 'issues', after.parent_id)
       if (row !== null) {
         parent = { id: row.id, project_id: row.project_id, key: `QN-${row.num}` }
-        parentProject = await preloadedProject(ctx, preload, row.project_id)
         parts.push(ATTACH_SLOT)
       }
     }
@@ -2477,7 +2455,6 @@ export async function notifyIssueUpdate(
       issue: after,
       project,
       also: [],
-      parent: parentProject === null ? [] : [parentProject],
       profiles,
       visibility,
       trims,
@@ -2559,7 +2536,6 @@ export async function notifyCommentInsert(
       issue,
       project,
       also: [],
-      parent: [],
       profiles,
       visibility,
       trims,

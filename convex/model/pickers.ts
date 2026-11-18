@@ -61,7 +61,6 @@ import {
   isAccessUnchecked,
   keepsInbox,
   levelRank,
-  type ProjectLevelReads,
   projectLevel,
   projectLevelReads,
 } from '../lib/access'
@@ -95,7 +94,7 @@ import {
   viewAccess,
   viewBudget,
 } from '../lib/viewReads'
-import { ancestorsFrom, hasSubtasks, NO_WRITE_ACCESS, REVIEWER_ON_GROUP } from './issues'
+import { hasSubtasks, NO_WRITE_ACCESS, REVIEWER_ON_GROUP } from './issues'
 import { idTieOf, nameKeysReady, profileIndex, profileRoleIndex } from './nameKeys'
 import { shownAvatarColor } from './people'
 import {
@@ -110,10 +109,10 @@ import {
 
 /**
  * What one call may read to work out its rule, past what the gate read,
- * counted from the rule's start with Convex's own transaction metrics: the
- * tasks above the task, their projects, every profile's levels on each
- * project and, for a top-level project, on each of its sub-projects, the
- * members of each team sharing them, and canOwn's lookups. Past it the
+ * counted from the rule's start with Convex's own transaction metrics:
+ * every profile's level on the task's project and, for a task stored on a
+ * top-level project, on each of its sub-projects, the members of each team
+ * sharing them, and canOwn's lookups. Past it the
  * call answers `over_budget` with no row. With the gate's reads, NAMED_READ
  * for the walk and NAMED_RESERVE it stays under Convex's 4,096 index
  * ranges, 32,000 documents and 16 MiB. Tests lower it.
@@ -200,10 +199,8 @@ const refused = (message: string) => ({ state: 'refused' as const, message })
 
 /* -------------------------------------------------------------- the gate */
 
-/** The task a picker is for, as the gate found it: its project and its
- * top-level project, which is the project itself for a task stored on
- * one. */
-type PickerTask = { task: Doc<'issues'>; project: Doc<'projects'>; top: Doc<'projects'> }
+/** The task a picker is for, as the gate found it, with its project. */
+type PickerTask = { task: Doc<'issues'>; project: Doc<'projects'> }
 
 /* The gate of every picker here, before it reads any person:
  * 1. the task by id, `unavailable` when there is none or it is another
@@ -247,10 +244,10 @@ async function pickerTask(
   if ([task, project, top].some((row) => row.archived_at !== undefined)) return UNAVAILABLE
   const level = await projectLevel(ctx, me, project)
   if (level === null) return UNAVAILABLE
-  if (field === 'mention') return { task, project, top }
+  if (field === 'mention') return { task, project }
   if (levelRank(level) < levelRank('user')) return refused(NO_WRITE_ACCESS)
   if (field === 'reviewer' && (await hasSubtasks(ctx, task))) return refused(REVIEWER_ON_GROUP)
-  return { task, project, top }
+  return { task, project }
 }
 
 /* ------------------------------------------------------------- the rules */
@@ -258,62 +255,19 @@ async function pickerTask(
 /** Whether a profile passes a picker's rule, answered without a read. */
 type Rule = (profile: Doc<'profiles'>) => boolean
 
-/* Whether `id`'s project shows to each profile, or null when nobody can
- * see it, because the project is gone, or its parent is, or the parent is
- * not top-level, where the write's chain check refuses everyone
- * (model/issues.ts chainSight reads a missing project as unseen, and
- * rootMetaOf throws on a broken chain). */
-async function sightOn(
-  ctx: QueryCtx,
-  id: string,
-  o: { guard: () => Promise<void>; reads: ProjectLevelReads },
-): Promise<Rule | null> {
-  await o.guard()
-  const project = await byId(ctx, 'projects', id)
-  if (project === null) return null
-  if (project.parent_id !== undefined) {
-    await o.guard()
-    const parent = await byId(ctx, 'projects', project.parent_id)
-    if (parent === null || parent.parent_id !== undefined) return null
-  }
-  return await canSeeProjectFor(ctx, project, o)
-}
-
 /**
  * The write's rule for a new assignee or reviewer of the gate's task
- * (model/issues.ts updateIssueCore). It lets in someone who can hold work
- * with User or Lead on the task's project (assertAssigneeRule,
- * lib/access.ts canBeAssignedFor) who sees the project of every task above
- * it (ancestorsFrom and chainSight, canSeeProjectFor, navigation included).
- * The task's own project and, for a task in a sub-project, its top-level
- * project are not asked again, since User on the task's project shows
- * both, the second for navigation. A task above whose project, or whose
- * project's parent, is gone lets nobody in. A task above may sit in a
- * project the caller cannot see, so the rule tells, for each person
- * listed, whether they see it, as the write's refusal tells for one chosen
- * person and the Reassign picker does (model/removalPreview.ts takerRule).
- * The write accepts an unchanged holder in any state; the picker judges
- * every person as a new one.
+ * (model/issues.ts updateIssueCore): someone who can hold work with User or
+ * Lead on the task's project (assertAssigneeRule, lib/access.ts
+ * canBeAssignedFor). The write accepts an unchanged holder in any state;
+ * the picker judges every person as a new one.
  */
 async function ownerRule(
   ctx: QueryCtx,
   gate: PickerTask,
   guard: () => Promise<void>,
 ): Promise<Rule> {
-  const reads = projectLevelReads()
-  const assignable = await canBeAssignedFor(ctx, gate.project, { guard, reads })
-  const above = new Set<string>()
-  for (const task of await ancestorsFrom(ctx, gate.task.parent_id, guard))
-    above.add(task.project_id)
-  above.delete(gate.project.id)
-  above.delete(gate.top.id)
-  const sights: Rule[] = []
-  for (const id of above) {
-    const sees = await sightOn(ctx, id, { guard, reads })
-    if (sees === null) return () => false
-    sights.push(sees)
-  }
-  return (profile) => assignable(profile) && sights.every((sees) => sees(profile))
+  return await canBeAssignedFor(ctx, gate.project, { guard, reads: projectLevelReads() })
 }
 
 /**
@@ -322,7 +276,7 @@ async function ownerRule(
  * postMessage, navigation included, so a task stored on a top-level
  * project counts whoever reaches one of its sub-projects), with the
  * window's own filters, a person (no agent), active, and not the caller.
- * It asks nothing of the tasks above. The fan-out itself still notifies a
+ * The fan-out itself still notifies a
  * person switched off after the batch was read, so the app checks a choice
  * with canOwn before it sends.
  */
@@ -403,17 +357,14 @@ async function peopleBatch(
  *    and says so.
  *
  * Its reads are the gate's, the rule's (a few index ranges for the task's
- * project and its top-level project, for the project of a task above and,
- * when that is a top-level project, for each of its sub-projects, and each
- * sharing team's members) and one document a person walked.
- * tests/pickers.test.ts ("the pickers inside Convex's limits") logs what a
- * batch reads at the design size, one figure at a time, among 1,000 people,
- * 995 of them in a team sharing the task's sub-project, or 3 holding Edit
- * by grants, where the first batch walks to the end to find them, for a
- * sub-project shared with five teams under a top-level project shared with
- * five others, and for a reviewer of a subtask whose parent sits on a
- * top-level project of 30 live and 40 archived sub-projects. The app reads
- * it once a batch and never subscribes.
+ * project and its top-level project, and each sharing team's members) and
+ * one document a person walked. tests/pickers.test.ts ("the pickers inside
+ * Convex's limits") logs what a batch reads at the design size, one figure
+ * at a time, among 1,000 people, 995 of them in a team sharing the task's
+ * sub-project, or 3 holding Edit by grants, where the first batch walks to
+ * the end to find them, and for a sub-project shared with five teams under
+ * a top-level project shared with five others. The app reads it once a
+ * batch and never subscribes.
  */
 export async function taskOwnersOf(
   ctx: QueryCtx,

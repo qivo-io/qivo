@@ -39,7 +39,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantHiddenSibling,
   plantIssue,
   plantMessage,
   plantProject,
@@ -191,30 +190,31 @@ describe('recipient-relative narration', () => {
     )
   })
 
-  it('ATTACH_SLOT resolves per recipient: the key for those who may see, the fixed fallback for those who may not', async () => {
+  it("ATTACH_SLOT names the new parent's key to every follower who sees the task, and tells no one else", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const hiddenSub = await plantHiddenSibling(t, f, f.guest)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await subscribe(t, f.admin, child.id) // admin sees hidden (org admin)
-    await subscribe(t, f.guest, child.id) // guest holds no grant on hidden
-
-    // no write attaches a task under a parent in another sub-project any
-    // more, so the notice of such an attach, from before that rule, is sent
-    // as the writer sent it
+    for (const who of [f.admin, f.guest, f.viewer]) await subscribe(t, who, child.id)
+    // the viewer loses sight of Testbed platform before the change
     await t.run(async (ctx) => {
-      const before = (await ctx.db.get(child._id)) as Doc<'issues'>
-      const after = { ...before, parent_id: parent.id }
-      await notifyIssueUpdate(ctx, { before, after, actor: f.user, now: NOW })
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.viewer.id),
+        )
+        .unique()
+      if (grant === null) throw new Error('the viewer holds no grant on TBED')
+      await ctx.db.delete(grant._id)
     })
 
-    expect((await messagesFor(t, f.admin.id, child.id))[0].detail).toBe(
-      `Attached under QN-${parent.num}`,
-    )
-    expect((await messagesFor(t, f.guest.id, child.id))[0].detail).toBe(
-      'Attached under a task in another sub-project',
-    )
+    await update(t, f.user, child.id, { parent_id: parent.id })
+
+    for (const who of [f.admin, f.guest])
+      expect((await messagesFor(t, who.id, child.id)).map((m) => m.detail)).toEqual([
+        `Attached under QN-${parent.num}`,
+      ])
+    expect(await messagesFor(t, f.viewer.id, child.id)).toEqual([])
   })
 
   it('the attach slot is dropped outright when the parent row vanished', async () => {
