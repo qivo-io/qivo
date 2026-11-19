@@ -1,9 +1,9 @@
 /* Read-only check of the rows stored before the weekly milestone rule
  * (LIMITS.milestonesPerWeek, model/milestones.ts assertWeekFree) that break
  * it. The rule makes no exception for them, so every deployment that holds
- * data is checked once the rule is on, and an operator resolves each
- * finding. Nothing here writes, deletes, merges or moves a milestone, and
- * there is no fix.
+ * data is checked once the rule is on. The check only reports each finding,
+ * and a stored milestone is changed or deleted only with approval. Nothing
+ * here writes, deletes, merges or moves a milestone, and there is no fix.
  *
  * It finds, among live milestones and the copies Deleted items keeps of a
  * deleted project's milestones (deleted_rows), which a restore writes back
@@ -37,10 +37,11 @@
  * The check ships in the release that turns the rule on. Right after the
  * release deploys to a deployment that holds data (staging, the demo,
  * production, a branch preview that keeps data), run the check there through
- * the private helpers and report every finding. `check` is a query, so it
- * cannot write, and a key that may only run internal queries can run it. It
- * reports one page of one phase. Start with `{"phase": "live"}`, pass the
- * returned `cursor` back until `done` is true, then do the same for
+ * the private helpers and report every finding. Changing or deleting a
+ * stored milestone that a finding names needs approval. `check` is a query,
+ * so it cannot write, and a key that may only run internal queries can run
+ * it. It reports one page of one phase. Start with `{"phase": "live"}`, pass
+ * the returned `cursor` back until `done` is true, then do the same for
  * `"deleted"`. `run` walks every page of both phases and answers the counts
  * and the first FINDINGS_MOST findings. With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"

@@ -1793,8 +1793,9 @@ const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
 
 /* Items deleted before this can hold grants and shares stored without a
  * grantee. Every item deleted from this time on stores the grantee of each
- * of them. The expiry purges such items by 22 November 2026, after which no
- * item is older than this. */
+ * of them. The nightly expiry (expireItems) purges only ready items whose
+ * TRASH_DAYS are over, so an older item that is not ready, such as a stuck
+ * one, can remain. */
 const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
 
 /** The most stored rows without a grantee one read takes for an item and
