@@ -26,19 +26,20 @@
  * grid. A stored day's week is the whole number of weeks from `from`,
  * floored, so the window is weeks 0 to (to - from) / 7, both counted.
  *
- * Beside lib/viewReads.ts's list, these still follow hidden data at a
- * budget's margin. How many subtasks a shown group has, hidden ones
- * included; how many of a person's own tasks and count rows are in projects
- * they cannot see, and where those projects' ids sort among the others
- * (lib/viewReads.ts mineCounts); the hidden sub-projects of a navigated
- * top-level project; and for the dependency read, how many links a task of
- * a part has to tasks the reader is not shown, archived tasks included,
- * each read by id and dropped. Each such task or link counts at a fixed
- * size, so its contents move no answer. A `counting` Remaining also
- * follows a regroup anywhere in the organization (model/overviewCounts.ts
- * countsReady), so a reader learns for a while that some project, one they
- * cannot see included, was archived, restored or moved to Deleted items, as
- * the Overview's figures do (lib/overview.ts). */
+ * A shown group's subtasks are in its own sub-project, so the reader sees
+ * them all. Beside lib/viewReads.ts's list, these still follow hidden data
+ * at a budget's margin: how many of a person's own tasks and count rows
+ * are in projects they cannot see, and where those projects' ids sort
+ * among the others (lib/viewReads.ts mineCounts); the hidden sub-projects
+ * of a navigated top-level project; and for the dependency read, how many
+ * links a task of a part has to tasks the reader is not shown, archived
+ * tasks included, each read by id and dropped. Each such task or link
+ * counts at a fixed size, so its contents move no answer. A `counting`
+ * Remaining also follows a regroup anywhere in the organization
+ * (model/overviewCounts.ts countsReady), so a reader learns for a while
+ * that some project, one they cannot see included, was archived, restored
+ * or moved to Deleted items, as the Overview's figures do
+ * (lib/overview.ts). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

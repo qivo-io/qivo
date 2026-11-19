@@ -14,10 +14,14 @@
  * lib/review.ts taskOwnerId's. The readers give an archived sub-project no
  * figure (subProjectCounts). The group rule of an earlier release counted
  * only an active subtask in a live project, so a row it wrote in an
- * archived sub-project can hold a group as a leaf until a restore's
- * regroup or a move out of the sub-project reads the task again
- * (tallyOverview), and until then a dry run of the backfill lists that
- * sub-project's rows as differing.
+ * archived sub-project can hold a group as a leaf until this release
+ * reads the task's subtasks again: a restore's regroup, a move out of the
+ * sub-project, a write by which a subtask starts or stops counting for it
+ * (tallyOverview), or a backfill run with `recount`. Until then a dry run
+ * of the backfill lists that sub-project's rows as differing. After a
+ * return to that release, its dry run lists the rows of each such task
+ * this release stored as a group: one in a sub-project archived under
+ * this release, or one that one of those reads counted again.
  * overview_tasks holds, for each active task, what the counts hold for it:
  * whether a group, and the leaf it adds to its rows (its slot). Each write
  * reconciles a task with that row (reconcileTask), moving the rows by the

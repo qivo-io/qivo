@@ -1027,13 +1027,12 @@ export function doneStampUpdate(
  * the parent is touched AND notified — in SQL this inner UPDATE fired the
  * stamp, touch and notify triggers, so its subscribers saw
  * "Remaining cleared (was N h)". 0067's row lock is subsumed by Convex
- * serializability. `actor` is absent only for a restore step from Deleted
- * items whose restorer is gone (model/deletedItems.ts). */
+ * serializability. */
 export async function clearParentRemaining(
   ctx: MutationCtx,
   a: {
     parentId: string
-    actor: Doc<'profiles'> | undefined
+    actor: Doc<'profiles'>
     now: string
   },
 ): Promise<void> {

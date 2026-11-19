@@ -21,23 +21,21 @@
  * - subtreeReads reads which tasks are groups, the subtrees a group's facts
  *   walk (lib/core.ts groupFacts) and rows' parents by id.
  *
- * A document the caller may not be shown, a subtask in a project they
- * cannot read or a parent by id until it turns out readable, counts at
- * lib/limits.ts TASK_ROW_MAX_BYTES in every budget decision, so a hidden
- * title's length moves no answer. What still follows hidden data is how
- * many documents those reads return, which can move where a read stops at
- * its budget's margin only:
+ * A document the caller may not be shown counts at lib/limits.ts
+ * TASK_ROW_MAX_BYTES in every budget decision, so a hidden title's length
+ * moves no answer. A subtask or a parent these reads return is in the
+ * row's own sub-project, which the caller reads, so only a row no write
+ * makes is such a document. Where a read stops at its budget's margin can
+ * still follow:
  *
- * - how many active subtasks a task has in projects the caller cannot read,
- *   at most LIMITS.subtasks.max a task, which a group check reads whole;
- * - how many distinct parents the caller cannot read a page's rows have,
- *   since each is read once for all its rows (subtreeReads `parent`), and
- *   whether such a parent is gone, which reads a second range and no
- *   document where an existing one reads one range and one document;
- * - and the real bytes of those documents where they pass the caps, which
- *   only a row stored over them or a hidden task's copy of its text (which
- *   only a rollback writes) can do, at the real-bytes stop (readTally
- *   `hard`). */
+ * - a deleted parent whose archived subtask keeps its id until a
+ *   background step detaches it (model/deletedItems.ts
+ *   startArchivedDetach), which reads a second range and no document,
+ *   where an existing parent reads one range and one document
+ *   (subtreeReads `parent`);
+ * - and the real bytes of a document past the caps, which only a row
+ *   stored over them or a task's copy of its text (which only a rollback
+ *   writes) can reach, at the real-bytes stop (readTally `hard`). */
 
 import type { TransactionMetrics } from 'convex/server'
 import { getDocumentSize } from 'convex/values'

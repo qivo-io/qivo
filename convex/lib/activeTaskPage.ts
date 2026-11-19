@@ -13,16 +13,15 @@
  * Since the admin access split an admin's readable projects are those
  * their own leads, grants and team shares reach, as anyone's.
  *
- * The reads that follow hidden data are those lib/machineSubtree.ts names:
- * how many active subtasks a row has in projects the caller cannot read,
- * each counted at a fixed size, and the real bytes of hidden documents past
- * the caps at the real-bytes stop. Before the page the list reads the
- * organization's projects and the caller's access to them (lib/core.ts
- * loadCatalogue and accessFlags), its roster, and for a search up to
- * ARCHIVE_LABELS.scan of its labels, which hidden projects' rows fill too,
- * but the page's budget counts from its own start, and a request without
- * room for the whole budget is refused (TASK_LIST_UNREADABLE) rather than
- * answered with a shorter page. */
+ * The group and parent reads of the page's rows (lib/machineSubtree.ts)
+ * read a row's subtasks and parent in its own sub-project, which the
+ * caller reads, so they follow no hidden data. Before the page the list
+ * reads the organization's projects and the caller's access to them
+ * (lib/core.ts loadCatalogue and accessFlags), its roster, and for a
+ * search up to ARCHIVE_LABELS.scan of its labels, which hidden projects'
+ * rows fill too, but the page's budget counts from its own start, and a
+ * request without room for the whole budget is refused
+ * (TASK_LIST_UNREADABLE) rather than answered with a shorter page. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

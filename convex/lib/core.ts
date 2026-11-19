@@ -1602,12 +1602,15 @@ export async function issueOut(
  * link's other task only through lib/workingSet.ts with the machine Shown:
  * a task of the caller's organization whose project the caller can read
  * (canSeeProject), archived projects included. Both ask that through one
- * lib/access.ts accessOf instance a call, project by project, so they read
- * only the projects the task and its links name, never the organization's
- * projects or every grant and share of the caller. A
- * check that a bound of that reader stopped refuses the whole call with its
- * sentence (accessUnchecked), never answering a hidden row or a short list
- * as whole.
+ * lib/access.ts accessOf instance a call, project by project, and taskOut's
+ * delay verdict asks the same instance which of the owner's open tasks it
+ * may count (lib/machineDelay.ts taskForecaster). So a read asks about the
+ * task's project, its links' other tasks and the owner's load, reads the
+ * caller's own grants, memberships and team shares once, and never reads
+ * the organization's whole catalogue (loadCatalogue). A check that a bound
+ * of that reader stopped refuses the whole call with its sentence
+ * (accessUnchecked), never answering a hidden row or a short list as
+ * whole.
  *
  * A list keeps its order with an id tie: subtasks and links by task number,
  * followers by name (the name key's UTF-8 bytes, lib/nameKey.ts), and
