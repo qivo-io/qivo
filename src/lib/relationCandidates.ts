@@ -6,7 +6,7 @@
    (store/planner.ts capInputs), so a list it holds only part of disables
    more and never allows more. The tasks each picker offers come from the
    server (convex/lib/relationPicker.ts), which applies the write's own
-   rules, archived and hidden subtasks included, before it answers, and
+   rules, archived subtasks included, before it answers, and
    the server's own block code for the task is worded here too
    (panels/RelationPicker.tsx). */
 
@@ -19,13 +19,14 @@ export type RelationTask = {
   project: string
   parent?: string | null
   children?: readonly string[]
-  hasHiddenParent?: boolean
-  hasHiddenSubtasks?: boolean
+  /** whether it is a group, also where `children` lists only some of its
+      subtasks or none, as for a task window's task whose subtask list is
+      incomplete (store/taskDetail.ts) */
+  isGroup?: boolean
 }
 
-const isSubtask = (x: RelationTask): boolean => !!x.parent || !!x.hasHiddenParent
-const hasSubtasks = (x: RelationTask): boolean =>
-  (x.children?.length ?? 0) > 0 || !!x.hasHiddenSubtasks
+const isSubtask = (x: RelationTask): boolean => !!x.parent
+const hasSubtasks = (x: RelationTask): boolean => !!x.isGroup || (x.children?.length ?? 0) > 0
 const subtasksFull = (x: RelationTask): boolean => (x.children?.length ?? 0) >= LIMITS.subtasks.max
 
 /** Why `it` can take no more subtasks, as a control's tooltip, or undefined

@@ -34,26 +34,22 @@ describe('group task completion', () => {
     expect(isIssueDone(parent, rows)).toBe(true)
   })
 
-  it('does not treat hidden children, missing branches or cycles as completed work', () => {
-    const parent: GroupIssue = {
-      id: 'parent',
-      status: 'done',
-      children: ['child'],
-      hasHiddenSubtasks: true,
-    }
+  it('does not treat missing branches, empty groups or cycles as completed work', () => {
+    const parent: GroupIssue = { id: 'parent', status: 'done', children: ['missing'] }
     const rows = { parent, child: { id: 'child', status: 'done' } }
-    expect(isIssueDone(parent, rows)).toBe(false)
-    expect(groupProgress(parent, rows)).toEqual({ total: 1, done: 1, pct: 100, unknown: true })
-    parent.hasHiddenSubtasks = false
-    parent.children = ['missing']
     expect(isIssueDone(parent, rows)).toBe(false)
     parent.children = ['parent']
     expect(isIssueDone(parent, rows)).toBe(false)
     expect(groupProgress(parent, rows)).toEqual({ total: 0, done: 0, pct: 0, unknown: true })
+    // a group named without the subtasks under it
     parent.children = []
-    parent.hasHiddenSubtasks = true
+    parent.isGroup = true
     expect(isIssueGroup(parent)).toBe(true)
     expect(isIssueDone(parent, rows)).toBe(false)
+    expect(groupProgress(parent, rows)).toEqual({ total: 0, done: 0, pct: 0, unknown: true })
+    // its one Done subtask, once listed, makes it Done
+    parent.children = ['child']
+    expect(isIssueDone(parent, rows)).toBe(true)
   })
 })
 
@@ -66,7 +62,7 @@ describe('group calculated dates', () => {
     unplanned: { id: 'unplanned', status: 'todo', start: null, end: null },
   })
 
-  it('spans the visible scheduled leaves and ignores stored group dates at any depth', () => {
+  it('spans the scheduled leaves and ignores stored group dates at any depth', () => {
     const rows = tree()
     // Done leaves count; the unplanned leaf and both stored group spans do not
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: false })
@@ -83,7 +79,7 @@ describe('group calculated dates', () => {
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 12, partial: false })
   })
 
-  it('has no dates when no visible leaf is scheduled', () => {
+  it('has no dates when no leaf is scheduled', () => {
     const rows = tree()
     rows.early.start = null
     rows.early.end = null
@@ -92,24 +88,15 @@ describe('group calculated dates', () => {
     expect(groupSpan(rows.root, rows)).toEqual({ start: null, end: null, partial: false })
   })
 
-  it('is partial when subtasks are hidden, missing or cyclic, without widening', () => {
+  it('is partial when subtasks are missing, unlisted or cyclic, without widening', () => {
     const rows = tree()
-    rows.nested.hasHiddenSubtasks = true
-    expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: true })
-    rows.nested.hasHiddenSubtasks = false
     rows.root.children = ['nested', 'early', 'missing']
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: true })
     rows.root.children = ['nested', 'early']
     rows.nested.children = ['late', 'root']
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: true })
-    // hidden subtasks alone make a group with nothing to show
-    const lone: DatedGroupIssue = {
-      id: 'lone',
-      status: 'todo',
-      start: 1,
-      end: 2,
-      hasHiddenSubtasks: true,
-    }
+    // a group named without its subtasks has nothing to show
+    const lone: DatedGroupIssue = { id: 'lone', status: 'todo', start: 1, end: 2, isGroup: true }
     expect(groupSpan(lone, { lone })).toEqual({ start: null, end: null, partial: true })
   })
 

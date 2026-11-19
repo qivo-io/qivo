@@ -408,14 +408,15 @@ describe("delayBeforeLoads — the window without the owners' loads", () => {
       delayBeforeLoads({ ...group, isDone: true }, { datesKnown: false, loading: false }),
     ).toBeNull()
   })
-  it('says unknown for a partial group while tasks load, unless its visible span is late already', () => {
+  it('says unknown for a partial group while tasks load, unless its known span is late already', () => {
     const partial = iss({ isGroup: true, isDone: false, partial: true, start: T, end: T + 1 })
     expect(delayBeforeLoads({ ...partial, dueWeek: T + 3 }, leaf)).toBe(DELAY_UNKNOWN)
     expect(delayBeforeLoads({ ...partial, dueWeek: T }, leaf)).toEqual({
       status: 'late',
       fin: T + 1,
     })
-    // once loaded, hidden subtasks prove neither on track nor behind
+    // once loaded, the subtasks a partial span leaves out prove neither on
+    // track nor behind
     expect(
       delayBeforeLoads({ ...partial, dueWeek: T + 3 }, { datesKnown: true, loading: false }),
     ).toBeNull()

@@ -199,7 +199,6 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       id: r.id,
       status: r.status,
       children: rows.filter((c) => c.parent_id === r.id).map((c) => c.id),
-      hasHiddenSubtasks: r.has_hidden_subtasks,
       start,
       end:
         r.end_week != null ? Math.max(start ?? isoToWeek(r.end_week), isoToWeek(r.end_week)) : null,

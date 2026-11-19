@@ -93,8 +93,9 @@ describe('the field check in the store', () => {
         remaining_hours: 8,
         remaining_set_at: NOW,
       }),
-      task('task-2', 2, { has_hidden_parent: true }),
+      task('task-2', 2, { parent_id: 'task-4' }),
       task('task-3', 3, { start_week: '2026-10-12', end_week: '2026-10-23' }),
+      task('task-4', 4),
     ]
     snap.links = [
       {
@@ -213,13 +214,11 @@ describe('the field check in the store', () => {
     })
   })
 
-  it('sends the hidden parent as the pair a read shows, and detaches from it', async () => {
+  it('sends the parent the window shows as expected.parent_id alone, and detaches from it', async () => {
     await open('task-2')
     P.updateIssue(key('task-2'), { parent: null })
-    expect(latest().args).toMatchObject({
-      patch: { parent_id: null },
-      expected: { parent_id: null, has_hidden_parent: true },
-    })
+    expect(latest().args.patch).toEqual({ parent_id: null })
+    expect(latest().args.expected).toEqual({ parent_id: 'task-4' })
   })
 
   it('sends long texts as prints, from what an editor began with', async () => {

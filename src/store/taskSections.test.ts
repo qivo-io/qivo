@@ -404,11 +404,7 @@ describe("the task window's sections in the store", () => {
     it('hides a subtask whose parent a write clears, and a refusal brings it back', async () => {
       const { P } = store
       opened()
-      P.setSubtaskParent(
-        openHandle(),
-        { uuid: 'kid-1', parent: 'task-a', hiddenParent: false },
-        false,
-      )
+      P.setSubtaskParent(openHandle(), { uuid: 'kid-1', parent: 'task-a' }, false)
       expect(subtaskIds()).toEqual(['kid-2'])
       refuse('issues:update')
       await settle()
@@ -419,11 +415,7 @@ describe("the task window's sections in the store", () => {
       const { P } = store
       opened()
       const seen = watch(subtaskIds)
-      P.setSubtaskParent(
-        openHandle(),
-        { uuid: 'kid-1', parent: 'task-a', hiddenParent: false },
-        false,
-      )
+      P.setSubtaskParent(openHandle(), { uuid: 'kid-1', parent: 'task-a' }, false)
       const kid = row('kid-1')
       delete kid.parent_id
       double.live?.batch(() => {

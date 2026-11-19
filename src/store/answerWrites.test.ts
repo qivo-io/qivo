@@ -363,32 +363,42 @@ describe('a field written from the window’s own answer', { timeout: 30_000 }, 
     expect(sent('issues:update')).toHaveLength(cases.length)
   })
 
-  it('sends the parent pair the window showed, hidden or not, and Remove parent takes it off the window', async () => {
+  it('sends the parent the window showed as expected.parent_id alone, saves Remove parent, and shows the parent again when the server refuses a stale one', async () => {
     await load()
     const parent = task(PARENT, 39, { title: 'Build the mast' })
+    const other = task('fd000000-0000-4000-8000-000000000038', 38, { title: 'Paint the mast' })
     await openFar(okAnswer(far({ parent_id: PARENT }), { parent: short(parent) }))
     expect(shown().parent).toBe('QN-39')
     void P.updateIssue(H, { parent: null })
-    expect(last('issues:update').args).toMatchObject({
+    expect(last('issues:update').args).toEqual({
+      org_id: ORG,
+      id: FAR,
       patch: { parent_id: null },
-      expected: { parent_id: PARENT, has_hidden_parent: false },
+      expected: { parent_id: PARENT },
     })
     expect(shown().parent).toBeNull()
     expect(P.detail?.parent).toBeNull()
-    // a parent the person cannot see: the pair says so, and names no task
-    await load()
-    await openFar(okAnswer(far({ has_hidden_parent: true })))
-    expect(shown().hasHiddenParent).toBe(true)
+    // Leo moved it under another parent before the window heard: the
+    // server refuses the stale parent, and the window shows the new one
+    last('issues:update').reject(conflict('parent_id'))
+    await turn()
+    await deliver(
+      'taskWindow:task',
+      okAnswer(far({ parent_id: other.id, updated_at: SERVER }), { parent: short(other) }),
+    )
+    expect(shown().parent).toBe('QN-38')
+    expect(P.detail?.parent?.uuid).toBe(other.id)
+    // Remove parent again, from the parent the window shows now: saved
     void P.updateIssue(H, { parent: null })
-    expect(last('issues:update').args).toMatchObject({
-      patch: { parent_id: null },
-      expected: { parent_id: null, has_hidden_parent: true },
-    })
-    expect(shown().hasHiddenParent).toBe(false)
+    expect(last('issues:update').args.expected).toEqual({ parent_id: other.id })
+    await answerWith(last('issues:update'))
+    await deliver('taskWindow:task', okAnswer(far({ updated_at: SERVER })))
+    expect(shown().parent).toBeNull()
+    expect(P.detail?.parent).toBeNull()
     // a new parent comes with the Parent picker's row of it
     // (relationWrites.test.ts), and without one nothing is sent
     await expect(P.updateIssue(H, { parent: 'QN-1' })).resolves.toBe(false)
-    expect(sent('issues:update')).toHaveLength(1)
+    expect(sent('issues:update')).toHaveLength(2)
   })
 })
 
@@ -610,8 +620,8 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
 
   it('leaves a new assignee of a subtask to the server, which refuses with its sentence', async () => {
     await load()
-    const parent = task(PARENT, 39, { project_id: 'manuals', title: 'Write the manual' })
-    await openFar(okAnswer(far({ parent_id: PARENT }), { parent: short(parent, 'viewer') }))
+    const parent = task(PARENT, 39, { title: 'Write the manual' })
+    await openFar(okAnswer(far({ parent_id: PARENT }), { parent: short(parent) }))
     // the store holds nobody but the signed-in person, so it cannot tell
     // whether Emil may work on the task: the write goes, painted
     const assigned = P.updateIssue(H, { assignee: EMIL })
@@ -624,11 +634,6 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
       'error',
     )
     expect(shown().assignee).not.toBe(EMIL)
-    // a hidden parent changes nothing, and the store sends the write
-    await load()
-    await openFar(okAnswer(far({ has_hidden_parent: true })))
-    void P.updateIssue(H, { assignee: EMIL })
-    expect(last('issues:update').args.patch).toEqual({ assignee_id: EMIL })
   })
 })
 
@@ -986,7 +991,7 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
       ...extra,
     })
 
-  it('moves the task with the subtasks it carries, sending the project and the parent pair it showed', async () => {
+  it('moves the task with the subtasks it carries, sending the project and the parent it showed', async () => {
     await load(editsManuals)
     await openBoard([viewRow(far({ parent_id: PARENT })), viewRow(kid(FAR_KID, 42))])
     await openFar(family())
@@ -1000,7 +1005,7 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
       id: FAR,
       project_id: 'manuals',
       detach_parent: true,
-      expected: { project_id: 'work', parent_id: PARENT, has_hidden_parent: false },
+      expected: { project_id: 'work', parent_id: PARENT },
     })
     expect(shown().project).toBe('manuals')
     expect(shown().parent).toBeNull()
@@ -1020,23 +1025,11 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
       id: FAR,
       project_id: 'bench',
       detach_parent: true,
-      expected: { project_id: 'work', parent_id: PARENT, has_hidden_parent: false },
+      expected: { project_id: 'work', parent_id: PARENT },
     })
     expect(shown().parent).toBeNull()
     expect(P.sections?.subtasks.rows.map((r) => r.project)).toEqual(['bench'])
     expect(card(FAR_KID)?.project).toBe('bench')
-    // a hidden parent counts as in the task's own sub-project, and the pair
-    // says only that there is one
-    for (const target of ['manuals', 'bench']) {
-      await load(editsManuals)
-      await openFar(okAnswer(far({ has_hidden_parent: true })))
-      P.moveIssue(H, target)
-      expect(last('issues:move').args).toMatchObject({
-        project_id: target,
-        detach_parent: true,
-        expected: { project_id: 'work', parent_id: null, has_hidden_parent: true },
-      })
-    }
   })
 
   it('moves only into a target the project cache answered, never one it only seeded', async () => {

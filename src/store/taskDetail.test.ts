@@ -383,15 +383,45 @@ describe('a task the workspace does not hold, in the store', () => {
         }),
       )
       expect(detail('far-1')?.done).toBe(false)
-      // a hidden subtask: the visible span, partial, and not Done
-      one('taskWindow:task').deliver(
+    })
+
+    it('counts a task whose subtask list is not complete as a group whose dates, Done state and family are unknown, also before a row arrives', () => {
+      const { P } = store
+      P.watchComments('far-1', org)
+      const done = short('kid-1', 43, {
+        status: 'done',
+        start_week: '2026-03-01',
+        end_week: '2026-04-01',
+      })
+      // as the server answers a list a read budget stopped: every row it
+      // read is Done, or it stopped before the first
+      for (const answer of [
         okAnswer('far-1', 40, {
           task: { has_subtasks: true, has_hidden_subtasks: true },
-          subtasks: { rows: kids, complete: true },
+          subtasks: { rows: [done], complete: false },
+        }),
+        okAnswer('far-1', 40, {
+          task: { has_hidden_subtasks: true },
+          subtasks: { rows: [], complete: false },
+        }),
+      ]) {
+        one('taskWindow:task').deliver(answer)
+        const shown = detail('far-1')
+        expect(shown).toMatchObject({ datesKnown: false, partial: true, done: false })
+        expect(shown?.view).toMatchObject({ isGroup: true, start: null, end: null })
+        expect(shown?.view && P.familyOf(shown.view)).toBeNull()
+      }
+      // the whole list: the same row makes the group Done, with its dates
+      one('taskWindow:task').deliver(
+        okAnswer('far-1', 40, {
+          task: { has_subtasks: true },
+          subtasks: { rows: [done], complete: true },
         }),
       )
-      expect(detail('far-1')).toMatchObject({ datesKnown: true, partial: true, done: false })
-      expect(detail('far-1')?.view?.end).toBe(P.isoToWeek(week(4)))
+      const whole = detail('far-1')
+      expect(whole).toMatchObject({ datesKnown: true, partial: false, done: true })
+      expect(whole?.view?.end).toBe(P.isoToWeek('2026-04-01'))
+      expect(whole?.view && P.familyOf(whole.view)).not.toBeNull()
     })
 
     it('says a group has unknown dates for an incomplete list or a subtask that is a group', () => {

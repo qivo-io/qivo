@@ -79,8 +79,8 @@ describe("a group's Progress and Remaining", () => {
   const list = (
     state: SectionState,
     rows: TotalsRow[],
-    extra: Partial<{ complete: boolean; delivered: boolean; hidden: boolean }> = {},
-  ) => ({ state, rows, complete: true, delivered: true, hidden: false, ...extra })
+    extra: Partial<{ complete: boolean; delivered: boolean }> = {},
+  ) => ({ state, rows, complete: true, delivered: true, ...extra })
 
   it('says loading before the list arrives, also while a retry runs before any answer', () => {
     const loading = { progress: { state: 'loading' }, remaining: { state: 'loading' } }
@@ -123,13 +123,6 @@ describe("a group's Progress and Remaining", () => {
     expect(groupTotals(list('ready', []))).toEqual({
       progress: { state: 'complete', done: 0, total: 0, pct: 0 },
       remaining: { state: 'complete', hours: undefined },
-    })
-  })
-
-  it('counts the visible subtasks beside hidden ones, and sums their hours', () => {
-    expect(groupTotals(list('ready', [leaf(true), leaf(false, 3)], { hidden: true }))).toEqual({
-      progress: { state: 'visible', done: 1, total: 2 },
-      remaining: { state: 'visible', hours: 3 },
     })
   })
 
