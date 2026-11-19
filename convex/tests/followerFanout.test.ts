@@ -392,7 +392,7 @@ describe('a change told in steps after the task changed', () => {
     expect(new Map(await told(t, task)).get(insider.id)).toBeUndefined()
   })
 
-  it('names the new parent as the change was written, once it moved out of sight meanwhile', async () => {
+  it('names the new parent as the change was written, once the parent moved with its subtask meanwhile', async () => {
     const { t, f, task, outsider, insider } = await scene()
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await as(t, f.admin).mutation(api.issues.update, {
@@ -400,9 +400,11 @@ describe('a change told in steps after the task changed', () => {
       id: task.id,
       patch: { parent_id: parent.id },
     })
-    // the parent moves to a sub-project the insider cannot see
-    const hidden = await plantHiddenSibling(t, f, insider)
-    await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: hidden.id }))
+    // the parent moves to Board rev with its subtask before the step, so
+    // the parent's project now differs from the one the notice recorded
+    await t.run(async (ctx) => {
+      for (const row of [parent, task]) await ctx.db.patch(row._id, { project_id: f.sub2.id })
+    })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     const byPerson = new Map(await told(t, task))
     expect(byPerson.get(insider.id)).toBe(`Attached under QN-${parent.num}`)

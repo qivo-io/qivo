@@ -1481,9 +1481,10 @@ describe('applyTaskUpdate, the write order of REST PATCH and MCP update_task', (
   it('moves, reparents, writes fields, labels, then the reason, skipping what does not change', async () => {
     const fx = await setup()
     const bug = await plantLabel(fx.t, fx.org.id, 'Bug', '#ff0000')
-    // a family stored across sub-projects before the subtask rule, whose
-    // subtask moves into its parent's sub-project
-    const parent = await task(fx, { project_id: fx.sub2.id, title: 'Parent' })
+    // a subtask in its parent's sub-project, which moves under a parent in
+    // the destination
+    const parent = await task(fx, { title: 'Parent' })
+    const there = await task(fx, { project_id: fx.sub2.id, title: 'Parent there' })
     const t1 = await task(fx, { title: 'Before', parent_id: parent.id })
     const apply = (
       a: Pick<Parameters<typeof applyTaskUpdate>[1], 'destination' | 'parent' | 'reason'> & {
@@ -1516,26 +1517,30 @@ describe('applyTaskUpdate, the write order of REST PATCH and MCP update_task', (
             .collect()
         ).map((c) => c.body),
       )
-    // the parent it already has is no change and writes no row
     await apply({
       destination: fx.sub2,
-      parent: parent.id,
+      parent: there.id,
       patch: { title: 'After' },
       archive: true,
       add: [bug],
       reason: ' Done elsewhere ',
     })
-    expect(await verbs()).toEqual(['moved', 'archived', 'labeled'])
+    const rows = await activityFor(fx.t, fx.org.id)
+    expect(rows.map((e) => e.verb)).toEqual(['moved', 'moved', 'archived', 'labeled'])
+    // the move to PCB, then the parent there
+    expect(rows[0]?.detail).toMatch(/^to the /)
+    expect(rows[1]?.detail).toMatch(new RegExp(`^under ${issueKey(there.num)} \\(from `))
     expect(await row(fx.t, t1.id)).toMatchObject({
       project_id: fx.sub2.id,
-      parent_id: parent.id,
+      parent_id: there.id,
       title: 'After',
       archived_at: NOW,
     })
     expect(await comments()).toEqual(['Done elsewhere'])
-    // an archive that matches the task's state writes nothing, reason included
+    // the parent it already has and an archive that matches the task's
+    // state write nothing, reason included
     await drainActivity(fx.t)
-    await apply({ archive: true, reason: 'again' })
+    await apply({ parent: there.id, archive: true, reason: 'again' })
     expect(await verbs()).toEqual([])
     // a restore never posts the reason
     await apply({ archive: false, reason: 'back' })
