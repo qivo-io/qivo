@@ -389,9 +389,10 @@ describe('a field written from the window’s own answer', { timeout: 30_000 }, 
     expect(shown().parent).toBe('QN-38')
     expect(P.detail?.parent?.uuid).toBe(other.id)
     // Remove parent again, from the parent the window shows now: saved
-    void P.updateIssue(H, { parent: null })
+    const saved = P.updateIssue(H, { parent: null })
     expect(last('issues:update').args.expected).toEqual({ parent_id: other.id })
     await answerWith(last('issues:update'))
+    await expect(saved).resolves.toBe(true)
     await deliver('taskWindow:task', okAnswer(far({ updated_at: SERVER })))
     expect(shown().parent).toBeNull()
     expect(P.detail?.parent).toBeNull()

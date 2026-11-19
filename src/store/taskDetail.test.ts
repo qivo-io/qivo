@@ -404,6 +404,8 @@ describe('a task the workspace does not hold, in the store', () => {
           task: { has_hidden_subtasks: true },
           subtasks: { rows: [], complete: false },
         }),
+        // the list's own answer decides, also without the task's flag
+        okAnswer('far-1', 40, { subtasks: { rows: [], complete: false } }),
       ]) {
         one('taskWindow:task').deliver(answer)
         const shown = detail('far-1')

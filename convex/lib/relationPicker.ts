@@ -222,8 +222,8 @@ export type RelationBlock = 'has_subtasks' | 'is_subtask' | 'full'
  * task as a subtask, and a new subtask has none of its own. */
 export type RelationCandidate = Omit<ShortRow, 'has_subtasks'> & {
   /** In the Subtasks picker only, the task's parent as a read states it
-   * (lib/workingSet.ts parentLink), the pair a pick sends as its expected
-   * values; has_hidden_parent is always false, and a later release removes
+   * (lib/workingSet.ts parentLink), whose id a pick sends as its expected
+   * value; has_hidden_parent is always false, and a later release removes
    * it. The other pickers leave both out. */
   parent_id?: string
   has_hidden_parent?: boolean

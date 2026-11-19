@@ -796,8 +796,8 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(reads.at(-1)?.args).toMatchObject({ issue_id: 'fam', kind: 'subtask' })
     await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
     expect(offered()).toEqual(['kid-1', 'kid-2', 'other'])
-    // the server counts 100 active subtasks, which the window does not
-    // list: no candidate, and the window's sentence
+    // the server answers the task as full, which the window's own list
+    // does not show: no candidate, and the window's sentence
     const search = document.querySelector<HTMLInputElement>('[data-relation-picker] input')
     await act(async () => {
       if (!search) return

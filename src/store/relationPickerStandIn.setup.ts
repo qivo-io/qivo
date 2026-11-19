@@ -50,9 +50,9 @@ import type { Whole } from './guard/liveDouble.setup'
     scan stops after this many tasks (`stop`), a read that fails (`fail`),
     an opened task the person may not open (`unavailable`), a request past
     the picker's budget (`over`), a smaller batch (`rows`), and the opened
-    task's own block (`blocked`), as for archived subtasks, which the window
-    does not list: has_subtasks for Parent, full for Subtasks and Linked
-    tasks. */
+    task's own block (`blocked`), which the window's lists do not show:
+    has_subtasks for Parent, as archived subtasks give, and full for
+    Subtasks and Linked tasks, as a cap the server counts gives. */
 export type ForcedRelations = {
   stop?: number
   fail?: boolean

@@ -2593,8 +2593,9 @@ backend, such as a tab left open, works as before. This release's app needs
 this backend. It sends a task's parent as `expected.parent_id` alone, which
 v0.1.170 refuses without `has_hidden_parent`, so against a v0.1.170 backend
 every parent change it sends is refused: a new or removed parent, a subtask
-added or taken off and a move that leaves the parent. From this release on,
-never return the backend to v0.1.170; roll forward instead.
+added or taken off and a move that leaves the parent. Every earlier backend
+refuses it the same way. From this release on, never return the backend to
+a commit before it; roll forward instead.
 
 The Overview's counts take an active task with an active subtask as a
 group in an archived sub-project too. An earlier backend counted such a
@@ -2747,9 +2748,8 @@ this backend offers parents and subtasks of the sibling sub-projects, which
 the server refuses with the rule's sentence, sends a subtask's move within
 its project without leaving the parent, which the server refuses the same
 way, and paints a task's move within its project without its subtasks,
-which the server carries, until it reloads. Rows from before the rule stay
-readable, so returning the backend to an earlier release is safe, but that
-release makes families across sub-projects again.
+which the server carries, until it reloads. The release after v0.1.170
+sets the floor for returning the backend to an earlier commit.
 
 v0.1.169 (`5138c16`) also carried two internal functions,
 `internal/orgReset:orgs` and `internal/orgReset:deleteOrg`, which listed a
