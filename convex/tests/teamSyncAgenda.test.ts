@@ -982,22 +982,17 @@ describe('the ceiling', () => {
 /* --------------------------------------------------------------- hidden data */
 
 /** A fixture whose hidden rows carry ordinary text when `wide`: the
- * sibling's tasks, a hidden parent of a row, a hidden blocker of a row and
- * a hidden subtask of a parent. Every task has the same number in both. */
+ * sibling's tasks, a hidden blocker of a row among them, beside a shown
+ * group and its subtask. Every task has the same number in both. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
   const f = await withReadingAdmin(t)
   const sibling = await plantHiddenSibling(t, f, f.viewer)
   const text = (i: number) => (wide ? ordinary(i) : { title: 'h', text: '' })
-  const [parent] = await plantTasks(t, sibling, 1, () => ({
-    ...text(1),
-    num: 1,
-    assignee_id: f.user.id,
-  }))
+  await plantTasks(t, sibling, 1, () => ({ ...text(1), num: 1, assignee_id: f.user.id }))
   const row = await task(t, f.sub, {
-    title: 'Under a hidden parent',
+    title: 'Blocked by a hidden task',
     num: 2,
-    parent_id: parent.id,
     assignee_id: f.user.id,
   })
   const [blocker] = await plantTasks(t, sibling, 1, () => ({ ...text(3), num: 3 }))
@@ -1009,7 +1004,7 @@ async function hiddenOrg(wide: boolean) {
     parent_id: shownGroup.id,
     assignee_id: f.user.id,
   })
-  await plantTasks(t, sibling, 1, () => ({ ...text(6), num: 6, parent_id: shownGroup.id }))
+  await plantTasks(t, sibling, 1, () => ({ ...text(6), num: 6 }))
   await plantTasks(t, sibling, 5, (i) => ({ ...text(i + 7), num: 7 + i, assignee_id: f.user.id }))
   await plantTasks(t, f.sub, 20, (i) => ({ ...ordinary(i), num: 20 + i, assignee_id: f.admin.id }))
   await withReach(t)

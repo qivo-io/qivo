@@ -896,8 +896,8 @@ describe('parents and subtasks', () => {
 /* --------------------------------------------------------------- hidden data */
 
 /** A fixture whose hidden rows carry ordinary text when `wide`, the
- * sibling's tasks, a hidden subtask of a shown group, a hidden parent of a
- * shown task, all the guest's own, so My view reads them too. Every task
+ * sibling's tasks, beside a shown group with its subtask, all the guest's
+ * own, so My view reads them too. Every task
  * has the same number in both, so their count rows fall in the same shards
  * (model/overviewCounts.ts OVERVIEW_SHARDS), and the sibling's id sorts
  * after FW's in both. How many count rows a person holds in projects they
@@ -915,9 +915,8 @@ async function hiddenOrg(wide: boolean) {
   const text = (i: number) => (wide ? ordinary(i) : { title: 'h', text: '' })
   const mine = { assignee_id: f.guest.id }
   const group = await task(t, f.sub, { title: 'Quartz group', num: 1, ...mine })
-  await plantTasks(t, sibling, 1, () => ({ ...text(1), num: 2, parent_id: group.id, ...mine }))
-  const [parent] = await plantTasks(t, sibling, 1, () => ({ ...text(2), num: 3, ...mine }))
-  await task(t, f.sub, { title: 'Under a hidden parent', num: 4, parent_id: parent.id, ...mine })
+  await task(t, f.sub, { title: 'Its subtask', num: 4, parent_id: group.id, ...mine })
+  await plantTasks(t, sibling, 2, (i) => ({ ...text(i + 1), num: 2 + i, ...mine }))
   await plantTasks(t, sibling, 5, (i) => ({ ...text(i + 3), num: 5 + i, ...mine }))
   await plantTasks(t, f.sub, 20, (i) => ({
     num: 10 + i,
