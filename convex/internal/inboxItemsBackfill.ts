@@ -1,8 +1,9 @@
 /* One-time migration: build the inbox_items rows (schema.ts) of every
  * profile whose messages were stored before them, and mark its inbox_state
- * built. The app, REST and MCP list an inbox by its items, and answer that
- * a profile not built yet is not ready (model/inboxItems.ts seatReady). A
- * profile whose first message came after this release keeps
+ * built. The app, REST and MCP list an inbox by its items, and answer not
+ * ready for a profile whose inbox_state says not built, or that holds
+ * messages and no inbox_state (model/inboxItems.ts seatReady). A profile
+ * whose first message came after this release keeps
  * its items from the start (model/inboxItems.ts ensureInboxState) and needs
  * nothing.
  *

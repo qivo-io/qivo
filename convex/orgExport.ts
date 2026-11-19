@@ -57,9 +57,9 @@
  * checks the link and then, on every request, the admin's authority, the
  * job and the organization (deliveryOf), takes a lease (leaseDelivery, at
  * most DELIVERY.streams a job) and streams the stored parts as one ZIP
- * without the function holding the archive. On a local backend the
- * runtime read that body as fast as storage allowed, whatever the client
- * took (http.ts archiveStream), so the lease and the checks before every
+ * without the function holding the archive. The runtime reads that body
+ * without waiting for the client and may read ahead as far as the whole
+ * archive (http.ts archiveStream), so the lease and the checks before every
  * part (canDeliver) and of every part's size cover the backend's read of
  * the archive, not the client's transfer. An archive the backend read
  * whole sets only the job's first served_at (recordDelivery), so a

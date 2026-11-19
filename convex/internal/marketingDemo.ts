@@ -766,8 +766,9 @@ export const checkReserved = internalQuery({
 const RESET_TO_CHANGE = 'marketing demo: use reset to change dates or dataset version'
 
 /** How much one wipe call deletes, half a deletion step's REMOVAL_BUDGET,
- * to keep each call small against Convex's 1 s mutation limit. It bounds
- * the rows and bytes a call deletes, not its time. */
+ * to keep each call small against Convex's 1 s mutation limit. A call
+ * stops once it has deleted that many rows or bytes, which its last row
+ * can pass. It counts rows and bytes, not time. */
 export const WIPE_BUDGET = { rows: 128, bytes: 2 * 1024 * 1024 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is

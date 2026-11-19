@@ -9,8 +9,8 @@
  * (qivo-internal docs/deployment.md). A dry run of a release before the
  * third, from v0.1.98 on, skips a task without a copy on its task row
  * before it looks for a second row, so it can report zero `duplicates` for
- * a task with two. The dry run's `skipped` counts the tasks whose text the
- * clear took off their task row, and is no gate.
+ * a task with two. The dry run's `skipped` counts the tasks that have a
+ * description row and no copy on their task row, and is no gate.
  *
  * - page: one page of up to 25 task and project results for a search text,
  *   ranked together across every organization where the login holds a
