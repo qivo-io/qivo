@@ -16,9 +16,9 @@
      whose project the caller reaches answers `ok` with its row, the
      caller's level on its project, its label rows, the caller's follow,
      its parent as a short row when the caller is shown the parent, and its
-     subtasks as short rows by number and then id, the list complete; both
-     only inside the task's own sub-project (convex/lib/liveTasks.ts
-     liveLink), as the server's are. An archived task whose project the caller sees answers
+     subtasks as short rows by number and then id, the list complete and
+     has_hidden_subtasks false; both only inside the task's own sub-project
+     (convex/lib/liveTasks.ts liveLink), as the server's are. An archived task whose project the caller sees answers
      `archived` with the Archived tasks page's row, its text, labels, level
      and whether its project is archived. Everything else answers
      `unavailable`, alike.
@@ -218,8 +218,9 @@ export function taskWindowStandIn(
         ...own,
         ...parentLink,
         has_subtasks: task.has_subtasks === true || counting.length > 0,
-        // says only that the list is incomplete
-        has_hidden_subtasks: task.has_hidden_subtasks === true || incomplete,
+        // says only that the list is incomplete, as the server's does,
+        // whatever the whole's row says
+        has_hidden_subtasks: incomplete,
       },
       level: level(task.project_id),
       labels,

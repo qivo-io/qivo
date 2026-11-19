@@ -57,9 +57,12 @@ let windowRead: ((value: unknown) => void) | null
 let windowFail: ((error: unknown) => void) | null
 /* Whether `mixed`'s window answers as a backend before the release after
    v0.1.170 did, which followed its link to `read-only` in Manuals and
-   listed that subtask at the caller's Viewer level there. This backend
-   follows no link across sub-projects, so only such a backend shows the
-   app a subtask it cannot edit, which the app still handles. */
+   listed that subtask at the caller's Viewer level there, and said beside
+   a complete list that more subtasks were in projects the caller cannot
+   open, as the row's has_hidden_subtasks says. This backend follows no
+   link across sub-projects and sets has_hidden_subtasks only for an
+   incomplete list, so only such a backend shows the app a subtask it
+   cannot edit or one it cannot open, which the app still handles. */
 let earlierBackend = false
 
 /* `mixed`'s window answer from an earlier backend (earlierBackend), over
@@ -70,8 +73,10 @@ function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
     task?: Record<string, unknown>
   }
   if (!earlierBackend || args.ref !== 'mixed' || answer.state !== 'ok') return answer
+  const hidden = whole.issues.find((row) => row.id === 'mixed')?.has_hidden_subtasks === true
+  const task = { ...answer.task, has_hidden_subtasks: hidden }
   const kid = whole.issues.find((row) => row.id === 'read-only')
-  if (kid === undefined) return answer
+  if (kid === undefined) return { ...answer, task }
   const {
     description: _text,
     parent_id: _parent,
@@ -81,7 +86,7 @@ function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
   } = kid
   return {
     ...answer,
-    task: { ...answer.task, has_subtasks: true },
+    task: { ...task, has_subtasks: true },
     subtasks: { rows: [{ ...row, has_subtasks: false, level: 'viewer' }], complete: true },
   }
 }
@@ -523,7 +528,8 @@ describe('Archive or delete a task', () => {
     expect(writes()[0].args).not.toHaveProperty('subtask_ids')
   })
 
-  it('warns that subtasks I cannot see can refuse the archive', async () => {
+  it("warns, on an earlier backend's answer, that subtasks I cannot see can refuse the archive", async () => {
+    earlierBackend = true
     snap.issues = snap.issues.filter((it) => it.id !== 'read-only')
     await act(async () => deliver(snap))
     await openTask('mixed')
