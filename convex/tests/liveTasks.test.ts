@@ -190,12 +190,41 @@ describe('the group rule', () => {
 })
 
 describe('the guard on parent links', () => {
-  it('names no parent outside the task’s own sub-project to a reader who cannot see it', async () => {
+  it('names no parent or subtask outside the task’s own sub-project to a reader who cannot see it', async () => {
     const fx = await setup()
-    // a row no write makes: its parent in AWAY, which the guest and the
-    // agent cannot see
+    // rows no write makes: a parent in AWAY, which the guest and the agent
+    // cannot see, and subtasks there of an active and an archived task
     const parent = await task(fx, { project_id: fx.away.id, title: 'Parent elsewhere' })
     const child = await task(fx, { parent_id: parent.id, title: 'Child' })
+    const group = await task(fx, { title: 'Group' })
+    const kid = await task(fx, { project_id: fx.away.id, parent_id: group.id })
+    const shelved = await task(fx, { title: 'Shelved group', archived_at: NOW })
+    const shelvedKid = await task(fx, {
+      project_id: fx.away.id,
+      parent_id: shelved.id,
+      archived_at: NOW,
+    })
+    // the REST and MCP subtask lists, of an active and of an archived task
+    for (const [of, below] of [
+      [group, kid],
+      [shelved, shelvedKid],
+    ] as const) {
+      const args = { today: TODAY, callerId: fx.agent.id, access: 'read' as const, ref: of.id }
+      const rest = await restGet(fx, of.id)
+      const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.getIssue, args))
+      for (const answer of [rest, mcp]) {
+        expect(answer.subtasks, of.title).toEqual([])
+        expect(JSON.stringify(answer), of.title).not.toContain(below.id)
+      }
+    }
+    // the app's write answer
+    const written = await as(fx.t, fx.guest).mutation(api.issues.update, {
+      org_id: fx.org.id,
+      id: child.id,
+      patch: { title: 'Child renamed' },
+    })
+    expect(written).not.toHaveProperty('parent_id')
+    expect(JSON.stringify(written)).not.toContain(parent.id)
     // the task window
     const window = await as(fx.t, fx.guest).query(api.taskWindow.task, {
       org_id: fx.org.id,
