@@ -543,13 +543,16 @@ export const recipes: Recipe[] = [
   {
     mutation: 'issues:update',
     mutator: 'updateAnswerTask',
-    what: 'a hidden parent removed from a task the window shows from its own answer',
+    what: 'a parent removed from a task the window shows from its own answer',
     pause: 'P',
     detail: {
       answer: (args) =>
-        windowAnswer(
-          args ? { has_hidden_parent: false, updated_at: SERVER } : { has_hidden_parent: true },
-        ),
+        args
+          ? windowAnswer({ updated_at: SERVER })
+          : windowAnswer(
+              { parent_id: 'task-p' },
+              { parent: shortOf(pickerRow('task-p', 85), true) },
+            ),
     },
     act: (P) => P.updateIssue('QN-80', { parent: null }),
   },
@@ -736,7 +739,7 @@ export const recipes: Recipe[] = [
     act: (P) =>
       P.setSubtaskParent(
         'QN-80',
-        { uuid: 'task-p', row: pickerRow('task-p', 85), parent: null, hiddenParent: false },
+        { uuid: 'task-p', row: pickerRow('task-p', 85), parent: null },
         true,
       ),
   },
@@ -754,12 +757,7 @@ export const recipes: Recipe[] = [
               { subtasks: { rows: [windowKid()], complete: true } },
             ),
     },
-    act: (P) =>
-      P.setSubtaskParent(
-        'QN-80',
-        { uuid: 'task-wk', parent: WINDOW_TASK, hiddenParent: false },
-        false,
-      ),
+    act: (P) => P.setSubtaskParent('QN-80', { uuid: 'task-wk', parent: WINDOW_TASK }, false),
   },
   {
     mutation: 'issues:addLink',

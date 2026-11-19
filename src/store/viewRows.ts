@@ -64,7 +64,6 @@
    holders are bounded by the server's ceilings and the views' lifetimes,
    and the total is measured at the design size, not limited. */
 
-import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import { ISSUE_PREFIX } from '../../convex/lib/taskRefs'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { Row } from './rows'
@@ -155,8 +154,8 @@ export function createViewRows(
   ): Shaped {
     const parentRow = row.parent_id ? rows.get(row.parent_id) : undefined
     const parent = parentRow ? ctx.handleNow(parentRow.id, parentRow.org_id, parentRow.num) : null
-    // the subtasks this answer names; a group's others are filtered out or
-    // hidden, and its facts say what they add up to
+    // the subtasks this answer names; the answer leaves a group's others
+    // out, and its facts say what they add up to
     const children = kidRows.map((kid) => ctx.handleNow(kid.id, kid.org_id, kid.num))
     const kids = children.join()
     const extra = ctx.extra?.(row.id) ?? ''
@@ -179,8 +178,8 @@ export function createViewRows(
     const it = shapeIssue(task, {
       uuidToKey: handles,
       uuidToDisplayKey: only(`${ISSUE_PREFIX}-${row.num}`),
-      hiddenSubtaskParents: { has: (id) => id === row.id && row.has_hidden_subtasks },
-      hiddenParentTasks: { has: (id) => id === row.id && row.has_hidden_parent },
+      // a group the answer names without its subtasks is still a group
+      groups: { has: (id) => id === row.id && row.has_subtasks },
       linkViews: only([]),
       childKeys: only(children),
       labelsByIssue: only([]),
@@ -188,12 +187,6 @@ export function createViewRows(
       attachmentCounts: only(0),
       subscribedIssues: { has: () => false },
     })
-    // a group the answer names without its subtasks is still a group
-    if (row.has_subtasks && !it.isGroup) {
-      it.isGroup = true
-      it.owner = taskOwnerId(row, true)
-      it.ownerField = reviewerOwns(row, true) ? 'reviewer' : 'assignee'
-    }
     if (row.has_subtasks) {
       // a group's dates are its calculated span, never its stored dates
       it.start = weekOf(row.span?.start_week, toWeek)

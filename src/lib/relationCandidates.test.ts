@@ -13,11 +13,11 @@ const task = (id: string, extra: Partial<RelationTask> = {}): RelationTask => ({
 })
 
 describe('the parent block', () => {
-  it('blocks a task with subtasks, also only hidden ones', () => {
+  it('blocks a task with subtasks, also a group whose subtasks are not listed', () => {
     expect(parentBlock(task('epic', { children: ['kid'] }))).toBe(
       'A task with subtasks cannot become a subtask',
     )
-    expect(parentBlock(task('epic', { hasHiddenSubtasks: true }))).toBe(
+    expect(parentBlock(task('epic', { isGroup: true }))).toBe(
       'A task with subtasks cannot become a subtask',
     )
   })
@@ -29,11 +29,8 @@ describe('the parent block', () => {
 })
 
 describe('the subtask block', () => {
-  it('blocks a subtask, also one under a hidden parent', () => {
+  it('blocks a subtask', () => {
     expect(subtaskBlock(task('kid', { parent: 'epic' }))).toBe('A subtask cannot have subtasks')
-    expect(subtaskBlock(task('kid', { hasHiddenParent: true }))).toBe(
-      'A subtask cannot have subtasks',
-    )
   })
 
   it('blocks a task that already has the most subtasks', () => {

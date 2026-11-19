@@ -790,14 +790,12 @@ export type RelatedTaskVM = {
     P.setSubtaskParent: a Subtasks picker's row
     (convex/lib/relationPicker.ts RelationCandidate) or a row of the
     window's Subtasks list. `row` is the short row the window's list
-    shows once it is a subtask, which a pick needs; `parent` and
-    `hiddenParent` are its parent as the person saw it, the write's
-    expected values. */
+    shows once it is a subtask, which a pick needs; `parent` is its parent
+    as the person saw it, the write's expected value. */
 export type SubtaskEnd = {
   uuid: string
   row?: RelationCandidate
   parent: string | null
-  hiddenParent: boolean
 }
 
 /** A row of Linked tasks: the other task and the relation as seen from the
@@ -820,16 +818,15 @@ export type SectionVM<R> = {
 export type SectionAttachmentVM = AttachmentVM
 
 /** The watched task's Subtasks, Linked tasks and Attachments (P.sections),
-    for the task `task`, whose windows alone show them. `hidden` says the
-    answer's subtask list leaves some out (has_hidden_subtasks): this
-    backend says so of an incomplete list, and an earlier one also said so
-    of subtasks in projects the person cannot open. An attachment row of a
-    description image (`inline`) is no row of the section, and `count`
-    counts what the per-task cap counts: every attachment row but those a
-    description save took out, images included. */
+    for the task `task`, whose windows alone show them. The Subtasks list
+    is whole where its answer says it is complete (`subtasks.complete`).
+    An attachment row of a description image (`inline`) is no row of the
+    section, and `count` counts what the per-task cap counts: every
+    attachment row but those a description save took out, images
+    included. */
 export type TaskSectionsVM = {
   task: string
-  subtasks: SectionVM<RelatedTaskVM> & { hidden: boolean }
+  subtasks: SectionVM<RelatedTaskVM>
   links: SectionVM<LinkedTaskVM>
   attachments: SectionVM<SectionAttachmentVM> & { count: number }
 }
@@ -2735,24 +2732,13 @@ function levelOf(level: string | null | undefined): ShortRow['level'] | null {
 /* The watched task's Subtasks from its painted task answer, by number. */
 function subtaskSection(answer: SectionAnswers['task']) {
   const state = sectionState('task', answer)
-  const list: { rows: readonly ShortRow[]; complete: boolean; hidden: boolean } | null =
+  const list: { rows: readonly ShortRow[]; complete: boolean } | null =
     answer === CREATING
-      ? { rows: [], complete: true, hidden: false }
+      ? { rows: [], complete: true }
       : answer?.state === 'ok'
-        ? {
-            rows: answer.subtasks.rows,
-            complete: answer.subtasks.complete,
-            hidden: answer.task.has_hidden_subtasks,
-          }
+        ? answer.subtasks
         : null
-  if (!list)
-    return {
-      state,
-      rows: [],
-      complete: false,
-      delivered: answer !== null,
-      hidden: false,
-    }
+  if (!list) return { state, rows: [], complete: false, delivered: answer !== null }
   const shown = [...list.rows]
     .map((short) => ({ id: short.id, num: short.num, row: relatedTask(short.id, short) }))
     .sort(byNumber)
@@ -2762,7 +2748,6 @@ function subtaskSection(answer: SectionAnswers['task']) {
     rows: shown,
     complete: list.complete,
     delivered: true,
-    hidden: list.hidden,
   }
 }
 
@@ -5448,7 +5433,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   }
   const view: View = target === 'none' || 'id' in target ? {} : target
   const layer = batch ?? layers.open(name, view, o.over)
-  // read before the paint, which may drop a hidden parent
+  // the expected values as the person saw them, before the paint
   const sentArgs = o.over ? ({ ...args, expected: expectedOf(o.over) } as FunctionArgs<M>) : args
   layers.send(layer, deliveryCounters())
   if (!batch) {
@@ -9153,8 +9138,7 @@ function subtaskListPaint(parent: string, kid: ShortRow | null, gone: string, at
   if (kid) rest.push({ ...kid })
   rest.sort(byNumber)
   shown.subtasks = { ...shown.subtasks, rows: rest }
-  shown.task.has_subtasks =
-    rest.length > 0 || !shown.subtasks.complete || shown.task.has_hidden_subtasks
+  shown.task.has_subtasks = rest.length > 0 || !shown.subtasks.complete
   const task = shown.task
   if (kid && (task.remaining_hours != null || task.review_at != null)) {
     task.remaining_hours = undefined
@@ -9436,7 +9420,7 @@ function paintMoved(
     (answerTaskOf), with what it takes along from the answer's whole
     subtask list (P.familyOf), and no move while that is unknown. Its
     expected values are the painted answer's project and, with a detach,
-    its parent pair. It paints the answer (the task, the subtasks it
+    its parent. It paints the answer (the task, the subtasks it
     carries, the parent it leaves) and every view copy of those tasks, and
     answers the task's handle, or null for a no-op or an invalid target. `onSaved` hears whether the
     server took the move. */
@@ -9474,7 +9458,6 @@ function moveAnswerTask(
           if (moving.includes(kid.id)) paintMoved(kid, projectId, at)
         if (leavesParent) {
           shown.task.parent_id = undefined
-          shown.task.has_hidden_parent = false
           shown.parent = null
         }
       },
@@ -9483,10 +9466,7 @@ function moveAnswerTask(
       for (const taskId of moving)
         for (const copy of viewCopiesIn(taskId, a.org)) {
           paintMoved(copy, projectId, at)
-          if (leavesParent && taskId === uuid) {
-            copy.parent_id = undefined
-            copy.has_hidden_parent = false
-          }
+          if (leavesParent && taskId === uuid) copy.parent_id = undefined
         }
     }),
   }
@@ -9500,10 +9480,7 @@ function moveAnswerTask(
     },
     view,
     {
-      over: {
-        ...overOf('issues', row, leavesParent ? ['project_id', 'parent_id'] : ['project_id']),
-        hiddenParent: row.has_hidden_parent,
-      },
+      over: overOf('issues', row, leavesParent ? ['project_id', 'parent_id'] : ['project_id']),
       about: { task: uuid },
     },
   ).then((saved) => onSaved?.(saved))
@@ -9746,13 +9723,7 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
   let family: TaskFamily | null = null
   if (kids) {
     const children = Object.keys(kids)
-    const hidden = answer.task.has_hidden_subtasks
-    const root: IssueVM = {
-      ...it,
-      children,
-      hasHiddenSubtasks: hidden,
-      isGroup: children.length > 0 || hidden,
-    }
+    const root: IssueVM = { ...it, children, isGroup: children.length > 0 }
     const byId: Record<string, IssueVM> = { ...kids, [root.id]: root }
     const parent = root.parent ? answerParent(root) : undefined
     if (parent) byId[parent.id] = parent
@@ -9774,12 +9745,12 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
     subtask list that is not whole as a group, and each field equal to what
     the person saw left unsent. A group's status, Pause or new reviewer
     still goes, and the server refuses it. Its expected values are the
-    painted answer's row with `opts.seen` over it, and its hidden parent
-    pair. It paints the answer (`detail`) and every view copy (`view`), and
-    sends to the answer's organization. It joins no Roadmap history: a
-    visit records nothing while a task window is open
-    (recordRoadmapChange), so a drag on the Roadmap under the window saves
-    as an ordinary write. */
+    painted answer's row with `opts.seen` over it, a parent as
+    expected.parent_id alone. It paints the answer (`detail`) and every
+    view copy (`view`), and sends to the answer's organization. It joins
+    no Roadmap history: a visit records nothing while a task window is
+    open (recordRoadmapChange), so a drag on the Roadmap under the window
+    saves as an ordinary write. */
 function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
   if (refusePausedEdit()) return Promise.resolve(false)
   // a new parent comes from the Parent picker's row, which the window's
@@ -9814,8 +9785,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
     toast(PARENT_UNKNOWN, 'error')
     return Promise.resolve(false)
   }
-  // a field sent with the value the person saw stays unsent; a detach
-  // from a parent the person cannot see is a change
+  // a field sent with the value the person saw stays unsent
   for (const key of Object.keys(wire) as (keyof typeof wire)[]) {
     const value = wire[key]
     const shown = seenRow[key]
@@ -9824,7 +9794,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
         ? String(value ?? '').trim() === String(shown ?? '').trim()
         : key === 'description'
           ? (value || null) === (shown || null)
-          : (key !== 'parent_id' || !row.has_hidden_parent) && (value ?? null) === (shown ?? null)
+          : (value ?? null) === (shown ?? null)
     if (same) delete wire[key]
   }
   if (!Object.keys(wire).length) return Promise.resolve(true)
@@ -9833,7 +9803,6 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   // a view's row sends no text
   const viewDb = { ...paintDb }
   delete viewDb.description
-  // a detach, or a new parent, replaces a hidden parent too
   const parentChange = 'parent_id' in paintDb
   const newParent = paintDb.parent_id ?? null
   const at = new Date().toISOString()
@@ -9841,10 +9810,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   const parentShort = newParent && parentRow ? parentShortOf(parentRow, at) : null
   const hours = reviewHoursOfWrite()
   const viewPart = viewPaint([uuid], () => {
-    for (const copy of viewCopiesIn(uuid, a.org)) {
-      stampTaskPatch(copy, viewDb, at, hours)
-      if (parentChange) copy.has_hidden_parent = false
-    }
+    for (const copy of viewCopiesIn(uuid, a.org)) stampTaskPatch(copy, viewDb, at, hours)
   })
   if ('description' in paintDb) unsentText.set(viewPart, uuid)
   const view: View = {
@@ -9854,20 +9820,14 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
         const shown = detailRows.task
         if (!shown || shown.task.id !== uuid) return
         stampTaskPatch(shown.task, paintDb, at, hours)
-        // the parent goes, a hidden one too, or the new one shows
-        if (parentChange) {
-          shown.task.has_hidden_parent = false
-          shown.parent = parentShort ? { ...parentShort } : null
-        }
+        // the parent goes, or the new one shows
+        if (parentChange) shown.parent = parentShort ? { ...parentShort } : null
       },
     },
     view: viewPart,
   }
   return send(api.issues.update, { org_id: a.org, id: uuid, patch: wire }, view, {
-    over: {
-      ...overOf('issues', row, Object.keys(wire), opts.seen),
-      hiddenParent: row.has_hidden_parent,
-    },
+    over: overOf('issues', row, Object.keys(wire), opts.seen),
     keepDraft: opts.keepDraft,
     keepUnsaved: opts.keepUnsaved,
     about: { task: uuid },
@@ -10015,8 +9975,8 @@ function slotsBehind(slots: readonly ViewSlot[]): ViewSlot[] {
 }
 
 /** New task `row`, numbered `num`, as a view's answer sends it (ViewRow):
-    no text, no hidden parent or subtasks, and a group without the facts
-    only a read of its subtasks gives when `group`. */
+    no text, has_hidden_parent and has_hidden_subtasks false, and a group
+    without the facts only a read of its subtasks gives when `group`. */
 function newViewRow(row: Row<'issues'>, num: number, group: boolean): ViewRow {
   const { description: _text, ...fields } = row
   return {
@@ -10072,7 +10032,6 @@ function newTaskViewPaint(
       const child = ends.child ? viewRows.editIn(slot, ends.child) : undefined
       if (child?.org_id === row.org_id && child.parent_id !== row.id) {
         child.parent_id = row.id
-        child.has_hidden_parent = false
         child.updated_at = row.created_at
       }
     }
@@ -10536,10 +10495,10 @@ const PRINTED: Record<string, Record<string, (value: unknown) => unknown>> = {
 }
 
 /** A write's `expected` from `over` (convex/model/expected.ts): null for
-    unset, a long text as its print, and a task's parent as the pair a read
-    shows, with has_hidden_parent: the one `over` carries from the row it
-    was made from, such as the window's own answer, else none. Read before
-    the write's paint, which may take the hidden parent away. */
+    unset and a long text as its print. A task's parent goes as
+    expected.parent_id alone, the parent the person saw or null, which the
+    server takes without has_hidden_parent (convex/model/issues.ts
+    TASK_FIELDS). */
 function expectedOf(over: Over): Record<string, unknown> {
   const printed = PRINTED[over.table] ?? {}
   const out: Record<string, unknown> = {}
@@ -10547,8 +10506,6 @@ function expectedOf(over: Over): Record<string, unknown> {
     const form = printed[field]
     out[field] = form ? printOf(form(value)) : (value ?? null)
   }
-  if (over.table === 'issues' && 'parent_id' in over.fields)
-    out.has_hidden_parent = over.fields.parent_id == null && (over.hiddenParent ?? false)
   return out
 }
 
@@ -11303,16 +11260,14 @@ export const PLANNER = {
      it. A subtask stays in its parent's own sub-project, so a subtask that
      moves leaves its parent (`leavesParent`) unless it lands in the
      parent's sub-project, which only a family stored before that rule can.
-     A hidden parent counts as being in the task's own sub-project, where
-     every new link is. Every move carries the subtasks outside the
-     destination along. `carried` lists the visible ones, and
-     `carriesSubtasks` also counts active ones hidden from this view, which
-     only such an older family has. Archived subtasks are not in the view,
-     so the Move window asks the server too (moveCarriesSubtasks). The
-     answer compares project ids alone, so it needs no facts of the
-     projects. With `family` (P.familyOf) the task, its parent and its
-     subtasks are the family's, as for a task the window shows from its own
-     answer. */
+     A parent the family does not hold counts as being in the task's own
+     sub-project, where every subtask's parent is. Every move carries the
+     subtasks outside the destination along, which `carried` lists and
+     `carriesSubtasks` says. Archived subtasks are not in the view, so the
+     Move window asks the server too (moveCarriesSubtasks). The answer
+     compares project ids alone, so it needs no facts of the projects. With
+     `family` (P.familyOf) the task, its parent and its subtasks are the
+     family's, as for a task the window shows from its own answer. */
   moveFamily: (
     it: IssueVM,
     projectId: string,
@@ -11324,7 +11279,7 @@ export const PLANNER = {
       return { leavesParent: false, carriesSubtasks: false, carried: [] }
     const parent = root.parent ? byId[root.parent] : undefined
     const parentProject = parent ? parent.project : root.project
-    const leavesParent = (!!root.parent || root.hasHiddenParent) && parentProject !== projectId
+    const leavesParent = !!root.parent && parentProject !== projectId
     const carried: IssueVM[] = []
     eachDescendant(
       root,
@@ -11333,11 +11288,7 @@ export const PLANNER = {
       },
       byId,
     )
-    return {
-      leavesParent,
-      carriesSubtasks: carried.length > 0 || root.hasHiddenSubtasks,
-      carried,
-    }
+    return { leavesParent, carriesSubtasks: carried.length > 0, carried }
   },
   /** The server's preview of `change` for the removal window
       (accessRemovals.preview), read once and never subscribed to, because
@@ -11942,8 +11893,8 @@ export const PLANNER = {
       task shown from its answer takes its group facts from P.taskDetail,
       or a group's Done and span from the row of a view that still reads
       it where the answer cannot give its dates (windowSpanRow). The
-      subtasks an answer leaves out are hidden from the person, which no
-      load changes. */
+      subtasks an incomplete answer leaves out stay unknown, which no load
+      changes. */
   windowDelay: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
     const { issue, facts } = windowDelayIssue(it)
     return judgeDelay(issue, it.org, viewDelayCtx, facts)
@@ -12958,7 +12909,7 @@ export const PLANNER = {
       window's Parent row shows it, and a window opened on it shows it from
       its creating answer until the server took it. The task creates from
       the window's current answer of it (answerTaskOf), with that answer's
-      parent pair as the expected values. Resolves whether the server
+      parent as the expected value. Resolves whether the server
       accepted it, false when refused here or there. */
   createParent: (id: string, title: string): Promise<boolean> => {
     if (refuseOver(LIMITS.title, title) || refusePausedEdit()) return Promise.resolve(false)
@@ -13001,15 +12952,11 @@ export const PLANNER = {
         const answer = detailRows.task
         if (!answer || answer.task.id !== it.uuid) return
         answer.task.parent_id = parentId
-        answer.task.has_hidden_parent = false
         answer.task.updated_at = at
         answer.parent = newShortRow(parent, created.num ?? parent.num, true, level)
       },
     }
-    const over: Over = {
-      ...overOf('issues', shown.answer.task, ['parent_id']),
-      hiddenParent: shown.answer.task.has_hidden_parent,
-    }
+    const over: Over = overOf('issues', shown.answer.task, ['parent_id'])
     return send(
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
@@ -13145,18 +13092,11 @@ export const PLANNER = {
      subtask under it, and under every subtask that would be deleted with it,
      with whether I can delete it (Edit access to its project). A subtask I
      cannot delete stays, keeping its own subtasks, so those are not listed.
-     `hidden` is true when the task, or a subtask that would be deleted, has
-     subtasks the window's answer left out (hasHiddenSubtasks). The task
-     and its subtasks are those of `family` (P.familyOf), which holds only
-     a complete list of leaf subtasks, so this backend's answer never sets
-     it. Only an earlier backend's answer does, beside a complete list, for
-     subtasks in projects I cannot open; how many is not known here. */
-  deletePlan: (
-    family: TaskFamily,
-  ): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
+     The task and its subtasks are those of `family` (P.familyOf), which
+     holds only a complete list of leaf subtasks. */
+  deletePlan: (family: TaskFamily): { rows: DeleteRow[]; deletable: IssueVM[] } => {
     const { byId, root } = family
     const rows: DeleteRow[] = []
-    let hidden = root.hasHiddenSubtasks
     const seen = new Set([root.id])
     const walk = (it: IssueVM, depth: number) => {
       for (const key of it.children) {
@@ -13166,12 +13106,11 @@ export const PLANNER = {
         const deletable = PLANNER.canWrite(child.project)
         rows.push({ task: child, depth, deletable })
         if (!deletable) continue
-        hidden ||= child.hasHiddenSubtasks
         walk(child, depth + 1)
       }
     }
     walk(root, 0)
-    return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task), hidden }
+    return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task) }
   },
 
   /* Move a task to Deleted items, and with it the `subtasks` (handles) the
@@ -13594,7 +13533,7 @@ export const PLANNER = {
   /** The parent of task `uuid` as the window's own answer of it shows it,
       painted, for the Parent row of a task the workspace holds whose
       parent it does not hold, as one the Parent picker offered. Null for
-      none, a hidden one, or a task the window does not watch. */
+      none or a task the window does not watch. */
   shownParent: (uuid: string): RelatedTaskVM | null => {
     const parent = uuid === watchedComments ? paintedAnswer()?.parent : null
     return parent ? relatedTask(parent.id, parent) : null
@@ -13716,10 +13655,9 @@ export const PLANNER = {
       or takes it off `open`, for a pick in the Subtasks picker and a
       Subtasks row's ×. `open` is the window's handle of its task, shown
       from a current answer; for any other it sends nothing and says why
-      (P.refuseStaleEdit). The write's expected values are the child's
-      parent pair as the window showed it (`child.parent` and
-      `child.hiddenParent`), so a change someone made meanwhile is refused
-      rather than overwritten. It sends issues.update from what the window
+      (P.refuseStaleEdit). The write's expected value is the child's
+      parent as the window showed it (`child.parent`), so a change someone
+      made meanwhile is refused rather than overwritten. It sends issues.update from what the window
       showed of the child, and paints the window's Subtasks list
       (subtaskListPaint) and the views' copies of the child. Resolves
       whether the server accepted it, false when refused here or there,
@@ -13733,7 +13671,7 @@ export const PLANNER = {
     }
     const { uuid: openUuid, org } = shown
     const parentId = on ? openUuid : null
-    if (child.parent === parentId && !child.hiddenParent) return Promise.resolve(true)
+    if (child.parent === parentId) return Promise.resolve(true)
     if (on && !child.row) return Promise.resolve(false)
     const at = new Date().toISOString()
     const patch: IssueWirePatch = { parent_id: parentId }
@@ -13741,20 +13679,12 @@ export const PLANNER = {
     const uuid = child.uuid
     const view: View = {
       view: viewPaint([uuid], () => {
-        for (const copy of viewCopiesIn(uuid, org)) {
-          stampTaskPatch(copy, patch, at)
-          copy.has_hidden_parent = false
-        }
+        for (const copy of viewCopiesIn(uuid, org)) stampTaskPatch(copy, patch, at)
       }),
       detail: { task: openUuid, paint: () => subtaskListPaint(openUuid, kid, uuid, at) },
     }
     return send(api.issues.update, { org_id: org, id: uuid, patch }, view, {
-      over: {
-        table: 'issues',
-        id: uuid,
-        fields: { parent_id: child.parent },
-        hiddenParent: child.hiddenParent,
-      },
+      over: { table: 'issues', id: uuid, fields: { parent_id: child.parent } },
       about: { task: uuid },
     })
   },

@@ -2306,7 +2306,7 @@ function IssueDetail({
   // finds another task's sections in the store; it shows loading lines
   // until its own lists answer.
   const sections = it ? P.sectionsFor(it.uuid) : null
-  const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
+  const subtasks = sections?.subtasks ?? LOADING_SECTION
   const linked = sections?.links ?? LOADING_SECTION
   const files = sections?.attachments ?? { ...LOADING_SECTION, count: 0 }
   // whether the task is a group is its answer's; its Progress and
@@ -2495,7 +2495,7 @@ function IssueDetail({
   // never allows more.
   const noSubtask = it ? subtaskBlock({ ...it, children: P.capInputs(it).children }) : undefined
   const noParent = it ? parentBlock(it) : undefined
-  const hasParent = !!it && (!!it.parent || it.hasHiddenParent || !!parentRow)
+  const hasParent = !!it && (!!it.parent || !!parentRow)
   // The per-task cap on links. A full task takes no new link, and the
   // server's Linked tasks picker says so (convex/lib/relationPicker.ts).
   const noLink = it ? linkBlock(P.capInputs(it).links) : undefined
@@ -3999,22 +3999,12 @@ function IssueDetail({
                           {totals ? (
                             (() => {
                               // an issue with sub-issues has no hours of its own (0066):
-                              // the value is the sum over its whole subtask list, the
-                              // subtasks the person can see when some are hidden, and
+                              // the value is the sum over its whole subtask list, and
                               // unknown or still loading without the whole list
                               const rem = totals.remaining
-                              const hours =
-                                rem.state === 'visible' || rem.state === 'complete'
-                                  ? rem.hours
-                                  : undefined
+                              const hours = rem.state === 'complete' ? rem.hours : undefined
                               return (
-                                <HoverTooltip
-                                  content={
-                                    rem.state === 'visible'
-                                      ? 'Sum of open hours of the subtasks you can see; parent tasks have no hours of their own'
-                                      : 'Sum of open subtask hours; parent tasks have no hours of their own'
-                                  }
-                                >
+                                <HoverTooltip content="Sum of open subtask hours; parent tasks have no hours of their own">
                                   <span
                                     data-remaining-rollup={rem.state}
                                     style={{ color: hours != null ? undefined : 'var(--text-3)' }}
@@ -4468,32 +4458,12 @@ function IssueDetail({
                                 remove={{
                                   label: 'Remove parent',
                                   // the window's own task, also one shown from its
-                                  // answer, which sends the parent pair it showed
+                                  // answer, which sends the parent it showed
                                   onClick: () => upd({ parent: null }),
                                   disabled: !canEdit || saving,
                                   hint: saving ? WAITS_FOR_SAVE : roTip,
                                 }}
                               />
-                            ) : it.hasHiddenParent ? (
-                              // the parent cannot be shown, but it can be removed,
-                              // the one change left to a task with subtasks there
-                              <div className="flex items-center gap-2 text-sm text-text-2 italic">
-                                <span className="flex-1">
-                                  The parent task is outside this view.
-                                </span>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="task-related-remove h-control-sm w-control-sm shrink-0"
-                                  aria-label="Remove parent"
-                                  title={roTip || 'Remove parent'}
-                                  disabled={!canEdit}
-                                  onClick={() => upd({ parent: null })}
-                                >
-                                  <Icon name="close" size={16} />
-                                </Button>
-                              </div>
                             ) : (
                               <div className="text-sm text-text-2 italic">
                                 {/* the answer's word is exact */}
@@ -4543,11 +4513,7 @@ function IssueDetail({
                                         removeOnce(row.uuid, () =>
                                           P.setSubtaskParent(
                                             it.id,
-                                            {
-                                              uuid: row.uuid,
-                                              parent: it.uuid,
-                                              hiddenParent: false,
-                                            },
+                                            { uuid: row.uuid, parent: it.uuid },
                                             false,
                                           ),
                                         ),
@@ -4697,25 +4663,13 @@ function IssueDetail({
           current={currentSubtasks}
           seenOf={(c) =>
             c.current
-              ? { on: true, busy: false, parent: { id: it.uuid, hidden: false } }
-              : {
-                  on: false,
-                  busy: false,
-                  parent: {
-                    id: c.candidate?.parent_id ?? null,
-                    hidden: !!c.candidate?.has_hidden_parent,
-                  },
-                }
+              ? { on: true, busy: false, parent: it.uuid }
+              : { on: false, busy: false, parent: c.candidate?.parent_id ?? null }
           }
           toggle={(choice, on, seen) =>
             P.setSubtaskParent(
               it.id,
-              {
-                uuid: choice.uuid,
-                row: choice.candidate,
-                parent: seen.parent?.id ?? null,
-                hiddenParent: seen.parent?.hidden ?? false,
-              },
+              { uuid: choice.uuid, row: choice.candidate, parent: seen.parent ?? null },
               on,
             )
           }

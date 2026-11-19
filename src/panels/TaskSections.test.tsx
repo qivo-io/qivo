@@ -88,9 +88,9 @@ const row = (id: string) => {
   if (!found) throw new Error(`missing ${id}`)
   return found
 }
-const taskAnswer = (kids: unknown[], complete = true, hidden = false, id = 'fam') => ({
+const taskAnswer = (kids: unknown[], complete = true, id = 'fam') => ({
   state: 'ok',
-  task: { ...row(id), has_subtasks: kids.length > 0, has_hidden_subtasks: hidden || !complete },
+  task: { ...row(id), has_subtasks: kids.length > 0, has_hidden_subtasks: !complete },
   level: 'lead',
   labels: [],
   follow: null,
@@ -438,7 +438,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
   it('says No attachments. only to a person who cannot add files', async () => {
     await load()
     await openTask('manual')
-    await answer('taskWindow:task', { ...taskAnswer([], true, false, 'manual'), level: 'viewer' })
+    await answer('taskWindow:task', { ...taskAnswer([], true, 'manual'), level: 'viewer' })
     await act(async () => one('taskWindow:attachments').deliver(filesAnswer([])))
     expect(noteOf('attachments')).toBe('No attachments.')
     expect(section('attachments').textContent).not.toContain('Drop files here')
@@ -511,7 +511,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       org_id: snap.orgs[0].id,
       id: 'far',
       patch: { parent_id: null },
-      expected: { parent_id: 'fam', has_hidden_parent: false },
+      expected: { parent_id: 'fam' },
     })
     expect(section('subtasks').querySelector('[data-related-task="QN-39"]')).toBeNull()
   })
@@ -635,7 +635,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(sentArgs('issues:update').at(-1)).toMatchObject({
       id: 'far',
       patch: { parent_id: null },
-      expected: { parent_id: 'fam', has_hidden_parent: false },
+      expected: { parent_id: 'fam' },
     })
     // the window's list drops it at once, and the picker keeps it, unchecked
     expect(titlesOf('subtasks')).toEqual([])
@@ -644,7 +644,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(sentArgs('issues:update').at(-1)).toMatchObject({
       id: 'far',
       patch: { parent_id: 'fam' },
-      expected: { parent_id: null, has_hidden_parent: false },
+      expected: { parent_id: null },
     })
     expect(titlesOf('subtasks')).toEqual(['Tune the filter'])
     expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
@@ -778,20 +778,6 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(section('attachments').querySelector('[data-attachment-open="file-2.pdf"]')).toBeNull()
   })
 
-  it("shows the totals beside hidden subtasks as the visible ones'", async () => {
-    await load()
-    await openTask()
-    await answer(
-      'taskWindow:task',
-      taskAnswer([short(row('kid-1')), short(row('kid-2'))], true, true),
-    )
-    expect(progress()).toEqual([
-      '1 of 2 visible tasks done. Completion unknown.',
-      'Additional work is outside this view.',
-    ])
-    expect(rollup()).toEqual(['visible', 'Σ 3h'])
-  })
-
   it('offers no new subtask in the picker once the server says the task is full, and keeps the current ones to take off', async () => {
     await load()
     const reads = holdRelations()
@@ -810,9 +796,8 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(reads.at(-1)?.args).toMatchObject({ issue_id: 'fam', kind: 'subtask' })
     await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
     expect(offered()).toEqual(['kid-1', 'kid-2', 'other'])
-    // the server counts 100 active subtasks, hidden and archived ones
-    // included, which the window does not list: no candidate, and the
-    // window's sentence
+    // the server answers the task as full, which the window's own list
+    // does not show: no candidate, and the window's sentence
     const search = document.querySelector<HTMLInputElement>('[data-relation-picker] input')
     await act(async () => {
       if (!search) return
@@ -1087,7 +1072,7 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
       // its answer
       const { taskRef } = await import('../lib/taskReference')
       await openHandle(taskRef({ org: snap.orgs[0].id, num: 31, uuid: 'other' }))
-      await answer('taskWindow:task', taskAnswer([], true, false, 'other'))
+      await answer('taskWindow:task', taskAnswer([], true, 'other'))
       await act(async () => {
         void (made === 'parent'
           ? P.createParent('QN-31', 'Build the rig')

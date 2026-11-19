@@ -68,10 +68,6 @@ export type Over = {
   table: string
   id: string
   fields: Record<string, unknown>
-  /** for a task's parent pair, whether the row on screen had a parent the
-      person cannot see, when that row is not the workspace's, such as the
-      task window's own answer (store/planner.ts expectedOf) */
-  hiddenParent?: boolean
 }
 
 /** One write's optimistic change. `open` collects paints before it is sent

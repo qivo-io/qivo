@@ -87,8 +87,8 @@ const short = (row: Task, has_subtasks = false) => {
   } = row
   return { ...rest, has_subtasks, level: 'lead' as const }
 }
-/* Task `row` as a relation picker's row, with the parent pair the
-   Subtasks picker sends. */
+/* Task `row` as a relation picker's row, with the parent the Subtasks
+   picker sends. */
 const pickerRow = (row: Task, pair: Partial<RelationCandidate> = {}): RelationCandidate => {
   const { has_subtasks: _group, ...rest } = short(row)
   return { ...rest, ...pair }
@@ -191,9 +191,9 @@ afterEach(() => {
 })
 
 describe("the window's own parent", { timeout: 30_000 }, () => {
-  it('sets a parent the picker offered on a task the window shows from its answer, with the hidden pair it showed, and shows the new parent at once', async () => {
+  it('sets a parent the picker offered on a task the window shows from its answer, with no parent as expected, and shows the new parent at once', async () => {
     await load()
-    await openFar(okAnswer(far({ has_hidden_parent: true })))
+    await openFar()
     // without the picker's row, nothing goes
     await expect(P.updateIssue(H, { parent: PICK })).resolves.toBe(false)
     expect(sent('issues:update')).toEqual([])
@@ -203,32 +203,30 @@ describe("the window's own parent", { timeout: 30_000 }, () => {
       org_id: ORG,
       id: FAR,
       patch: { parent_id: PICK },
-      expected: { parent_id: null, has_hidden_parent: true },
+      expected: { parent_id: null },
     })
     // the window's Parent row, a group now, without hours of its own
     expect(P.detail?.parent).toMatchObject({ uuid: PICK, title: 'Build the mast', isGroup: true })
     expect(P.detail?.parent?.remaining).toBeUndefined()
-    expect(P.detail?.view?.hasHiddenParent).toBe(false)
     // a refusal takes the parent away again
     last('issues:update').reject(new ConvexError({ code: 'rule', message: 'Not allowed' }))
     await turn()
     expect(P.detail?.parent).toBeNull()
-    expect(P.detail?.view?.hasHiddenParent).toBe(true)
   })
 })
 
 describe('the Subtasks writes', { timeout: 30_000 }, () => {
-  it('makes a task the workspace does not hold a subtask from the picker’s row, with its parent pair as expected, and lists it at once', async () => {
+  it('makes a task the workspace does not hold a subtask from the picker’s row, with its parent as expected, and lists it at once', async () => {
     await load()
     await openFar()
     const row = pickerRow(task(PICK, 45, { title: 'Mount it' }), { parent_id: OLD_PARENT })
-    const end = { uuid: PICK, row, parent: OLD_PARENT, hiddenParent: false }
+    const end = { uuid: PICK, row, parent: OLD_PARENT }
     const saved = P.setSubtaskParent(H, end, true)
     expect(last('issues:update').args).toEqual({
       org_id: ORG,
       id: PICK,
       patch: { parent_id: FAR },
-      expected: { parent_id: OLD_PARENT, has_hidden_parent: false },
+      expected: { parent_id: OLD_PARENT },
     })
     expect(P.sections?.subtasks.rows.map((r) => r.uuid)).toEqual([PICK])
     expect(P.detail?.view?.isGroup).toBe(true)
@@ -236,20 +234,12 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
     await expect(saved).resolves.toBe(true)
   })
 
-  it('sends a hidden parent pair as the person saw it, and takes the row back off when refused', async () => {
+  it('sends a top-level task’s parent as null, and takes the row back off when refused', async () => {
     await load()
     await openFar()
-    const end = {
-      uuid: PICK,
-      row: pickerRow(task(PICK, 45), { has_hidden_parent: true }),
-      parent: null,
-      hiddenParent: true,
-    }
+    const end = { uuid: PICK, row: pickerRow(task(PICK, 45)), parent: null }
     const saved = P.setSubtaskParent(H, end, true)
-    expect(last('issues:update').args.expected).toEqual({
-      parent_id: null,
-      has_hidden_parent: true,
-    })
+    expect(last('issues:update').args.expected).toEqual({ parent_id: null })
     last('issues:update').reject(new ConvexError({ code: 'rule', message: 'Not allowed' }))
     await expect(saved).resolves.toBe(false)
     expect(P.sections?.subtasks.rows).toEqual([])
@@ -260,12 +250,12 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
     const kid = task(PICK_2, 46, { parent_id: FAR })
     await openFar(okAnswer(far(), { subtasks: { rows: [short(kid)], complete: true } }))
     expect(P.sections?.subtasks.rows.map((r) => r.uuid)).toEqual([PICK_2])
-    void P.setSubtaskParent(H, { uuid: PICK_2, parent: FAR, hiddenParent: false }, false)
+    void P.setSubtaskParent(H, { uuid: PICK_2, parent: FAR }, false)
     expect(last('issues:update').args).toEqual({
       org_id: ORG,
       id: PICK_2,
       patch: { parent_id: null },
-      expected: { parent_id: FAR, has_hidden_parent: false },
+      expected: { parent_id: FAR },
     })
     expect(P.sections?.subtasks.rows).toEqual([])
   })
@@ -285,17 +275,15 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
 
   it('sends nothing while writes pause, nor for a task the window does not show', async () => {
     await load()
-    await expect(
-      P.setSubtaskParent(H, { uuid: PICK, parent: null, hiddenParent: false }, true),
-    ).resolves.toBe(false)
+    await expect(P.setSubtaskParent(H, { uuid: PICK, parent: null }, true)).resolves.toBe(false)
     const sync = await import('../lib/syncStatus')
     await openFar()
     sync.syncStatus.setSocket({ connected: false, everConnected: true })
     await new Promise((resolve) => setTimeout(resolve, sync.OFFLINE_DELAY_MS + 50))
     const row = pickerRow(task(PICK, 45))
-    await expect(
-      P.setSubtaskParent(H, { uuid: PICK, row, parent: null, hiddenParent: false }, true),
-    ).resolves.toBe(false)
+    await expect(P.setSubtaskParent(H, { uuid: PICK, row, parent: null }, true)).resolves.toBe(
+      false,
+    )
     await expect(P.linkTasks(H, 'blocks', { uuid: PICK })).resolves.toBe(false)
     expect(writes.filter((w) => w.name.startsWith('issues:'))).toEqual([])
   })

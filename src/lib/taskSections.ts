@@ -73,8 +73,9 @@ export type SectionState = 'loading' | 'failed' | 'retrying' | 'unavailable' | '
 export type TotalsRow = { isGroup: boolean; done: boolean; remaining?: number | null }
 
 /** What a group's Progress says: loading; completion unknown, `partial`
-    once rows were read; the visible subtasks of a complete list beside
-    hidden ones or a group row; or a complete count. */
+    once rows were read; the leaves of a complete list beside a row that is
+    itself a group, whose own leaves the list does not hold; or a complete
+    count. */
 export type Progress =
   | { state: 'loading' }
   | { state: 'unknown'; partial: boolean }
@@ -82,28 +83,26 @@ export type Progress =
   | { state: 'complete'; done: number; total: number; pct: number }
 
 /** What a group's Remaining says: loading, unknown, or the open hours of
-    the unfinished leaves, undefined when none has hours, of the subtasks
-    the person can see (`visible`) or of every subtask (`complete`). */
+    the unfinished leaves of a complete list, undefined when none has
+    hours. */
 export type Remaining =
   | { state: 'loading' }
   | { state: 'unknown' }
-  | { state: 'visible' | 'complete'; hours: number | undefined }
+  | { state: 'complete'; hours: number | undefined }
 
 /** A group's Progress and Remaining from its subtask list. The leaves are
     the rows that are no group. A row that is itself a group, stored before
     the one-level rule, holds subtasks the list does not, so Remaining is
-    then unknown and Progress counts the visible leaves; so it is beside
-    subtasks the person cannot see (`hidden`), where Remaining sums the
-    visible ones. `delivered` says whether an
-    answer arrived for the task before a failure. */
+    then unknown and Progress counts the leaves the list holds. A list that
+    is not complete leaves both unknown. `delivered` says whether an answer
+    arrived for the task before a failure. */
 export function groupTotals(list: {
   state: SectionState
   complete: boolean
   delivered: boolean
-  hidden: boolean
   rows: readonly TotalsRow[]
 }): { progress: Progress; remaining: Remaining } {
-  const { state, complete, delivered, hidden, rows } = list
+  const { state, complete, delivered, rows } = list
   if (state === 'loading' || (state === 'retrying' && !delivered))
     return { progress: { state: 'loading' }, remaining: { state: 'loading' } }
   if (state !== 'ready' || !complete)
@@ -114,6 +113,8 @@ export function groupTotals(list: {
   const leaves = rows.filter((row) => !row.isGroup)
   const total = leaves.length
   const done = leaves.filter((row) => row.done).length
+  if (rows.some((row) => row.isGroup))
+    return { progress: { state: 'visible', done, total }, remaining: { state: 'unknown' } }
   let sum = 0
   let any = false
   for (const leaf of leaves) {
@@ -121,15 +122,8 @@ export function groupTotals(list: {
     sum += leaf.remaining
     any = true
   }
-  const hours = any ? Math.round(sum * 10) / 10 : undefined
-  const grouped = rows.some((row) => row.isGroup)
-  if (hidden || grouped)
-    return {
-      progress: { state: 'visible', done, total },
-      remaining: grouped ? { state: 'unknown' } : { state: 'visible', hours },
-    }
   return {
     progress: { state: 'complete', done, total, pct: total ? Math.round((done / total) * 100) : 0 },
-    remaining: { state: 'complete', hours },
+    remaining: { state: 'complete', hours: any ? Math.round(sum * 10) / 10 : undefined },
   }
 }

@@ -60,7 +60,6 @@ export type SyncIssue = Pick<
   | 'owner'
   | 'isGroup'
   | 'children'
-  | 'hasHiddenSubtasks'
   | 'links'
   | 'start'
   | 'due'

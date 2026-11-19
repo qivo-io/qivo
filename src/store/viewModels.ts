@@ -357,13 +357,14 @@ type Members = { has(key: string): boolean }
 
 /* the derivations shapeIssue folds in, which a view's row
    (store/viewRows.ts) or a window's answer (store/taskDetail.ts) gives:
-   mirrored links, child keys, label attachments, the attachment views, my
-   subscriptions */
+   mirrored links, child keys, the groups it names, label attachments, the
+   attachment views, my subscriptions */
 type IssueShapeCtx = {
   uuidToKey: Lookup<string>
   uuidToDisplayKey: Lookup<string>
-  hiddenSubtaskParents: Members
-  hiddenParentTasks: Members
+  /** the tasks the source names groups, also where `childKeys` lists only
+      some of their subtasks or none */
+  groups: Members
   linkViews: Lookup<{ type: string; id: string }[]>
   childKeys: Lookup<string[]>
   labelsByIssue: Lookup<string[]>
@@ -373,9 +374,9 @@ type IssueShapeCtx = {
   subscribedIssues: Members
 }
 export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
-  const { uuidToKey, uuidToDisplayKey, hiddenSubtaskParents } = ctx
+  const { uuidToKey, uuidToDisplayKey } = ctx
   const children = ctx.childKeys.get(i.id) || []
-  const isGroup = !!children.length || hiddenSubtaskParents.has(i.id)
+  const isGroup = !!children.length || ctx.groups.has(i.id)
   return {
     id: uuidToKey.get(i.id) as string, // the handle the app threads (key at home, uuid abroad)
     key: uuidToDisplayKey.get(i.id) as string, // what surfaces RENDER — always "QN-n"
@@ -397,9 +398,6 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     reporter: i.reporter_id,
     parent: i.parent_id ? uuidToKey.get(i.parent_id) || null : null,
     children,
-    hasHiddenSubtasks: hiddenSubtaskParents.has(i.id),
-    // the parent is outside this view; `parent` is null, as for no parent
-    hasHiddenParent: ctx.hiddenParentTasks.has(i.id),
     isGroup,
     links: ctx.linkViews.get(i.id) || [],
     // the stored plan, in week indexes. rebuild() replaces a group's pair

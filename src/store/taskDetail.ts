@@ -16,9 +16,11 @@
    (lib/issueGroups.ts groupSpan and isIssueDone) over the answer's subtask
    rows, so a group reads the same before and after it arrives. They are
    unknown only where the answer lacks their inputs: a subtask list that is
-   not complete, or a subtask that is itself a group, whose leaves the
-   answer does not hold, and an archived group, whose answer holds no
-   subtasks. The answer of an archived task holds no parent, subtasks,
+   not complete (`subtasks.complete`), or a subtask that is itself a group,
+   whose leaves the answer does not hold, and an archived group, whose
+   answer holds no subtasks. A task whose list is not complete counts as a
+   group even when the list holds no row, as the subtasks it leaves out may
+   make it one. The answer of an archived task holds no parent, subtasks,
    links or files. */
 
 import type { FunctionReturnType } from 'convex/server'
@@ -66,7 +68,7 @@ export type TaskDetailVM = {
   /** the caller's level on the task's project, by which the window offers
       comments and Restore, null without an answer */
   level: AccessLevel | null
-  /** the parent as a row of Parent, null for none or a hidden one */
+  /** the parent as a row of Parent, null for none */
   parent: RelatedTaskVM | null
   /** when it was archived (ms), null for an active task */
   archivedAt: number | null
@@ -130,8 +132,9 @@ function contextOf(
     key: string
     parent?: { uuid: string; handle: string }
     children?: string[]
-    hiddenSubtasks: boolean
-    hiddenParent: boolean
+    /** whether the answer names it a group, also where `children` lists
+        only some of its subtasks or none */
+    group: boolean
     links?: { type: string; id: string }[]
     labels: string[]
     attachments?: AttachmentVM[]
@@ -145,8 +148,7 @@ function contextOf(
   return {
     uuidToKey: handles,
     uuidToDisplayKey: only(facts.key),
-    hiddenSubtaskParents: { has: (id: string) => id === uuid && facts.hiddenSubtasks },
-    hiddenParentTasks: { has: (id: string) => id === uuid && facts.hiddenParent },
+    groups: { has: (id: string) => id === uuid && facts.group },
     linkViews: only(facts.links ?? []),
     childKeys: only(facts.children ?? []),
     labelsByIssue: only(facts.labels),
@@ -165,6 +167,7 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
   const handleOf = (task: { id: string; org_id: string; num: number }) =>
     inputs.handleNow(task.id, task.org_id, task.num)
   const kids = [...answer.subtasks.rows].sort(byNumber)
+  const whole = answer.subtasks.complete
   const ends = new Map((inputs.links?.tasks ?? []).map((end) => [end.id, end]))
   const links = inputs.links
     ? linkViews(row.id, inputs.links.links, (other) => ends.has(other)).flatMap((view) => {
@@ -182,8 +185,7 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
         ? { uuid: answer.parent.id, handle: handleOf(answer.parent) }
         : undefined,
       children: kids.map(handleOf),
-      hiddenSubtasks: row.has_hidden_subtasks,
-      hiddenParent: row.has_hidden_parent,
+      group: !whole,
       links,
       labels: labelsInOrder(answer.labels.map((label) => label.label_id)),
       attachments: files.filter((file) => !file.inline).map(shapeAttachment),
@@ -206,8 +208,7 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
     }
   }
   const group = isIssueGroup(view)
-  const datesKnown =
-    !group || (answer.subtasks.complete && !answer.subtasks.rows.some((kid) => kid.has_subtasks))
+  const datesKnown = !group || (whole && !answer.subtasks.rows.some((kid) => kid.has_subtasks))
   const span = groupSpan(view, byId)
   if (span) {
     view.start = datesKnown ? span.start : null
@@ -216,8 +217,10 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
   return {
     view,
     datesKnown,
-    partial: !!span?.partial,
-    done: group ? isIssueDone(view, byId) : view.status === 'done',
+    // a list that is not complete leaves subtasks out of the span and can
+    // never make the group Done
+    partial: !!span && (span.partial || !whole),
+    done: group ? whole && isIssueDone(view, byId) : view.status === 'done',
     parent: answer.parent ? inputs.related(answer.parent) : null,
     level: answer.level,
     num: row.num,
@@ -235,8 +238,7 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
     contextOf(row.id, {
       handle: inputs.handleNow(row.id, row.org_id, row.num),
       key: `${ISSUE_PREFIX}-${row.num}`,
-      hiddenSubtasks: is_group,
-      hiddenParent: false,
+      group: is_group,
       labels: labelsInOrder((answer.labels ?? []).map((label) => label.label_id)),
       follows: false,
     }),
@@ -281,8 +283,7 @@ export function shapeShortTask(
       handle,
       key: `${ISSUE_PREFIX}-${row.num}`,
       parent,
-      hiddenSubtasks: has_subtasks,
-      hiddenParent: false,
+      group: has_subtasks,
       labels: [],
       follows: false,
     }),
@@ -357,10 +358,10 @@ export type CreatingInputs = {
 /** The task window's answer of the person's own new task before the server
     took its create (store/planner.ts PendingCreate), shaped as the server
     will answer it (convex/lib/taskWindow.ts readWindowTask): the row with
-    its text and no hidden parent or subtasks, the person's level, no
-    labels, the parent's short row for a subtask, and a whole subtask list,
-    empty or the one subtask of a new parent. The person follows the task
-    where the server makes them (convex/model/messages.ts
+    its text, has_hidden_parent and has_hidden_subtasks false, the person's
+    level, no labels, the parent's short row for a subtask, and a whole
+    subtask list, empty or the one subtask of a new parent. The person
+    follows the task where the server makes them (convex/model/messages.ts
     notifyIssueInsert): as its assignee, or as the reviewer of a task born
     In Review. A mention of themselves in the description, which the
     server also follows, shows with the window's own first answer. */

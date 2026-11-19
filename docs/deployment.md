@@ -2569,7 +2569,8 @@ earlier app against this backend, such as a tab left open, works as
 before, because it shows each refusal as the server sends it. The release
 changes no table, field, index, public function, argument or answer field,
 and has no backfill and no release step. Returning the backend to v0.1.170
-brings the checks back and is safe.
+would bring the checks back, but this release's app needs this backend, as
+the next paragraph says.
 
 The same release asks no one's sight of a task's parent or subtasks, as a
 subtask is always in its parent's own sub-project. `has_hidden_parent` is
@@ -2588,7 +2589,13 @@ stop sending `has_hidden_parent`, and `has_hidden_parent: true` matches
 nothing. A project restore no longer schedules `regroup.restoredStep`,
 which now does nothing, so a chain an earlier backend scheduled ends at
 its next step; a later release removes it. An earlier app against this
-backend, such as a tab left open, works as before.
+backend, such as a tab left open, works as before. This release's app needs
+this backend. It sends a task's parent as `expected.parent_id` alone, which
+v0.1.170 refuses without `has_hidden_parent`, so against a v0.1.170 backend
+every parent change it sends is refused: a new or removed parent, a subtask
+added or taken off and a move that leaves the parent. Every earlier backend
+refuses it the same way. From this release on, never return the backend to
+a commit before it; roll forward instead.
 
 The Overview's counts take an active task with an active subtask as a
 group in an archived sub-project too. An earlier backend counted such a
@@ -2602,11 +2609,11 @@ reports the sub-project's row, and the row there of the task's owner if
 it has one, as differing: the stored row holds the task as a leaf, and
 the count does not. A run with `"recount": true` mends them,
 but none is needed. The release changes no table, field, index or public
-function, and needs no backfill and no release step. Returning the
-backend to v0.1.170 is safe; v0.1.170 refuses `expected.parent_id`
-without `has_hidden_parent` again, and its dry run reports as differing
-the rows of an archived sub-project for each such task that this release
-stored as a group: one in a sub-project archived under this release, one
+function, and needs no backfill and no release step. The backend does not
+return to v0.1.170 after this release, as the paragraph above says. A
+backend returned to it would report as differing in its dry run the rows of
+an archived sub-project for each such task that this release stored as a
+group: one in a sub-project archived under this release, one
 whose subtasks a write of this release read again, and every one after a
 run with `"recount": true`.
 
@@ -2741,9 +2748,8 @@ this backend offers parents and subtasks of the sibling sub-projects, which
 the server refuses with the rule's sentence, sends a subtask's move within
 its project without leaving the parent, which the server refuses the same
 way, and paints a task's move within its project without its subtasks,
-which the server carries, until it reloads. Rows from before the rule stay
-readable, so returning the backend to an earlier release is safe, but that
-release makes families across sub-projects again.
+which the server carries, until it reloads. The release after v0.1.170
+sets the floor for returning the backend to an earlier commit.
 
 v0.1.169 (`5138c16`) also carried two internal functions,
 `internal/orgReset:orgs` and `internal/orgReset:deleteOrg`, which listed a

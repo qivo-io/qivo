@@ -79,7 +79,7 @@ export function ownerLoadsStandIn(
   for (const task of workspace.issues) {
     if (task.org_id !== args.org_id) continue
     const project = projects.get(task.project_id)
-    const isGroup = parents.has(task.id) || task.has_hidden_subtasks
+    const isGroup = parents.has(task.id)
     const projectLive = !!project && project.archived_at === undefined
     const row = loadRowFor(task, {
       isGroup,

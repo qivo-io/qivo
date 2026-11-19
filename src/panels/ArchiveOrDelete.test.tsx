@@ -13,8 +13,7 @@ import { taskWindowStandIn } from '../store/taskWindowStandIn.setup'
 /* The Archive or delete windows on the real store, fed one snapshot. Mira
    (me) is a standard user who leads Plan and only views Docs. In Work, under
    Plan, QN-1 has subtasks QN-2 (Done), QN-3 (To Do) and QN-4 (In Progress).
-   QN-5 has QN-6 in Manuals, under Docs, and subtasks Mira can't see. QN-7 is
-   Done and has no subtasks. The windows call the store as their callers do;
+   QN-7 is Done and has no subtasks. The windows call the store as their callers do;
    the network records each write and answers it as the test says. The clock
    is fixed, so the window's one-second pause after asking again is under the
    test's control. */
@@ -55,47 +54,6 @@ let summaries: (() => Promise<ProjectRemovalSummary>)[]
 // its failures
 let windowRead: ((value: unknown) => void) | null
 let windowFail: ((error: unknown) => void) | null
-/* Whether `mixed`'s window answers as a backend before the release after
-   v0.1.170 did, which followed its link to `read-only` in Manuals and
-   listed that subtask at the caller's Viewer level there, and said beside
-   a complete list that more subtasks were in projects the caller cannot
-   open, as the row's has_hidden_subtasks says. This backend follows no
-   link across sub-projects and sets has_hidden_subtasks only for an
-   incomplete list, so only such a backend shows the app a subtask it
-   cannot edit or one it cannot open, which the app still handles. */
-let earlierBackend = false
-
-/* `mixed`'s window answer from an earlier backend (earlierBackend), over
-   the stand-in's answer for `args`. Such a backend set has_hidden_subtasks
-   beside a complete list only when it counted a subtask, so the task then
-   has subtasks even when the list shows none. */
-function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
-  const answer = taskWindowStandIn(whole, 'taskWindow:task', args) as {
-    state: string
-    task?: Record<string, unknown>
-  }
-  if (!earlierBackend || args.ref !== 'mixed' || answer.state !== 'ok') return answer
-  const hidden = whole.issues.find((row) => row.id === 'mixed')?.has_hidden_subtasks === true
-  const task = {
-    ...answer.task,
-    has_hidden_subtasks: hidden,
-    ...(hidden && { has_subtasks: true }),
-  }
-  const kid = whole.issues.find((row) => row.id === 'read-only')
-  if (kid === undefined) return { ...answer, task }
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_parent: _hiddenParent,
-    has_hidden_subtasks: _hidden,
-    ...row
-  } = kid
-  return {
-    ...answer,
-    task: { ...task, has_subtasks: true },
-    subtasks: { rows: [{ ...row, has_subtasks: false, level: 'viewer' }], complete: true },
-  }
-}
 // the answers of the windows open on a fixture task, run again on each
 // delivery
 const fixtureWindows = new Set<() => void>()
@@ -144,8 +102,6 @@ function fixture() {
     task('done-sub', 2, { parent_id: 'root', status: 'done' }),
     task('todo-sub', 3, { parent_id: 'root' }),
     task('busy-sub', 4, { parent_id: 'root', status: 'progress' }),
-    task('mixed', 5, { has_hidden_subtasks: true }),
-    task('read-only', 6, { parent_id: 'mixed', project_id: 'manuals', status: 'review' }),
     task('finished', 7, { status: 'done' }),
   )
   return next
@@ -163,7 +119,6 @@ async function load() {
   )
   windowRead = null
   windowFail = null
-  earlierBackend = false
   fixtureWindows.clear()
   // a project's page and Archived projects read the server from the
   // snapshot last delivered
@@ -191,7 +146,7 @@ async function load() {
         windowRead = next
         windowFail = fail
       } else {
-        const answer = () => next(earlierWindow(held, args))
+        const answer = () => next(taskWindowStandIn(held, 'taskWindow:task', args))
         fixtureWindows.add(answer)
         answer()
         return () => fixtureWindows.delete(answer)
@@ -487,64 +442,6 @@ describe('Archive or delete a task', () => {
     await openTask('finished')
     await choose('delete')
     expect(button('Delete QN-7').disabled).toBe(false)
-  })
-
-  it("refuses to archive with a subtask in a project I can't edit, until the subtasks are kept", async () => {
-    earlierBackend = true
-    answers['issues:archive'] = () => Promise.resolve(null)
-    await openTask('mixed')
-    expect(text('[data-fate-lead]')).toBe(
-      "QN-5 has 1 subtask, which is unfinished. At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects.",
-    )
-    expect(text('[data-fate-subtask="QN-6"]')).toContain('View only')
-    expect(text('[data-fate-subtasks]')).toContain("More subtasks in projects you can't open")
-    await type('Parked')
-    expect(button('Archive').disabled).toBe(true)
-    await click(button('Archive'))
-    expect(writes()).toEqual([])
-
-    await click(subtasks())
-    expect(text('[data-fate-lead]')).toBe('QN-5 has 1 subtask, which is unfinished.')
-    expect(button('Archive').disabled).toBe(false)
-    await click(button('Archive'))
-    await settle()
-    expect(writes()).toEqual([
-      {
-        name: 'issues:archive',
-        args: expect.objectContaining({ id: 'mixed', keep_subtasks: true }),
-      },
-    ])
-  })
-
-  it("says why subtasks I can't delete stay, and deletes the task alone", async () => {
-    earlierBackend = true
-    answers['issues:deleteDeep'] = () => Promise.resolve(null)
-    await openTask('mixed')
-    await choose('delete')
-    expect(has('[data-subtask-choice]')).toBe(false)
-    expect(text('[data-fate-card="delete"]')).toContain(
-      "You can't delete its subtasks, so they stay in their projects and become top-level tasks.",
-    )
-    expect(text('[data-fate-subtasks] > div')).toBe('Keeps 1 subtask:')
-    await click(button('Delete QN-5'))
-    await settle()
-    expect(writes()).toEqual([
-      { name: 'issues:deleteDeep', args: expect.objectContaining({ id: 'mixed' }) },
-    ])
-    expect(writes()[0].args).not.toHaveProperty('subtask_ids')
-  })
-
-  it("warns, on an earlier backend's answer, that subtasks I cannot see can refuse the archive", async () => {
-    earlierBackend = true
-    snap.issues = snap.issues.filter((it) => it.id !== 'read-only')
-    await act(async () => deliver(snap))
-    await openTask('mixed')
-    expect(text('[data-fate-lead]')).toBe(
-      "QN-5 has subtasks in projects you can't open. If any of them is in a project you can't edit, the archive is refused.",
-    )
-    expect(text('[data-fate-card="archive"]')).toContain('Also archive its subtasks')
-    await click(subtasks())
-    expect(text('[data-fate-lead]')).toBe("QN-5 has subtasks in projects you can't open.")
   })
 
   it('waits for the server, refuses to close meanwhile, and stays open on a refusal', async () => {

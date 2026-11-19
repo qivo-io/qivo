@@ -19,12 +19,13 @@
    current relations of the picker's own kind, decided per kind as the
    reader's decide does: the Parent picker's tasks without a parent and
    with room for one more subtask, never the current parent; the Subtasks
-   picker's tasks without subtasks, with their parent pair, never a
-   current subtask; and the Linked tasks picker's tasks it is not linked
-   to, its parent and subtasks included; every fragment of the search in
-   the task's ID or title (convex/lib/search.ts allWordsMatcher); a search
-   that is one task ID answers that task first, marked `exact`, and every
-   later batch leaves it out; at most RELATION_PICKER.rows tasks a batch.
+   picker's tasks without subtasks, with their parent and
+   has_hidden_parent false, never a current subtask; and the Linked tasks
+   picker's tasks it is not linked to, its parent and subtasks included;
+   every fragment of the search in the task's ID or title
+   (convex/lib/search.ts allWordsMatcher); a search that is one task ID
+   answers that task first, marked `exact`, and every later batch leaves
+   it out; at most RELATION_PICKER.rows tasks a batch.
 
    Its cursors are plain JSON of the picker, the task, the search, the
    phase and the place in the scope, and one of another picker, task or
@@ -49,8 +50,9 @@ import type { Whole } from './guard/liveDouble.setup'
     scan stops after this many tasks (`stop`), a read that fails (`fail`),
     an opened task the person may not open (`unavailable`), a request past
     the picker's budget (`over`), a smaller batch (`rows`), and the opened
-    task's own block (`blocked`), as for subtasks the window cannot see:
-    has_subtasks for Parent, full for Subtasks and Linked tasks. */
+    task's own block (`blocked`), which the window's lists do not show:
+    has_subtasks for Parent, as archived subtasks give, and full for
+    Subtasks and Linked tasks, as a cap the server counts gives. */
 export type ForcedRelations = {
   stop?: number
   fail?: boolean
@@ -126,11 +128,11 @@ export function relationPickerStandIn(
       ? 'has_subtasks'
       : 'full'
     : args.kind === 'parent'
-      ? kids.length > 0 || task.has_hidden_subtasks
+      ? kids.length > 0
         ? 'has_subtasks'
         : null
       : args.kind === 'subtask'
-        ? task.parent_id || task.has_hidden_parent
+        ? task.parent_id
           ? 'is_subtask'
           : kids.length >= LIMITS.subtasks.max
             ? 'full'
@@ -171,33 +173,23 @@ export function relationPickerStandIn(
   const eligible = (row: Task) => {
     if (row.id === task.id) return false
     if (args.kind === 'parent')
-      return (
-        row.id !== task.parent_id &&
-        !row.parent_id &&
-        !row.has_hidden_parent &&
-        activeKids(row.id) < LIMITS.subtasks.max
-      )
-    if (args.kind === 'subtask')
-      return row.parent_id !== task.id && !parents.has(row.id) && !row.has_hidden_subtasks
+      return row.id !== task.parent_id && !row.parent_id && activeKids(row.id) < LIMITS.subtasks.max
+    if (args.kind === 'subtask') return row.parent_id !== task.id && !parents.has(row.id)
     return !linked.has(row.id)
   }
   const shortOf = (row: Task, exact?: boolean): RelationCandidate => {
     const {
       description: _text,
       parent_id: parent,
-      has_hidden_parent: hidden,
-      has_hidden_subtasks: _hiddenKids,
+      has_hidden_parent: _hiddenParent,
+      has_hidden_subtasks: _hidden,
       ...fields
     } = row
     return {
       ...fields,
       level,
       ...(args.kind === 'subtask'
-        ? hidden
-          ? { has_hidden_parent: true }
-          : parent
-            ? { parent_id: parent }
-            : {}
+        ? { ...(parent ? { parent_id: parent } : {}), has_hidden_parent: false }
         : {}),
       ...(exact ? { exact: true as const } : {}),
     }

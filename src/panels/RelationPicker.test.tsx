@@ -151,12 +151,8 @@ async function show(o: Options = {}) {
                 ? { on: true, busy: false, link: c.current.type ?? null }
                 : { on: false, busy: false, link: null }
               : c.current
-                ? { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } }
-                : {
-                    on: false,
-                    busy: false,
-                    parent: { id: c.candidate?.parent_id ?? null, hidden: false },
-                  }
+                ? { on: true, busy: false, parent: TASK.uuid }
+                : { on: false, busy: false, parent: c.candidate?.parent_id ?? null }
           }
           toggle={(...args) => picks(...args)}
           createLabel="Create new subtask:"
@@ -481,7 +477,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     await click(rowOf('task-45'))
     expect(picks.mock.calls[0]?.slice(1)).toEqual([
       false,
-      { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } },
+      { on: true, busy: false, parent: TASK.uuid },
     ])
     // the window's list drops it at once, as its paint does
     await show({ current: [] })
@@ -493,10 +489,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     // pressed again, it goes back with the row it showed and no parent
     await click(rowOf('task-45'))
     expect(picks.mock.calls[1]?.[0]).toMatchObject({ uuid: 'task-45', candidate: kid.row })
-    expect(picks.mock.calls[1]?.slice(1)).toEqual([
-      true,
-      { on: false, busy: false, parent: { id: null, hidden: false } },
-    ])
+    expect(picks.mock.calls[1]?.slice(1)).toEqual([true, { on: false, busy: false, parent: null }])
     expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -508,24 +501,21 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     await click(rowOf('task-45'))
     expect(picks.mock.calls[0]?.slice(1)).toEqual([
       true,
-      { on: false, busy: false, parent: { id: 'task-9', hidden: false } },
+      { on: false, busy: false, parent: 'task-9' },
     ])
     // the window lists it, and the person takes it off again
     await show({ current: [relation(45)] })
     await click(rowOf('task-45'))
     expect(picks.mock.calls[1]?.slice(1)).toEqual([
       false,
-      { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } },
+      { on: true, busy: false, parent: TASK.uuid },
     ])
     await show({ current: [] })
     expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('false')
     // the batch's row predates the first pick, so the next press sends the
     // parent the person's removal left, none, rather than QN-9
     await click(rowOf('task-45'))
-    expect(picks.mock.calls[2]?.slice(1)).toEqual([
-      true,
-      { on: false, busy: false, parent: { id: null, hidden: false } },
-    ])
+    expect(picks.mock.calls[2]?.slice(1)).toEqual([true, { on: false, busy: false, parent: null }])
     // someone else moves it under QN-7, and the window's list drops it
     await show({ current: [relation(45)] })
     await show({ current: [] })
@@ -537,7 +527,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     await click(rowOf('task-45'))
     expect(picks.mock.calls[3]?.slice(1)).toEqual([
       true,
-      { on: false, busy: false, parent: { id: 'task-7', hidden: false } },
+      { on: false, busy: false, parent: 'task-7' },
     ])
   })
 
@@ -664,7 +654,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     await click(rowOf('task-46'))
     expect(picks.mock.calls.at(-1)?.slice(1)).toEqual([
       false,
-      { on: true, busy: false, parent: { id: TASK.uuid, hidden: false }, link: null },
+      { on: true, busy: false, parent: TASK.uuid, link: null },
     ])
   })
 
@@ -754,7 +744,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
         'parent',
         batch([], null, { blocked: 'has_subtasks' }),
         'ready',
-        parentBlock({ id: '', org: '', project: '', hasHiddenSubtasks: true }) ?? '',
+        parentBlock({ id: '', org: '', project: '', isGroup: true }) ?? '',
       ],
       [
         'link',

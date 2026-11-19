@@ -128,12 +128,12 @@ type Choice = {
 }
 
 /** What the person now sees of a row whose relation a pick changed: on or
-    off, busy while its write is on its way, and the values the next press
-    sends as expected, the row's parent pair or its link. */
+    off, busy while its write is on its way, and the value the next press
+    sends as expected, the row's parent or its link. */
 type Seen = {
   on: boolean
   busy: boolean
-  parent?: { id: string | null; hidden: boolean }
+  parent?: string | null
   link?: string | null
 }
 
@@ -145,15 +145,14 @@ type Kept = { now: Seen; basis: Seen }
 /* Whether `a` and `b` show the same relation. */
 const sameSeen = (a: Seen, b: Seen) =>
   a.on === b.on &&
-  (a.parent?.id ?? null) === (b.parent?.id ?? null) &&
-  !!a.parent?.hidden === !!b.parent?.hidden &&
+  (a.parent ?? null) === (b.parent ?? null) &&
   (a.link ?? null) === (b.link ?? null)
 
 /** The window's sentence for the opened task's own block of the picker's
     kind, as its buttons' tooltips word it. */
 function blockSentence(kind: RelationKind, block: RelationBlock): string {
   if (block === 'has_subtasks')
-    return parentBlock({ id: '', org: '', project: '', hasHiddenSubtasks: true }) ?? ''
+    return parentBlock({ id: '', org: '', project: '', isGroup: true }) ?? ''
   if (block === 'is_subtask')
     return subtaskBlock({ id: '', org: '', project: '', parent: 'x' }) ?? ''
   if (kind === 'link') return linkBlock(Array.from({ length: LIMITS.links.max })) ?? ''
@@ -427,7 +426,7 @@ export function RelationPicker({
             now: {
               on,
               busy: false,
-              parent: on ? { id: task.uuid, hidden: false } : { id: null, hidden: false },
+              parent: on ? task.uuid : null,
               link: on ? (linkKind ?? null) : null,
             },
             basis,

@@ -705,7 +705,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       org_id: org,
       id: FAR,
       patch: { parent_id: PICKED },
-      expected: { parent_id: null, has_hidden_parent: false },
+      expected: { parent_id: null },
     })
     // the Parent row shows the new parent at once
     const parentRow = document.querySelector(`[data-related-task="QN-44"]`)
@@ -726,7 +726,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       org_id: org,
       id: FAR_KID,
       patch: { parent_id: null },
-      expected: { parent_id: FAR, has_hidden_parent: false },
+      expected: { parent_id: FAR },
     })
     expect(
       document.querySelector('[data-section="subtasks"] [data-related-task="QN-42"]'),
@@ -774,7 +774,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       org_id: org,
       id: PICKED_3,
       patch: { parent_id: FAR },
-      expected: { parent_id: FAR_KID_2, has_hidden_parent: false },
+      expected: { parent_id: FAR_KID_2 },
     })
     // the window's Subtasks list shows it at once
     expect(
@@ -1425,25 +1425,25 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     expect(delayChip()?.textContent).toBe('Delayed')
   })
 
-  it('judges a group shown from its answer with hidden subtasks by its visible span', async () => {
+  it('judges a group shown from its answer only from a complete subtask list', async () => {
     await load(true)
     await openWindow(await noteTask(far()))
-    const kid = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(7) }))
+    const late = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(28) }))
+    // a list the server could not read whole: even a span past the due
+    // date leaves the delay unknown
     await answer(
       'taskWindow:task',
       okAnswer(far(), {
         task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
-        subtasks: { rows: [kid], complete: true },
+        subtasks: { rows: [late], complete: false },
       }),
     )
-    // hidden subtasks prove neither on track nor behind, loaded or not
-    expect(delayChip()).toBeNull()
-    // a visible span that ends past the due date proves it late
-    const late = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(28) }))
+    expect(delayChip()?.dataset.delayChip).toBe('unknown')
+    // the same span of a complete list proves it late
     await answer(
       'taskWindow:task',
       okAnswer(far(), {
-        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        task: { ...far(), has_subtasks: true },
         subtasks: { rows: [late], complete: true },
       }),
     )

@@ -66,7 +66,6 @@ const task = (o: Partial<SyncIssue> & { key: string }): SyncIssue => {
     owner: undefined,
     isGroup: false,
     children: [],
-    hasHiddenSubtasks: false,
     links: [],
     start: null,
     due: undefined,

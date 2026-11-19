@@ -51,7 +51,7 @@ async function answerOf(fx: Fx, who: Doc<'profiles'>, id: string) {
 
 /** The expected values the app sends for `fields` from the answer's row
     `row`: a title and a description as their prints, the parent as the
-    pair the answer shows, every other field as it is, null for unset. */
+    id the answer shows, every other field as it is, null for unset. */
 function expectedFrom(row: TaskRow, fields: readonly string[]): Record<string, unknown> {
   const values = row as unknown as Record<string, unknown>
   const out: Record<string, unknown> = {}
@@ -64,8 +64,6 @@ function expectedFrom(row: TaskRow, fields: readonly string[]): Record<string, u
           ? printOf(descriptionForm(value))
           : (value ?? null)
   }
-  if (fields.includes('parent_id'))
-    out.has_hidden_parent = row.parent_id === undefined && row.has_hidden_parent
   return out
 }
 
@@ -148,7 +146,7 @@ describe('a write from the task window’s own answer', () => {
     }
   })
 
-  it('detaches a parent by the pair the answer shows, passes as no change once there is none, and refuses once the task has another parent', async () => {
+  it('detaches a parent by the id the answer shows, passes as no change once there is none, and refuses once the task has another parent', async () => {
     const fx = await setup()
     const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
@@ -162,10 +160,7 @@ describe('a write from the task window’s own answer', () => {
     expect(answer.task.parent_id).toBe(parent.id)
     expect(answer.task.has_hidden_parent).toBe(false)
     expect(answer.parent?.id).toBe(parent.id)
-    expect(expectedFrom(answer.task, ['parent_id'])).toEqual({
-      parent_id: parent.id,
-      has_hidden_parent: false,
-    })
+    expect(expectedFrom(answer.task, ['parent_id'])).toEqual({ parent_id: parent.id })
     await detach(child.id, answer.task)
     expect((await stored(fx, child.id))?.parent_id).toBeUndefined()
 
@@ -173,25 +168,13 @@ describe('a write from the task window’s own answer', () => {
     // takes as no change to check
     const gone = await plant()
     const stale = await answerOf(fx, fx.guest, gone.id)
-    await update(
-      fx,
-      fx.admin,
-      gone.id,
-      { parent_id: null },
-      { parent_id: parent.id, has_hidden_parent: false },
-    )
+    await update(fx, fx.admin, gone.id, { parent_id: null }, { parent_id: parent.id })
     await detach(gone.id, stale.task)
     expect((await stored(fx, gone.id))?.parent_id).toBeUndefined()
-    // and another parent since, which the pair does not name, is refused
+    // and another parent since, which the id does not name, is refused
     const third = await plant()
     const seenThird = await answerOf(fx, fx.guest, third.id)
-    await update(
-      fx,
-      fx.admin,
-      third.id,
-      { parent_id: other.id },
-      { parent_id: parent.id, has_hidden_parent: false },
-    )
+    await update(fx, fx.admin, third.id, { parent_id: other.id }, { parent_id: parent.id })
     expect(await changedFields(detach(third.id, seenThird.task))).toEqual(['parent_id'])
   })
 
@@ -260,13 +243,7 @@ describe('a write from the task window’s own answer', () => {
     expect(answer.subtasks.complete).toBe(true)
     expect(answer.subtasks.rows.map((row) => [row.id, row.level])).toEqual([[mine.id, 'user']])
     // the subtask the answer listed moves away before the delete
-    await update(
-      fx,
-      fx.admin,
-      mine.id,
-      { parent_id: null },
-      { parent_id: root.id, has_hidden_parent: false },
-    )
+    await update(fx, fx.admin, mine.id, { parent_id: null }, { parent_id: root.id })
     await expectRefusal(
       as(fx.t, fx.guest).mutation(api.issues.deleteDeep, {
         org_id: fx.org.id,

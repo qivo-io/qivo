@@ -3,23 +3,22 @@ export type GroupIssue = {
   status: string
   children?: readonly string[]
   isGroup?: boolean
-  hasHiddenSubtasks?: boolean
 }
 
 /** A task as groupSpan reads it: week indexes, null when unplanned. */
 export type DatedGroupIssue = GroupIssue & { start?: number | null; end?: number | null }
 
-/** A group's calculated dates. `start` and `end` are null when no visible
- * leaf is scheduled; `partial` is the "unknown" flag groupProgress reports. */
+/** A group's calculated dates. `start` and `end` are null when no leaf
+ * the walk reaches is scheduled; `partial` is the "unknown" flag groupProgress reports. */
 export type GroupSpan = { start: number | null; end: number | null; partial: boolean }
 
 export function isIssueGroup(issue: GroupIssue): boolean {
-  return !!(issue.isGroup || issue.hasHiddenSubtasks || issue.children?.length)
+  return !!(issue.isGroup || issue.children?.length)
 }
 
-/** Visit the visible leaves under a task. Nested groups contribute only
- * through their own children. Returns true when the walk cannot see the whole
- * subtree: hidden subtasks, a missing child, an empty group or a cycle. */
+/** Visit the leaves under a task that `byId` holds. Nested groups contribute
+ * only through their own children. Returns true when the walk cannot reach the
+ * whole subtree: a missing child, an empty group or a cycle. */
 function walkLeaves<T extends GroupIssue>(
   issue: T,
   byId: Readonly<Record<string, T>>,
@@ -27,7 +26,7 @@ function walkLeaves<T extends GroupIssue>(
 ): boolean {
   const seen = new Set([issue.id])
   const stack = [...(issue.children || [])]
-  let unknown = !!issue.hasHiddenSubtasks || (isIssueGroup(issue) && !stack.length)
+  let unknown = isIssueGroup(issue) && !stack.length
   while (stack.length) {
     const id = stack.pop() as string
     if (seen.has(id)) {
@@ -41,7 +40,7 @@ function walkLeaves<T extends GroupIssue>(
       continue
     }
     if (isIssueGroup(child)) {
-      unknown ||= !!child.hasHiddenSubtasks || !child.children?.length
+      unknown ||= !child.children?.length
       stack.push(...(child.children || []))
     } else visit(child)
   }
@@ -49,7 +48,7 @@ function walkLeaves<T extends GroupIssue>(
 }
 
 /** Only executable leaf work contributes to completion. Missing children and
- * hidden branches cannot establish that a group is finished. */
+ * empty groups cannot establish that a group is finished. */
 function descendants(issue: GroupIssue, byId: Readonly<Record<string, GroupIssue>>) {
   let total = 0
   let done = 0
@@ -71,8 +70,8 @@ export function isIssueDone(issue: GroupIssue, byId: Readonly<Record<string, Gro
   return !unknown && total > 0 && total === done
 }
 
-/** A group's dates: the earliest start to the latest end of its visible
- * scheduled leaves, at any depth. A group's own stored dates are never read
+/** A group's dates: the earliest start to the latest end of the scheduled
+ * leaves the walk reaches, at any depth. A group's own stored dates are never read
  * (nested groups included), a leaf without an end counts as its start week,
  * and Done leaves count. `datesOf` overrides a leaf's dates when it returns a
  * value (the roadmap passes live drag drafts). Null for a leaf. */

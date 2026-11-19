@@ -121,7 +121,6 @@ async function appView(fx: Fx, person: Doc<'profiles'>) {
       id: row.id,
       status: row.status,
       children: rows.filter((c) => c.parent_id === row.id).map((c) => c.id),
-      hasHiddenSubtasks: row.has_hidden_subtasks,
     }
   }
   return { rows, byId, projects: snap.projects.filter((p) => p.org_id === fx.org.id) }
