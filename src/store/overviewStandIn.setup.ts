@@ -114,7 +114,7 @@ export function myViewProjects(
   const parents = new Set(
     workspace.issues.flatMap((t) => (t.parent_id === undefined ? [] : [t.parent_id])),
   )
-  const isGroup = (t: Task) => t.has_hidden_subtasks || parents.has(t.id)
+  const isGroup = (t: Task) => parents.has(t.id)
   const byTop = new Map<string, Task[]>()
   for (const t of workspace.issues) {
     const p = projectById.get(t.project_id)
@@ -251,7 +251,7 @@ export function overviewStandIn(
   for (const t of workspace.issues)
     if (t.parent_id !== undefined && byId.has(t.parent_id))
       children.set(t.parent_id, [...(children.get(t.parent_id) ?? []), t.id])
-  const isGroup = (t: Task) => t.has_hidden_subtasks || (children.get(t.id)?.length ?? 0) > 0
+  const isGroup = (t: Task) => (children.get(t.id)?.length ?? 0) > 0
   const groupView = Object.fromEntries(
     workspace.issues.map((t) => [
       t.id,
@@ -259,7 +259,6 @@ export function overviewStandIn(
         id: t.id,
         status: t.status,
         children: children.get(t.id) ?? [],
-        hasHiddenSubtasks: t.has_hidden_subtasks,
       },
     ]),
   )
@@ -641,19 +640,20 @@ export function overviewStandIn(
     const row = {
       ...rest,
       ...(parent !== undefined && shown.has(parent) ? { parent_id: parent } : {}),
+      has_hidden_parent: false,
+      has_hidden_subtasks: false,
     } as Omit<ViewRow, 'has_subtasks'>
     const view: ViewRow = isGroup(t)
       ? {
           ...row,
           has_subtasks: true,
-          has_hidden_subtasks: t.has_hidden_subtasks,
           group_done: done(t),
           span: {
             ...spanOf(t, children, byId),
             partial: groupProgress(groupView[t.id], groupView).unknown,
           },
         }
-      : { ...row, has_subtasks: false, has_hidden_subtasks: false }
+      : { ...row, has_subtasks: false }
     return at_risk === undefined ? view : { ...view, at_risk }
   }
 

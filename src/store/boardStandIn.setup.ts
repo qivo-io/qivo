@@ -100,7 +100,7 @@ export function boardStandIn(
   for (const t of workspace.issues)
     if (t.parent_id !== undefined && byId.has(t.parent_id))
       children.set(t.parent_id, [...(children.get(t.parent_id) ?? []), t.id])
-  const isGroup = (t: Task) => t.has_hidden_subtasks || (children.get(t.id)?.length ?? 0) > 0
+  const isGroup = (t: Task) => (children.get(t.id)?.length ?? 0) > 0
   const groupView = Object.fromEntries(
     workspace.issues.map((t) => [
       t.id,
@@ -108,7 +108,6 @@ export function boardStandIn(
         id: t.id,
         status: t.status,
         children: children.get(t.id) ?? [],
-        hasHiddenSubtasks: t.has_hidden_subtasks,
       },
     ]),
   )
@@ -236,12 +235,13 @@ export function boardStandIn(
     const row = {
       ...rest,
       ...(parent !== undefined && shown.has(parent) ? { parent_id: parent } : {}),
+      has_hidden_parent: false,
+      has_hidden_subtasks: false,
     } as Omit<ViewRow, 'has_subtasks'>
-    if (!isGroup(t)) return { ...row, has_subtasks: false, has_hidden_subtasks: false }
+    if (!isGroup(t)) return { ...row, has_subtasks: false }
     return {
       ...row,
       has_subtasks: true,
-      has_hidden_subtasks: t.has_hidden_subtasks,
       group_done: done(t),
       span: {
         ...spanOf(t, children, byId),
@@ -278,7 +278,7 @@ export function spanOf(
     const t = byId.get(id)
     if (!t) continue
     const below = children.get(id) ?? []
-    if (below.length || t.has_hidden_subtasks) {
+    if (below.length) {
       stack.push(...below)
       continue
     }
