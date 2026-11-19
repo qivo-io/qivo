@@ -124,6 +124,7 @@ import {
   OWNER_PICKERS_NAMES,
   OWNER_PICKERS_PERSON,
   OWNER_PICKERS_STEP,
+  PARENT_READ_STEP,
   PEOPLE_PAGE,
   PEOPLE_REFUSALS,
   PHONE_SELECTS_STEP,
@@ -145,6 +146,7 @@ import {
   PROJECTS_PART_STEP,
   PURGE_DELETED_STEP,
   pace,
+  parentReadFaults,
   parseArgs,
   peoplePagesMax,
   phoneSelectPages,
@@ -564,6 +566,26 @@ describe('staging check REST contract', () => {
     const picker = read('../src/components/TargetPicker.tsx')
     for (const mark of ["'data-target-search'", 'data-target-picker', 'data-target={row.id}'])
       expect(picker, mark).toContain(mark)
+  })
+  it("finds a subtask's parent by id with has_hidden_parent false, and nothing else", () => {
+    expect(PARENT_READ_STEP).toBe('subtask-rule/parent-read')
+    const parentId = randomUUID()
+    expect(parentReadFaults({ parent_id: parentId, has_hidden_parent: false }, parentId)).toEqual(
+      [],
+    )
+    // must fail: a hidden parent as an earlier backend read it, another
+    // parent, no parent, and an answer without the flag
+    expect(parentReadFaults({ parent_id: null, has_hidden_parent: true }, parentId)).toHaveLength(2)
+    expect(
+      parentReadFaults({ parent_id: randomUUID(), has_hidden_parent: false }, parentId),
+    ).toEqual([expect.stringContaining("not the parent's id")])
+    expect(parentReadFaults({ parent_id: null, has_hidden_parent: false }, parentId)).toHaveLength(
+      1,
+    )
+    expect(parentReadFaults({ parent_id: parentId }, parentId)).toEqual([
+      expect.stringContaining('not false'),
+    ])
+    expect(parentReadFaults(null, parentId)).toHaveLength(2)
   })
   it("checks a project's Settings page on the page's own selectors, after the removal window", () => {
     const page = readFileSync(

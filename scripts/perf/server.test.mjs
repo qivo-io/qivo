@@ -2513,19 +2513,28 @@ describe('the benchmark server', () => {
     expect(answer.subtasks.rows.length).toBeLessThan(2)
   })
 
-  it("answers a task whose only subtasks are in hidden projects as a group, as the server's read does", async () => {
-    // in the varied fixture, task 15 has no visible subtask and one in a
-    // hidden project (the server's hidden tasks part their parents among
-    // tasks 5, 15, 25 and 35)
+  it("answers a family as the server's read does, and says of no task that it hides one", async () => {
     const { posted, send } = await server('tasks=40&latency=0&mbps=100000&shape=varied')
-    await send({ type: 'query', id: 'group', name: 'taskWindow:task', args: { ref: id('4', 15) } })
-    const answer = JSON.parse(posted.find((m) => m.to === 'group').text)
-    expect(answer).toMatchObject({ state: 'ok', subtasks: { rows: [], complete: true } })
-    expect(answer.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: true })
+    // task 25 is the parent of 26 to 28
+    await send({ type: 'query', id: 'group', name: 'taskWindow:task', args: { ref: id('4', 25) } })
+    const group = JSON.parse(posted.find((m) => m.to === 'group').text)
+    expect(group.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: false })
+    expect(group.subtasks.rows.map((row) => row.id)).toEqual([26, 27, 28].map((n) => id('4', n)))
     // a task with no subtask at all is no group
     await send({ type: 'query', id: 'leaf', name: 'taskWindow:task', args: { ref: id('4', 16) } })
     const leaf = JSON.parse(posted.find((m) => m.to === 'leaf').text)
     expect(leaf.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
+    // and the rows the views read say the same
+    const { snapshot } = await snapshotOf('tasks=40&shape=varied')
+    const rows = new Map(snapshot.issues.map((row) => [row.id, row]))
+    expect(rows.get(id('4', 26))).toMatchObject({
+      parent_id: id('4', 25),
+      has_hidden_parent: false,
+    })
+    for (const row of snapshot.issues) {
+      expect(row.has_hidden_parent, row.id).toBe(false)
+      expect(row.has_hidden_subtasks, row.id).toBe(false)
+    }
   })
 
   it("answers the Inbox's unread summary and the open task's item, and reads the item to its through", async () => {

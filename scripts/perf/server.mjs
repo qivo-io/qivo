@@ -75,8 +75,7 @@
 //   hidden (4)           projects the signed-in person cannot see, as full
 //                        of tasks as the visible ones; they reach the app
 //                        only as owner load spans that name no task
-//                        (planning:ownerLoads) and as the hidden flags of
-//                        the rows the views and the task window answer
+//                        (planning:ownerLoads)
 //   programs (1)         visible top-level projects, the visible tasks
 //                        spread over all their sub-projects, so the first,
 //                        which the app opens as the project the person
@@ -1542,8 +1541,7 @@ const taskRow = (n, uid, project, parent) => {
   return row
 }
 /* The server's tasks: `count` visible ones, then the hidden projects' as
-   many a project. Every 20th hidden task is a subtask of a visible parent,
-   and every 20th visible plain task one of a hidden parent. */
+   many a project. A subtask is in its parent's own sub-project. */
 const perProject = Math.max(1, Math.ceil(count / projects.length))
 /** Task `n` of the varied workspace. Every 25th task is a parent of the
     three after it, every 7th has a due date (every other one past), every
@@ -1583,34 +1581,23 @@ const tasks = Array.from({ length: count }, (_, n) =>
     scripts/perf/options.test.mjs counts them toward the design size's
     figures, as the organization holds them. */
 export const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
-  taskRow(
-    count + h,
-    id('5', h),
-    hidden.children[Math.floor(h / 10) % hiddenCount],
-    h % 20 === 1 && count > 5 ? id('4', 5 + 10 * (h % Math.floor(count / 10 || 1))) : undefined,
-  ),
+  taskRow(count + h, id('5', h), hidden.children[Math.floor(h / 10) % hiddenCount], undefined),
 )
-if (hiddenTasks.length)
-  for (const row of tasks)
-    if (!row.parent_id && row.num % 20 === 13) row.parent_id = hiddenTasks[0].id
 const shown = new Set(tasks.map((row) => row.id))
 const allTasks = [...tasks, ...hiddenTasks]
-// visible tasks with a hidden subtask (workingSetOf's hidden subtask parents)
-const hiddenSubtaskParents = new Set(hiddenTasks.map((row) => row.parent_id).filter(Boolean))
 /** The tasks with a subtask, among every live task (lib/liveTasks.ts
     countsAsSubtask; every project here is active). */
 const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row) => row.parent_id))
 let parents = parentsOf()
 /** Task `row` as the server's working set holds it (lib/workingSet.ts,
     convex/tests/tasksOracle.setup.ts), which the stand-ins answer from, and
-    as forMe sent it to baseline builds. */
+    as forMe sent it to baseline builds. has_hidden_parent and
+    has_hidden_subtasks are false, as the server sends them. */
 const wireTask = (row) => {
   const { parent_id: parent, ...rest } = row
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
-  out.has_hidden_parent = !!parent && !shown.has(parent)
-  out.has_hidden_subtasks = hiddenSubtaskParents.has(row.id)
-  // the server's group fact counts every active subtask, hidden ones
-  // included, so the window's stand-in reads it from the row
+  out.has_hidden_parent = false
+  out.has_hidden_subtasks = false
   out.has_subtasks = parents.has(row.id)
   return out
 }

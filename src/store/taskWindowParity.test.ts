@@ -295,8 +295,8 @@ describe('the task window stand-in', () => {
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: secret.id }),
     ).toEqual({ state: 'unavailable' })
-    // the group's own answers name neither hidden task, and say a subtask
-    // is hidden, as the server's do
+    // the group's own answers name neither hidden task, and, as the
+    // server's, say nothing of the secret outside the group's sub-project
     for (const [name, args] of [
       ['taskWindow:task', { org_id: f.org.id, ref: group.id }],
       ['taskWindow:links', { org_id: f.org.id, issue_id: group.id }],
@@ -319,6 +319,6 @@ describe('the task window stand-in', () => {
     }
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: group.id }),
-    ).toMatchObject({ task: { has_subtasks: true, has_hidden_subtasks: true } })
+    ).toMatchObject({ task: { has_subtasks: true, has_hidden_subtasks: false } })
   })
 })

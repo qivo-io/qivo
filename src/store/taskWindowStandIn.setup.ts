@@ -15,10 +15,10 @@
      task id that is no uuid as that task's. An active task
      whose project the caller reaches answers `ok` with its row, the
      caller's level on its project, its label rows, the caller's follow,
-     its parent as a short row when the caller is shown the parent, and
-     its subtasks the caller is shown as short rows by number and then id,
-     the list complete; a subtask the caller is not shown sends no row and
-     sets has_hidden_subtasks, as the server's does. An archived task whose project the caller sees answers
+     its parent as a short row when the caller is shown the parent, and its
+     subtasks as short rows by number and then id, the list complete; both
+     only inside the task's own sub-project (convex/lib/liveTasks.ts
+     liveLink), as the server's are. An archived task whose project the caller sees answers
      `archived` with the Archived tasks page's row, its text, labels, level
      and whether its project is archived. Everything else answers
      `unavailable`, alike.
@@ -125,7 +125,18 @@ export function taskWindowStandIn(
   const shown = new Map(
     active.filter((t) => level(t.project_id) !== null).map((t) => [t.id, t] as const),
   )
-  const parents = new Set(active.flatMap((t) => (t.parent_id ? [t.parent_id] : [])))
+  // the tasks an active subtask in their own sub-project makes groups
+  const byTask = new Map(active.map((t) => [t.id, t] as const))
+  const parents = new Set(
+    active.flatMap((t) => {
+      const parent = t.parent_id === undefined ? undefined : byTask.get(t.parent_id)
+      return parent !== undefined &&
+        parent.org_id === t.org_id &&
+        parent.project_id === t.project_id
+        ? [parent.id]
+        : []
+    }),
+  )
   /* a task the whole holds as a list row of the window, with its group
      fact and the caller's level on its project */
   const short = (row: Task) => {
@@ -180,34 +191,35 @@ export function taskWindowStandIn(
       }
     }
     if (opened(task.id) === undefined) return UNAVAILABLE
-    // every active subtask counts toward the group, and only the ones the
-    // caller is shown go out; a hidden one sets has_hidden_subtasks
-    const counting = active.filter((row) => row.parent_id === task.id)
+    // an active subtask counts toward the group, and goes out, only inside
+    // the task's own sub-project (convex/lib/liveTasks.ts liveLink)
+    const sameHome = (row: { org_id: string; project_id: string }) =>
+      row.org_id === task.org_id && row.project_id === task.project_id
+    const counting = active.filter((row) => row.parent_id === task.id && sameHome(row))
     const kids = counting.filter((row) => shown.has(row.id)).sort(byNumber)
     const incomplete = force === 'incomplete'
-    const parent = task.parent_id ? shown.get(task.parent_id) : undefined
+    const shownParent = task.parent_id ? shown.get(task.parent_id) : undefined
+    const parent = shownParent !== undefined && sameHome(shownParent) ? shownParent : undefined
     const me = new Set(whole.myProfileIds)
-    // the parent's id goes out only when the caller is shown the parent
-    // (convex/lib/workingSet.ts parentLink); a fixture's row may carry the
-    // id of one the caller is not shown, and a server-made whole's row of
-    // such a task holds no id and says the parent is hidden
+    // the parent's id goes out only for a parent in the task's own
+    // sub-project that the caller is shown (convex/lib/workingSet.ts
+    // parentLink), and a fixture's row may carry the id of any other. This
+    // server says no parent is hidden; a row without a parent's id that
+    // says so is one a backend before the release after v0.1.170 sent, and
+    // its window said so too
     const { parent_id: parentId, has_hidden_parent: hiddenParent, ...own } = task
     const parentLink =
-      parentId === undefined
-        ? { has_hidden_parent: hiddenParent === true }
-        : shown.has(parentId)
-          ? { parent_id: parentId, has_hidden_parent: false }
-          : { has_hidden_parent: true }
+      parent === undefined
+        ? { has_hidden_parent: parentId === undefined && hiddenParent === true }
+        : { parent_id: parent.id, has_hidden_parent: false }
     return {
       state: 'ok',
       task: {
         ...own,
         ...parentLink,
         has_subtasks: task.has_subtasks === true || counting.length > 0,
-        has_hidden_subtasks:
-          task.has_hidden_subtasks === true ||
-          incomplete ||
-          counting.some((row) => !shown.has(row.id)),
+        // says only that the list is incomplete
+        has_hidden_subtasks: task.has_hidden_subtasks === true || incomplete,
       },
       level: level(task.project_id),
       labels,

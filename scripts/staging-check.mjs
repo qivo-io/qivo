@@ -6024,8 +6024,27 @@ async function listOrderChecks() {
   })
 }
 
+/** The step that reads the run's subtask over REST and MCP and sends its
+ *  parent back as `expected` (subtaskRuleChecks). */
+export const PARENT_READ_STEP = 'subtask-rule/parent-read'
+
+/** What is wrong with how `read`, a task as REST GET /v1/tasks/{ref} or MCP
+ *  get_task answers it, names its parent, the task with id `parentId` in
+ *  its own sub-project: from the release after v0.1.170 `parent_id` names
+ *  it and `has_hidden_parent` is false. Empty when nothing is. */
+export function parentReadFaults(read, parentId) {
+  const faults = []
+  if (read?.parent_id !== parentId)
+    faults.push(`parent_id is ${short(read?.parent_id)}, not the parent's id`)
+  if (read?.has_hidden_parent !== false)
+    faults.push(`has_hidden_parent is ${short(read?.has_hidden_parent)}, not false`)
+  return faults
+}
+
 /** A subtask stays in its parent's own sub-project (the release after
- *  v0.1.168). Makes the run's second project, which the facts checks use. */
+ *  v0.1.168), and reads name its parent with has_hidden_parent false (the
+ *  release after v0.1.170). Makes the run's second project, which the facts
+ *  checks use. */
 async function subtaskRuleChecks() {
   const w = run.creds.writeToken
   const { A, Z } = run.projects
@@ -6080,6 +6099,22 @@ async function subtaskRuleChecks() {
     return `a subtask in ${A.name} with its parent; refused in ${Z.name} over REST and MCP, and a move there that keeps the parent refused`
   })
   if (!run.child) return
+  await check(PARENT_READ_STEP, async () => {
+    const reads = {
+      REST: await restOk(w, 'GET', `/tasks/${run.child.key}`),
+      MCP: await toolOk(w, 'get_task', { ref: run.child.key }),
+    }
+    for (const [surface, read] of Object.entries(reads)) {
+      const faults = parentReadFaults(read, run.parent.id)
+      expect(faults.length === 0, `${surface} read of ${run.child.key}: ${faults.join('; ')}`)
+    }
+    // the parent as both reads name it, sent alone as expected, matches
+    const parent = { parent: run.parent.key, expected: { parent_id: run.parent.id } }
+    const patched = await restOk(w, 'PATCH', `/tasks/${run.child.key}`, parent)
+    eq(patched.parent_id, run.parent.id, "the PATCH answer's parent")
+    await toolOk(w, 'update_task', { ref: run.child.key, ...parent })
+    return `${run.child.key} names ${run.parent.key} with has_hidden_parent false over REST and MCP, and both take expected.parent_id alone`
+  })
   await check('subtask-rule/other-project', async () => {
     const N = await restOk(w, 'POST', '/projects', { name: `${run.tag} second project` })
     run.projects.N = N
