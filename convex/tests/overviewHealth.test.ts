@@ -1324,8 +1324,7 @@ describe('real limits', () => {
  * projects the reader is not shared. That work keeps everyday values, in
  * sub-projects of 30 open tasks, three to a project, so each owner's
  * scheduled work spans every one of them. It logs what the table read
- * sorted by Delayed and by Name, and whether Delayed was given. On a large
- * Boat sandbox each case takes 1 to 12 s. */
+ * sorted by Delayed and by Name, and whether Delayed was given. */
 describe.runIf(process.env.QIVO_HEALTH_ORG_OPEN === '1')(
   "the organization's open tasks, on demand",
   () => {

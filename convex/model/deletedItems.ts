@@ -196,12 +196,11 @@ export const TRASH_BUDGET = { rows: 300, bytes: 4 * 1024 * 1024, tasks: 100, ran
  * spends before steps take over. Convex ends a function whose database
  * calls wait 15 s in all ("too many system operations"), and a step that
  * does is retried at half its budget (recoverJobs), but a person's call is
- * not retried. On a local backend busy removing a person with 18,000
- * tokens, each call of a restore waited 3.8 to 7.6 ms, so a restore of four
- * 200-project items that made 1,977 calls failed, and so did deleting a
- * sub-project of 5,000 tasks. A quarter of the budget, about 700 calls with
- * the writes, stays near 5 s at that rate. A mutable object, so tests can
- * change it. */
+ * not retried. On a busy backend each call waits longer, so a person's call
+ * that spends the whole budget, such as a restore of four 200-project items
+ * or a deletion of a sub-project of 5,000 tasks, can pass that limit. A
+ * quarter of the budget, about 700 calls with the writes, leaves room for
+ * those waits. A mutable object, so tests can change it. */
 export const CALL = { scale: 1 / 4 }
 
 /** Adaptive retries: each restart halves budget_scale down to `floor`, and

@@ -6,7 +6,7 @@
  * `[body.path] message` for every problem zod found, joined by "; ". A
  * 64 KiB body that holds an array of 32,000 numbers where strings belong,
  * such as `scopes` on /sign-in/social, so got a 2.2 MB answer, and zod spent
- * about 60 ms and 25 MiB building the 32,000 problems.
+ * time and memory building the 32,000 problems.
  *
  * stopValidationEarly fixes that in each schema's own check. It makes zod
  * stop at the first problem when a request holds more than

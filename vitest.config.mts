@@ -31,8 +31,7 @@ export default defineConfig({
     /* A test's or hook's limit only has to catch a hang. A test shares the CPU
      * with the other workers, and a busy machine or CI runner makes it several
      * times slower than usual, so every test and hook gets 60 s unless it sets
-     * its own. The slowest test with the default took 11.6 s on a slow CI
-     * runner. */
+     * its own. */
     testTimeout: 60_000,
     hookTimeout: 60_000,
     /* tests/contract/** is the LIVE contract pass (vitest.contract.config.mts,

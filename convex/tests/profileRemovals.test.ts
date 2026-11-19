@@ -1250,8 +1250,8 @@ describe('bounds a long credential and file history', () => {
   it('reads each range once a step, not a page at a time from its start', async () => {
     // A read from the start of a range passes every row the step cleared
     // there again, and the local backend reads a whole range for each
-    // query: 256 of 20,000 comments read four at a time took 10.3 s. A step
-    // here reads about 13 ranges in one pass, and 75 four at a time
+    // query. A step here reads about 13 ranges in one pass, and 75 four at
+    // a time
     const t = newT({ transactionLimits: { databaseQueries: 40 } })
     const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

@@ -458,8 +458,9 @@ const RESERVED = [
 ]
 
 /** The uuids one part of the reserved-id check reads. Each reads at most
- * three index ranges, so a part reads at most 240: the whole check, about
- * 920 ranges, took up to 2 s in one call on a loaded machine. */
+ * three index ranges, so a part reads at most 240 of the whole check's
+ * about 920 ranges, which in one call could pass Convex's 1 s limit on a
+ * loaded machine. */
 export const RESERVED_PART = 80
 
 /** How many parts the reserved-id check has (checkReserved). */

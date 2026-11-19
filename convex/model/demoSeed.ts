@@ -764,13 +764,12 @@ async function writeStep(
  * convex/tests/demo.test.ts runs every call under limits of 630 index
  * ranges, 900 documents read and 650 written, beside a third of Convex's
  * bytes. convex-test keeps no time limit, so the range cap stands in for
- * the 333 ms: the hosted demo's steps at v0.1.86, summed for each call,
- * gave a call's JavaScript a fixed part and a part for each index range
- * that keep a call of 630 ranges inside 333 ms. Their part for each
- * document read spread too widely to bound the time by documents alone, so
- * the document caps keep a call's documents for each range inside what the
- * calls those costs come from read and wrote, and a call with fewer ranges
- * stays inside 333 ms too. */
+ * the 333 ms. A call's JavaScript time has a fixed part and a part for each
+ * index range, and those keep a call of 630 ranges inside 333 ms. The part
+ * for each document read varies too widely to bound the time by documents
+ * alone, so the document caps keep a call's documents for each range inside
+ * the ratio the range cap was set for, and a call with fewer ranges stays
+ * inside 333 ms too. */
 export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4, 1]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past

@@ -43,13 +43,13 @@ import { audit } from './model/admin'
 /** Step sizes. Tests lower them. */
 export const AUTH_EXPIRY = {
   /** Sessions one step deletes at most. Each runs its delete trigger in the
-   * step's transaction, about 7 ms on a local backend, so a step stays well
+   * step's transaction, and a trigger that loads little keeps a step well
    * inside Convex's time limit for one transaction; a step that failed on
    * time would fail every night. Since notification delivery, the trigger
    * also reads one index entry and deletes at most one notification row a
    * session (lib/sessionEnd.ts), and loads only one more small module
-   * (lib/authUser.ts) besides a module with no imports, so the figure
-   * holds; tests/authTriggers.test.ts pins what the trigger loads. */
+   * (lib/authUser.ts) besides a module with no imports, so it stays small;
+   * tests/authTriggers.test.ts pins what the trigger loads. */
   sessions: 100,
   /** OAuth token rows and refresh token hashes one step deletes at most,
    * far below Convex's read and write limits for one transaction. */

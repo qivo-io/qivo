@@ -6,10 +6,9 @@
  * transaction (the adapter's deleteMany, @convex-dev/better-auth).
  *
  * A nested call loads the imports of its module again, so this module
- * imports none of Better Auth. On a local backend a trigger in a module that
- * loaded auth.ts cost about 30 ms a session before it did anything, against
- * about 5 ms here, and a ban of 200 sessions failed on Convex's time limit
- * for one transaction. */
+ * imports none of Better Auth. A trigger in a module that loads auth.ts
+ * pays for that load for each session before it does anything, so a ban of
+ * 200 sessions can fail on Convex's time limit for one transaction. */
 
 import type { Triggers } from '@convex-dev/better-auth'
 import { v } from 'convex/values'

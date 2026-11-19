@@ -523,8 +523,8 @@ type Delivery = {
  * The reader is the Convex runtime, not the client. On a local backend
  * (precompiled-2026-10-22) it pulls a body of several megabytes as fast as
  * storage gives it, whatever the client takes: a download that curl stops
- * early is recorded within a second of its start, its lease ends then, and a
- * file erased a few seconds into a download no longer stops it. So the
+ * early is recorded soon after its start, its lease ends then, and a file
+ * erased during a download no longer stops it. So the
  * record says that the backend read the whole archive into the response, not
  * that the client received it, and it leaves
  * organizations.last_export_confirmed_at, which the deletion reminder

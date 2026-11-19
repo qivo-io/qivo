@@ -224,8 +224,9 @@ async function fixture() {
 /* This file runs in the node project, whose default timeout is 5 s. Each
  * test builds a full convex-test organization and sends whole MCP and REST
  * requests through it. The first one also loads and transforms the Convex
- * modules those requests reach, which took 6 s on a busy host. The convex
- * project gives the same work 20 s, so these tests get 20 s too. */
+ * modules those requests reach, which can take longer than 5 s on a busy
+ * host. The convex project gives the same work 20 s, so these tests get
+ * 20 s too. */
 describe('MCP Events and generic REST webhooks', { timeout: 20_000 }, () => {
   it('discovers events and completes subscribe, verified delivery, refresh and unsubscribe', async () => {
     const f = await fixture()

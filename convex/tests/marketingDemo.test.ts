@@ -1989,9 +1989,8 @@ describe('marketing demo Deleted items', () => {
 
 describe('marketing demo seed steps', () => {
   // The whole seed in one transaction wrote about 1,400 documents and read
-  // about 2,500 index ranges, and the reserved-id check alone took up to 2 s
-  // on a loaded machine. Every call of a seed, a check or a wipe now does a
-  // small, bounded part of that.
+  // about 2,500 index ranges. Every call of a seed, a check or a wipe now
+  // does a small, bounded part of that.
   // The Overview's counts of every task, made and stamped in one call at
   // the end (model/overviewCounts.ts countWhole), write a group row for each
   // of the 90 tasks and their count rows, and the call moves its receipt on:

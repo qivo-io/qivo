@@ -1626,9 +1626,9 @@ async function mentionedIn(
 
 /** How many followers one comment or change tells in its own transaction
  * (`inline`), and how many each background step tells after that (`step`).
- * A follower costs about two index ranges, a few writes and about a
- * millisecond, so a task followed by some thousands of people before
- * LIMITS.followers.max existed passed Convex's 4,096 ranges, and a bulk save of
+ * A follower costs about two index ranges and a few writes, so a task
+ * followed by some thousands of people before LIMITS.followers.max
+ * existed passed Convex's 4,096 ranges, and a bulk save of
  * tasks with many followers passed its 1 s. Keeping the follower's inbox
  * item (model/inboxItems.ts) adds two ranges and a write, and for someone
  * without a message yet one range and one write more: in tests a follower

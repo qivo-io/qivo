@@ -434,9 +434,9 @@ const project = (id: string) => ({ org_id: ORG, project_ids: [id] })
 
 /* This file runs in the node project, whose default timeout is 5 s. Every
    test resets the modules and imports and boots the real planner store
-   again. The first one also transforms the store and the page, and took up
-   to 9 s on a busy host, so the tests get the 20 s the convex project gives
-   its fixtures. */
+   again. The first one also transforms the store and the page, which can
+   take longer than 5 s on a busy host, so the tests get the 20 s the convex
+   project gives its fixtures. */
 describe('Archived tasks', { timeout: 20_000 }, () => {
   it('opens on its project with the search focused, 25 a page, Next and Previous replacing them', async () => {
     await open()
