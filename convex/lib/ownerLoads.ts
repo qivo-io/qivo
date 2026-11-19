@@ -178,15 +178,9 @@ const QUESTION: ReadCeiling = {
 /* One project row read by id, for its liveness. */
 const PROJECT_READ: ReadCeiling = { ranges: 1, documents: 1, bytes: PROJECT_ROW_MAX_BYTES }
 
-/* One subtask check: its index range, its first subtask, which can come
- * close to Convex's document size limit, and that subtask's project. A
- * check reads further only while the subtasks it reads are in projects
- * that are not live, and counts each of those rows as it reads it. */
-const CHECK: ReadCeiling = {
-  ranges: 2,
-  documents: 2,
-  bytes: DOCUMENT_MAX_BYTES + PROJECT_ROW_MAX_BYTES,
-}
+/* One subtask check: its index range and its first subtask, which can
+ * come close to Convex's document size limit. */
+const CHECK: ReadCeiling = { ranges: 1, documents: 1, bytes: DOCUMENT_MAX_BYTES }
 
 /* The owner's profile, read by id. */
 const PROFILE: ReadCeiling = { ranges: 1, documents: 1, bytes: DOCUMENT_MAX_BYTES }
@@ -326,23 +320,20 @@ export function ownerLoadReader(
     return out
   }
 
-  /* whether `task`, active in a live project, has an active subtask in a
-   * live project, which makes it a group (lib/liveTasks.ts
-   * countsAsSubtask), as model/issues.ts hasSubtasks answers with
-   * access.live, its subtasks counted as they are read */
+  /* whether `task`, active in a live project, has an active subtask, which
+   * makes it a group (lib/liveTasks.ts countsAsSubtask), as model/issues.ts
+   * hasSubtasks answers, its first subtask counted as it is read */
   const isGroup = async (task: Doc<'issues'>): Promise<boolean> => {
     spend(1, 0, 0)
-    const kids = ctx.db
+    const kid = await ctx.db
       .query('issues')
       .withIndex('by_parent_archived', (q) =>
         q.eq('parent_id', task.id).eq('archived_at', undefined),
       )
-    for await (const kid of kids) {
-      spendRow(kid)
-      const child = { archived: false, projectLive: await liveOf(kid.project_id) }
-      if (countsAsSubtask({ archived: false, projectLive: true }, child)) return true
-    }
-    return false
+      .first()
+    if (kid === null) return false
+    spendRow(kid)
+    return countsAsSubtask(task, kid)
   }
 
   const readOwner = async (ownerId: string): Promise<OwnedLoad> => {

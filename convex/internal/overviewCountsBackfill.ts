@@ -14,9 +14,10 @@
  * a time, while every write leaves its counts alone and no project change
  * starts a regroup. The count steps read its active tasks in _creationTime
  * order (issues.by_org_archived) and reconcile each (model/overviewCounts.ts
- * reconcileTask), checking it for an active subtask in a live project,
- * while every write in between reconciles the tasks it writes and every
- * project archive, restore or move to Deleted items starts a regroup.
+ * reconcileTask), checking it for an active subtask (lib/liveTasks.ts
+ * countsAsSubtask), while every write in between reconciles the tasks it
+ * writes and every project archive, restore or move to Deleted items
+ * starts a regroup.
  * Reconciling moves the counts by what a task gives over what its
  * overview_tasks row holds, so whichever of a step, a write and a regroup
  * comes first, the count is exact however the tasks change while it runs.
@@ -111,13 +112,10 @@ import {
  * next creation time and leaves the rest to the next. A stored description
  * can come close to Convex's document size limit, so a step reads no more
  * tasks at a time than its unspent bytes could hold at that size
- * (taskPage). Each task's check reads its subtasks until one is in a live
- * project, usually one range, but every one of them where none is, up to
- * LIMITS.subtasks rows and the rows' projects; a page asks about each
- * project once. tests/overviewCounts.test.ts logs what a page of 100 tasks
- * whose 700 subtasks sit in 7 archived sub-projects reads. A task then
- * reads and writes at most four count rows and one group row. `room` stops
- * a page whose subtasks are many and large. Tests lower them. */
+ * (taskPage). Each task's check reads one range and its first active
+ * subtask (model/overviewCounts.ts hasLiveSubtask) and no project. A task
+ * then reads and writes at most four count rows and one group row. `room`
+ * stops a page whose tasks are many and large. Tests lower them. */
 export const COUNT_PAGE = { tasks: 100, rows: 500, bytes: 4 * MIB, listed: 100, room: 0.5 }
 
 /** Organizations one page of a run reads, and how long one call of run
@@ -208,11 +206,10 @@ export const step = internalMutation({
       return { done: true, ...idle }
     }
     let rows = 0
-    const live = new Map<string, boolean>()
     const went = await throughTasks(
       page.tasks,
       async (task) => {
-        if (await reconcileTask(ctx.db, org_id, task.id, task, 'read', live)) rows++
+        if (await reconcileTask(ctx.db, org_id, task.id, task, 'read')) rows++
       },
       () => usedMoreThan(ctx, COUNT_PAGE.room),
     )
@@ -275,9 +272,7 @@ export const check = internalQuery({
   handler: async (ctx, { org_id, after }): Promise<Checked | null> => {
     const page = await taskPage(ctx.db, org_id, after, COUNT_PAGE)
     if (page === null) return null
-    const counted = await countTasks(ctx.db, org_id, page.tasks, () =>
-      usedMoreThan(ctx, COUNT_PAGE.room),
-    )
+    const counted = await countTasks(ctx.db, page.tasks, () => usedMoreThan(ctx, COUNT_PAGE.room))
     return {
       rows: [...counted.rows],
       tasks: counted.counted,

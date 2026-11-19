@@ -281,7 +281,7 @@ export function filterRead(
   const factsOf = async (groups: readonly Doc<'issues'>[]) => {
     const fresh = groups.filter((g) => !facts.has(g.id))
     if (fresh.length === 0) return
-    for (const [id, got] of await groupFacts(ctx, guard, seats, fresh, subtasks)) facts.set(id, got)
+    for (const [id, got] of await groupFacts(ctx, guard, fresh, subtasks)) facts.set(id, got)
   }
 
   /* keeps the tasks of `tasks`, which passed `cheap` (and match the search),
@@ -291,7 +291,7 @@ export function filterRead(
   const decide = async (tasks: readonly Doc<'issues'>[]) => {
     for (let at = 0; at < tasks.length; at += STEP) {
       const step = tasks.slice(at, at + STEP).filter((t) => !rows.has(t.id))
-      await groupCheck(ctx, guard, seats, step, subtasks)
+      await groupCheck(ctx, guard, step, subtasks)
       const pass = step.filter((t) => ownerPasses(t, isGroup(t) === true))
       if (o.rule.facts) await factsOf(pass.filter((t) => isGroup(t)))
       for (const t of pass) {
@@ -304,7 +304,7 @@ export function filterRead(
   }
 
   const search =
-    f.search === '' ? null : filterSearch(ctx, guard, f.search, subtasks, sizes, seats, o.limits)
+    f.search === '' ? null : filterSearch(ctx, guard, f.search, subtasks, sizes, o.limits)
   // the tasks taken that wait for their group checks
   const pending: Doc<'issues'>[] = []
 
@@ -392,7 +392,6 @@ function filterSearch(
   text: string,
   subtasks: ReturnType<typeof noSubtasks>,
   sizes: ReadonlyMap<string, number>,
-  seats: ViewSeats,
   limits: SearchLimits,
 ) {
   const matches = allWordsMatcher(text)
@@ -741,7 +740,6 @@ function filterSearch(
           await groupCheck(
             ctx,
             guard,
-            seats,
             step.map((c) => c.task),
             subtasks,
           )

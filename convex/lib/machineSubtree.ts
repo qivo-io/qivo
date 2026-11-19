@@ -2,7 +2,9 @@
  * visibility rule: a row is a task in a project the caller can read
  * (lib/core.ts accessFlags `read`), archived projects included when a call
  * names one. The app's views follow the working-set rule instead
- * (lib/viewReads.ts), so the two keep their own reads.
+ * (lib/viewReads.ts), so the two keep their own reads. A subtask or parent
+ * a row names or counts is in the row's own sub-project (lib/liveTasks.ts
+ * liveLink), which the caller reads.
  *
  * The active task list (lib/activeTaskPage.ts) reads through them.
  * subtreeReads answers from the catalogue's flags, which it reads nothing
@@ -44,7 +46,7 @@ import type { QueryCtx } from '../_generated/server'
 import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { TASK_ROW_MAX_BYTES } from './limits'
-import { countsAsSubtask, layerOf, type ProjectLive } from './liveTasks'
+import { countsAsSubtask } from './liveTasks'
 import { ONE_LEVEL_SINCE, withoutSubtasks } from './viewReads'
 
 /* How many reads a tally counts itself before it looks at the request's
@@ -125,15 +127,12 @@ export async function readTally(ctx: QueryCtx, hard: ReadTotals) {
   }
 }
 
-/** What the group and parent reads know of the caller and the
- * organization: the caller's read flags (lib/core.ts accessFlags) and the
- * organization's projects (lib/core.ts Catalogue), so they ask nothing of
- * the database about projects. */
+/** What the group and parent reads know of the caller: the caller's read
+ * flags (lib/core.ts accessFlags), so they ask nothing of the database
+ * about projects. */
 export type MachineView = {
   me: Doc<'profiles'>
   readable: (projectId: string) => boolean
-  projectOf: (projectId: string) => Doc<'projects'> | undefined
-  live: ProjectLive
 }
 
 /* The active subtasks of the task with id `taskId`. */
@@ -151,14 +150,11 @@ export type SubtreeReads = ReturnType<typeof subtreeReads>
  * lib/core.ts ChildIndex for issueOut), and the tasks the list read by id
  * (`tasks`, its rows and their parents), so nothing is read twice.
  *
- * A task is a group when it has an active subtask that makes it one
- * (lib/liveTasks.ts countsAsSubtask, with the catalogue's liveness): for a
- * task in a live project an active subtask in a live project, and for one
- * in an archived project any active subtask. Its check reads its active
- * subtasks whole (issues by_parent_archived), at most LIMITS.subtasks.max,
- * so the group's facts need no other read of them, and reads nothing for a
- * subtask created under the rule of one level (lib/viewReads.ts
- * withoutSubtasks).
+ * A task is a group when it has an active subtask (lib/liveTasks.ts
+ * countsAsSubtask). Its check reads its active subtasks whole (issues
+ * by_parent_archived), at most LIMITS.subtasks.max, so the group's facts
+ * need no other read of them, and reads nothing for a subtask created under
+ * the rule of one level (lib/viewReads.ts withoutSubtasks).
  */
 export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally) {
   const kids = new Map<string, Doc<'issues'>[]>()
@@ -185,10 +181,8 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
     return true
   }
   /* whether `task`, whose subtasks are read, is a group */
-  const isGroup = (task: Doc<'issues'>): boolean => {
-    const parent = layerOf(task, view.live)
-    return (kids.get(task.id) ?? []).some((kid) => countsAsSubtask(parent, layerOf(kid, view.live)))
-  }
+  const isGroup = (task: Doc<'issues'>): boolean =>
+    (kids.get(task.id) ?? []).some((kid) => countsAsSubtask(task, kid))
   return {
     kids,
     tasks,
@@ -202,7 +196,7 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
     isGroup,
     /**
      * Reads, within `ceiling`, the subtree group `root`'s facts walk
-     * (lib/core.ts groupFacts over groupCounter with the caller's flags):
+     * (lib/core.ts groupFacts over groupCounter):
      * the active subtasks of each task under it that counts, a level at a
      * time, the seen set stopping a corrupt cycle. A subtask created under
      * the rule of one level, or one of a group created then, has no
@@ -213,14 +207,11 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
      */
     walk: async (root: Doc<'issues'>, ceiling: ReadTotals): Promise<boolean> => {
       if (!(await readKids(root, ceiling))) return false
-      const rootLive = view.live(root.project_id)
-      // groupCounter's rule with the caller's flags, which reads nothing
-      const counts = (task: Doc<'issues'>) => {
-        if (task.org_id !== view.me.org_id || task.archived_at !== undefined) return false
-        const project = view.projectOf(task.project_id)
-        if (project === undefined || (rootLive && project.archived_at !== undefined)) return false
-        return view.readable(project.id)
-      }
+      // groupCounter's rule for an active group, which reads nothing
+      const counts = (task: Doc<'issues'>) =>
+        task.org_id === root.org_id &&
+        task.project_id === root.project_id &&
+        task.archived_at === undefined
       const seen = new Set([root.id])
       let frontier = [root]
       while (frontier.length > 0) {
@@ -232,9 +223,8 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
             // a leaf, which the facts count and enter no further
             if (!isGroup(task)) continue
           }
-          const above = layerOf(task, view.live)
           for (const kid of kids.get(task.id) ?? []) {
-            if (!countsAsSubtask(above, layerOf(kid, view.live))) continue
+            if (!countsAsSubtask(task, kid)) continue
             if (seen.has(kid.id) || !counts(kid)) continue
             seen.add(kid.id)
             next.push(kid)

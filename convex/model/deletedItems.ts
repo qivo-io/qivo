@@ -141,7 +141,6 @@ import {
 import { notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
-import { countsAsSubtask } from '../lib/liveTasks'
 import { nameKey } from '../lib/nameKey'
 import { insertActivity, logActivity } from './activity'
 import { recheckParent, recheckProject, waitsForChildren } from './archiveRechecks'
@@ -2793,13 +2792,11 @@ type HomedTask = StoredTask & { home: Doc<'projects'> }
  * absent until the reveal (design 5.1), so these tasks stay hidden. A task
  * whose parent is in the item keeps it when both are in the same
  * sub-project (model/issues.ts sameSubProject), and goes back without it
- * otherwise, which only a family stored across sub-projects before that
- * rule meets. A task whose parent is outside the
+ * otherwise. A task whose parent is outside the
  * item goes back without it, and deleted_item_parents keeps that parent
  * for attachParents, which applies the parent table after the reveal, by
- * the state then (design 5.2). Writing the parent now could make it a group
- * before the reveal, as a parent in an archived project counts every active
- * subtask (lib/liveTasks.ts countsAsSubtask). A
+ * the state then (design 5.2). Writing the parent now would make it a group
+ * before the reveal (lib/liveTasks.ts countsAsSubtask). A
  * deleted_tasks row whose stored task is gone is deleted, so the reveal,
  * which sends the item back here while the item has one, always moves on. */
 const restoreTasks = (run: Run): Promise<boolean> =>
@@ -3256,8 +3253,8 @@ async function revealProjects(run: Run): Promise<void> {
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
   }
-  // their tasks, written back while the projects were hidden, count again,
-  // and so do the parents they make groups (model/overviewCounts.ts)
+  // their tasks, written back while the projects were hidden, count again
+  // (model/overviewCounts.ts)
   const family = parent ?? top
   if (family !== null) await startRegroup(run.ctx, family, [...written.keys()])
   // Once every project is in, the reach rows of each stored lead follow the
@@ -3477,8 +3474,8 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * (design 5.2), or undefined to clear it. Only a live parent that is the
  * task the item stored can stay, and only in `home`, the live project the
  * task comes back in, by the subtask rule (model/issues.ts sameSubProject).
- * A parent that moved to another sub-project since the delete fails it, as
- * can a family stored across sub-projects before the rule. The one level
+ * A parent that moved to another sub-project since the delete fails it.
+ * The one level
  * of subtasks (lib/limits.ts) also clears a
  * parent that is a subtask itself, the parent of a task that comes back
  * with subtasks, and, for an active task, a parent that already has
@@ -3488,8 +3485,7 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * for an archived task.
  * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
  * countsAsSubtask). Any task under an archived parent does, and so does an
- * active task under an active parent unless the task's project is archived
- * while the parent's is not. The parent then loses its own remaining hours
+ * active task under an active parent. The parent then loses its own remaining hours
  * as on a reparent (model/issues.ts clearParentRemaining). An archived
  * parent that holds hours of its own
  * therefore needs the restorer's Edit too, so a restore never changes a
@@ -3525,11 +3521,10 @@ async function keptParent(
   if (subtasks === 'later') return 'later'
   if (subtasks >= LIMITS.subtasks.max) return undefined
   if (taskActive) reads.subtasks.set(outside.parent.id, subtasks + 1)
-  // the attach makes the parent a group only when the task counts for it
-  const grouped = countsAsSubtask(
-    { archived: !active, projectLive: outside.project.archived_at === undefined },
-    { archived: !taskActive, projectLive: home.archived_at === undefined },
-  )
+  // the attach makes the parent a group when the task counts for it: both
+  // are in `home`, so an archived parent counts every subtask and an active
+  // one an active subtask (lib/liveTasks.ts countsAsSubtask)
+  const grouped = !active || taskActive
   return { id: outside.parent.id, grouped }
 }
 
@@ -4962,8 +4957,8 @@ export async function moveProjectToTrash(
     charge(budget, p)
   }
   await startJob(ctx, item, { phase: 'move_edges', tally }, budget)
-  // the parents its tasks no longer make groups, as their projects are
-  // gone, and the counts nobody reads again (model/overviewCounts.ts)
+  // its tasks leave the counts, as their projects are gone, and so do the
+  // count rows nobody reads again (model/overviewCounts.ts)
   await startRegroup(
     ctx,
     parent ?? project,

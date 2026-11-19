@@ -33,6 +33,7 @@ import { type Grantee, navReady } from '../model/projectNav'
 import { canSeeProject, levelRank, OWN_READS, projectLevelsOf, receivesTeamAccess } from './access'
 import { digestText, openCursorText, sealCursorText } from './archiveCursorSeal'
 import { byId } from './db'
+import { countsAsSubtask } from './liveTasks'
 import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
@@ -418,20 +419,12 @@ export async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<b
  * document at Convex's size limit, so as long as the walk reads nothing
  * between its calls, no range starts once the ceiling's ranges are used
  * and the documents and bytes stay under the ceiling's. The range that uses
- * the last of the ceiling's ranges may be read to its end. A walk that
- * reads between its calls, such as a question about a project's access
- * (lib/core.ts groupCounter over lib/access.ts accessOf), calls look before
- * it. */
+ * the last of the ceiling's ranges may be read to its end. */
 export type CeilingGuard = {
   /** Whether the walk may start one more index range. */
   range(): Promise<boolean>
   /** Whether the walk may go on after the document it just read. */
   document(): Promise<boolean>
-  /** Looks at the metrics now, before a read the guard does not count, and
-   * answers whether the request's reads are still under the ceiling, so
-   * such a read passes it by its own reads at most. It drops what the look
-   * left, so the next range or document looks again, after that read. */
-  look(): Promise<boolean>
 }
 
 /** A CeilingGuard for `ceiling`. Each look at the metrics costs about as
@@ -463,12 +456,6 @@ export function ceilingGuard(ctx: QueryCtx, ceiling: ReadCeiling): CeilingGuard 
       documents--
       return true
     },
-    look: async () => {
-      const under = await look()
-      ranges = 0
-      documents = 0
-      return under
-    },
   }
 }
 
@@ -482,8 +469,8 @@ export async function rangesLeft(ctx: QueryCtx, ceiling: ReadCeiling): Promise<n
 /** What a page reads about one archived task besides its own row, each at
  * most once, so a search and the task's row share the reads. */
 export type TaskFacts = {
-  /** Whether the task has any subtask, archived or not, whoever can read it.
-   * An archived task is a group while it has one. */
+  /** Whether the task has any subtask, archived or not (lib/liveTasks.ts
+   * countsAsSubtask). An archived task is a group while it has one. */
   isGroup(): Promise<boolean>
   /** The ids of the labels the task carries, archive marks included. */
   labelIds(): Promise<string[]>
@@ -504,7 +491,7 @@ export function taskFacts(ctx: QueryCtx, task: Doc<'issues'>): TaskFacts {
         .query('issues')
         .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
         .first()
-        .then((kid) => kid !== null)),
+        .then((kid) => kid !== null && countsAsSubtask(task, kid))),
     labelIds: () =>
       (labels ??= ctx.db
         .query('issue_labels')

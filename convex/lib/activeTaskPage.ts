@@ -51,7 +51,6 @@ import { badRequest } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS, MIB } from './limits'
 import { CURSOR_REFUSAL, filtersKey, listCursorText, openListCursor } from './listCursor'
-import { liveIn } from './liveTasks'
 import { delayClock, pageForecaster } from './machineDelay'
 import { type ReadTally, readTally, subtreeReads, totalsOf } from './machineSubtree'
 import { taskOwnerId } from './review'
@@ -261,7 +260,6 @@ export async function listActiveIssuesCore(
   ]
   const after = o.cursor === null ? null : await cursorPosition(o.cursor, view.surface, scope)
   const projectOf = (id: string) => cat.byUuid.get(id)
-  const live = liveIn(cat.byUuid)
   // the list's projects, each read once
   const ids = [
     ...new Set(
@@ -298,7 +296,7 @@ export async function listActiveIssuesCore(
     bytes: start.bytes + ACTIVE_PAGE.bytes - ACTIVE_PAGE.delays.bytes,
   }
   const tally = await readTally(ctx, hard)
-  const reads = subtreeReads(ctx, { me, readable, projectOf, live }, tally)
+  const reads = subtreeReads(ctx, { me, readable }, tally)
   // a group check a task's filters or search need reads past the rows'
   // budget, up to the request's room, which LIMITS.subtasks.max holds
   const groupOf = async (task: Doc<'issues'>): Promise<boolean> => {
@@ -430,7 +428,6 @@ export async function listActiveIssuesCore(
       kept.map(({ task, partial }) => {
         const shared = {
           me,
-          readable,
           project: projectOf(task.project_id),
           projectOf,
           names,
@@ -439,7 +436,6 @@ export async function listActiveIssuesCore(
           lastComments,
           texts,
           children: reads.kids,
-          live,
           partial,
           forecast,
         }

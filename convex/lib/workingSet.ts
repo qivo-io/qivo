@@ -4,14 +4,19 @@
  * tasks whose project it can read, except in the inbox, which shows the
  * working set on every surface. A parent, a link, an inbox row or a group
  * total that a read sends goes through these rules, so no read names or
- * counts a task its reader is not shown. It may only say that such a task
- * exists (has_hidden_parent, has_hidden_subtasks). The app's workspace
- * parts (lib/workspaceParts.ts), its task window (lib/taskWindow.ts), its
- * Board (lib/board.ts) and its Overview (lib/overview.ts), both through
- * lib/viewReads.ts, apply them, and machine outputs reuse them. */
+ * counts a task its reader is not shown. A parent and its subtasks share a
+ * sub-project, and a read names one from the other only where they do
+ * (lib/liveTasks.ts liveLink), so a reader shown either end is shown the
+ * other, and no read says that a task it does not show exists:
+ * has_hidden_parent and has_hidden_subtasks stay in the answers for one
+ * release and say nothing (lib/taskWindow.ts keeps the latter for a list
+ * it could not finish). The app's workspace parts (lib/workspaceParts.ts),
+ * its task window (lib/taskWindow.ts), its Board (lib/board.ts) and its
+ * Overview (lib/overview.ts), both through lib/viewReads.ts, apply them,
+ * and machine outputs reuse them. */
 
 import type { Doc } from '../_generated/dataModel'
-import { countsAsSubtask, layerOf, liveIn, type ProjectLive } from './liveTasks'
+import { countsAsSubtask, type LinkEnd, liveLink } from './liveTasks'
 
 /** Whether the reader is shown the task with this id. */
 export type Shown = (taskId: string) => boolean
@@ -21,10 +26,6 @@ export type WorkingSet = {
   /** the active tasks of visible, active projects, in the order given */
   tasks: Doc<'issues'>[]
   shown: Shown
-  /** whether the task has a subtask that makes it a group (an active
-   * subtask in an active project, lib/liveTasks.ts countsAsSubtask) that the
-   * member is not shown */
-  hasHiddenSubtasks: (taskId: string) => boolean
 }
 
 /**
@@ -51,12 +52,7 @@ export function inWorkingSet(
  * The working set within an organization's active tasks, which holds those
  * in a project the member can see that is not archived. `projects` is the
  * member's view of the organization's projects by id, with whether they can
- * see each, such as the access suites' (tests/orgProjectView.setup.ts). Every
- * task of the working set is in an active project, so its subtasks that make
- * it a group are the active tasks in active projects (lib/liveTasks.ts
- * countsAsSubtask), which is what `activeTasks` must hold for
- * hasHiddenSubtasks to be right. Tasks in archived projects among them
- * change nothing.
+ * see each, such as the access suites' (tests/orgProjectView.setup.ts).
  */
 export function workingSetOf(
   activeTasks: readonly Doc<'issues'>[],
@@ -69,30 +65,22 @@ export function workingSetOf(
     inWorkingSet(task, projects.byUuid.get(task.project_id), projects.visible(task.project_id)),
   )
   const ids = new Set(tasks.map((task) => task.id))
-  const shown: Shown = (taskId) => ids.has(taskId)
-  const live = liveIn(projects.byUuid)
-  // the parents asked about are in the working set, so active in an active project
-  const parent = { archived: false, projectLive: true }
-  const hiddenSubtaskParents = new Set<string>()
-  for (const task of activeTasks) {
-    if (task.parent_id === undefined || shown(task.id)) continue
-    if (countsAsSubtask(parent, layerOf(task, live))) hiddenSubtaskParents.add(task.parent_id)
-  }
-  return { tasks, shown, hasHiddenSubtasks: (taskId) => hiddenSubtaskParents.has(taskId) }
+  return { tasks, shown: (taskId) => ids.has(taskId) }
 }
 
 /**
- * A task's parent as a read may state it. The parent's id goes out only when
- * the reader is shown the parent, else only the fact that a parent exists.
+ * A task's parent as a read states it. `parent` is the task the read shows
+ * as the parent, or none. Its id goes out only inside the task's own
+ * sub-project (lib/liveTasks.ts liveLink). has_hidden_parent is always
+ * false; a later release removes it.
  */
 export function parentLink(
-  task: Pick<Doc<'issues'>, 'parent_id'>,
-  shown: Shown,
-): { parent_id?: string; has_hidden_parent: boolean } {
-  if (task.parent_id === undefined) return { has_hidden_parent: false }
-  return shown(task.parent_id)
-    ? { parent_id: task.parent_id, has_hidden_parent: false }
-    : { has_hidden_parent: true }
+  task: Pick<Doc<'issues'>, 'parent_id' | 'org_id' | 'project_id'>,
+  parent: LinkEnd | null | undefined,
+): { parent_id?: string; has_hidden_parent: false } {
+  return parent != null && liveLink(parent, task)
+    ? { parent_id: parent.id, has_hidden_parent: false }
+    : { has_hidden_parent: false }
 }
 
 /** Whether a read may send a link, which needs the reader shown both ends. */
@@ -120,24 +108,20 @@ export function aboutShownTasks<Row extends { issue_id: string }>(
  * remainingOf). It is the sum over the unfinished leaves of its subtree that
  * the reader is shown, to one decimal, or null when none has hours. A nested
  * group counts only through its subtasks. The walk enters only the subtasks
- * that make the task above them a group (lib/liveTasks.ts countsAsSubtask,
- * with `live` telling which projects are active), and never one the reader
- * is not shown, so nothing under it counts either.
+ * that make the task above them a group (lib/liveTasks.ts countsAsSubtask),
+ * and never one the reader is not shown, so nothing under it counts either.
  */
 export function groupRemainingHours(
-  group: Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>,
+  group: Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>,
   childrenOf: (taskId: string) => readonly Doc<'issues'>[],
   shown: Shown,
-  live: ProjectLive,
 ): number | null {
   let sum = 0
   let counted = false
   const seen = new Set<string>([group.id])
   // the subtasks of `task` that make it a group
-  const counting = (task: Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>) => {
-    const above = layerOf(task, live)
-    return childrenOf(task.id).filter((kid) => countsAsSubtask(above, layerOf(kid, live)))
-  }
+  const counting = (task: Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>) =>
+    childrenOf(task.id).filter((kid) => countsAsSubtask(task, kid))
   const stack = counting(group)
   for (let task = stack.pop(); task !== undefined; task = stack.pop()) {
     if (seen.has(task.id) || !shown(task.id)) continue

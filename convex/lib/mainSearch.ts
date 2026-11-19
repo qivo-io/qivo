@@ -65,7 +65,6 @@ import type { IssueStatus } from './enums'
 import { badRequest } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS } from './limits'
-import type { Liveness } from './liveTasks'
 import { hidesWords, MAX_PARSE, readableText } from './md'
 import {
   convexTakesAll,
@@ -473,11 +472,6 @@ type Stops = {
  *   project the seat sees while the row's live task is hidden. The seat
  *   reads and parses the row as one of its candidates, and the seat or the
  *   page reads the live task to judge it, each in its own allowances.
- * - The page's walk for whether a result is a group (rowOf), as Qivo's
- *   group rule counts active subtasks in any project, hidden ones too
- *   (model/issues.ts hasSubtasks). The walk reads them and their projects
- *   in the page's own allowance, and finds a project the seat already read
- *   for free.
  * Planning reads hidden projects, never tasks, in one case: whether a
  * top-level project of the scope shows only for navigation reads the reach
  * rows of the seat and its teams under it and the sub-projects those name,
@@ -1538,13 +1532,7 @@ async function rowOf(
   await reads.need(1, 1)
   const parent = project.parent_id === undefined ? null : await access.project(project.parent_id)
   await reads.need(1, 1)
-  const live: Liveness = async (projectId) => {
-    // each later subtask the walk reads, and its project
-    await reads.need(1, 2)
-    const p = await access.project(projectId)
-    return p !== null && p.archived_at === undefined
-  }
-  const isGroup = await hasSubtasks(ctx, task, live)
+  const isGroup = await hasSubtasks(ctx, task)
   return {
     kind: 'task',
     org_id: task.org_id,

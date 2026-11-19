@@ -86,11 +86,10 @@ import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { shownImages } from '../lib/imageRefs'
 import { limitedMarkdown, limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
-import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
+import { countsAsSubtask, liveLink } from '../lib/liveTasks'
 import { tooManyMentions } from '../lib/mentions'
 import { reviewStamp } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { inWorkingSet } from '../lib/workingSet'
 import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import { recheckParent } from './archiveRechecks'
@@ -246,19 +245,9 @@ export function cleanDescription(raw: string | null | undefined): string {
 
 /* ------------------------------------------------------- the field check
  * A task edit's `expected` (model/expected.ts) takes these keys. The
- * parent compares as the pair a read shows: parent_id when the reader is
- * shown the parent, else has_hidden_parent. project_id is a move's. */
-
-/** Whether `parentId` is shown to the reader as a parent: a task of the
- * reader's organization in a project it can see, and in the app also active
- * in an active project (lib/workingSet.ts inWorkingSet). */
-async function parentShown(read: Read, parentId: string): Promise<boolean> {
-  const parent = await byId(read.ctx, 'issues', parentId)
-  if (parent === null || parent.org_id !== read.me.org_id) return false
-  const project = await byId(read.ctx, 'projects', parent.project_id)
-  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return false
-  return read.view === 'machine' || inWorkingSet(parent, project, true)
-}
+ * parent compares as parent_id, which may come alone, or as the pair a read
+ * shows with has_hidden_parent, which every read sends false. project_id
+ * is a move's. */
 
 const hoursForm = (value: unknown): unknown =>
   typeof value === 'number' ? roundTenths(value) : (value ?? null)
@@ -304,28 +293,21 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     type: uuidOf('task', true),
     form: idForm,
     pair: 'has_hidden_parent',
+    // has_hidden_parent is always false and a later release removes it, so
+    // parent_id may come alone; has_hidden_parent still comes only with it
+    alone: true,
     shape: (expected) =>
       expected.parent_id != null && expected.has_hidden_parent === true
         ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
         : undefined,
-    // A parent seen by id matches while it is stored. A parent seen hidden
-    // matches any stored parent the reader is not shown, so a change from
-    // one hidden parent to another goes unseen: telling it would tell of
-    // tasks the reader cannot see. For the same reason an id the reader is
-    // not shown now counts as a hidden parent, so the answer never says
-    // whether a task the reader cannot see is the parent.
-    compare: async ({ row, read, expected, next }) => {
+    // A parent seen by id matches while it is stored, and none while none
+    // is. A parent is in its subtask's sub-project, which the editor sees,
+    // so no read shows a hidden parent any more and one seen hidden
+    // matches nothing.
+    compare: async ({ row, expected, next }) => {
       const stored = idForm(row.parent_id)
-      const seenId = idForm(expected.parent_id)
-      const hidden = async () => stored !== null && !(await parentShown(read, String(stored)))
       const seen =
-        seenId !== null
-          ? (await parentShown(read, String(seenId)))
-            ? stored === seenId
-            : await hidden()
-          : expected.has_hidden_parent === true
-            ? await hidden()
-            : stored === null
+        expected.has_hidden_parent === true ? false : idForm(expected.parent_id) === stored
       return { seen, next: idForm(next.parent_id) === stored }
     },
   },
@@ -748,40 +730,15 @@ export function metaNeedsSub(
 }
 
 /* The task fields the group rule reads. */
-type GroupRow = Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>
+type GroupRow = Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>
 
-/* Whether `child` makes `parent` a group (countsAsSubtask), with each
- * project's state read through `live`. */
-async function subtaskOf(parent: GroupRow, child: GroupRow, live: Liveness): Promise<boolean> {
-  return countsAsSubtask(
-    { archived: parent.archived_at !== undefined, projectLive: await live(parent.project_id) },
-    { archived: child.archived_at !== undefined, projectLive: await live(child.project_id) },
-  )
-}
-
-/* Whether the task has an active subtask that makes it a group
- * (countsAsSubtask). This is the remaining guards' test, which leaves
- * archived subtasks out even under an archived task (0070). One
- * by_parent_archived range and each subtask's project once. */
-async function hasActiveSubtasks(
-  ctx: QueryCtx,
-  issue: GroupRow,
-  live: Liveness = projectLiveness(ctx),
-): Promise<boolean> {
-  const archived = issue.archived_at !== undefined
-  // an archived task counts every subtask, whatever its project
-  const parent = { archived, projectLive: !archived && (await live(issue.project_id)) }
-  const kids = ctx.db
-    .query('issues')
-    .withIndex('by_parent_archived', (q) =>
-      q.eq('parent_id', issue.id).eq('archived_at', undefined),
-    )
-  for await (const kid of kids) {
-    if (countsAsSubtask(parent, { archived: false, projectLive: await live(kid.project_id) })) {
-      return true
-    }
-  }
-  return false
+/* Whether the task has an active subtask (lib/liveTasks.ts liveLink). This
+ * is the remaining guards' test, which leaves archived subtasks out even
+ * under an archived task (0070). One by_parent_archived range and its
+ * first row. */
+async function hasActiveSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<boolean> {
+  const kid = await activeSubtasks(ctx, issue.id).first()
+  return kid !== null && liveLink(issue, kid)
 }
 
 /* Machine pre-check twin of the remaining guard (core.ts:397-402), naming
@@ -795,28 +752,21 @@ export async function assertNoSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<
 }
 
 /* A task is a group while a subtask makes it one (lib/liveTasks.ts
- * countsAsSubtask). An active task in an active project is one through an
- * active subtask in an active project, an active task in an archived
- * project through any active subtask, and an archived task through any
- * subtask, so archived groups retain their hierarchy for display until
- * restored. The stored status, start_week and end_week stay dormant, ready
- * to resume after the last such subtask is detached, deleted or archived,
- * or its project is archived. Nothing reads, clears or migrates them while
- * the task is a group; readers calculate its dates from its leaves instead.
- * Child visibility must not change this fact: readers disclose only the
- * boolean, never hidden child identities. `live` reads each project once;
- * callers that hold the organization's projects pass them. */
-export async function hasSubtasks(
-  ctx: QueryCtx,
-  issue: GroupRow,
-  live: Liveness = projectLiveness(ctx),
-): Promise<boolean> {
-  if (issue.archived_at === undefined) return await hasActiveSubtasks(ctx, issue, live)
+ * countsAsSubtask): an active task through an active subtask, and an
+ * archived task through any subtask, so archived groups retain their
+ * hierarchy for display until restored. Whether the project is archived
+ * changes nothing, as a subtask shares its parent's sub-project. The stored
+ * status, start_week and end_week stay dormant, ready to resume after the
+ * last such subtask is detached, deleted or archived. Nothing reads, clears
+ * or migrates them while the task is a group; readers calculate its dates
+ * from its leaves instead. One range and its first row. */
+export async function hasSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<boolean> {
+  if (issue.archived_at === undefined) return await hasActiveSubtasks(ctx, issue)
   const kid = await ctx.db
     .query('issues')
     .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
     .first()
-  return kid !== null
+  return kid !== null && liveLink(issue, kid)
 }
 
 /* Machine pre-check twin of the group-dates guard in updateIssueCore,
@@ -859,12 +809,9 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
  * in a hidden project) answers 'parent task not found' before any other
  * guard describes it. Attaching changes the parent (it becomes a group and
  * loses its own hours), so it also needs Edit on the parent's project, like
- * any other change to it. A subtask stays in its parent's own sub-project.
- * A family stored before that rule may span sibling sub-projects, and one
- * stored before the earlier rule that kept a subtask in its parent's
- * top-level project any two projects. Such rows stay readable, every
- * reader and guard keeps tolerating them, failing closed, and no write
- * makes or keeps such a link. */
+ * any other change to it. A subtask stays in its parent's own sub-project:
+ * every write that makes a parent link enforces it, so the rest of the code
+ * assumes it. */
 
 /** Whether a task in project `child` may be a subtask of a task in project
  * `parent`, which is when both are the same sub-project. parentChainCheck
@@ -1056,15 +1003,14 @@ export function doneStampUpdate(
  * the parent is touched AND notified — in SQL this inner UPDATE fired the
  * stamp, touch and notify triggers, so its subscribers saw
  * "Remaining cleared (was N h)". 0067's row lock is subsumed by Convex
- * serializability. `actor` is absent only for a background step whose
- * person is gone, and `preload` is that step's (regroup.ts). */
+ * serializability. `actor` is absent only for a restore step from Deleted
+ * items whose restorer is gone (model/deletedItems.ts). */
 export async function clearParentRemaining(
   ctx: MutationCtx,
   a: {
     parentId: string
     actor: Doc<'profiles'> | undefined
     now: string
-    preload?: NotifyPreload
   },
 ): Promise<void> {
   const parent = await byId(ctx, 'issues', a.parentId)
@@ -1083,7 +1029,7 @@ export async function clearParentRemaining(
     { stored: true },
   )
   const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
-  await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now, preload: a.preload })
+  await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now })
 }
 
 /* ------------------------------------------------------------- detaching
@@ -1689,8 +1635,7 @@ export async function updateIssueCore(
   // and only by the status, dates, pause and reviewer guards (a group's are
   // dormant)
   let group: boolean | undefined
-  const live = projectLiveness(ctx)
-  const isGroup = async (): Promise<boolean> => (group ??= await hasSubtasks(ctx, issue, live))
+  const isGroup = async (): Promise<boolean> => (group ??= await hasSubtasks(ctx, issue))
   if ('assignee_id' in patch) {
     const next = patch.assignee_id ?? undefined
     // fires only when the assignee actually CHANGES (0099/0102): deactivating
@@ -1823,9 +1768,9 @@ export async function updateIssueCore(
     const descendants = await archiveSubtree(ctx, issue.id, now, me)
     await scheduleArchivedReads(ctx, { issues: [issue.id, ...descendants] })
   }
-  // the attach makes the parent a group only when this task counts for it,
-  // so a task in an archived project leaves a parent in an active one alone
-  if (attachedTo !== undefined && (await subtaskOf(attachedTo, after, live))) {
+  // the attach makes the parent a group when this task counts for it: an
+  // active task, or any under an archived parent
+  if (attachedTo !== undefined && countsAsSubtask(attachedTo, after)) {
     await clearParentRemaining(ctx, { parentId: attachedTo.id, actor: me, now })
   }
   // -- ONE fan-out for the row itself (diffs only the trigger's column list;
@@ -1918,24 +1863,17 @@ export async function updateIssueCore(
  *
  * A subtask stays in its parent's own sub-project, and tasks live only in
  * sub-projects, so every move takes the task out of its family's
- * sub-project. A move carries every subtask that is not already in the
- * destination along, archived ones included. A subtask must leave its
- * parent in the same change, through the app's `detachParent` or a machine
- * update's later parent (MachineMove.laterParent), which may also be a
- * task in the destination, unless it lands in its parent's sub-project,
- * which only a subtask stored before the rule can. The carried
- * subtasks are touched and send a task.updated event each. They get no
- * message or activity row of their own, because the task's one message and
- * row tell the move, as the archive cascade does. A move of a task whose
- * family was stored across sub-projects before the rule brings every
- * subtask into the destination, so the family then follows the rule. A
- * subtask already in the destination does not move, so its people are not
- * checked. */
+ * sub-project. A move carries its subtasks along, archived ones included,
+ * from the sub-project it leaves, which the mover edits. A subtask must
+ * leave its parent in the same change, through the app's `detachParent` or
+ * a machine update's later parent (MachineMove.laterParent), which may also
+ * be a task in the destination. The carried subtasks are touched and send a
+ * task.updated event each. They get no message or activity row of their
+ * own, because the task's one message and row tell the move, as the archive
+ * cascade does. */
 
 export const MOVE_SUBTASK_RULE =
   "a subtask stays in its parent task's sub-project; to move it to another sub-project, detach it from its parent in the same change"
-export const MOVE_SUBTREE_EDIT_RULE =
-  'moving this task would move a subtask in a project you cannot edit; someone who can edit that project can move it'
 /** The refusal of a move that would carry subtasks whose `blockers`, their
  * assignees and reviewers, cannot work in the destination, by name. The
  * mover edits every carried subtask, so each is named. `unchecked` says
@@ -1946,8 +1884,8 @@ export const moveSubtreeHolderRule = (
   unchecked = false,
 ): string => blockersSentence(blockers, unchecked)
 /* A task that moves may have at most LIMITS.moveSubtree.max subtasks,
- * archived ones included. The move reads them all, including any already in
- * the destination, and carries the rest. LIMITS.subtasks.max bounds only
+ * archived ones included. The move reads them all and carries them.
+ * LIMITS.subtasks.max bounds only
  * the active ones, so this bounds what the move reads and writes:
  * LIMITS.subtasks.max active subtasks and as many archived. Each carried
  * subtask is read twice, once by the move and once by its write, and so is
@@ -1979,10 +1917,10 @@ const subtasksOf = (ctx: QueryCtx, rootId: string): Promise<Doc<'issues'>[]> =>
     .take(LIMITS.moveSubtree.max + 1)
 
 /** Whether moving `issue` to `target` would carry subtasks along, for the
- * app's Move window, whose view holds no archived subtasks: whether any of
- * its subtasks, archived or not, is outside the destination. Past
- * LIMITS.moveSubtree.max, where moveIssueCore refuses, it answers false,
- * because such a move carries nothing. */
+ * app's Move window, whose view holds no archived subtasks: whether it has
+ * any subtask, archived or not. Past LIMITS.moveSubtree.max, where
+ * moveIssueCore refuses, it answers false, because such a move carries
+ * nothing. */
 export async function subtasksWouldMove(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
@@ -1991,22 +1929,20 @@ export async function subtasksWouldMove(
   if (issue.project_id === target.id) return false
   const below = await subtasksOf(ctx, issue.id)
   if (below.length > LIMITS.moveSubtree.max) return false
-  return below.some((row) => row.project_id !== target.id)
+  return below.length > 0
 }
 
 /* The subtasks a move to `target` carries, which are the subtasks of
- * `root`, active or archived, outside the target. Before anything is
- * written, each needs Edit on its project, and an active one needs an
- * assignee and a reviewer who can hold it at the target. A subtask has no
- * subtasks of its own, so its reviewer is never a group's dormant one.
- * Archived subtasks keep their people unchecked, as an archived task's
- * people are. `below` holds every subtask (subtasksOf), and the walk
- * refuses past LIMITS.moveSubtree.max of them.
- * A subtask the actor cannot edit refuses at once. The people who cannot
- * hold theirs are gathered over every carried subtask, which costs what a
- * move that passes reads, and refuse together by name
- * (moveSubtreeHolderRule), a profile that is gone as "someone". Once
- * someone blocks the move and the transaction has no room left
+ * `root`, active or archived. Before anything is written, an active one
+ * needs an assignee and a reviewer who can hold it at the target. A
+ * subtask has no subtasks of its own, so its reviewer is never a group's
+ * dormant one. Archived subtasks keep their people unchecked, as an
+ * archived task's people are. `below` holds every subtask (subtasksOf),
+ * and the walk refuses past LIMITS.moveSubtree.max of them.
+ * The people who cannot hold theirs are gathered over every carried
+ * subtask, which costs what a move that passes reads, and refuse together
+ * by name (moveSubtreeHolderRule), a profile that is gone as "someone".
+ * Once someone blocks the move and the transaction has no room left
  * (SUBTREE_ROOM), the walk stops and the refusal names those found with a
  * word that others may block it too, so gathering never costs the refusal
  * its sentence. */
@@ -2015,12 +1951,10 @@ async function subtreeToCarry(
   a: {
     below: readonly Doc<'issues'>[]
     target: Doc<'projects'>
-    actor: Doc<'profiles'>
   },
 ): Promise<Doc<'issues'>[]> {
   const { below } = a
   if (below.length > LIMITS.moveSubtree.max) throw rule(LIMITS.moveSubtree.refusal)
-  const edits = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
   const canHold = (profileId: string): Promise<boolean> => {
     let result = holds.get(profileId)
@@ -2039,10 +1973,6 @@ async function subtreeToCarry(
       unchecked = true
       break
     }
-    if (c.project_id === a.target.id) continue
-    const editable = await edits(c.project_id)
-    if (editable === null) throw rule(SUBTASK_BEING_DELETED)
-    if (!editable) throw rule(MOVE_SUBTREE_EDIT_RULE)
     if (c.archived_at === undefined) {
       for (const holder of new Set([c.assignee_id, c.reviewer_id])) {
         if (holder === undefined || (await canHold(holder))) continue
@@ -2116,23 +2046,16 @@ export async function moveIssueCore(
   if (target.org_id !== issue.org_id) throw rule('tasks cannot move between organizations')
   assertProjectArrival(target)
   const source = await byId(ctx, 'projects', issue.project_id)
-  // A subtask must land in its parent's sub-project or leave the parent in
-  // the same change. A later parent in the destination is checked in full by
-  // the write that sets it. A parent the mover cannot see counts as being in
-  // the task's own sub-project, as the app counts it, so the answer tells
-  // nothing about where it is.
+  // A subtask must leave its parent in the same change, as the parent is in
+  // the sub-project the task leaves. A later parent in the destination is
+  // checked in full by the write that sets it.
   const detach = a.detachParent === true && issue.parent_id !== undefined
   if (issue.parent_id !== undefined && !detach) {
-    const seenIn = async (task: Doc<'issues'>): Promise<string | null> => {
-      const project = await byId(ctx, 'projects', task.project_id)
-      if (project === null) return null
-      return (await canSeeProject(ctx, me, project)) ? project.id : issue.project_id
-    }
     const parent = await byId(ctx, 'issues', issue.parent_id)
-    if (parent !== null && (await seenIn(parent)) !== project_id) {
+    if (parent !== null) {
       const laterParent = a.machine?.laterParent
       const next = laterParent ? await byId(ctx, 'issues', laterParent) : null
-      const leaves = laterParent === null || (next !== null && (await seenIn(next)) === project_id)
+      const leaves = laterParent === null || (next !== null && next.project_id === project_id)
       if (!leaves) throw rule(MOVE_SUBTASK_RULE)
     }
   }
@@ -2151,21 +2074,16 @@ export async function moveIssueCore(
     ...movedStamps(issue, now),
   }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
-  const live = projectLiveness(ctx)
-  // Whether the task and its subtasks are in a live project once the move
-  // lands, for their group tests: the move takes every subtask outside the
-  // destination there with the task, so all of them are in the destination.
-  const liveAfter: Liveness = () => live(project_id)
   const holdsOwn = issue.remaining_hours !== undefined || issue.review_at !== undefined
   // only a reviewer can change hands in a move, and only a group must lose
-  // its own hours, so the group flag is read only for those
+  // its own hours, so the group flag is read only for those. The subtasks
+  // come along, so the move leaves it a group or a leaf.
   let isGroup = false
   if (issue.reviewer_id !== undefined || (holdsOwn && issue.archived_at === undefined)) {
-    isGroup = await hasSubtasks(ctx, { ...issue, project_id }, liveAfter)
+    isGroup = await hasSubtasks(ctx, issue)
   }
-  // a group holds no hours of its own, so hours the task held as a leaf go,
-  // as on an attach (clearParentRemaining). That happens when a subtask the
-  // move carries leaves an archived project.
+  // a group holds no hours of its own, so hours it still stores go, as on
+  // an attach (clearParentRemaining)
   if (isGroup && holdsOwn && issue.archived_at === undefined) {
     w.remaining_hours = undefined
     w.remaining_set_at = undefined
@@ -2180,13 +2098,13 @@ export async function moveIssueCore(
       w.reviewer_id = undefined // ctx.db.patch unsets it
     }
   }
-  // the subtasks outside the destination come along. They are read once,
-  // for the carry and the answer's room below: a subtask's row is about 2 KB
-  // without its text, but about 60 KB within TEXT_MAX while it still holds a
-  // copy of it, and then LIMITS.moveSubtree.max of them take most of what
-  // one transaction may read
+  // the subtasks come along. They are read once, for the carry and the
+  // answer's room below: a subtask's row is about 2 KB without its text,
+  // but about 60 KB within TEXT_MAX while it still holds a copy of it, and
+  // then LIMITS.moveSubtree.max of them take most of what one transaction
+  // may read
   const below = await subtasksOf(ctx, issue.id)
-  const carried = await subtreeToCarry(ctx, { below, target, actor: me })
+  const carried = await subtreeToCarry(ctx, { below, target })
   // A caller that answers with the task's full read, which reads its
   // active subtasks again (MachineMove.answerReadsSubtasks), gets a move
   // that leaves room for that read. An archived task's read walks under a
@@ -2235,26 +2153,6 @@ export async function moveIssueCore(
   // (model/inboxItems.ts), after the notices above, whose arrivals give
   // their own items the new project already
   await rekeyItems(ctx, [issue.id, ...carried.map((row) => row.id)], project_id)
-  // A task that leaves an archived project counts for its parent again
-  // (countsAsSubtask), so a parent it makes a group loses its own hours, as
-  // on an attach. That is the task's parent, unless the task leaves it or a
-  // later write of this update gives it another, and each carried subtask's.
-  // A later parent equal to the current one changes nothing, so that write
-  // is skipped (lib/core.ts applyTaskUpdate) and this one clears the hours.
-  const regrouped = new Set(carried.map((row) => row.parent_id))
-  const laterParent = a.machine?.laterParent
-  if (!detach && (laterParent === undefined || laterParent === issue.parent_id)) {
-    regrouped.add(issue.parent_id)
-  }
-  regrouped.delete(issue.id) // its own hours went with the move's patch
-  for (const parentId of regrouped) {
-    const parent = parentId === undefined ? null : await byId(ctx, 'issues', parentId)
-    if (parent === null || parent.archived_at !== undefined) continue
-    if (parent.remaining_hours === undefined && parent.review_at === undefined) continue
-    if (await hasSubtasks(ctx, parent, live)) {
-      await clearParentRemaining(ctx, { parentId: parent.id, actor: me, now })
-    }
-  }
   // lib/activityVisibility.ts isUnrecordedProjectMove recognizes older rows by
   // this wording
   const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
@@ -2291,70 +2189,28 @@ export async function moveIssueCore(
  * suppressed Archived line, so their notify is skipped outright; each is
  * still touched, and the whole subtree shares the mutation's one `now`.
  * The reason-comment (early archive) is the mutation layer's job (comments
- * model, phase 5) — it must share this same `now`. */
-
-/* Both name who can finish the change, someone who can edit that project,
- * so neither refusal is a dead end. Admin status gives no Edit, so they
- * name no organization admin. */
-export const ARCHIVE_CASCADE_RULE =
-  'archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it'
-export const RESTORE_CASCADE_RULE =
-  'restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it'
-
-/* The refusals for a cascade that meets a subtask or parent whose project
- * Deleted items is moving (model/deletedItems.ts). The task still names the
- * project until the move reaches it, and changing it could bring it back
- * into a live project, so the change is refused until the move is done. No
- * one can edit a project that is gone, an admin included. */
-export const SUBTASK_BEING_DELETED =
-  'a subtask of this task is being moved to Deleted items; try again when that finishes'
-export const PARENT_BEING_DELETED =
-  'a parent of this task is being moved to Deleted items; try again when that finishes'
-
-/* Per-call cache of the actor's Edit access, null for a project whose row
- * is gone while Deleted items moves it. A cascade changes only tasks in
- * projects the actor could edit directly; otherwise the whole write is
- * refused and rolls back. */
-function editableBy(
-  ctx: QueryCtx,
-  actor: Doc<'profiles'>,
-): (projectId: string) => Promise<boolean | null> {
-  const seen = new Map<string, Promise<boolean | null>>()
-  return (projectId) => {
-    let result = seen.get(projectId)
-    if (result === undefined) {
-      result = byId(ctx, 'projects', projectId).then((p) =>
-        p === null ? null : hasProjectLevel(ctx, actor, p.id, 'user'),
-      )
-      seen.set(projectId, result)
-    }
-    return result
-  }
-}
+ * model, phase 5) — it must share this same `now`.
+ *
+ * Every task a cascade changes is in the sub-project of the task the write
+ * gate checked, as a subtask shares its parent's, so no cascade asks Edit
+ * again. */
 
 /* The subtask walk, shared with updateIssueCore's folded machine toggle:
- * stamps active subtasks (touched, NEVER notified). An active subtask in a
- * project the actor cannot edit refuses the archive, because an active task
- * may never sit under an archived parent. A subtask has no subtasks of its
- * own, so the walk reads one range of at most LIMITS.subtasks.max active subtasks,
- * under SUBTREE_ROOM. Returns the ids it stamped. */
+ * stamps active subtasks (touched, NEVER notified). A subtask has no
+ * subtasks of its own, so the walk reads one range of at most
+ * LIMITS.subtasks.max active subtasks, under SUBTREE_ROOM. Returns the ids
+ * it stamped. */
 async function archiveSubtree(
   ctx: MutationCtx,
   rootId: string,
   now: string,
   actor: Doc<'profiles'>,
 ): Promise<string[]> {
-  const edits = editableBy(ctx, actor)
   const room = roomCheck(ctx)
   await room()
   // read in full before the first patch, which moves a row out of the range
   const kids = await activeSubtasks(ctx, rootId).take(LIMITS.subtasks.max)
-  for (const c of kids) {
-    await room(getDocumentSize(c))
-    const editable = await edits(c.project_id)
-    if (editable === null) throw rule(SUBTASK_BEING_DELETED)
-    if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
-  }
+  for (const c of kids) await room(getDocumentSize(c))
   // each subtask's description rows, to price its patch (patchCost)
   const rows: Doc<'issue_descriptions'>[][] = []
   for (const c of kids) rows.push(await rowsForPatch(ctx, c, SUBTREE_TOO_LARGE))
@@ -2374,8 +2230,7 @@ async function archiveSubtree(
   return kids.map((c) => c.id)
 }
 
-/* The 'archived' row names no subtask count, because subtasks can sit in
- * projects some readers of the root cannot access. The Archived notice is
+/* The 'archived' row names no subtask count. The Archived notice is
  * stored read, and the messages already stored about the root and the
  * subtree are marked read in the background (model/messages.ts
  * scheduleArchivedReads).
@@ -2429,7 +2284,7 @@ export async function archiveIssueCore(
 /* -------------------------------------------------------- unarchive core
  * Restore branch (0071:66-75): the whole ancestor chain surfaces, each
  * restored parent also loses its own hours (it has sub-issues again — 0066,
- * like attach, when the task below counts for it, lib/liveTasks.ts
+ * like attach, as the task below counts for it, lib/liveTasks.ts
  * countsAsSubtask) with the stamp pairing kept and any review hand-off, and a
  * restored still-done row's done_at restarts (0071 fix 1). No ancestor's
  * dates change, because a restored group's span is calculated from its
@@ -2441,15 +2296,12 @@ export async function archiveIssueCore(
 /* The ancestor walk, shared with updateIssueCore's folded machine toggle:
  * restores/clears the chain above `row` (each echo notified with the Restored
  * line suppressed) and returns the ancestors it restored from the archive.
- * The row itself is the caller's to notify. An ancestor it would change in a
- * project the actor cannot edit refuses the restore. */
+ * The row itself is the caller's to notify. */
 async function restoreAncestors(
   ctx: MutationCtx,
   a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
 ): Promise<Doc<'issues'>[]> {
   const { actor, now } = a
-  const edits = editableBy(ctx, actor)
-  const live = projectLiveness(ctx)
   const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
@@ -2461,15 +2313,10 @@ async function restoreAncestors(
     seen.add(parent.id)
     const wasArchived = parent.archived_at !== undefined
     // own hours, or a review hand-off from its leaf days: a group has
-    // neither. They go only when the restored task makes the parent a group
-    // once both are active (countsAsSubtask), so a task in an archived
-    // project leaves the hours of a parent in an active one alone.
-    const hadOwn = parent.remaining_hours !== undefined || parent.review_at !== undefined
-    const clears = hadOwn && (await subtaskOf({ ...parent, archived_at: undefined }, cur, live))
+    // neither, and the restored task makes the parent a group once both are
+    // active (countsAsSubtask)
+    const clears = parent.remaining_hours !== undefined || parent.review_at !== undefined
     if (!wasArchived && !clears) break
-    const editable = await edits(parent.project_id)
-    if (editable === null) throw rule(PARENT_BEING_DELETED)
-    if (!editable) throw rule(RESTORE_CASCADE_RULE)
     const pBefore = { ...parent }
     const ownHours = clears
       ? { remaining_hours: undefined, remaining_set_at: undefined, review_at: undefined }

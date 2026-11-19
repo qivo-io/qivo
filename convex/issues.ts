@@ -12,13 +12,9 @@
  *   (the RLS 0-row successor — the client shows its fixed permission toast);
  * - a task or project the caller only REFERENCES (a parent, a link's other
  *   end, a move's destination) answers exactly like a missing one when the
- *   caller cannot see it, so no answer describes it. One accepted exception
- *   is restore: it is refused when it would change a parent the caller
- *   cannot edit, so its outcome can tell whether such a parent is archived
- *   or holds its own hours or review hand-off. It also tells a caller who
- *   cannot see the parent that one exists: REST reads its parent_id as null
- *   and MCP sends no parent. Refusing every restore under such a parent
- *   would stop people restoring their own task;
+ *   caller cannot see it, so no answer describes it. A parent and its
+ *   subtasks share a sub-project, so a cascade changes only tasks the
+ *   caller edits;
  * - `rule` sentences come out of the model layer verbatim.
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.
@@ -62,6 +58,7 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
+import { liveLink } from './lib/liveTasks'
 import { nameKey } from './lib/nameKey'
 import { assertArchiveReasonRoom, postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
@@ -99,21 +96,14 @@ const pub = ({
   ...row
 }: Doc<'issues'>) => row
 
-/* A returned row names its parent only when the caller can see the parent's
- * project, so no hidden task id leaves a write's result (the snapshot's
- * has_hidden_parent rule). */
-async function pubFor(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  issue: Doc<'issues'>,
-): Promise<ReturnType<typeof pub>> {
+/* A returned row names its parent only inside the task's own sub-project
+ * (lib/liveTasks.ts liveLink), which the caller edits, so no task of
+ * another sub-project leaves a write's result. */
+async function pubFor(ctx: QueryCtx, issue: Doc<'issues'>): Promise<ReturnType<typeof pub>> {
   const { parent_id, ...row } = pub(issue)
   if (parent_id === undefined) return row
   const parent = await byId(ctx, 'issues', parent_id)
-  if (parent === null || parent.org_id !== me.org_id) return row
-  const project = await byId(ctx, 'projects', parent.project_id)
-  const visible = project !== null && (await canSeeProject(ctx, me, project))
-  return visible ? { ...row, parent_id } : row
+  return parent !== null && liveLink(parent, issue) ? { ...row, parent_id } : row
 }
 
 /* Resolve an issue uuid inside the caller's org — missing and foreign rows
@@ -246,7 +236,7 @@ export const create = orgMutation({
   handler: async (ctx, args) => {
     const now = new Date().toISOString()
     const issue = await createIssueCore(ctx, { me: ctx.me, args, now })
-    return await pubFor(ctx, ctx.me, issue)
+    return await pubFor(ctx, issue)
   },
 })
 
@@ -286,7 +276,7 @@ export const update = orgMutation({
     const text = 'description' in patch ? await descriptionOf(ctx.db, issue) : undefined
     await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next, text })
     const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now, text })
-    return await pubFor(ctx, ctx.me, after)
+    return await pubFor(ctx, after)
   },
 })
 
@@ -328,7 +318,7 @@ export const createParent = orgMutation({
       patch: { parent_id },
       now,
     })
-    return { ...(await pubFor(ctx, ctx.me, after)), parent_num: parent.num }
+    return { ...(await pubFor(ctx, after)), parent_num: parent.num }
   },
 })
 
@@ -363,7 +353,7 @@ export const createLinked = orgMutation({
       ...storedLink(issue.id, kind, created.id),
       now,
     })
-    return await pubFor(ctx, ctx.me, created)
+    return await pubFor(ctx, created)
   },
 })
 
@@ -403,7 +393,7 @@ export const move = orgMutation({
       now,
       detachParent: detach_parent,
     })
-    return await pubFor(ctx, ctx.me, after)
+    return await pubFor(ctx, after)
   },
 })
 
@@ -459,7 +449,7 @@ export const archive = orgMutation({
       keepSubtasks: keep_subtasks === true,
     })
     if (wasActive) await postArchiveReason(ctx, { issue: after, author: ctx.me, reason, now })
-    return { issue: await pubFor(ctx, ctx.me, after), archived: wasActive }
+    return { issue: await pubFor(ctx, after), archived: wasActive }
   },
 })
 
@@ -488,7 +478,7 @@ export const unarchive = orgMutation({
       : left === LIMITS.subtasks.refusal
         ? 'full'
         : 'deleted'
-    return { issue: await pubFor(ctx, ctx.me, after), left_parent }
+    return { issue: await pubFor(ctx, after), left_parent }
   },
 })
 
@@ -502,12 +492,12 @@ export const unarchive = orgMutation({
  * LIMITS.deleteReason (model/deletedItems.ts cleanReason).
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
- * the delete window listed them. Each must still be an active task under one
- * being deleted here, in an active project the caller can edit; otherwise
- * nothing is deleted (SUBTASKS_CHANGED), so the outcome is the one the
- * window showed.
- * Every subtask left behind (archived, in a project the caller cannot edit
- * or see, or not chosen) is detached and becomes a top-level task. A chosen
+ * the delete window listed them. Each must still be an active subtask of
+ * the task, in the task's own sub-project, which the caller edits, and that
+ * sub-project must not be archived; otherwise nothing is deleted
+ * (SUBTASKS_CHANGED), so the outcome is the one the window showed.
+ * Every subtask left behind (archived or not chosen) is detached and
+ * becomes a top-level task. A chosen
  * subtask keeps its parent in Deleted items. A subtask has no subtasks of
  * its own, so the choice reads one range of at most LIMITS.subtasks.max active
  * subtasks. */
@@ -522,7 +512,7 @@ export const deleteDeep = orgMutation({
   handler: async (ctx, { id, subtask_ids, reason }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
-    await assertWritable(ctx, issue.project_id)
+    const project = await assertWritable(ctx, issue.project_id)
     const why = cleanReason(reason)
     const chosen = new Set(subtask_ids ?? [])
     const doomed: Doc<'issues'>[] = []
@@ -535,20 +525,10 @@ export const deleteDeep = orgMutation({
           q.eq('parent_id', issue.id).eq('archived_at', undefined),
         )
         .take(LIMITS.subtasks.max)
-      // whether the caller may delete a subtask in each project, read once
-      // per project rather than once per subtask
-      const usable = new Map<string, boolean>()
+      // an archived project keeps its tasks and grants, but they are put away
+      const putAway = project.archived_at !== undefined
       for (const kid of children) {
-        if (!chosen.has(kid.id)) continue
-        let ok = usable.get(kid.project_id)
-        if (ok === undefined) {
-          // an archived project keeps its tasks and grants, but they are put away
-          ok =
-            (await byId(ctx, 'projects', kid.project_id))?.archived_at === undefined &&
-            (await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))
-          usable.set(kid.project_id, ok)
-        }
-        if (!ok) continue
+        if (putAway || !chosen.has(kid.id)) continue
         chosen.delete(kid.id)
         doomed.push(kid)
       }

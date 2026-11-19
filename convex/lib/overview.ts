@@ -89,6 +89,7 @@ import { ISSUE_STATUSES, type IssueStatus } from './enums'
 import { badRequest } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS, MIB, TASK_ROW_MAX_BYTES } from './limits'
+import { liveLink } from './liveTasks'
 import { nameKey } from './nameKey'
 import { taskOwnerId } from './review'
 import { allWordsMatcher } from './search'
@@ -117,8 +118,6 @@ import {
   ownerSettled,
   ownHeldTasks,
   ownTasks,
-  PROJECT_ASK,
-  PROJECT_READ,
   projectCounts,
   projectSelection,
   type Reads,
@@ -532,7 +531,6 @@ export const newGroups = (): Groups => ({ known: noSubtasks(), facts: new Map() 
 async function readGroups(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   g: Groups,
   tasks: readonly Doc<'issues'>[],
   facts: boolean,
@@ -541,11 +539,11 @@ async function readGroups(
     g.known.shown.set(t.id, true)
     if (t.parent_id !== undefined) g.known.parents.add(t.parent_id)
   }
-  await firstSubtaskCheck(ctx, guard, seats, tasks, g.known)
+  await firstSubtaskCheck(ctx, guard, tasks, g.known)
   if (!facts) return
   const fresh = tasks.filter((t) => isGroupKnown(g.known, t.id) === true && !g.facts.has(t.id))
   if (fresh.length === 0) return
-  for (const [id, f] of await groupFacts(ctx, guard, seats, fresh, g.known)) g.facts.set(id, f)
+  for (const [id, f] of await groupFacts(ctx, guard, fresh, g.known)) g.facts.set(id, f)
 }
 
 /* Whether `t` is a group, once readGroups read it. */
@@ -613,7 +611,6 @@ async function mineHasTask(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats): 
       await readGroups(
         ctx,
         guard,
-        seats,
         g,
         step.filter((t) => !ownerSettled(t)),
         false,
@@ -635,7 +632,7 @@ async function overdueCount(
   for await (const step of dueTasks(ctx, guard, at, { from: '', below: day }))
     candidates.push(...step)
   const g = newGroups()
-  await readGroups(ctx, guard, at.seats, g, candidates, true)
+  await readGroups(ctx, guard, g, candidates, true)
   return candidates.filter((t) => inScope(at, g, t) && !isDoneFor(g, t)).length
 }
 
@@ -660,10 +657,10 @@ async function projectedCount(
   for await (const step of dueTasks(ctx, guard, at, { from: clock.day, below: ANY_DAY }, tracks))
     candidates.push(...step)
   const g = newGroups()
-  await readGroups(ctx, guard, at.seats, g, candidates, false)
+  await readGroups(ctx, guard, g, candidates, false)
   const kept = candidates.filter((t) => inScope(at, g, t))
   const groups = kept.filter((t) => isGroup(g, t))
-  if (groups.length > 0) await readGroups(ctx, guard, at.seats, g, groups, true)
+  if (groups.length > 0) await readGroups(ctx, guard, g, groups, true)
   const v = verdicts(ctx, guard, at.seats, clock)
   const open = kept.filter((t) => !isDoneFor(g, t))
   // the owners each organization's verdicts need, read in owner id order
@@ -996,7 +993,7 @@ type ListSpec = {
 
 /** What a batch read: the rows it keeps with their extras, in order; the
  * last candidate it judged; whether its reads stopped short; and the
- * parents of its rows it holds room back for (shownIds). */
+ * parents of its rows it holds room back for (shownTasks). */
 type BatchRead = {
   rows: { task: Doc<'issues'>; at_risk?: OverviewRow['at_risk'] }[]
   last: Pos | null
@@ -1004,15 +1001,12 @@ type BatchRead = {
   parents: Set<string>
 }
 
-/* What reading one row's parent may take (shownIds): the parent by id, and
- * whether the reader is shown it, its project's row and the access question
- * about that project, held as the batch keeps the row (ViewBudget hold), so
- * a batch its budget stopped still answers the rows it kept. */
-const PARENT_READ: Reads = {
-  ranges: BY_ID.ranges + PROJECT_READ.ranges + PROJECT_ASK.ranges,
-  documents: BY_ID.documents + PROJECT_READ.documents + PROJECT_ASK.documents,
-  bytes: BY_ID.bytes + PROJECT_READ.bytes + PROJECT_ASK.bytes,
-}
+/* What reading one row's parent takes (shownTasks): the parent by id,
+ * which is all it reads, as a parent shares its row's sub-project, which
+ * the reader is shown, so no access is asked. It is held as the batch
+ * keeps the row (ViewBudget hold), so a batch its budget stopped still
+ * answers the rows it kept. */
+const PARENT_READ: Reads = BY_ID
 
 /* The candidates of `spec` after `from`, up to `end` when given, judged in
  * order until `want` rows are kept, the candidates end, or the reads stop
@@ -1089,15 +1083,15 @@ async function readBatch(
 }
 
 /* The tasks among `rows`' parents the reader is shown, beside the rows
- * themselves: each parent read by id, charged at lib/limits.ts
- * TASK_ROW_MAX_BYTES, and shown when it is in the reader's working set. */
-async function shownIds(
+ * themselves, by id: each parent read by id, charged at lib/limits.ts
+ * TASK_ROW_MAX_BYTES, and shown when it is active in its row's own
+ * sub-project (lib/liveTasks.ts liveLink), which the reader is shown. */
+async function shownTasks(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   rows: readonly Doc<'issues'>[],
-): Promise<Set<string>> {
-  const shown = new Set(rows.map((t) => t.id))
+): Promise<Map<string, Doc<'issues'>>> {
+  const shown = new Map(rows.map((t) => [t.id, t]))
   const wanted = [
     ...new Set(
       rows.flatMap((t) =>
@@ -1111,12 +1105,8 @@ async function shownIds(
     (p): p is Doc<'issues'> => p !== null,
   )
   for (const p of parents) guard.charge(p, TASK_ROW_MAX_BYTES)
-  for (const [org, theirs] of groupBy(parents, (p) => p.org_id)) {
-    const seat = seats.get(org)
-    if (seat === undefined) continue
-    const held = await seat.holds(theirs)
-    for (const [i, p] of theirs.entries()) if (held[i]) shown.add(p.id)
-  }
+  for (const p of parents)
+    if (p.archived_at === undefined && rows.some((t) => liveLink(p, t))) shown.set(p.id, p)
   return shown
 }
 
@@ -1146,15 +1136,14 @@ function charges(guard: ViewBudget, at: ScopeRead) {
 type Charges = ReturnType<typeof charges>
 
 /**
- * One batch of list `kind` over the scope `at`, after `from` (its start when
- * null), up to `end` when the client asks the batch again with its fixed
- * end, as ListAnswer states it, or `over_budget` where its budget stopped it
- * before it judged a candidate.
+ * One batch of list `kind`, whose candidates `spec` reads, after `from`
+ * (its start when null), up to `end` when the client asks the batch again
+ * with its fixed end, as ListAnswer states it, or `over_budget` where its
+ * budget stopped it before it judged a candidate.
  */
 async function listBatch(
   ctx: QueryCtx,
   guard: ViewBudget,
-  at: ScopeRead,
   kind: ListKind,
   key: string,
   spec: ListSpec,
@@ -1204,13 +1193,9 @@ async function listBatch(
   for (const { task } of kept) c.shown(task)
   const tasks = kept.map((r) => r.task)
   guard.release(PARENT_READ, got.parents.size)
-  const shown = await shownIds(ctx, guard, at.seats, tasks)
+  const shown = await shownTasks(ctx, guard, tasks)
   const rows = kept.map(({ task, at_risk }) => {
-    const row = viewRow(
-      task,
-      (id) => shown.has(id),
-      isGroup(g, task) ? (g.facts.get(task.id) ?? null) : null,
-    )
+    const row = viewRow(task, shown, isGroup(g, task) ? (g.facts.get(task.id) ?? null) : null)
     return at_risk === undefined ? row : { ...row, at_risk }
   })
   return { state: 'ok', rows, complete, next, end: last, ...(split === undefined ? {} : { split }) }
@@ -1300,7 +1285,6 @@ function attentionSpec(
       await readGroups(
         ctx,
         guard,
-        at.seats,
         g,
         round.filter((_, i) => held[i]),
         true,
@@ -1351,7 +1335,6 @@ function pausedSpec(ctx: QueryCtx, guard: ViewBudget, at: ScopeRead, sources: So
       await readGroups(
         ctx,
         guard,
-        at.seats,
         g,
         round.filter((_, i) => held[i]),
         false,
@@ -1479,7 +1462,7 @@ export async function readAttention(
     const c = charges(guard, at)
     const sources = await listSources(ctx, guard, at, 'attention', clock.day, c.charge)
     const spec = attentionSpec(ctx, guard, at, clock, sources)
-    return await listBatch(ctx, guard, at, 'attention', key, spec, from, end, c)
+    return await listBatch(ctx, guard, 'attention', key, spec, from, end, c)
   })
 }
 
@@ -1504,7 +1487,7 @@ export async function readPaused(
     const c = charges(guard, at)
     const sources = await listSources(ctx, guard, at, 'paused', '', c.charge)
     const spec = pausedSpec(ctx, guard, at, sources)
-    return await listBatch(ctx, guard, at, 'paused', key, spec, from, end, c)
+    return await listBatch(ctx, guard, 'paused', key, spec, from, end, c)
   })
 }
 
@@ -1665,7 +1648,6 @@ export async function myViewProjects(
     await readGroups(
       ctx,
       guard,
-      seats,
       g,
       own.filter((t) => !ownerSettled(t)),
       false,
@@ -1781,7 +1763,7 @@ async function healthDelays(
       tasksOf.set(r.project.id, kept)
     }
   const tasks = [...tasksOf.values()].flat()
-  await readGroups(ctx, guard, at.seats, g, tasks, true)
+  await readGroups(ctx, guard, g, tasks, true)
   const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
   const v = verdicts(ctx, guard, at.seats, clock)
   const byOrg = groupBy(tasks, (t) => t.org_id)

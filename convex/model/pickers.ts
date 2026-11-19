@@ -670,14 +670,13 @@ export async function viewOwnersOf(
     const seat = viewAccess(ctx, guard, me)
     const selection = await projectSelection(ctx, guard, seat, a.project_id)
     if (selection === null) return UNAVAILABLE
-    const seats = new Map([[me.org_id, seat]])
     const subtasks = noSubtasks()
     const owners = new Set<string>()
     for await (const step of selectionTasks(ctx, guard, selection.subProjects)) {
       // a task In review with a reviewer stays with its assignee while it
       // is a group, so only those are asked for their subtasks
       const unsettled = step.filter((task) => !ownerSettled(task))
-      if (unsettled.length > 0) await groupCheck(ctx, guard, seats, unsettled, subtasks)
+      if (unsettled.length > 0) await groupCheck(ctx, guard, unsettled, subtasks)
       for (const task of step) {
         const owner = taskOwnerId(task, isGroupIn(subtasks, task.id) === true)
         if (owner !== undefined) owners.add(owner)

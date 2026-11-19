@@ -25,10 +25,11 @@
  * They say of a task what the caller's working set holds of it
  * (lib/workingSet.ts), as the tests' oracle reads it
  * (convex/tests/tasksOracle.setup.ts): a task outside the caller's working set answers
- * `unavailable` alike for every reason, and a parent, subtask or link end
- * goes out only when the caller is shown it. A hidden subtask only sets
- * has_hidden_subtasks, and a link to a task the caller is not shown is left
- * out with its id and the other end's.
+ * `unavailable` alike for every reason, and a link end goes out only when
+ * the caller is shown it. A parent and a subtask go out only inside the
+ * opened task's own sub-project (lib/liveTasks.ts liveLink), which the
+ * caller is shown, so no access is asked for them, and a link to a task
+ * the caller is not shown is left out with its id and the other end's.
  *
  * A task body is one document of up to Convex's 1 MiB while descriptions
  * stay on task rows, so the subtask read and the read of link ends take
@@ -51,6 +52,7 @@ import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
 import { MIB, PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
+import { liveLink } from './liveTasks'
 import { parseIssueRef } from './taskRefs'
 import { linkShown, parentLink } from './workingSet'
 import { relationRow, type TaskRow, taskFields } from './workspaceParts'
@@ -108,8 +110,8 @@ export const TASK_WINDOW = {
 }
 
 /** A task in one of the window's lists: the task's app row (TaskRow,
- * lib/workspaceParts.ts taskFields) without its text, parent and hidden facts, with whether it is a
- * group (an active subtask in a live project makes it one,
+ * lib/workspaceParts.ts taskFields) without its text, parent and hidden
+ * facts, with whether it is a group (an active subtask makes it one,
  * lib/liveTasks.ts countsAsSubtask) and the caller's level on its project.
  * Status, owners, dates, remaining hours and pause stay, because the window
  * computes a group's progress, remaining total and plan span from its
@@ -332,40 +334,31 @@ async function unlessUnchecked<T, R>(check: Promise<T>, refused: R): Promise<T |
  * its row stop. */
 type Rest = 'none' | 'some' | 'unknown'
 
-/** The first `most` active subtasks from `kids`, a stream of a task's active
- * subtasks oldest first, each with whether it counts toward the task (its
- * project is live, lib/liveTasks.ts countsAsSubtask) and whether the caller
- * is shown it. It reads them one at a time while a body fits in `budget`,
- * keeping back what the group check of each shown row needs, and checks
- * each as it is read while the budget holds its project (inOrder). `rest`
- * says whether more follow; the caller asks restOf when it is unknown,
- * after the group checks. */
+/** The first `most` active subtasks from `kids`, a stream of the active
+ * subtasks of `parent` oldest first, each with whether it counts toward
+ * the parent (lib/liveTasks.ts liveLink). A subtask is in the parent's own
+ * sub-project, which the caller is shown, so it is shown too and no access
+ * is asked for it. It reads them
+ * one at a time while a body fits in `budget`, keeping back what the group
+ * check of each counting row needs. `rest` says whether more follow; the
+ * caller asks restOf when it is unknown, after the group checks. */
 async function subtasksOf(
+  parent: Doc<'issues'>,
   kids: AsyncIterator<Doc<'issues'>>,
-  access: Access,
   budget: Budget,
   most: number,
-): Promise<{ rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[]; rest: Rest }> {
-  const rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[] = []
-  // the rows the caller is shown, each of which a group check follows
+): Promise<{ rows: { kid: Doc<'issues'>; counts: boolean }[]; rest: Rest }> {
+  const rows: { kid: Doc<'issues'>; counts: boolean }[] = []
+  // the rows that count, each of which a group check follows
   let checks = 0
   for (;;) {
     if (rows.length === most) return { rows, rest: 'unknown' }
     if ((await budget.fits(BODY, undefined, checks)) === 0) return { rows, rest: 'unknown' }
     const next = await kids.next()
     if (next.done === true) return { rows, rest: 'none' }
-    const [row] = await budget.inOrder(
-      [next.value],
-      (kid) => kid.project_id,
-      async (kid) => {
-        const counts = await access.live(kid.project_id)
-        return { kid, counts, shown: counts && (await access.visible(kid.project_id)) }
-      },
-      checks,
-    )
-    if (row === undefined) return { rows, rest: 'some' }
-    rows.push(row)
-    if (row.shown) checks += 1
+    const counts = liveLink(parent, next.value)
+    rows.push({ kid: next.value, counts })
+    if (counts) checks += 1
   }
 }
 
@@ -379,22 +372,21 @@ async function restOf(kids: AsyncIterator<Doc<'issues'>>, budget: Budget): Promi
   return (await kids.next()).done === true ? 'none' : 'some'
 }
 
-/** The subtask list of the task with this id: its first TASK_WINDOW.rows
- * active subtasks and whether each counts and is shown (subtasksOf), the
- * shown ones as short rows (shortRows), and whether the list is complete:
- * the read reached the range's end, or the look for one more after the
- * group checks found none (restOf), and every shown row has its group
- * fact. */
-async function subtaskList(ctx: QueryCtx, access: Access, budget: Budget, id: string) {
-  const stream = activeKids(ctx, id)[Symbol.asyncIterator]()
+/** The subtask list of task `task`: its first TASK_WINDOW.rows active
+ * subtasks and whether each counts (subtasksOf), the counting ones as short
+ * rows (shortRows), and whether the list is complete: the read reached the
+ * range's end, or the look for one more after the group checks found none
+ * (restOf), and every row has its group fact. */
+async function subtaskList(ctx: QueryCtx, access: Access, budget: Budget, task: Doc<'issues'>) {
+  const stream = activeKids(ctx, task.id)[Symbol.asyncIterator]()
   try {
-    const kids = await subtasksOf(stream, access, budget, TASK_WINDOW.rows)
+    const kids = await subtasksOf(task, stream, budget, TASK_WINDOW.rows)
     const counting = kids.rows.filter((kid) => kid.counts)
     const shown = await shortRows(
       ctx,
       access,
       budget,
-      counting.filter((kid) => kid.shown).map((kid) => kid.kid),
+      counting.map((kid) => kid.kid),
     )
     // the group checks come before the look for one more subtask, so the
     // budget they need is not spent on it
@@ -442,64 +434,27 @@ async function shownByIds(
   return { shown, complete: true }
 }
 
-/** Whether each of `tasks`, which the caller is shown, so active tasks in
- * live projects, is a group: whether an active subtask of it is in a live
- * project (lib/liveTasks.ts countsAsSubtask). Undefined where `budget` ran
- * out first. It reads each task's active subtasks, oldest first, only until
- * one counts: one index range and no body for a task without any, as most
- * subtasks are, and usually one body for a group. Each step reads the next
- * subtask of as many undecided tasks as `budget` holds bodies for, one
- * while some of every count is left ('last'), and checks their projects
- * while the budget holds them (inOrder); past that every task still open
- * stays undecided. */
+/** Whether each of `tasks`, which the caller is shown, is a group: whether
+ * it has an active subtask (lib/liveTasks.ts countsAsSubtask). Undefined
+ * where `budget` ran out first. It reads each task's first active subtask:
+ * one index range and no body for a task without any, as most subtasks
+ * are, and one body for a group. Each step reads as many tasks as `budget`
+ * holds bodies for, one while some of every count is left ('last'); past
+ * that every task left stays undecided. It asks no access, as a subtask is
+ * in its task's sub-project. */
 async function groupsOf(
   ctx: QueryCtx,
-  access: Access,
   budget: Budget,
   tasks: readonly Doc<'issues'>[],
 ): Promise<(boolean | undefined)[]> {
   const groups: (boolean | undefined)[] = tasks.map(() => undefined)
-  const streams = new Map<number, AsyncIterator<Doc<'issues'>>>()
-  let open = tasks.map((_, at) => at)
-  try {
-    while (open.length > 0) {
-      const n = await budget.fits(BODY, 'last')
-      if (n === 0) break
-      const step = open.slice(0, n)
-      open = open.slice(n)
-      const next = await Promise.all(
-        step.map((at) => {
-          let kids = streams.get(at)
-          if (kids === undefined) {
-            kids = activeKids(ctx, tasks[at].id)[Symbol.asyncIterator]()
-            streams.set(at, kids)
-          }
-          return kids.next()
-        }),
-      )
-      const counts = await budget.inOrder(
-        next,
-        (kid) => (kid.done === true ? undefined : kid.value.project_id),
-        async (kid) => kid.done !== true && (await access.live(kid.value.project_id)),
-      )
-      for (const [i, counted] of counts.entries()) {
-        const at = step[i]
-        const kid = next[i]
-        if (kid.done !== true && !counted) {
-          open.push(at)
-          continue
-        }
-        groups[at] = kid.done !== true
-        // a decided task's stream closes at once, so only undecided ones stay open
-        await streams.get(at)?.return?.()
-        streams.delete(at)
-      }
-      // a subtask read whose project the budget could not hold leaves its
-      // task, and every task still open, undecided
-      if (counts.length < step.length) break
-    }
-  } finally {
-    await Promise.all([...streams.values()].map((kids) => kids.return?.()))
+  for (let at = 0; at < tasks.length; ) {
+    const n = await budget.fits(BODY, 'last')
+    if (n === 0) break
+    const step = tasks.slice(at, at + n)
+    const firsts = await Promise.all(step.map((task) => activeKids(ctx, task.id).first()))
+    for (const [i, kid] of firsts.entries()) groups[at + i] = kid !== null && liveLink(step[i], kid)
+    at += step.length
   }
   return groups
 }
@@ -518,7 +473,7 @@ async function shortRows(
   const levels = await Promise.all(
     tasks.map((task) => unlessUnchecked(access.level(task.project_id), undefined)),
   )
-  const groups = await groupsOf(ctx, access, budget, tasks)
+  const groups = await groupsOf(ctx, budget, tasks)
   const rows: ShortRow[] = []
   for (const [i, task] of tasks.entries()) {
     const group = groups[i]
@@ -533,20 +488,17 @@ async function shortRows(
   }
 }
 
-/** The parent of `task` as a short row when the caller is shown it, else
- * null. `task` is in the caller's working set, so an active subtask in a
- * live project, which makes a parent the caller is shown a group without
+/** The parent of `task` the window shows, else null: its parent when it is
+ * active in the task's own sub-project (lib/liveTasks.ts liveLink), as the
+ * caller's working set holds it. `task` is in the caller's working set, so
+ * that sub-project is one the caller is shown, and no access is asked.
+ * `task` is an active subtask, which makes the parent a group without
  * another read. */
-async function shownParent(
-  ctx: QueryCtx,
-  access: Access,
-  task: Doc<'issues'>,
-): Promise<ShortRow | null> {
+async function shownParent(ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'> | null> {
   if (task.parent_id === undefined) return null
   const parent = await byId(ctx, 'issues', task.parent_id)
-  if (parent === null || parent.org_id !== task.org_id || !(await access.holds(parent))) return null
-  const level = await access.level(parent.project_id)
-  return level === null ? null : shortRow(parent, true, level)
+  if (parent === null || !liveLink(parent, task) || parent.archived_at !== undefined) return null
+  return parent
 }
 
 /**
@@ -557,15 +509,14 @@ async function shownParent(
  *   task in the caller's working set. `task` is its app row (TaskRow,
  *   lib/workspaceParts.ts taskFields): its text from its description row
  *   (model/descriptions.ts descriptionOf, as every reader takes it since
- *   the second release of the move), its parent's id only when the caller
- *   is shown the parent, has_subtasks and has_hidden_subtasks. `level` is
- *   the caller's level on its project, `labels` its label rows,
- *   `follow` the caller's follow or null, and `parent`
- *   the parent as a short row when the caller is shown it, else null.
- *   `subtasks.rows` are its active subtasks in live projects that the
- *   caller is shown, as short rows by number and then id. A subtask in an
- *   archived project is neither a row nor hidden. A live one the caller is
- *   not shown sets has_hidden_subtasks and sends no row.
+ *   the second release of the move), its parent's id only when the window
+ *   shows the parent (shownParent), has_subtasks, has_hidden_parent,
+ *   always false, and has_hidden_subtasks,
+ *   true only while the subtask list is incomplete. `level` is the caller's
+ *   level on its project, `labels` its label rows, `follow` the caller's
+ *   follow or null, and `parent` that parent as a short row, else null.
+ *   `subtasks.rows` are its active subtasks, in its own sub-project, as
+ *   short rows by number and then id.
  * - `{ state: 'archived', task, description, labels, level, project_archived }` for an
  *   archived task of the organization whose project the caller sees
  *   (lib/archivedTasks.ts archivedTaskCore's rule, canSeeProject), so the
@@ -583,18 +534,17 @@ async function shownParent(
  *   loadMember), so another organization's archived task answers
  *   unavailable.
  * - `{ state: 'unavailable' }` for everything else, alike, also where a
- *   bound stopped the check of the caller's access on the task, its project
- *   or its parent (lib/access.ts accessUnchecked), so the answer does not
- *   tell a refused check from a hidden task, and never leaves out a parent
- *   it could not check as hidden.
+ *   bound stopped the check of the caller's access on the task or its
+ *   project (lib/access.ts accessUnchecked), so the answer does not tell a
+ *   refused check from a hidden task.
  *
  * The subtasks load with the task because the window needs the group facts
  * at once: the status control, the owner rule and the remaining total
  * depend on whether the task is a group. Past TASK_WINDOW, or at a subtask
- * whose access check a bound stopped, the subtasks answer `complete: false`
- * with the rows read before it; has_subtasks then says
- * whether one read counts, and has_hidden_subtasks is true, so the window
- * can say its completion is unknown. A subtask whose own has_subtasks is
+ * whose level a bound stopped, the subtasks answer `complete: false` with
+ * the rows read before it; has_subtasks then says whether one read counts,
+ * and has_hidden_subtasks is true, so the window can say its completion is
+ * unknown. A subtask whose own has_subtasks is
  * true is a group stored before the rule of one level, and the answer holds
  * none of its subtasks, so the app must treat a remaining total or progress
  * that needs its leaves as unknown (src/store/planner.ts remainingOf and
@@ -610,8 +560,8 @@ export const readWindowTask = (ctx: QueryCtx, me: Doc<'profiles'>, ref: string) 
   unlessUnchecked(windowTask(ctx, me, ref), UNAVAILABLE)
 
 /* readWindowTask's answer while the checks of the caller's access on the
- * task, its project and its parent finish; a subtask's that a bound stops
- * ends the subtask list instead (budgetIn inOrder). */
+ * task and its project finish; a subtask's level that a bound stops ends
+ * the subtask list instead (shortRows). */
 async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
@@ -658,20 +608,21 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
       .query('issue_subscriptions')
       .withIndex('by_issue_profile', (q) => q.eq('issue_id', task.id).eq('profile_id', me.id))
       .unique(),
-    shownParent(ctx, access, task),
+    shownParent(ctx, task),
     descriptionOf(ctx.db, task),
   ])
   if (level === null) return UNAVAILABLE
   const { documents, ranges } = TASK_WINDOW
   const budget = budgetIn(ctx, { bytes: TASK_WINDOW.bytes, documents, ranges }, access.shared)
   budget.asked(task.project_id)
-  const kids = await subtaskList(ctx, access, budget, task.id)
+  const kids = await subtaskList(ctx, access, budget, task)
   const row: TaskRow = {
     ...taskFields(task),
     description,
-    ...parentLink(task, () => parent !== null),
+    ...parentLink(task, parent),
     has_subtasks: kids.counting.length > 0,
-    has_hidden_subtasks: !kids.complete || kids.counting.some((kid) => !kid.shown),
+    // says only that the list is incomplete; no subtask is hidden
+    has_hidden_subtasks: !kids.complete,
   }
   return {
     state: 'ok' as const,
@@ -679,7 +630,8 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
     level,
     labels: labels.map(relationRow),
     follow: follow === null ? null : relationRow(follow),
-    parent,
+    // the parent shares the task's sub-project, so the caller's level
+    parent: parent === null ? null : shortRow(parent, true, level),
     subtasks: { rows: kids.rows.sort(byNumber), complete: kids.complete },
   }
 }

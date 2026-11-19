@@ -12,7 +12,6 @@
  * access (grants, sharing, the lead) takes a person (lib/access.ts
  * canChangeAccess). */
 
-import { makeFunctionReference } from 'convex/server'
 import { type ConvexError, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -72,14 +71,6 @@ import {
   treeSubProjects,
 } from './projectNav'
 import { renameProjectTotals } from './storageTotals'
-
-/* The first step of a restore's regroup chain (regroup.ts), referenced by
- * name as model/messages.ts references its steps. */
-const restoredStepRef = makeFunctionReference<
-  'mutation',
-  { projects: string[]; restorer_id: string },
-  null
->('regroup:restoredStep')
 
 /** The description to store: trimmed, '' for null or absent, refused past
  * LIMITS.projectDescription. */
@@ -875,7 +866,8 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
   await patchRows(ctx, reach, { live: false })
   if (a.budget === undefined) await settleFavorites(ctx, budget)
   await scheduleArchivedReads(ctx, { projects: archived })
-  // the parents its tasks no longer make groups (model/overviewCounts.ts)
+  // its tasks leave the Overview's counts; their groups stay as they are,
+  // as a subtask shares its parent's sub-project (model/overviewCounts.ts)
   await startRegroup(ctx, parent ?? project, archived)
   await logActivity(ctx, {
     org_id: me.org_id,
@@ -909,9 +901,9 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
  * again (model/projectNav.ts). A tree whose sub-projects and those rows
  * pass LIMITS.projectTreeChange.max or TREE_FAVORITES.max is refused
  * before anything is written. Not archived is a silent no-op. Returns
- * whether it restored anything. The restored projects' tasks make the
- * parents they have in other active projects groups again, which then lose
- * their own remaining hours in background steps (regroup.ts). The next
+ * whether it restored anything. The restored projects' tasks count in the
+ * Overview again (model/overviewCounts.ts startRegroup), and their groups
+ * stay as they were, as a subtask shares its parent's sub-project. The next
  * nightly archive checks each restored project in full, because their Done
  * tasks keep their done_at (model/archiveRechecks.ts).
  */
@@ -975,8 +967,7 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
     if (s.archive_state !== 'listed') await ctx.db.patch(s._id, { archive_state: 'listed' })
   await patchRows(ctx, reach, { live: true })
   if (a.budget === undefined) await settleFavorites(ctx, budget)
-  await ctx.scheduler.runAfter(0, restoredStepRef, { projects: ids, restorer_id: me.id })
-  // the parents its tasks make groups again (model/overviewCounts.ts)
+  // its tasks count again (model/overviewCounts.ts)
   await startRegroup(ctx, parent ?? project, ids)
   await logActivity(ctx, {
     org_id: me.org_id,
