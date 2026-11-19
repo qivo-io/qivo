@@ -69,11 +69,12 @@
  * steps refuse before it writes anything; running reset again lets it go.
  *
  * Earlier releases guarded each table keyed by a task id against a new task
- * that takes a freed id. Once a dry run on every deployment reports zero in
- * every source, and no such table holds a row whose task is gone (for
- * descriptions, internal/descriptionsBackfill reports no orphans), these
- * guards only cover ids nothing can take any more, and a later change may
- * remove them: putDescription resetting the organization of a row it finds
+ * that takes a freed id. Once a dry run on a deployment reports zero in
+ * every source, and no such table there holds a row whose task is gone
+ * (for descriptions, internal/descriptionsBackfill reports no orphans),
+ * these guards only cover ids nothing can take any more there, and a
+ * change may remove them once that holds on each deployment it reaches:
+ * putDescription resetting the organization of a row it finds
  * (model/descriptions.ts); the live-task and organization checks of
  * dropDescriptions, holdsDescription and clearDescriptions (ownDescription)
  * and idTaken before purgeHistory (model/deletedItems.ts); the bound of

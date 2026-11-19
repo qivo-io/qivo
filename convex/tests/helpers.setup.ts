@@ -57,7 +57,8 @@ export type T = TestConvex<typeof schema>
  * created in a beforeAll is shared by several tests, so its suite settles it
  * after each of them.
  *
- * Every instance has the Better Auth component, as every deployment has it.
+ * Every instance has the Better Auth component, as convex.config.ts installs
+ * it.
  * Personal token lookup and webhook ownership read the owner's login and
  * refuse one that is banned or that Better Auth no longer has, so withOrg
  * gives each of its people a real Better Auth user (plantLogins). A suite

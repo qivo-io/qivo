@@ -4,7 +4,7 @@
  * of the organization's catalogue (projectRead, lib/core.ts
  * projectCompletion). The old whole read, kept for the task routes, is the
  * oracle (machineProjects.setup.ts). Every fixture holds the reach rows and
- * archive states every deployment holds (projectReach.setup.ts withReach),
+ * archive states the project lists read (projectReach.setup.ts withReach),
  * written after its last planted project, grant or share. The cases at the
  * design size raise one figure, or the sum a list covers, and print what
  * each page read. */
@@ -1185,7 +1185,7 @@ describe('the single read and the write answers', () => {
         ),
       ).toBe(`project "${ref}" not found (or not visible to you)`)
     }
-    // the list walks the roster in name order, which every deployment keys
+    // the list walks the roster in name order, by each profile's name key
     await keyOrg(t, f.org.id)
     const { users } = await t.query(internal.machine.rest.listProjectUsers, {
       callerId: pia.id,

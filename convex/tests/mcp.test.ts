@@ -1141,7 +1141,7 @@ describe('read tools', () => {
     })
     const noAccess = await plantSeat(fx.t, { org_id: fx.org.id, name: 'No access' })
     await grant(fx.t, fx.meta.id, inactive.id, 'viewer')
-    // the list walks the roster in name order, which every deployment keys
+    // the list walks the roster in name order, by each profile's name key
     await keyOrg(fx.t, fx.org.id)
 
     const page = JSON.parse(

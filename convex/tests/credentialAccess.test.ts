@@ -1350,7 +1350,7 @@ async function credentials() {
     })
   }
   await keyOrg(t, f.org.id)
-  // the project lists read the reach rows every deployment holds
+  // the project lists read the reach rows
   await withReach(t)
   // the fixture's real Better Auth login for the user
   const authUserId = f.user.auth_user_id!

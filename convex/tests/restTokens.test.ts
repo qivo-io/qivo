@@ -116,8 +116,8 @@ async function plantKey(t: T, agent: Doc<'profiles'>): Promise<string> {
 /* withOrg plus one credential of every shape. Both agents hold User on the
  * meta, so only the Viewer's role keeps it from writing; the Viewer person
  * holds User on the meta too (withOrg), capped to reading by their role.
- * Every profile holds its name key (nameKeys.setup.ts keyOrg), as on every
- * deployment, which the workload's name order needs. */
+ * Every profile holds its name key (nameKeys.setup.ts keyOrg), which the
+ * workload's name order needs. */
 async function fixture() {
   const t = newT()
   const f = await withReadingAdmin(t)
@@ -138,7 +138,7 @@ async function fixture() {
       }),
     )
   }
-  // the project list pages the reach rows every deployment holds
+  // the project list pages the reach rows
   await withReach(t)
   // a task every link request points at, and a label to edit
   const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

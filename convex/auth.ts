@@ -164,7 +164,7 @@ export const createAuthOptions = (
     database: oauthAdapter(authComponent.adapter(ctx)),
     hooks: demo ? {} : oauthHooks(ctx),
     session: demo ? { expiresIn: DEMO_TTL_MS / 1_000, disableSessionRefresh: true } : undefined,
-    /* No deployment stores the personal data lib/authData.ts lists. A create
+    /* No write stores the personal data lib/authData.ts lists. A create
      * leaves those fields out. An update that carries a provider token or a
      * picture writes null instead, which also clears what an older row held.
      * Writes without one, such as a password change or a ban, pass through

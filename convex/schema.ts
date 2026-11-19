@@ -666,10 +666,10 @@ export default defineSchema({
   account_appearance: defineTable({
     auth_user_id: v.string(),
     // 'image' is the retired Canvas theme (deviation #302) and 'blue' the
-    // retired Blue theme. Demo visitor or production rows written before they
-    // retired may still hold them, so the schema accepts them for deploys;
-    // appearanceSettings reads both as 'dark' and every save writes a current
-    // mode. Drop them once no deployment holds one.
+    // retired Blue theme. Rows written before they retired may still hold
+    // them, so the schema accepts them for deploys; appearanceSettings reads
+    // both as 'dark' and every save writes a current mode. Drop them once no
+    // stored row holds one.
     mode: v.union(vAppearanceMode, v.literal('blue'), v.literal('image')),
     image_source: vImageSource,
     custom_image_id: v.optional(v.string()),
@@ -1822,17 +1822,16 @@ export default defineSchema({
    * older backup, holds none, and a release from before the table, which
    * still deploys, leaves rows with stale ones when it moves or archives
    * tasks. The same backfill reports and mends both (`differ`). Main Search
-   * (search.ts, lib/mainSearch.ts) reads search_description, and the
-   * release whose Search palette first calls it ships only once a dry run
-   * from the third release on every deployment reports zero `missing`,
-   * `differ`, `duplicates` and `orphans`
-   * (qivo-internal docs/deployment.md). */
+   * (search.ts, lib/mainSearch.ts) reads search_description and trusts these
+   * copies, so it relies on a dry run of the backfill that reports zero
+   * `missing`, `differ`, `duplicates` and `orphans` on each deployment that
+   * serves it (qivo-internal docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
     description: v.string(),
     // the task's; absent only on a row not yet stamped (above). Optional
-    // until the backfill has stamped every deployment's rows.
+    // until the backfill has stamped every row.
     project_id: v.optional(v.string()),
     archived_at: v.optional(v.string()), // the task's, absent while it is active
   })
@@ -2995,8 +2994,9 @@ export default defineSchema({
   // answers that a profile is not ready while its inbox_state is not
   // built. The app's Inbox badge, its Mark all as read and Remove all read
   // and its task window read the summary and the item, and its Inbox list
-  // reads the pages. REST and MCP read the messages until a later release
-  // switches them, once every deployment has run internal/inboxItemsBackfill.
+  // reads the pages. REST and MCP read the messages. Switching a deployment's
+  // REST and MCP to these rows needs internal/inboxItemsBackfill run there
+  // first.
   inbox_items: defineTable({
     recipient_id: v.string(),
     issue_id: v.string(),

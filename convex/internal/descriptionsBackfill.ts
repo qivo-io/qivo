@@ -44,8 +44,8 @@
  * state, which grows with every create and description edit. A deployment
  * is clean when `missing`, `differ`, `duplicates` and `orphans` are zero,
  * and `waiting` only while a teardown runs, and it is cleared once `held` is
- * zero too. Main Search's palette ships only once a dry run on every
- * deployment reports it clean (search.ts). The backfill of the releases
+ * zero too. Main Search's palette relies on a clean dry run on each
+ * deployment that serves it (search.ts). The backfill of the releases
  * from v0.1.98 up to this one skips a task without a copy before it looks
  * for a second row, so after a rollback to one of them only this release's
  * dry run counts such duplicates.

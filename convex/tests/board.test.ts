@@ -839,8 +839,7 @@ async function hiddenOrg(wide: boolean) {
         label_id: labelId,
       })
   })
-  // navigation reads reach rows, as on every deployment since v0.1.97,
-  // not a parent's sub-projects
+  // navigation reads reach rows, not a parent's sub-projects
   await withReach(t)
   return { t, f }
 }

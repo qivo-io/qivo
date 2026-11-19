@@ -1043,8 +1043,8 @@ export const noSubtasks = (): Subtasks => ({
 })
 
 /** The release from which every backend that can run keeps one level of
- * subtasks: v0.1.98, the backend's rollback floor, released everywhere on
- * this instant. The rule itself shipped in v0.1.17: the parent fence
+ * subtasks: v0.1.98, the backend's rollback floor, released at this
+ * instant. The rule itself shipped in v0.1.17: the parent fence
  * (model/issues.ts parentChainCheck) refuses a parent that has a parent of
  * its own and a parent for a task that has subtasks, on the app, REST and
  * MCP, and a Deleted items restore drops such a parent (model/deletedItems.ts

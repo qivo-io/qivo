@@ -99,8 +99,8 @@ type Fx = OrgFixture & {
 
 /* withOrg, with the agent holding Edit on TBED (FW, PCB) and nothing on
  * SKNK. The Viewer person holds Edit on TBED, capped to reading by the role.
- * Every profile holds its name key (nameKeys.setup.ts keyOrg), as on every
- * deployment, since the workload lists people in name order. */
+ * Every profile holds its name key (nameKeys.setup.ts keyOrg), since the
+ * workload lists people in name order. */
 async function setup(): Promise<Fx> {
   const t = newT()
   const f = await withReadingAdmin(t)

@@ -52,8 +52,8 @@ import { listedTasks, markRead, removeIds } from './inboxItems.setup'
 /* A message stored for its recipient as helpers.setup.ts plantMessage
  * stores one, but through the item writer (model/inboxItems.ts itemEdits)
  * without postMessage's checks, so its inbox_items row is kept and the
- * Inbox's walk finds the recipient's items ready, as for every message a
- * deployment holds. A recipient who already holds raw messages gets no
+ * Inbox's walk finds the recipient's items ready, as for every message the
+ * app's writers store. A recipient who already holds raw messages gets no
  * build state, as ensureInboxState gives none. */
 async function plantHeld(t: T, m: Parameters<typeof plantMessage>[1]): Promise<Doc<'messages'>> {
   return await t.run(async (ctx) => {

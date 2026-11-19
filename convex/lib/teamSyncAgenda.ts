@@ -532,7 +532,8 @@ type Named = { tops: Set<string> } | null
  * row and the team row at their fixed size, and each shared project's
  * selection, skipping those the reader cannot see; or All projects, once
  * the organization's reach rows are complete (model/projectNav.ts
- * reachReady, which every deployment has held since v0.1.97; the view
+ * reachReady, which an organization holds from its creation or once
+ * internal/navBackfill.ts has written its reach rows; the view
  * reads `unavailable` as a scope to choose again), the organization's live
  * top-level projects by name in steps, each at its fixed size, and the
  * selection of each the reader sees. */

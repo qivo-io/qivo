@@ -78,8 +78,8 @@ async function setup(): Promise<Fx> {
   })
   await grant(t, f.sub.id, pia.id, 'user')
   await grant(t, f.meta.id, f.agent.id, 'user')
-  // the details' grant pages read in name order, which every deployment
-  // keys; a case that plants a grant or share later keys it again
+  // the details' grant pages read in name order, by name key; a case that
+  // plants a grant or share later keys it again
   await keyOrg(t, f.org.id)
   return { ...f, t, pia }
 }

@@ -498,7 +498,7 @@ describe('GET /v1/projects/{ref}/users', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(inactive._id, { active: false })
     })
-    // the list walks the roster in name order, which every deployment keys
+    // the list walks the roster in name order, by each profile's name key
     await keyOrg(t, f.org.id)
 
     const page = await t.query(internal.machine.rest.listProjectUsers, {

@@ -882,8 +882,7 @@ describe('access rows past the first pass', () => {
         await ctx.db.insert('project_access', { project_id: f.sub.id, profile_id, level: 'user' })
       await ctx.db.insert('user_prefs', { profile_id: f.user.id, prefs: {}, updated_at: NOW })
     })
-    // the project's users and grants page in name order, which every
-    // deployment keys
+    // the project's users and grants page in name order, by their name keys
     await keyOrg(t, f.org.id)
     const lookups = async () => ({
       tokens: await Promise.all(

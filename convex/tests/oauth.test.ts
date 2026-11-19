@@ -83,8 +83,8 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
   const t = newT()
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   const f = await withOrg(t)
-  // every profile holds its name key, as on every deployment, which the
-  // workload's name order needs, and every organization its reach rows,
+  // every profile holds its name key, which the workload's name order
+  // needs, and every organization its reach rows,
   // which the project list reads
   await keyOrg(t, f.org.id)
   await withReach(t)
