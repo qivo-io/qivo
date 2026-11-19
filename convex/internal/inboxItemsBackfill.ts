@@ -1,9 +1,8 @@
 /* One-time migration: build the inbox_items rows (schema.ts) of every
  * profile whose messages were stored before them, and mark its inbox_state
- * built, so that a later release can list an inbox by its items. Until then
- * the app, REST and MCP read the messages as before, and convex/inbox.ts
- * answers that a profile not built yet is not ready (model/inboxItems.ts
- * seatReady). A profile whose first message came after this release keeps
+ * built. The app, REST and MCP list an inbox by its items, and answer that
+ * a profile not built yet is not ready (model/inboxItems.ts seatReady). A
+ * profile whose first message came after this release keeps
  * its items from the start (model/inboxItems.ts ensureInboxState) and needs
  * nothing.
  *
