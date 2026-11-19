@@ -2939,9 +2939,9 @@ async function writeTask(
  * parent outside it once (outsideParent), reading nothing back after a
  * write. It reads none of the item's deleted_tasks rows, which hold each
  * task's searchable text, so it reads about what a reveal read before they
- * held it, which stays inside Convex's limits on a local backend for a task
- * with LIMITS.subtasks.max subtasks whose descriptions are at the cap in a
- * three-byte script. */
+ * held it. convex/tests/deletedItemsRestore.test.ts restores a task with
+ * LIMITS.subtasks.max subtasks, each with a person of its own, under
+ * Convex's limits. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {
     const late = await run.ctx.db

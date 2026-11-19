@@ -90,12 +90,10 @@ import {
  * page parses up to `pageParse` more, a page of descriptions at
  * LIMITS.description, and always its first row. Every search result costs
  * an index range, so `ranges` binds first, and each result costs more as
- * the search index grows. `ranges` keeps a call's results well inside the
- * 1 s Convex gives a query's own code, in an organization past the design
- * size too. Planning counts against `ranges` too, and in convex-test three
- * seats of a member in 25 teams that each share every top-level project the
- * member sees each kept room for their search queries. Parsing `parse`
- * characters of descriptions full of links takes a small part of that time.
+ * the search index grows. `ranges` bounds how many results a call reads,
+ * to keep a call's own work small against the 1 s Convex gives a query's
+ * own code. It counts reads and does not bound time. Planning counts
+ * against `ranges` too.
  *
  * An organization admin's search costs the same as a standard user's with
  * the same rows. A seat that sees more than `projects` is searched whole

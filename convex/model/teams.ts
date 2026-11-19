@@ -107,9 +107,10 @@ import {
  * reach rows (model/projectNav.ts, at most two a share) and legacy owned
  * projects (model/cascade.ts deleteTeamDeep), read before anything else so
  * the refusal itself fits. A deployment counts each changed row as one of
- * Convex's 4,096 reads: a local backend read 3,062 ranges deleting a team
- * with 3,000 memberships, and refused one with 5,000. Answers the team's
- * legacy owned projects it read, for deleteTeamDeep. */
+ * Convex's 4,096 reads, and LIMITS.teamDeleteRows.max holds those rows
+ * below that. convex/tests/teamParity.test.ts deletes a team at the bound
+ * and refuses one past it. Answers the team's legacy owned projects it
+ * read, for deleteTeamDeep. */
 export async function assertTeamFits(
   ctx: QueryCtx,
   team: Doc<'teams'>,

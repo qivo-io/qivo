@@ -193,9 +193,9 @@ type Profile = Doc<'profiles'>
  *
  * An organization admin's page, which judges task items by the admin's own
  * levels, costs about what a standard user's with the same rows costs, plus
- * the items only an admin lists. On a local backend the admins' and the
- * member's searches read about what convex-test counts, and the two leads'
- * searches read more ranges, for a reason not yet known.
+ * the items only an admin lists. A deployment counts reads in its own way,
+ * so what a page reads there can differ from what convex-test counts, in
+ * either direction.
  */
 export const DELETED_PAGE = {
   rows: 25,

@@ -1823,9 +1823,12 @@ export default defineSchema({
    * still deploys, leaves rows with stale ones when it moves or archives
    * tasks. The same backfill reports and mends both (`differ`). Main Search
    * (search.ts, lib/mainSearch.ts) reads search_description and trusts these
-   * copies, so it relies on a dry run of the backfill that reports zero
-   * `missing`, `differ`, `duplicates` and `orphans` on each deployment that
-   * serves it (qivo-internal docs/deployment.md). */
+   * copies, so it relies on a dry run of the backfill from the third
+   * release on that reports zero `missing`, `differ`, `duplicates` and
+   * `orphans` on each deployment that serves it (qivo-internal
+   * docs/deployment.md). A dry run of a release before the third, from the
+   * second on, skips a task without issues.description before it looks for
+   * a second row, so it can report zero `duplicates` for a task with two. */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
@@ -2994,9 +2997,12 @@ export default defineSchema({
   // answers that a profile is not ready while its inbox_state is not
   // built. The app's Inbox badge, its Mark all as read and Remove all read
   // and its task window read the summary and the item, and its Inbox list
-  // reads the pages. REST and MCP read the messages. Switching a deployment's
-  // REST and MCP to these rows needs internal/inboxItemsBackfill run there
-  // first.
+  // reads the pages. REST GET /v1/inbox and MCP list_inbox page the rows
+  // through the same walk, with each item's messages (machine/discussion.ts
+  // inboxPage), and refuse with INBOX_NOT_READY a recipient whose rows are
+  // not complete (model/inboxItems.ts seatReady), one whose inbox_state is
+  // not built or who holds messages and no inbox_state, until
+  // internal/inboxItemsBackfill builds it.
   inbox_items: defineTable({
     recipient_id: v.string(),
     issue_id: v.string(),

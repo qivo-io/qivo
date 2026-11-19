@@ -765,15 +765,16 @@ export const checkReserved = internalQuery({
  * demo's. */
 const RESET_TO_CHANGE = 'marketing demo: use reset to change dates or dataset version'
 
-/** How much one wipe call deletes: half a deletion step's REMOVAL_BUDGET, so
- * a call stays far inside Convex's 1 s mutation limit on a loaded machine. */
+/** How much one wipe call deletes, half a deletion step's REMOVAL_BUDGET,
+ * to keep each call small against Convex's 1 s mutation limit. It bounds
+ * the rows and bytes a call deletes, not its time. */
 export const WIPE_BUDGET = { rows: 128, bytes: 2 * 1024 * 1024 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is
- * deliberately no single-call reset, and no single-call seed: the whole
- * Northstar work in one transaction came close to Convex's 1 s mutation
- * limit on a loaded machine. Callers reset by running 'wipe' and then 'seed'
- * (scripts/marketing-demo.mjs, the explicit fixture CLI).
+ * deliberately no single-call reset, and no single-call seed, so that no
+ * call does the whole Northstar work against Convex's 1 s mutation limit.
+ * Callers reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
+ * the explicit fixture CLI).
  *
  * A wipe call deletes one bounded batch (WIPE_BUDGET), marks the demo empty
  * and answers `wipe_done`, and the CLI calls it again until that is true.

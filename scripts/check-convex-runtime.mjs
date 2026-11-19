@@ -37,9 +37,8 @@ import { API, SymbolFlags } from 'typescript/unstable/sync'
 import { closeTypeScriptAPI } from './typescript-api.mjs'
 
 /* The globals of the default runtime beyond ECMAScript's, which come from
- * the program's lib. Measured on a local backend (precompiled-2026-10-10)
- * as the names on globalThis and its prototypes in a query, a mutation and
- * an action, which had the same ones. They match Convex's list at
+ * the program's lib. They are the names on globalThis and its prototypes in
+ * a query, a mutation and an action, and match Convex's list at
  * https://docs.convex.dev/functions/runtimes, which adds that fetch works in
  * actions only. Convex and getParent are internal and left out. `process`
  * holds only `env` there. */

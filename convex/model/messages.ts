@@ -1032,8 +1032,8 @@ export async function removeMessages(
  * batch at INBOX_BATCH") runs one batch at 160 with notices that carry every
  * fragment in ordinary text, in its worst case and the other cases, and each
  * stays below a quarter of each of Convex's transaction limits. These are
- * convex-test's counts, which count the document a patch or a delete reads;
- * a hosted deployment was not measured. */
+ * convex-test's counts, which count the document a patch or a delete
+ * reads. */
 export const INBOX_BATCH = 160
 
 /** The two bulk inbox actions: Mark all as read (`read`) and Remove all

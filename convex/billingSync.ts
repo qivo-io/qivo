@@ -186,9 +186,11 @@ export const STORAGE_FINALIZE_RETRY_MS = 3 * DAY_MS
  * DAILY_STORAGE_BILLING is exactly `true`. Read only when apply records a
  * period, which keeps the answer as its storage_basis, so a change of the
  * variable acts from each organization's next renewal, and a period
- * already open keeps its basis. Unset on every deployment until it is
- * switched on (qivo-internal docs/deployment.md). Billing, and with it this,
- * never runs on the demo (billingEnabled). */
+ * already open keeps its basis. The variable is unset by default, so a
+ * period is charged on the sample at its start, and setting it to `true`
+ * charges the periods recorded from then on by the average
+ * (qivo-internal docs/deployment.md). Billing, and with it this, never runs
+ * on the demo (billingEnabled). */
 export const dailyStorageBilling = () => process.env.DAILY_STORAGE_BILLING === 'true'
 
 // API responses are normalized by the adapter; serialize their raw-equivalent
@@ -920,9 +922,7 @@ async function finishStorageSample(
  * everyday periods. A page it schedules reads its rows and writes nothing
  * besides the scheduled calls, and a page it stops, its heaviest shape,
  * reads each row again for its patch and writes the rows and an audit row
- * each. Under convex-test a full page of periods of 1,000 people each stays
- * well inside Convex's limits, both when it schedules them and when it
- * stops them. */
+ * each. */
 export const finalizeDue = internalMutation({
   args: { until: v.string(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { until, cursor }): Promise<null> => {

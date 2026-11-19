@@ -3,11 +3,14 @@
  * typing rests for 250 ms, and once for each page, and never for a text
  * without terms or for the search it already shows. This query trusts the
  * description rows' project and archived copies to narrow its candidates,
- * so it relies on a dry run of internal/descriptionsBackfill that reports
- * zero `missing`, `differ`, `duplicates` and `orphans` on each deployment
- * that serves it (qivo-internal docs/deployment.md). The dry run's
- * `skipped` counts the tasks whose text the clear took off their task row,
- * and is no gate.
+ * so it relies on a dry run of internal/descriptionsBackfill from the third
+ * release of the description move on that reports zero `missing`,
+ * `differ`, `duplicates` and `orphans` on each deployment that serves it
+ * (qivo-internal docs/deployment.md). A dry run of a release before the
+ * third, from v0.1.98 on, skips a task without a copy on its task row
+ * before it looks for a second row, so it can report zero `duplicates` for
+ * a task with two. The dry run's `skipped` counts the tasks whose text the
+ * clear took off their task row, and is no gate.
  *
  * - page: one page of up to 25 task and project results for a search text,
  *   ranked together across every organization where the login holds a

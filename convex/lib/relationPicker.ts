@@ -190,9 +190,11 @@ import { taskFields } from './workspaceParts'
  *
  * Inside the design size the batch at its full `scan` for the lead of every
  * project reads the most documents and bytes of those cases, and a member's
- * Search all your projects over 200 sub-projects the most ranges. No caller
- * inside the design size reads every project. `scan` is the figure to lower
- * if these reads must cost less.
+ * Search all your projects over 200 sub-projects the most ranges. Search
+ * all your projects reads every project of the organization once, to learn
+ * the reader's levels (otherScope), and scans the tasks only of the
+ * projects whose level fits the picker. `scan` is the figure to lower if
+ * these reads must cost less.
  */
 export const RELATION_PICKER = {
   rows: 25,

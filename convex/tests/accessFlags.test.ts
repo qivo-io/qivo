@@ -846,9 +846,8 @@ describe('accessFlags', () => {
     // stays live, so each parent shows only for navigation, which the
     // per-project walk finds after reading every sibling's grants.
     // convex-test counts every query, while a deployment counts a range the
-    // function already read once, which is about three ranges per project
-    // for this walk (measured on a local backend). This organization passes
-    // 4,096 either way.
+    // function already read once, so this test shows the per-project walk
+    // past 4,096 under convex-test's count.
     const parents = 149
     let archive = 992
     const granted = await t.run(async (ctx) => {

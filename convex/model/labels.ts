@@ -565,9 +565,9 @@ export async function updateLabelCore(
 /** The task assignments a label delete removes in its own transaction, and
  * the most one background step removes (labelRemovals.ts). Convex reads a
  * row by id before deleting it, so each deleted row uses one of the 4,096
- * index ranges a transaction may read. A full step measured 2,048 ranges on
- * a local backend, half the limit. convex-test does not count these reads.
- * Tests lower both values. */
+ * index ranges a transaction may read, and both values stay well below
+ * that, with room for the transaction's other reads. convex-test does not
+ * count these reads. Tests lower both values. */
 export const LABEL_REMOVAL = { inline: 1000, step: 2000 }
 
 const removalStepRef = makeFunctionReference<'mutation', { label_id: string }, null>(

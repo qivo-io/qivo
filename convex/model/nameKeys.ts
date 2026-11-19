@@ -38,9 +38,8 @@ import { nameKey } from '../lib/nameKey'
  * spend (nameCopies.ts): the copies it gives their key and the bytes it
  * reads. Convex reads a row by id before it patches it, so each copy uses
  * one of the 4,096 index ranges a transaction may read, as a label
- * deletion's rows do (model/labels.ts LABEL_REMOVAL, which measured a step
- * of 2,000 at about half the limit), and each copy is read twice, in its
- * range and by its patch. A copy is under 3 KiB even with the longest key a
+ * deletion's rows do (model/labels.ts LABEL_REMOVAL), and each copy is read
+ * twice, in its range and by its patch. A copy is under 3 KiB even with the longest key a
  * name of NAME_MAX units gives (2,640 bytes), so the bytes only bind for
  * such names. A pass reads `chunk` copies at a time and starts a chunk only
  * while bytes are left, so it reads at most one chunk past its bytes. Tests
