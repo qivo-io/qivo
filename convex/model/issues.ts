@@ -253,6 +253,17 @@ export function cleanDescription(raw: string | null | undefined): string {
 const hoursForm = (value: unknown): unknown =>
   typeof value === 'number' ? roundTenths(value) : (value ?? null)
 
+/* A task's parent in its compare form as a read shows it (lib/workingSet.ts
+ * parentLink), which is the stored id while that task's row is in the
+ * task's own sub-project and none otherwise, as for a deleted parent whose
+ * archived subtask keeps its id until a background step detaches it
+ * (model/deletedItems.ts startArchivedDetach). No write reads the stored
+ * parent before the field check, so this reads it, one range. */
+async function shownParent(ctx: QueryCtx, row: Doc<'issues'>): Promise<unknown> {
+  const parent = row.parent_id === undefined ? null : await byId(ctx, 'issues', row.parent_id)
+  return idForm(parentLink(row, parent).parent_id)
+}
+
 /** The keys of a task's `expected`, in the order refusals name them. */
 export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   // cleanTitle's rule
@@ -301,19 +312,11 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
       expected.parent_id != null && expected.has_hidden_parent === true
         ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
         : undefined,
-    // The parent compares as a read shows it (lib/workingSet.ts
-    // parentLink): the stored id while that task's row is in the task's own
-    // sub-project, else none, as for a deleted parent whose archived
-    // subtask keeps its id until a background step detaches it
-    // (model/deletedItems.ts startArchivedDetach). No write reads the
-    // stored parent before this check, so it reads it here, one range. A
-    // parent is in its subtask's sub-project, which the editor sees, so no
-    // read shows a hidden parent any more and one seen hidden matches
-    // nothing.
+    // The parent compares as a read shows it (shownParent). A parent is in
+    // its subtask's sub-project, which the editor sees, so no read shows a
+    // hidden parent any more and one seen hidden matches nothing.
     compare: async ({ row, read, expected, next }) => {
-      const parent =
-        row.parent_id === undefined ? null : await byId(read.ctx, 'issues', row.parent_id)
-      const shown = idForm(parentLink(row, parent).parent_id)
+      const shown = await shownParent(read.ctx, row)
       const seen =
         expected.has_hidden_parent === true ? false : idForm(expected.parent_id) === shown
       return { seen, next: idForm(next.parent_id) === shown }
@@ -441,10 +444,23 @@ export async function assertTaskExpected(
     row: issue,
     expected: a.expected,
     next,
-    writers: (fields) =>
-      taskWriters(read, issue, fields, (field) =>
-        printOf(TASK_FIELDS[field].form((issue as Record<string, unknown>)[field])),
-      ),
+    writers: async (fields) => {
+      // the parent's writer wrote the value its compare used (shownParent);
+      // a stored parent with no live row compares as none, a change that
+      // the parent's delete made and that names nobody
+      const parent = fields.includes('parent_id') ? await shownParent(ctx, issue) : undefined
+      const named =
+        parent !== undefined && parent !== idForm(issue.parent_id)
+          ? fields.filter((field) => field !== 'parent_id')
+          : fields
+      return taskWriters(read, issue, named, (field) =>
+        printOf(
+          field === 'parent_id'
+            ? parent
+            : TASK_FIELDS[field].form((issue as Record<string, unknown>)[field]),
+        ),
+      )
+    },
   })
 }
 

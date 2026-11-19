@@ -207,7 +207,7 @@ describe('REST task edits', () => {
     expect((await task(fx, group.id))?.remaining_hours).toBeUndefined()
   })
 
-  it('reads a deleted parent as none before its archived subtask is detached, over REST, MCP and the app', async () => {
+  it('reads a deleted parent as none before its archived subtask is detached, and names nobody for it, over REST, MCP and the app', async () => {
     // the delete's detach step waits on the fake clock
     vi.useFakeTimers()
     try {
@@ -215,15 +215,20 @@ describe('REST task edits', () => {
       const org_id = fx.org.id
       const gone = await plantIssue(fx.t, { org_id, project_id: fx.sub.id })
       const kids: Doc<'issues'>[] = []
-      for (let n = 0; n < 3; n++)
-        kids.push(
-          await plantIssue(fx.t, {
-            org_id,
-            project_id: fx.sub.id,
-            parent_id: gone.id,
-            archived_at: NOW,
-          }),
-        )
+      // the admin attaches each in the app in an edit that also renames it.
+      // Its history row tells the rename and so names no other task, so the
+      // agent and the user still see it once the parent is deleted, and it
+      // prints the parent that the delete changes next, which names nobody.
+      for (let n = 0; n < 3; n++) {
+        const kid = await plantIssue(fx.t, { org_id, project_id: fx.sub.id, archived_at: NOW })
+        await as(fx.t, fx.admin).mutation(api.issues.update, {
+          org_id,
+          id: kid.id,
+          patch: { parent_id: gone.id, title: `Kid ${n}` },
+          expected: { parent_id: null, title: titlePrint(kid.title) },
+        })
+        kids.push(kid)
+      }
       const [viaRest, viaMcp, viaApp] = kids
       const other = await plantIssue(fx.t, { org_id, project_id: fx.sub.id })
       await as(fx.t, fx.user).mutation(api.issues.deleteDeep, { org_id, id: gone.id })
@@ -248,7 +253,7 @@ describe('REST task edits', () => {
           expected: { parent_id: gone.id },
         }),
       ).toMatchObject(toolError(changed(viaMcp)))
-      await expectRefusal(
+      const refused = await expectRefusal(
         as(fx.t, fx.user).mutation(api.issues.update, {
           org_id,
           id: viaApp.id,
@@ -257,6 +262,9 @@ describe('REST task edits', () => {
         }),
         'conflict',
       )
+      expect((refused.data as Refusal).changes).toEqual([
+        { record: 'task', id: viaApp.id, field: 'parent_id', by: null, at: null },
+      ])
       for (const kid of kids) expect((await task(fx, kid.id))?.parent_id).toBe(gone.id)
 
       // one that saw no parent saves
