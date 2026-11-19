@@ -26,16 +26,9 @@
  * moves no answer. A subtask or a parent these reads return is in the
  * row's own sub-project, which the caller reads, so only a row no write
  * makes is such a document. Where a read stops at its budget's margin can
- * still follow:
- *
- * - a deleted parent whose archived subtask keeps its id until a
- *   background step detaches it (model/deletedItems.ts
- *   startArchivedDetach), which reads a second range and no document,
- *   where an existing parent reads one range and one document
- *   (subtreeReads `parent`);
- * - and the real bytes of a document past the caps, which only a row
- *   stored over them or a task's copy of its text (which only a rollback
- *   writes) can reach, at the real-bytes stop (readTally `hard`). */
+ * still follow the real bytes of a document past the caps, which only a
+ * row stored over them or a task's copy of its text (which only a rollback
+ * writes) can reach, at the real-bytes stop (readTally `hard`). */
 
 import type { TransactionMetrics } from 'convex/server'
 import { getDocumentSize } from 'convex/values'

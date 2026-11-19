@@ -2597,14 +2597,14 @@ figure shows those rows, as the counts' readers give an archived
 sub-project none, and a restore of the sub-project, a move of the task
 out of it, or another write that reads the task's subtasks again counts
 the task as a group. Until then a dry run of
-`internal/overviewCountsBackfill` lists the sub-project's row, and the
-task owner's row there, in `differ`: the stored row holds the task as a
+`internal/overviewCountsBackfill` reports the sub-project's row, and the
+task owner's row there, as differing: the stored row holds the task as a
 leaf, and the count does not. A run with `"recount": true` mends them,
 but none is needed. The release changes no table, field, index or public
 function, and needs no backfill and no release step. Returning the
 backend to v0.1.170 is safe; v0.1.170 refuses `expected.parent_id`
-without `has_hidden_parent` again, and its dry run lists in `differ` the
-rows of an archived sub-project for each such task that this release
+without `has_hidden_parent` again, and its dry run reports as differing
+the rows of an archived sub-project for each such task that this release
 stored as a group: one in a sub-project archived under this release, one
 whose subtasks a write of this release read again, and every one after a
 run with `"recount": true`.

@@ -1122,8 +1122,9 @@ describe('what hidden data moves', () => {
       await task(t, f, sibling, { title: 'Board secret' }),
       await task(t, f, f.hidden, { title: 'Board skunk' }),
     ]
-    // a batch of the Parent and Subtasks pickers holds two parent checks
-    // by its documents, and one of Linked tasks two ranges
+    // a batch of the Parent picker holds two parent checks by its
+    // documents, and one of Linked tasks two ranges; the Subtasks picker
+    // reads its candidates in one batch
     const read = async () => {
       const out: Batch[][] = []
       for (const kind of ['parent', 'subtask', 'link'] as const) {

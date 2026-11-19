@@ -1608,9 +1608,10 @@ export async function issueOut(
  * task's project, its links' other tasks and the owner's load, reads the
  * caller's own grants, memberships and team shares once, and never reads
  * the organization's whole catalogue (loadCatalogue). A check that a bound
- * of that reader stopped refuses the whole call with its sentence
- * (accessUnchecked), never answering a hidden row or a short list as
- * whole.
+ * of that reader stopped never answers a hidden row or a short list as
+ * whole. About the task, its parent, its subtasks or a link it refuses the
+ * whole call with its sentence (accessUnchecked), and about the owner's
+ * load it answers the task with its delay unavailable.
  *
  * A list keeps its order with an id tie: subtasks and links by task number,
  * followers by name (the name key's UTF-8 bytes, lib/nameKey.ts), and
@@ -1743,16 +1744,10 @@ export const RELATED_READ = { rows: 200 }
 
 /** What one page of an archived task's subtasks reads past the call's start
  * (subtasksByNumber): index ranges, documents and bytes as Convex counts
- * them, a subtask the caller may not be shown at lib/limits.ts
- * TASK_ROW_MAX_BYTES, and leaving out the caller's own grants, memberships
- * and team shares, which the request's limits hold (lib/access.ts accessOf
- * shared). Its ranges hold a question of up to six ranges (lib/access.ts
- * OWN_READS) about each of 70 sub-projects, a family's 30 live and 40
- * archived at the design size, beside the index's. A page reads its first
- * row whatever it says, and one the budget ends carries a cursor.
- * convex/tests/taskRelated.test.ts ("reads at the design size") logs what a
- * page of an archived group whose subtasks sit in those 70 sub-projects
- * reads. Tests lower it. */
+ * them. A page reads one range of the task's subtasks in number order and
+ * the rows it counts, and asks no access. It reads its first row whatever
+ * the ceiling says, and one the budget ends carries a cursor. Tests lower
+ * it. */
 export const SUBTASK_PAGE: ReadCeiling = { ranges: 512, documents: 2000, bytes: 4 * MIB }
 
 /** What the first pages of a task's details that the walk does not give

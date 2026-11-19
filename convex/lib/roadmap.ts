@@ -241,7 +241,7 @@ export type RoadmapAnswer =
       parents: ViewRow[]
       /** every shown descendant of a group row, at any depth, that is
        * neither a row nor a parent, such as Backlog subtasks, Done ones outside
-       * the window, filtered-out ones and those in another sub-project. With
+       * the window and filtered-out ones. With
        * the rows and parents they hold every shown descendant of a group
        * row, so a group's bar during a drag (src/lib/issueGroups.ts
        * groupSpan) and its stale fade (the newest activity of its shown
