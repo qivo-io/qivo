@@ -321,8 +321,9 @@ describe('counting', () => {
     await t.run((ctx) => ctx.db.delete(run))
     expect(await counts()).toEqual(counted)
     // a regroup of a family where the person holds no row: every scope
-    // waits for it, a project of another family too, because a regroup
-    // reconciles a parent there whose subtask older code stored in its own
+    // waits for it, a project of another family too, as every family waits
+    // for every regroup in the organization (model/overviewCounts.ts
+    // countsReady)
     const regroup = (family: Doc<'projects'>) =>
       t.run((ctx) =>
         ctx.db.insert('overview_regroups', {
@@ -829,7 +830,8 @@ describe('verdicts', () => {
 
 /** withOrg as a member who sees FW only, with an overdue task of theirs in
  * FW, and in PCB, which they cannot see, a task holding `title` and a
- * paused task of theirs of that title. */
+ * paused task of theirs of that title, due before the day, which My view's
+ * Overdue reads and leaves out. */
 async function hiddenCase(title: string) {
   const t = newT()
   const f = await withReadingAdmin(t)
@@ -855,6 +857,7 @@ async function hiddenCase(title: string) {
     title,
     assignee_id: me.id,
     paused: true,
+    due_date: shift(DAY, -5),
   })
   await plantIssue(t, {
     org_id: f.org.id,
