@@ -19,9 +19,8 @@ Tasks have these fields:
 
 - **Status**. Backlog, To Do, In Progress, In Review or Done. A task with
   active subtasks acts as a group. Its own status is hidden; progress and
-  completion come from descendants without active subtasks. Subtasks in an
-  archived sub-project do not count. Removing or archiving the last active
-  subtask, giving it another parent, or archiving its sub-project restores
+  completion come from descendants without active subtasks. Removing or
+  archiving the last active subtask, or giving it another parent, restores
   the parent's previous status. To Do, In Progress and In Review tasks can
   also be paused.
 - **Priority**. Urgent, High, Medium or Low.
@@ -53,12 +52,9 @@ Tasks have these fields:
   means no work remains. Gaining a first subtask clears the parent's own
   estimate. The parent then shows the total of its unfinished subtasks at any
   depth, marked **Σ**. Done subtasks and linked tasks do not count. The task
-  window totals the subtasks you can see when some are hidden from you,
-  which only a task from before subtasks had to share their parent's
-  sub-project can have, and
-  says **Unknown** when it cannot total every subtask, for example a subtask
-  stored with subtasks of its own before a task could have only one level of
-  subtasks. After the last active subtask leaves, the field
+  window says **Unknown** when it cannot total every subtask, for example a
+  subtask stored with subtasks of its own before a task could have only one
+  level of subtasks. After the last active subtask leaves, the field
   becomes editable and starts empty. Entering **In Review** replaces
   Remaining with the project's review time, 2 h by default. A REST or MCP
   update that supplies remaining hours with that status change keeps the
@@ -69,10 +65,8 @@ Tasks have these fields:
 - **Planned period**. Start and end weeks on the Roadmap. Planning uses whole
   weeks ([The Roadmap](./the-roadmap.md)). A task with active subtasks takes
   its planned period from them, from the earliest start to the latest end of
-  the scheduled subtasks you can access. A subtask you cannot access, which
-  only a task from before subtasks had to share their parent's sub-project
-  can have, hides the subtasks below it. Its own saved dates are hidden and
-  cannot be edited. Removing or archiving the last active subtask, or giving
+  the scheduled subtasks. Its own saved dates are hidden and cannot be
+  edited. Removing or archiving the last active subtask, or giving
   it another parent, restores them.
 - **Paused**. Choose **Pause** in the Status menu to hold work without
   changing its status. Choose **Resume** there, or use the adjacent play
@@ -183,11 +177,7 @@ top-level project's sub-projects. Qivo then says so; shorten the longest
 names or descriptions, or delete some of those sub-projects first.
 
 A subtask stays in its parent's sub-project, so archiving a sub-project
-archives whole families. A task saved before that rule can sit in another
-sub-project than its subtasks: when all its subtasks were in the archived
-one, it becomes an ordinary task again, with its own status, dates and
-estimate. When the sub-project is restored, the task becomes a group again
-and loses its own estimate, as when it gains a subtask.
+archives whole families.
 
 If you can access only a sub-project, the archived list shows its archived
 project too, whose **Show sub-projects** lists that sub-project, and a search
@@ -304,11 +294,7 @@ and you can edit the parent. An archived subtask does not count
 toward the 100. Otherwise, or when the parent's
 subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
-from the archive under a full parent does. A family saved before the rule
-that a subtask stays in its parent's sub-project can be split by a restore,
-because a subtask in another sub-project than its parent's returns as a
-top-level task, also when it was deleted together with that parent or
-with its project. A restored task comes back without its assignee or
+from the archive under a full parent does. A restored task comes back without its assignee or
 reviewer when that person can no longer edit its sub-project. Work that was
 archived when it was deleted returns archived. A restored Done task restarts its auto-archive
 clock. A restored project shows to its leads and the people and teams it is

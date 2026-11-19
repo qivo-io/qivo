@@ -643,18 +643,16 @@ finds an object; read its `projects` and follow `next_cursor` until it is
 - `completion` is the project's **Completion** on the app's Overview. It
   counts the active tasks without subtasks in the project, or for a
   top-level project in its sub-projects you can read that are not archived,
-  and `done` counts those that are Done. A task with an active subtask in
-  any project that is not archived counts as a group and is left out, as in
-  the app, also when that subtask, from older versions of Qivo, is in a
-  sub-project hidden from you or in another top-level project. `percent` is rounded, and `0` when `total` is `0`. Its
+  and `done` counts those that are Done. A task with an active subtask
+  counts as a group and is left out, as in the app. `percent` is rounded,
+  and `0` when `total` is `0`. Its
   `status` is `ok`. Qivo keeps these counts as tasks change, so they hold
   whatever the project's size. For a moment after any project of the
   organization is archived, restored, moved to Deleted items or brought
   back from it, and while Qivo counts an organization again, it is
   `{"status": "counting", "done": null, "total": null, "percent": null}`,
   so ask again later. That includes a project in another top-level
-  project, because older versions of Qivo let a subtask sit in another
-  top-level project than its parent. A `PATCH` that restores a project
+  project. A `PATCH` that restores a project
   answers its completion as `counting` too, unless it is a top-level
   project with no live sub-project you can read, which answers `ok` with
   zero counts, and one that archives a project answers `null`, as for any
@@ -1693,8 +1691,7 @@ access to the parent task`. The new task's project still comes from
 `project` and `sub_project`, and a subtask lives in its parent's own
 sub-project, so name that sub-project. A parent in any other sub-project
 answers `400` with `a subtask must be in the same sub-project as its parent
-task`. Older versions of Qivo let a subtask sit in another sub-project than
-its parent; such tasks keep their parent until they move or leave it. A task has one level of subtasks, at most 100 active
+task`. A task has one level of subtasks, at most 100 active
 ones; archived subtasks do not count. A parent that is a subtask itself
 answers `400` with `the parent task is a subtask, and a subtask cannot have
 subtasks of its own`, and a parent with 100 active subtasks `400` with `the
@@ -1745,8 +1742,8 @@ rejected with `400` and a message.
 PATCH also takes `expected`, the values you last read of the fields the
 request changes, keyed as a read names them. The keys are `title`,
 `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`,
-`end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with
-`has_hidden_parent` for `parent`, and `project_id` for a move. When someone
+`end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` for
+`parent`, and `project_id` for a move. When someone
 changed one of them since, the PATCH is a `409` and nothing changes. See
 [Refusing a change when a field changed since you read
 it](#refusing-a-change-when-a-field-changed-since-you-read-it). POST takes no
@@ -1770,14 +1767,8 @@ Naming the current sub-project changes nothing.
 
 A subtask stays in its parent's own sub-project, and tasks live only in
 sub-projects, so every move also moves every subtask, archived ones
-included, that is not already in the destination, to another sub-project of
-the same project as to another project. The caller needs Edit access on each
-of their projects (otherwise
-`400`, `moving this task would move a subtask in a project you cannot edit;
-someone who can edit that project can move it`). A subtask in a project that is being
-moved to Deleted items refuses the move for everyone, admins included, with
-`400` `a subtask of this task is being moved to Deleted items; try again
-when that finishes`. The assignee and the reviewer of
+included, to another sub-project of the same project as to another
+project. The assignee and the reviewer of
 each active subtask the move carries must be able to work in the
 destination. Otherwise the PATCH is a `400` that names them with their
 subtasks, such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16)
@@ -1805,11 +1796,7 @@ inbox message. A subtask that moves must leave its parent in the same
 request, with `parent: null` or a new parent in the destination; otherwise
 the PATCH is a `400` with `a subtask stays in its parent task's sub-project;
 to move it to another sub-project, detach it from its parent in the same
-change`. A subtask from older versions of Qivo in another sub-project than
-its parent may also move into its parent's sub-project. A parent in a
-project you cannot see counts as being in the subtask's own sub-project, so
-moving such a subtask also needs `parent: null` or a new parent in the
-destination.
+change`.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST, against
@@ -1880,28 +1867,18 @@ their stored `status` is dormant and must not be displayed or counted as
 their own workflow status. Status filters return ordinary tasks only, and a
 PATCH containing `status` on a group returns `400` with
 `status cannot be set on a task with subtasks, so update its subtasks instead`.
-For a task in an active project, only active subtasks in active projects
-count. A subtask in an archived project, such as a sub-project archived on
-its own, does not make it a group. A task in an archived project counts
-every active subtask. When its last such subtask is detached, deleted or
-archived, or that subtask's project is archived, the task resumes its saved
-status. Restoring that project makes it a group again, and background steps
-clear its own `remaining_hours` moments later, as attaching a subtask does.
-They do the same for a task that is still a group when its own project is
-restored after its subtasks' project. Archived parents retain `is_group: true` while they have attached subtasks.
-Child visibility does not change grouping; this flag reveals no child
-identities.
+An active task counts its active subtasks, and when the last one is
+detached, deleted or archived, the task resumes its saved status. Archiving
+or restoring a project changes no task's group. Archived parents retain
+`is_group: true` while they have attached subtasks.
 
 **Group dates.** A group's `start_week` and `end_week` are calculated from
-the subtasks the caller can read, at any depth. `start_week` is the earliest
-start and `end_week` the latest end of the scheduled ones, including `done`
-subtasks. Both are `null` when none is scheduled. A nested group counts only
-through its own subtasks, and the calculation stops at a subtask the caller
-cannot read, so the tasks below it do not count. Like `is_group`, an active
-group counts only active subtasks, while an archived group counts its whole
-subtree. Subtasks in archived projects do not count while the group's own
-project is active. Two credentials with different access can therefore get
-different dates for the same group. The group's own stored dates are not
+its subtasks, at any depth. `start_week` is the earliest start and
+`end_week` the latest end of the scheduled ones, including `done` subtasks.
+Both are `null` when none is scheduled. A nested group counts only through
+its own subtasks. Like `is_group`, an active group counts only active
+subtasks, while an archived group counts its whole subtree. The group's own
+stored dates are not
 used while it is a group, and subtask changes never write them. They apply
 again when its last active subtask is detached, deleted or archived. A PATCH
 containing `start_week` or `end_week` on a group, including `null` or the
@@ -1910,8 +1887,7 @@ task with subtasks; its dates come from its subtasks`, and the other fields
 in that request remain unchanged. Change the subtasks' dates instead.
 
 A task **with active subtasks** has no remaining time of its own (0066;
-archived subtasks stopped counting in 0070, and subtasks in archived
-projects do not count for a task in an active project): a PATCH
+archived subtasks stopped counting in 0070): a PATCH
 sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks, because it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
@@ -1942,18 +1918,8 @@ so it never gets one.
 PATCH also accepts `archived: true | false` (0070 — the Active/Archived axis,
 orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
-Older versions of Qivo let a subtask sit in another project than its parent,
-so both can reach other projects, and the caller needs User access on every
-project the cascade changes. Otherwise the PATCH is a `400`
-with `archiving this task would change a subtask in a project you cannot edit;
-someone who can edit that project can archive it` or `restoring this task
-would change a parent task in a project you cannot edit; someone who can
-edit that project can restore it`, and nothing changes. A subtask or parent in a project that is being
-moved to Deleted items refuses the PATCH for everyone, admins included, with
-`a subtask of this task is being moved to Deleted items; try again when that
-finishes` or `a parent of this task is being moved to Deleted items; try
-again when that finishes`. Restoring a subtask whose parent already has 100
-active subtasks brings it back as a top-level task: the answer's `parent_id`
+Restoring a subtask whose parent already has 100 active subtasks brings it
+back as a top-level task: the answer's `parent_id`
 is `null`, and its followers are told it left its parent. So does restoring
 a subtask whose parent was deleted after the subtask was archived, even when
 the parent is back from Deleted items, because that delete takes every such
@@ -2133,28 +2099,25 @@ to read the rest.
 `owner_id` is whose work the task is. It is the reviewer while the task is in
 `review` with a reviewer set, else the assignee, and always the assignee on a
 group. `url` is the address the app's **Copy link** gives. `parent_id` is
-the parent task's uuid when the caller can read the parent. Otherwise it is
-`null` and `has_hidden_parent` is `true`, so a subtask under a task the
-caller cannot read is not mistaken for a top-level task.
+the parent task's uuid, or `null` for a task without a parent. A parent is
+in its subtask's own sub-project, so a caller who can read a subtask can
+read its parent. `has_hidden_parent` is always `false`, and a later release
+removes it, so stop reading it.
 
 The single-task fields name only tasks the caller can read. `subtasks` lists
-the first page of the direct subtasks it can read, by number. An active task lists its active
-ones, also those in an archived project, which do not make it a group while
-its own project is active, and an archived task lists all of them. `links` lists the task's links
+the first page of the direct subtasks, by number. An active task lists its
+active ones, and an archived task lists all of them. `links` lists the
+task's links
 whose other task it can read, with `kind` as seen from this task (`blocks`,
 `blocked_by` or `relates`). `labels` are ordered by name.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
 is the remaining time the app shows, which is the sum over the unfinished
-subtasks at any depth that the caller can read, or `null` when none has hours.
-Like the group's dates, it counts only active subtasks of an active group,
-leaves out subtasks in archived projects while the group's project is active,
-and stops at a subtask the caller cannot read. `is_group` still reports
-subtasks the caller cannot read, without identifying them. Their dates do not
-count toward the group's `start_week` and `end_week`.
+subtasks at any depth, or `null` when none has hours. Like the group's
+dates, it counts only active subtasks of an active group.
 
 `progress` is `null` for a task without subtasks. For a group it is the
 **Progress** of the app's task window, `done` of `total` tasks without
-subtasks under it, at any depth, that the caller can read:
+subtasks under it, at any depth:
 
 ```json
 { "progress": { "done": 2, "total": 3, "percent": 67, "partial": true } }
@@ -2162,9 +2125,9 @@ subtasks under it, at any depth, that the caller can read:
 
 It counts the same subtasks as the group's dates, scheduled or not, and
 `done` counts those that are Done. `percent` is rounded, and `0` when
-`total` is `0`. `partial` is `true` when some of the group is hidden from
-the caller, such as a subtask it cannot read, so the true completion is
-unknown. The app then says "Completion unknown".
+`total` is `0`. `partial` is `true` when Qivo could not read the whole
+group, as below, so the true completion is unknown. The app then says
+"Completion unknown".
 
 An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks. So can an active group stored before the rule
@@ -2196,8 +2159,8 @@ owner's plannable hours and their other scheduled work, counted as the app
 counts it for the caller. For organization admins and users that includes
 work in projects they cannot read, without naming it. For viewers and
 guests it includes only work they can read or own, so two callers can get
-different verdicts for one task. A group with subtasks the caller cannot
-read can only be `late`, as in the app. The server judges today's date in
+different verdicts for one task. A group whose `progress` is `partial`
+can only be `late`, as in the app. The server judges today's date in
 UTC, so near midnight or a week boundary it can differ from the app, which
 uses the browser's time zone.
 
@@ -3108,7 +3071,7 @@ These routes and tools take `expected`, with these keys:
 
 | Route | MCP tool | Keys |
 |---|---|---|
-| `PATCH /v1/tasks/{ref}` | `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with `has_hidden_parent`, `project_id` |
+| `PATCH /v1/tasks/{ref}` | `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id`, `project_id` |
 | `PATCH /v1/comments/{id}` | `update_comment` | `body` |
 | `DELETE /v1/comments/{id}` | `delete_comment` | `body` |
 | `PATCH /v1/projects/{ref}` | `update_project` | `name`, `description`, `track_delay`, `review_hours`, `lead_id` |
@@ -3120,8 +3083,9 @@ These routes and tools take `expected`, with these keys:
 | `PATCH /v1/users/{id}` | `update_user` | `plannable_hours` |
 
 Each key belongs to the request field of the same name, with three
-exceptions on a task. `parent_id` and `has_hidden_parent` belong to
-`parent`, and `project_id` to `project` or `sub_project`. A delete changes
+exceptions on a task. `parent_id` belongs to `parent`, as does
+`has_hidden_parent` while Qivo still takes it, and `project_id` to
+`project` or `sub_project`. A delete changes
 the whole record, so it takes any of its keys. `archived`, `archive_reason`,
 `add_labels` and `remove_labels` take no key and are never checked. Routes
 and tools that create a record take no `expected`. A request that creates a
@@ -3155,13 +3119,11 @@ person, task or project is compared like any other value and can answer
 tell you which ids exist.
 Send each field as the read showed it:
 
-- **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
-  `GET /v1/tasks/{ref}` answered them. That is the parent's uuid with
-  `false`, `null` with `true` for a parent you cannot read, or `null` with
-  `false` for no parent. A parent you read by uuid matches while it stays
-  the parent, even after you lose sight of it. A parent you read as hidden matches any
-  parent you cannot read, so a move from one hidden parent to another is not
-  detected, because telling you would reveal tasks you cannot see.
+- **A task's parent.** Send `parent_id` as `GET /v1/tasks/{ref}` answered
+  it, the parent's uuid or `null` for no parent. A parent you read matches
+  while it stays the parent. Qivo still takes `has_hidden_parent` beside
+  `parent_id`, and a later release refuses it, so stop sending it.
+  `has_hidden_parent: true` matches nothing.
 - **A group's remaining time.** An active task with subtasks reads
   `remaining_hours: null`, also while it stores hours from before its
   subtasks, so send `null`.
@@ -3207,8 +3169,8 @@ that breaks its field's rule is a `400`, never a `409`:
   label or team.
 - `expected.<key> applies only when the request sends <field>`, such as
   `expected.parent_id applies only when the request sends parent`.
-- `expected.parent_id and expected.has_hidden_parent go together`, when one
-  of the two is missing.
+- `expected.parent_id and expected.has_hidden_parent go together`, when
+  `has_hidden_parent` comes without `parent_id`.
 - `expected.has_hidden_parent must be false when expected.parent_id names a
   task`.
 

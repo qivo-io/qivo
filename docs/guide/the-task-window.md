@@ -338,30 +338,20 @@ and when the window lists 100 subtasks with **This task has 100 active
 subtasks, the most a task can have. Archive or remove one of them first.** A task with subtasks cannot become a
 subtask, so when the window lists any, its **Parent** button is disabled with
 **A task with subtasks cannot become a subtask**. The buttons count what the
-window lists, which leaves out archived subtasks and subtasks you cannot
-see. The pickers count those too: when the task can take no parent, no more
-subtasks or no more links for them, its picker says so with the same
-sentence and offers nothing to create. **Remove parent** also appears
-when the parent is outside this view.
+window lists, which leaves out archived subtasks. The pickers count those
+too: when the task can take no parent, no more subtasks or no more links for
+them, its picker says so with the same sentence and offers nothing to
+create.
 
 A subtask stays in its parent's own sub-project. Setting a parent changes
 both tasks, so it needs edit access to the subtask and to the parent. The
 parent and subtask pickers offer only tasks of the task's own sub-project
 that you can edit, and leave out tasks the limits above refuse, also for
-subtasks that are archived or that you cannot see. Links, unlike subtasks,
-can join tasks of any sub-project or project. A task saved before this
-rule can have a subtask in another sub-project of its project, or, saved
-before that, in another project. Such a subtask keeps its parent until it
-moves or leaves it, or until a restore from Deleted items brings it back
-as a top-level task. The subtask picker shows it first among the
-current subtasks you can edit. The current parent shows first so you can
-remove it.
-Removing a parent needs edit access to the subtask only. Adding or
+subtasks that are archived. Links, unlike subtasks, can join tasks of any
+sub-project or project. The current parent shows first so you can remove
+it. Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
-other. If a task's parent is in an archived project or
-a project you cannot access, which only a task saved before the rule can
-have, **Parent** says the parent task is outside this view. Choosing
-another parent replaces it, and **Remove parent** removes it.
+other.
 
 ## Moving a task
 
@@ -384,17 +374,13 @@ the move does not restart its
 
 A subtask stays in its parent's own sub-project, so a move to any other
 sub-project, in the same project or another one, also moves the task's
-subtasks, archived ones included, unless they are already there. A subtask
-that moves stops being a subtask of its parent. The dialog says both before
-you move. Qivo refuses the move if a subtask that would move is in a
-sub-project you cannot edit (someone who can edit it can move it), or if the
-task has more than 200 subtasks, archived ones included. Restore some
+subtasks, archived ones included. A subtask that moves stops being a
+subtask of its parent. The dialog says both before you move. Qivo refuses
+the move if the task has more than 200 subtasks, archived ones included. Restore some
 archived subtasks from **Archived tasks** and remove them from the task
 first. A move or a new parent is also refused in
 the rare case that the task and its subtasks are too large to change at
 once.
-While a subtask that would move is in a project being moved to Deleted
-items, Qivo refuses the move for everyone until that move finishes.
 
 The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
@@ -418,23 +404,16 @@ It sends no inbox update. The task's messages are marked read as with any
 archive.
 
 The sweep archives subtasks before their parents. A Done subtask moved to
-another sub-project starts its count again. When it keeps its parent, as a
-subtask saved before the rule does when it moves into its parent's
-sub-project, its Done parent archives no earlier than the night after that
-subtask archives, even if the parent itself did not move. Once a group's active subtasks are gone, its saved status
-applies again. A saved Done task can archive on a later sweep when its Done
+another sub-project starts its count again. Once a group's active subtasks
+are gone, its saved status applies again. A saved Done task can archive on a later sweep when its Done
 age meets the threshold; a saved To Do task returns to To Do.
 
 **Manual archiving** uses **Archive or delete…** in the task's **…** menu,
 which needs edit access. **Archive** is selected first. For a task with
 subtasks, the window lists them, and a box such as **Also archive the 3
-subtasks**, selected first, archives the whole subtask tree, including
-subtasks in other sub-projects, which only a task saved before the rule
-that a subtask stays in its parent's sub-project can have. Qivo refuses
-that when one of them is in a project you cannot edit, and someone who can edit that project can archive
-the whole tree instead. While one of them is in a project being moved to Deleted items, Qivo
-refuses it for everyone until that move finishes. Qivo also refuses the whole
-tree when the task and its subtasks are too large to change at once, such as
+subtasks**, selected first, archives the whole subtask tree. Qivo refuses
+the whole tree when the task and its subtasks are too large to change at
+once, such as
 several subtasks with very long descriptions saved before Qivo limited
 descriptions to 20,000 characters. Clear the box to archive only the task.
 Its subtasks stay in their projects, those directly under it become top-level
@@ -503,12 +482,7 @@ again, so the next archived task moves up into it. A task someone else
 restores leaves the list when the page asks for its tasks again. A subtask whose parent already has 100 active subtasks comes back as
 a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
-from Deleted items does. If a restore would change a parent task in a
-project you cannot edit, Qivo
-refuses the restore, and someone who can edit that project can restore it
-instead.
-While the parent's project is being moved to Deleted items, Qivo refuses
-the restore for everyone until the move finishes.
+from Deleted items does.
 Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks appear only in **Archived
 tasks** and in Search with **Include archived tasks** on, and open from
@@ -552,11 +526,9 @@ shown in Deleted items. The button names what goes, such as **Delete QN-142**
 or **Delete 4 tasks**.
 
 For a task with subtasks, the window lists them first. A box such as **Also
-delete the 3 subtasks**, selected first, deletes the listed subtasks you can
-edit. Subtasks marked **View only**, in projects where you can read but not
-edit, are not deleted. Neither are subtasks in projects you cannot open,
-because you have no access or the project is archived, nor archived subtasks.
-Clear the box to delete only the task. A subtask whose parent is deleted, and
+delete the 3 subtasks**, selected first, deletes the listed subtasks, which
+share the task's sub-project. Archived subtasks are not deleted. Clear the
+box to delete only the task. A subtask whose parent is deleted, and
 that is not deleted itself, stays in its project and becomes a top-level
 task; archived subtasks follow a moment after the delete. Restoring the
 parent does not bring it back under it. People following it are told

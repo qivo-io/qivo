@@ -1425,7 +1425,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry. A task holds at most 1,000 comments, and you post at most 10 on one task in any 60 seconds (see [Comments, inbox and following](#comments-inbox-and-following)) |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same sub-project. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; its subtasks move along, and a subtask must leave its parent in the same call or get one in the destination), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it` or `restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; its subtasks move along, and a subtask must leave its parent in the same call or get one in the destination), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the first links, and `list_task_related` the rest |
 | `list_labels` | One page of the organization's labels as `{next_cursor, labels}`, each `id`, `name` and `color`, by name in any case, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)) |
@@ -1465,7 +1465,7 @@ since. A call without `expected` saves as before. The rule, for each key:
 
 | Tool | Keys of `expected` |
 |---|---|
-| `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with `has_hidden_parent`, `project_id` |
+| `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id`, `project_id` |
 | `update_comment`, `delete_comment` | `body` |
 | `update_project` | `name`, `description`, `track_delay`, `review_hours`, `lead_id` |
 | `set_project_access` with a `level` other than `null` | `level` |
@@ -1475,8 +1475,8 @@ since. A call without `expected` saves as before. The rule, for each key:
 | `update_user` | `plannable_hours` |
 
 Each key belongs to the argument of the same name, with three exceptions on
-a task. `parent_id` and `has_hidden_parent` belong to `parent`, and
-`project_id` to `project` or `sub_project`. A delete takes any of its keys.
+a task. `parent_id` belongs to `parent`, as does `has_hidden_parent` while
+Qivo still takes it, and `project_id` to `project` or `sub_project`. A delete takes any of its keys.
 `archived`, `archive_reason`, `add_labels` and `remove_labels` take no key
 and are never checked. A call that creates a record takes no `expected`.
 A call that creates a task, comment, project, milestone, label or team
@@ -1484,13 +1484,12 @@ refuses it with the sentence below.
 
 Send each value as a read tool answered it:
 
-- `get_task` gives a task's fields. Send `parent_id` and `has_hidden_parent`
-  together, as the parent's uuid with `false`, `null` with `true` for a
-  parent you cannot read, or `null` with `false` for no parent. A parent you
-  read as hidden matches any parent you cannot read, so a move from one hidden parent
-  to another is not detected, because telling you would reveal tasks you
-  cannot see. An active task with subtasks reads `remaining_hours: null`,
-  also while it stores hours of its own, so send `null`.
+- `get_task` gives a task's fields. Send `parent_id` as the parent's uuid,
+  or `null` for no parent. A parent you read matches while it stays the
+  parent. Qivo still takes `has_hidden_parent` beside `parent_id`, and a
+  later release refuses it, so stop sending it. `has_hidden_parent: true`
+  matches nothing. An active task with subtasks reads `remaining_hours:
+  null`, also while it stores hours of its own, so send `null`.
 - `get_project` gives a project's fields, the first 50 of its milestones'
   `name` and `date` and the first 50 of its user grants and of its team
   grants (`grants`), and `list_project_related` the rest of each. `lead_id`
@@ -1544,7 +1543,8 @@ characters`, `expected.name must be a string that is not blank, of at most
 40 characters` (a label's), `expected.assignee_id must be a profile uuid or
 null`, `expected.date must be a date as YYYY-MM-DD`,
 `expected.parent_id applies only when the request sends parent` and
-`expected.parent_id and expected.has_hidden_parent go together`. `expected`
+`expected.parent_id and expected.has_hidden_parent go together`, when
+`has_hidden_parent` comes without `parent_id`. `expected`
 on a call that creates is refused with `expected applies only when changing
 an existing <record>`: `task` for `create_task`, `comment` for
 `add_comment`, `project` for `create_project`, and `label`, `team` and
@@ -1774,18 +1774,15 @@ the time a task entering `review` gets. `completion` is the project's
 **Completion** on the app's Overview. It counts the active tasks without
 subtasks in the project, or for a top-level project in its sub-projects you
 can read that are not archived, and `done` counts those that are Done. A
-task with an active subtask in any project that is not archived counts as a
-group and is left out, as in the app, also when that subtask, from older
-versions of Qivo, is in a sub-project hidden from you or in another
-top-level project. `percent` is rounded, and `0` when
+task with an active subtask counts as a group and is left out, as in the
+app. `percent` is rounded, and `0` when
 `total` is `0`. Its `status` is `ok`. Qivo keeps these counts as tasks
 change, so they hold whatever the project's size. For a moment after any
 project of the organization is archived, restored, moved to Deleted items
 or brought back from it, and while Qivo counts an organization again, it is
 `{"status": "counting", "done": null, "total": null, "percent": null}`, so
-ask again later. That includes a project in another top-level project,
-because older versions of Qivo let a subtask sit in another top-level
-project than its parent. An `update_project` that restores a project
+ask again later. That includes a project in another top-level project. An
+`update_project` that restores a project
 answers its completion as `counting` too, unless it is a top-level project
 with no live sub-project you can read, which answers `ok` with zero counts,
 and one that archives a project answers `null`. In a project with
@@ -2152,20 +2149,20 @@ MCP`.
 columns: `owner_id` (whose work it is, the reviewer while the task is in
 `review` with one, else the assignee, and always the assignee on a group),
 `parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
-the address the app's **Copy link** gives. `parent_id` is the parent's uuid
-when you can read the parent. Otherwise it is `null` and `has_hidden_parent`
-is `true`, so a subtask under a task hidden from you is not mistaken for a
-top-level task. A group's `start_week` and `end_week` come from the subtasks
-you can read, at any depth.
+the address the app's **Copy link** gives. `parent_id` is the parent's uuid,
+or `null` for a task without a parent. A parent is in its subtask's own
+sub-project, so if you can read a subtask you can read its parent.
+`has_hidden_parent` is always `false`, and a later release removes it, so
+stop reading it. A group's `start_week` and `end_week` come from its
+subtasks, at any depth.
 
 `progress` is `null` for a task without subtasks. For a group it is the
 **Progress** of the app's task window, `done` of `total` tasks without
-subtasks under it, at any depth, that you can read, for example `{"done": 2,
-"total": 3, "percent": 67, "partial": true}`. It counts the same subtasks
-as the group's dates, scheduled or not, and `done` counts those that are
-Done. `percent` is rounded, and `0` when `total` is `0`. `partial` is `true`
-when some of the group is hidden from you, such as a subtask you cannot read,
-so the true completion is unknown. The app then says "Completion unknown".
+subtasks under it, at any depth, for example `{"done": 2, "total": 3,
+"percent": 67, "partial": true}`. It counts the same subtasks as the
+group's dates, scheduled or not, and `done` counts those that are Done.
+`percent` is rounded, and `0` when `total` is `0`. `partial` is `true` when
+Qivo could not read the whole group, so the true completion is unknown. The app then says "Completion unknown".
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show, for example `{"status": "behind", "projected_end_week":
@@ -2181,7 +2178,7 @@ hours and their other scheduled work, counted as the app counts it for you.
 For organization admins and users that includes work in projects they
 cannot read, without naming it. For viewers and guests it includes only
 work they can read or own, so two users can get different verdicts for one
-task. A group with subtasks you cannot read can only be `late`, as in the
+task. A group whose `progress` is `partial` can only be `late`, as in the
 app. The server judges today's date in UTC, so near midnight or a week
 boundary it can differ from the app, which uses the browser's time zone.
 
@@ -2294,17 +2291,14 @@ update whole with `Qivo could not finish checking which projects you can
 see in one request. Contact support@qivo.io so we can help.` Only a person
 far past the sizes Qivo is built for meets it.
 
-`subtasks` are the first page of the direct subtasks you can read, by number. An active task
-lists its active ones, also those in an archived project, which do not make
-it a group while its own project is active, and an archived task lists all
-of them. `links` are the
+`subtasks` are the first page of the direct subtasks, by number. An active
+task lists its active ones, and an archived task lists all of them. `links`
+are the
 task's links whose other task you can read, `kind` as seen from this task.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
 is the remaining time the app shows, which is the sum over its unfinished
-subtasks at any depth that you can read, or `null` when none has hours. Like
-the group's dates, it counts only active subtasks of an active group, leaves
-out subtasks in archived projects while the group's project is active, and
-stops at a subtask you cannot read.
+subtasks at any depth, or `null` when none has hours. Like the group's
+dates, it counts only active subtasks of an active group.
 
 An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks. So can an active group stored before the rule
@@ -2452,14 +2446,7 @@ and subtasks.
 
 A subtask stays in its parent's own sub-project, and tasks live only in
 sub-projects, so every move also moves every subtask, archived ones
-included, that is not already in the destination, to another sub-project of
-the same project as to another project. You need Edit access on each of
-their projects (otherwise `moving
-this task would move a subtask in a project you cannot edit; someone who can
-edit that project can move it`). A subtask in a project that is being moved
-to Deleted items refuses the move for everyone, admins included, with `a
-subtask of this task is being moved to Deleted items; try again when that
-finishes`.
+included, to another sub-project of the same project as to another project.
 The assignee and the reviewer of each active subtask the move carries must
 be able to work in the destination. Otherwise the refusal names them with their subtasks,
 such as `Aisha Rahman (on QN-14, QN-15) and Leo Martins (on QN-16) cannot
@@ -2483,9 +2470,7 @@ itself gets an activity row and an inbox message. A subtask that moves must
 leave its parent in the same call, with `parent: null` or a new parent in
 the destination; otherwise the call is refused with `a subtask stays in its
 parent task's sub-project; to move it to another sub-project, detach it from
-its parent in the same change`. A subtask from older versions of Qivo in
-another sub-project than its parent may also move into its parent's
-sub-project.
+its parent in the same change`.
 
 A task has one level of subtasks, at most 100 active ones; archived
 subtasks do not count. `parent` is refused with `the parent task is a
@@ -2502,9 +2487,7 @@ subtask was archived, even when the parent is back from Deleted items,
 because that delete takes every such subtask off the parent. Naming that
 parent as `parent` to keep it is refused with `this task's parent was
 deleted after this task was archived, so the task comes back as a top-level
-task; restore it without naming that parent`. A parent in a project you cannot see counts as being in the subtask's own
-sub-project, so moving such a subtask also needs `parent: null` or a new
-parent in the destination.
+task; restore it without naming that parent`.
 
 `parent` (a task ref) makes the task a subtask of that task, and `null`
 detaches it. You need Edit access on the parent's project, because the
@@ -2512,9 +2495,7 @@ parent becomes a group and loses its own remaining hours. A parent you
 cannot read reads `parent task "<ref>" not found (or not visible to you)`.
 A subtask stays in its parent's own sub-project, so a parent in any other
 sub-project, after any move in the same call, is refused with `a subtask
-must be in the same sub-project as its parent task`. Older versions of Qivo
-let a subtask sit in another sub-project than its parent; such tasks keep
-their parent until they move or leave it.
+must be in the same sub-project as its parent task`.
 The task cannot become its own parent, an active task cannot go under an
 archived parent, and a task has one level of subtasks (see above).
 
@@ -3116,11 +3097,10 @@ longer in the `create_task`/`update_task` schemas. A client still sending
 `estimate_hours` is refused with `Unrecognized key`, and the call changes
 nothing. Update the client. A task **with
 active subtasks** has no remaining time of its own (0066; archived
-subtasks stopped counting in 0070, and subtasks in archived projects do not
-count for a task in an active project). `update_task` with a non-null
+subtasks stopped counting in 0070). `update_task` with a non-null
 `remaining_hours` for one is refused with `remaining_hours cannot be set on a
-task with subtasks, because it is the sum of their remaining time`, also when you
-cannot read the subtasks. `null` passes as a no-op. The hours live on the
+task with subtasks, because it is the sum of their remaining time`. `null`
+passes as a no-op. The hours live on the
 subtasks, and the app shows the parent's value as the sum over its unfinished
 subtasks; such tasks read back `remaining_hours: null` and
 `remaining_set_at: null`, also while they still store hours of their own
