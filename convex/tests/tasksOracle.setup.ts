@@ -5,8 +5,9 @@
  * one of its windows together: the active tasks of the seat's organization
  * that the seat is shown (lib/workingSet.ts, lib/access.ts Access.holds),
  * each with its text from its description row, its parent's id only when
- * the seat is shown the parent (parentLink), has_subtasks and
- * has_hidden_subtasks from the active subtasks in live projects; the links
+ * the seat is shown the parent (parentLink), has_subtasks from its active
+ * subtasks (lib/liveTasks.ts countsAsSubtask) and has_hidden_subtasks
+ * false; the links
  * from each shown task as source whose target the seat is shown; the label
  * assignments, attachment rows and the seat's follows of the shown tasks;
  * and the anonymized load rows of the active tasks the seat is not shown,
@@ -26,6 +27,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { accessOf, isOrgStaff } from '../lib/access'
 import { byId } from '../lib/db'
+import { countsAsSubtask } from '../lib/liveTasks'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { taskOwnerId } from '../lib/review'
 import { parentLink } from '../lib/workingSet'
@@ -94,8 +96,7 @@ export async function tasksOracle(ctx: QueryCtx, me: Doc<'profiles'>): Promise<T
     return held
   }
   const tasks = active.filter((task) => heldOf.get(task.id) === true)
-  // the active subtasks in live projects of each active task, and whether
-  // the seat cannot see each such subtask's project
+  // whether each project is live, asked once
   const liveOf = new Map<string, boolean>()
   const live = async (projectId: string) => {
     let known = liveOf.get(projectId)
@@ -105,12 +106,13 @@ export async function tasksOracle(ctx: QueryCtx, me: Doc<'profiles'>): Promise<T
     }
     return known
   }
+  // the active subtasks of each active task that count for it
+  const byTask = new Map(active.map((task) => [task.id, task]))
   const kids = new Map<string, Doc<'issues'>[]>()
-  const hiddenKid = new Set<string>()
   for (const kid of active) {
-    if (kid.parent_id === undefined || !(await live(kid.project_id))) continue
-    kids.set(kid.parent_id, [...(kids.get(kid.parent_id) ?? []), kid])
-    if (!(await access.visible(kid.project_id))) hiddenKid.add(kid.id)
+    const parent = kid.parent_id === undefined ? undefined : byTask.get(kid.parent_id)
+    if (parent === undefined || !countsAsSubtask(parent, kid)) continue
+    kids.set(parent.id, [...(kids.get(parent.id) ?? []), kid])
   }
 
   const issues: TaskSections['issues'] = []
@@ -124,14 +126,16 @@ export async function tasksOracle(ctx: QueryCtx, me: Doc<'profiles'>): Promise<T
     // rows, as it read them through its own indexes
     const kept = <R extends { task_archived?: true }>(rows: R[]) =>
       flagged ? rows : rows.filter((row) => row.task_archived !== true)
-    const ownParent = task.parent_id === undefined ? false : await shown(task.parent_id)
-    const own = kids.get(task.id) ?? []
+    const ownParent =
+      task.parent_id !== undefined && (await shown(task.parent_id))
+        ? byTask.get(task.parent_id)
+        : undefined
     issues.push({
       ...taskFields(task),
       description: await descriptionOf(ctx.db, task),
-      ...parentLink(task, () => ownParent),
-      has_subtasks: own.length > 0,
-      has_hidden_subtasks: own.some((kid) => hiddenKid.has(kid.id)),
+      ...parentLink(task, ownParent),
+      has_subtasks: (kids.get(task.id) ?? []).length > 0,
+      has_hidden_subtasks: false,
     })
     for (const row of kept(
       await ctx.db

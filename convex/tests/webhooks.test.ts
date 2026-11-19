@@ -167,9 +167,10 @@ describe('durable task events', () => {
       }),
     )
     expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeDefined()
+    // a subtask in the task's own sub-project, which the move carries
     await f.t.run(async (ctx) => {
       const row = await byId(ctx, 'issues', child.id)
-      await ctx.db.patch(row!._id, { parent_id: f.issue.id })
+      await ctx.db.patch(row!._id, { parent_id: f.issue.id, project_id: f.fx.sub2.id })
     })
     const carried = await move(far.id)
     expect(carried).toContainEqual([child.id, ['project_id']])

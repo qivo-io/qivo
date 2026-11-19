@@ -9,28 +9,23 @@ const NOW = '2026-01-01T00:00:00.000Z'
 
 describe('the oracle’s group rule', () => {
   it('makes a task a group by the subtasks among its rows', () => {
-    const live = (id: string) => id === 'on'
     const rows = [
-      { parent_id: 'a', archived_at: undefined, project_id: 'off' },
-      { parent_id: 'b', archived_at: undefined, project_id: 'on' },
-      { parent_id: 'c', archived_at: NOW, project_id: 'on' },
+      { parent_id: 'a', org_id: 'o', archived_at: undefined, project_id: 'p' },
+      { parent_id: 'c', org_id: 'o', archived_at: NOW, project_id: 'p' },
     ]
-    const isGroup = groupTest(rows, live)
-    const at = (id: string, project_id: string, archived_at?: string) => ({
+    const isGroup = groupTest(rows)
+    const at = (id: string, archived_at?: string) => ({
       id,
-      project_id,
+      org_id: 'o',
+      project_id: 'p',
       archived_at,
     })
-    // an active parent in a live project counts only active subtasks in
-    // live projects
-    expect(isGroup(at('a', 'on'))).toBe(false)
-    // an active parent in an archived project counts every active subtask
-    expect(isGroup(at('a', 'off'))).toBe(true)
-    expect(isGroup(at('b', 'on'))).toBe(true)
+    // an active subtask counts
+    expect(isGroup(at('a'))).toBe(true)
     // an archived subtask counts only for an archived parent
-    expect(isGroup(at('c', 'on'))).toBe(false)
-    expect(isGroup(at('c', 'on', NOW))).toBe(true)
+    expect(isGroup(at('c'))).toBe(false)
+    expect(isGroup(at('c', NOW))).toBe(true)
     // a task without subtasks among the rows is no group
-    expect(isGroup(at('d', 'on'))).toBe(false)
+    expect(isGroup(at('e'))).toBe(false)
   })
 })

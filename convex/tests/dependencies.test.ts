@@ -125,7 +125,7 @@ describe('the parts', () => {
     // an unscheduled one
     const g = await task(t, ops.subs[0], { title: 'G' })
     const x = await task(t, ops.subs[0], { title: 'X', parent_id: g.id, ...dated(-3) })
-    const y = await task(t, ops.subs[1], { title: 'Y', parent_id: g.id, ...dated(-6) })
+    const y = await task(t, ops.subs[0], { title: 'Y', parent_id: g.id, ...dated(-6) })
     await task(t, ops.subs[0], { title: 'Unscheduled', parent_id: g.id })
     await link(t, x, b)
     // C blocks A from OPS, and D in MKT blocks C
@@ -162,12 +162,12 @@ describe('the parts', () => {
     )
   })
 
-  it('takes in a selected task without links whose parent outside the selection has one', async () => {
+  it('takes in a selected task without links whose parent has one', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const parent = await task(t, f.sub2, { title: 'Parent' })
+    const parent = await task(t, f.sub, { title: 'Parent' })
     const leaf = await task(t, f.sub, { title: 'Leaf', parent_id: parent.id, ...dated(0) })
-    const sibling = await task(t, f.sub2, { title: 'Sibling', parent_id: parent.id, ...dated(3) })
+    const sibling = await task(t, f.sub, { title: 'Sibling', parent_id: parent.id, ...dated(3) })
     const w = await task(t, f.sub2, { title: 'W', ...dated(6) })
     await link(t, parent, w)
     // a selected leaf with a family and no link anywhere stays out

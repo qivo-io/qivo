@@ -1056,7 +1056,7 @@ describe('deleting a task with many subtasks', () => {
     const fx = await crowded(0)
     const parent = await plantIssue(fx.t, {
       org_id: fx.org.id,
-      project_id: fx.sub2.id,
+      project_id: fx.sub.id,
       title: 'Parent',
       assignee_id: fx.user.id,
     })

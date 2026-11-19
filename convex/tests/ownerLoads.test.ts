@@ -229,7 +229,7 @@ const orgOwner = (fx: Pick<Fx, 't'>, reader: Doc<'profiles'>, ownerId: string) =
       .map(spanOf(projectOf))
       .sort(byLoadRow)
     const projectLive = liveIn(view.byUuid)
-    const isGroup = groupTest(live, projectLive)
+    const isGroup = groupTest(live)
     const inOrg = roster.some((p) => p.id === ownerId)
     const paused = live
       .filter(
@@ -297,7 +297,7 @@ const assigneeOracle = (fx: Fx, reader: Doc<'profiles'>, ownerId: string) =>
     if (owner === null || owner.org_id !== me.org_id) return []
     const view = await orgProjectView(ctx, me)
     const live = await liveTasksOf(ctx, view.projects)
-    const isGroup = groupTest(live, liveIn(view.byUuid))
+    const isGroup = groupTest(live)
     const rows: AssigneeLoadRow[] = []
     for (const i of live) {
       if (taskOwnerId(i) !== ownerId || i.start_week === undefined || i.end_week === undefined)
@@ -856,13 +856,12 @@ describe('which tasks count', () => {
     const fx = await setup()
     const mine = { assignee_id: fx.user.id, ...plan(3) }
     const leaf = await task(fx, mine)
-    // an active subtask in a live sub-project makes a group, whose stale
-    // own hours never count
+    // an active subtask makes a group, whose stale own hours never count
     const group = await task(fx, { ...mine, remaining_hours: 8 })
-    await task(fx, { project_id: fx.sub2.id, parent_id: group.id })
-    // a subtask only in the archived sub-project does not
+    await task(fx, { parent_id: group.id })
+    // an archived subtask does not
     const shelved = await task(fx, { ...mine, remaining_hours: 4 })
-    await task(fx, { project_id: fx.shelf.id, parent_id: shelved.id })
+    await task(fx, { parent_id: shelved.id, archived_at: NOW })
     // an archived task, a task of the archived sub-project and a task
     // whose project row is gone carry no load
     await task(fx, { ...mine, archived_at: NOW })
@@ -892,12 +891,12 @@ describe('which tasks count', () => {
     const fx = await setup()
     const mine = { assignee_id: fx.user.id, paused: true, ...plan(3) }
     const leaf = await task(fx, mine)
-    // a group's stored pause is dormant. A subtask in a live sub-project
-    // makes one, and one only in the archived sub-project does not
+    // a group's stored pause is dormant. An active subtask makes one, and
+    // an archived one does not
     const group = await task(fx, mine)
-    await task(fx, { project_id: fx.sub2.id, parent_id: group.id })
+    await task(fx, { parent_id: group.id })
     const shelved = await task(fx, mine)
-    await task(fx, { project_id: fx.shelf.id, parent_id: shelved.id })
+    await task(fx, { parent_id: shelved.id, archived_at: NOW })
     // no hours, zero hours and Backlog, a legacy pause a status write would
     // have cleared, stay in
     const weeks = { start_week: '2026-09-07', end_week: '2026-09-14' }

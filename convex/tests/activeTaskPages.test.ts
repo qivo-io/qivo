@@ -540,7 +540,7 @@ describe('groups created under the rule of one level', () => {
     for (const [i, status] of (['done', 'todo'] as const).entries())
       await plantIssue(fx.t, {
         org_id: fx.org.id,
-        project_id: i === 0 ? fx.sub.id : fx.sub2.id,
+        project_id: fx.sub.id,
         parent_id: group.id,
         status,
         start_week: '2026-11-02',

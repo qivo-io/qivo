@@ -168,12 +168,12 @@ async function cases(fx: Fx) {
     nothing: await task(fx, { title: 'Nothing to judge' }),
     // PCB stops tracking below
     pcb: await task(fx, { title: 'Board', project_id: fx.sub2.id, due_date: '2026-10-01' }),
-    // a group late for staff, whose subtask in sib ends after the due week;
-    // the guest sees only the subtask that ends in time, so no verdict
+    // a group late for everyone, whose second subtask ends after the due
+    // week
     group: await (async () => {
       const g = await task(fx, { title: 'Group', due_date: W(2) })
       await task(fx, { parent_id: g.id, ...scheduled(0, 1) })
-      await task(fx, { parent_id: g.id, project_id: fx.sib.id, ...scheduled(0, 4) })
+      await task(fx, { parent_id: g.id, ...scheduled(0, 4) })
       return g
     })(),
     archived: await task(fx, { title: 'Archived', due_date: '2026-10-01', archived_at: NOW }),
@@ -374,7 +374,7 @@ describe('delay is the app’s projected delay for each reader', () => {
     expect(admin.get(c.stale.id)).toEqual(verdict('behind', 0))
     expect(admin.get(c.measured.id)).toEqual(verdict('ok', 0))
     expect(admin.get(c.group.id)).toEqual(verdict('late', 4))
-    expect(guest.get(c.group.id)).toBeNull()
+    expect(guest.get(c.group.id)).toEqual(verdict('late', 4))
     for (const quiet of [c.done, c.nothing, c.pcb, c.archived]) {
       expect(admin.get(quiet.id), quiet.title).toBeNull()
     }

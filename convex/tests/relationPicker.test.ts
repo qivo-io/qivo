@@ -613,29 +613,14 @@ describe('the Parent picker', () => {
 })
 
 describe('the Subtasks picker', () => {
-  it('offers tasks without subtasks with their parent as the reader sees it, and never a task with subtasks or a current subtask', async () => {
+  it('offers tasks without subtasks with their parent, and never a task with subtasks or a current subtask', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
-    const shelved = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: NOW,
-    })
     const open = await task(t, f, f.sub)
     const current = await task(t, f, f.sub, { parent_id: open.id })
     const plain = await task(t, f, f.sub, { title: 'Plain' })
     const shownParent = await task(t, f, f.sub, { title: 'Shown parent' })
-    const ofShown = await task(t, f, f.sub2, {
-      title: 'Of the shown parent',
-      parent_id: shownParent.id,
-    })
-    const hiddenParent = await task(t, f, sibling, { title: 'Hidden parent' })
-    const ofHidden = await task(t, f, f.sub, {
-      title: 'Of the hidden parent',
-      parent_id: hiddenParent.id,
-    })
+    const inPcb = await task(t, f, f.sub2, { title: 'In PCB' })
     // created under the rule of one level, so it reads no subtask
     const recent = await task(t, f, f.sub, {
       title: 'Recent',
@@ -644,23 +629,15 @@ describe('the Subtasks picker', () => {
     })
     const withArchived = await task(t, f, f.sub, { title: 'Only an archived subtask' })
     await task(t, f, f.sub, { parent_id: withArchived.id, archived_at: NOW })
-    const withHidden = await task(t, f, f.sub, { title: 'Only a hidden subtask' })
-    await task(t, f, sibling, { parent_id: withHidden.id })
-    const withShelved = await task(t, f, f.sub, { title: 'Only a shelved subtask' })
-    await task(t, f, shelved, { parent_id: withShelved.id })
     const answer = okOf(await pick(t, f.guest, open.id, 'subtask'))
-    // FW alone, where a subtask stays with its parent; the task in PCB is
-    // in another sub-project, as only a family from before that rule is
+    // FW alone, where a subtask stays with its parent
     expect(answer.rows.map((r) => [r.title, r.parent_id ?? null, r.has_hidden_parent])).toEqual([
       ['Plain', null, false],
-      ['Of the hidden parent', null, true],
       ['Recent', shownParent.id, false],
     ])
-    for (const out of [current, shownParent, withArchived, withHidden, withShelved])
+    for (const out of [current, shownParent, withArchived, inPcb])
       expect(answer.rows.map((r) => r.id)).not.toContain(out.id)
-    expect(answer.rows.find((r) => r.id === ofHidden.id)).not.toHaveProperty('parent_id')
     expect(answer.rows.map((r) => r.id)).toContain(plain.id)
-    expect(answer.rows.map((r) => r.id)).not.toContain(ofShown.id)
     expect(answer.rows.map((r) => r.id)).toContain(recent.id)
     // the rows carry the window's short row fields and the reader's level
     expect(answer.rows[0]).toMatchObject({

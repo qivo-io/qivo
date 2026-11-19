@@ -22,7 +22,6 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
-  plantProject,
   type T,
   uuid,
   withReadingAdmin,
@@ -262,8 +261,9 @@ describe('malformed expected', () => {
         { status: 'done', expected: { title: 'One' } },
         'expected.title applies only when the request sends title',
       ],
+      // expected.parent_id may come alone, and has_hidden_parent never does
       [
-        { parent: null, expected: { parent_id: null } },
+        { parent: null, expected: { has_hidden_parent: false } },
         'expected.parent_id and expected.has_hidden_parent go together',
       ],
       [
@@ -767,63 +767,6 @@ describe('expected on a create', () => {
     // nothing was created
     const tasks = await fx.t.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks.map((t) => t.id)).toEqual([row.id])
-  })
-})
-
-describe('a parent the caller cannot read', () => {
-  it('compares an id the caller is not shown as a hidden parent, so it tells nothing', async () => {
-    const fx = await setup()
-    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'Child' })
-    // a parent in a top-level project the agent cannot read
-    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
-    const away = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      key: 'HIDS',
-      type: 'project',
-      parent_id: elsewhere.id,
-    })
-    const hidden = (await plantIssue(fx.t, { org_id: fx.org.id, project_id: away.id })).id
-    // the right hidden id and any other id the caller cannot read answer alike
-    for (const guess of [hidden, uuid()]) {
-      await fx.t.run(async (ctx) => {
-        const live = await byId(ctx, 'issues', row.id)
-        if (live) await ctx.db.patch(live._id, { parent_id: hidden })
-      })
-      const probe = await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
-        parent: null,
-        expected: { parent_id: guess, has_hidden_parent: false },
-      })
-      expect(probe.status, guess).toBe(200)
-    }
-  })
-
-  it('still sees a parent it was shown that moved to one it is not, by its id in any case', async () => {
-    const fx = await setup()
-    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    const row = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.sub.id,
-      parent_id: shown.id,
-    })
-    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
-    const away = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      key: 'HIDS',
-      type: 'project',
-      parent_id: elsewhere.id,
-    })
-    const hidden = (await plantIssue(fx.t, { org_id: fx.org.id, project_id: away.id })).id
-    await fx.t.run(async (ctx) => {
-      const live = await byId(ctx, 'issues', row.id)
-      if (live) await ctx.db.patch(live._id, { parent_id: hidden })
-    })
-    for (const seen of [shown.id, shown.id.toUpperCase()]) {
-      const probe = await send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
-        parent: null,
-        expected: { parent_id: seen, has_hidden_parent: false },
-      })
-      expect(probe.status, seen).toBe(409)
-    }
   })
 })
 

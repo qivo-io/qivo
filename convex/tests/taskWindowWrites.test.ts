@@ -15,13 +15,11 @@ import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import type { Refusal } from '../lib/functions'
 import { TASK_WINDOW } from '../lib/taskWindow'
 import type { TaskRow } from '../lib/workspaceParts'
-import { ARCHIVE_CASCADE_RULE } from '../model/issues'
 import {
   as,
   expectRefusal,
   newT,
   type OrgFixture,
-  plantHiddenSibling,
   plantIssue,
   plantProject,
   type T,
@@ -150,42 +148,26 @@ describe('a write from the task window’s own answer', () => {
     }
   })
 
-  it('detaches a hidden parent by the pair the answer shows, also once it became another hidden task, passes as no change once there is none, and refuses once the guest is shown the parent', async () => {
+  it('detaches a parent by the pair the answer shows, passes as no change once there is none, and refuses once the task has another parent', async () => {
     const fx = await setup()
-    const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: sibling.id })
-    const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: sibling.id })
+    const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const plant = () =>
       plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: parent.id })
     const detach = (id: string, row: TaskRow) =>
       update(fx, fx.guest, id, { parent_id: null }, expectedFrom(row, ['parent_id']))
-    // no write puts a task under a parent in another sub-project any more,
-    // so the families of these cases, from before that rule, change in place
-    const repoint = (id: string, parent_id: string) =>
-      fx.t.run(async (ctx) => {
-        const row = await byId(ctx, 'issues', id)
-        if (row !== null) await ctx.db.patch(row._id, { parent_id })
-      })
 
     const child = await plant()
     const answer = await answerOf(fx, fx.guest, child.id)
-    expect(answer.task.parent_id).toBeUndefined()
-    expect(answer.task.has_hidden_parent).toBe(true)
-    expect(answer.parent).toBeNull()
+    expect(answer.task.parent_id).toBe(parent.id)
+    expect(answer.task.has_hidden_parent).toBe(false)
+    expect(answer.parent?.id).toBe(parent.id)
     expect(expectedFrom(answer.task, ['parent_id'])).toEqual({
-      parent_id: null,
-      has_hidden_parent: true,
+      parent_id: parent.id,
+      has_hidden_parent: false,
     })
     await detach(child.id, answer.task)
     expect((await stored(fx, child.id))?.parent_id).toBeUndefined()
-
-    // the hidden parent is another hidden task by the time the window
-    // writes, which the answer cannot tell, and the pair still matches
-    const moved = await plant()
-    const before = await answerOf(fx, fx.guest, moved.id)
-    await repoint(moved.id, other.id)
-    await detach(moved.id, before.task)
-    expect((await stored(fx, moved.id))?.parent_id).toBeUndefined()
 
     // no parent any more: the detach changes nothing, which the server
     // takes as no change to check
@@ -200,30 +182,14 @@ describe('a write from the task window’s own answer', () => {
     )
     await detach(gone.id, stale.task)
     expect((await stored(fx, gone.id))?.parent_id).toBeUndefined()
-    // a new hidden parent meanwhile: the pair still says there is one,
-    // so the detach takes it off, as the person asked
-    const again = await plant()
-    const seenAgain = await answerOf(fx, fx.guest, again.id)
-    await update(
-      fx,
-      fx.admin,
-      again.id,
-      { parent_id: null },
-      { parent_id: parent.id, has_hidden_parent: false },
-    )
-    await repoint(again.id, other.id)
-    await detach(again.id, seenAgain.task)
-    expect((await stored(fx, again.id))?.parent_id).toBeUndefined()
-    // and a parent the guest is shown since, which the hidden pair does not
-    // name, is refused
-    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    // and another parent since, which the pair does not name, is refused
     const third = await plant()
     const seenThird = await answerOf(fx, fx.guest, third.id)
     await update(
       fx,
       fx.admin,
       third.id,
-      { parent_id: shown.id },
+      { parent_id: other.id },
       { parent_id: parent.id, has_hidden_parent: false },
     )
     expect(await changedFields(detach(third.id, seenThird.task))).toEqual(['parent_id'])
@@ -282,39 +248,17 @@ describe('a write from the task window’s own answer', () => {
     ).toEqual(['project_id'])
   })
 
-  it('refuses an archive over a subtask the answer lists in a project the caller cannot edit, and a delete of one that moved away', async () => {
+  it('refuses a delete of a subtask the answer lists that moved away since', async () => {
     const fx = await setup()
-    const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
-    // the guest views the sibling, so the answer lists its subtask
-    await fx.t.run((ctx) =>
-      ctx.db.insert('project_access', {
-        project_id: sibling.id,
-        profile_id: fx.guest.id,
-        level: 'viewer',
-      }),
-    )
     const root = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const mine = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
       parent_id: root.id,
     })
-    const viewOnly = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: sibling.id,
-      parent_id: root.id,
-    })
     const answer = await answerOf(fx, fx.guest, root.id)
     expect(answer.subtasks.complete).toBe(true)
-    expect(answer.subtasks.rows.map((row) => [row.id, row.level])).toEqual([
-      [mine.id, 'user'],
-      [viewOnly.id, 'viewer'],
-    ])
-    await expectRefusal(
-      as(fx.t, fx.guest).mutation(api.issues.archive, { org_id: fx.org.id, id: root.id }),
-      'rule',
-      new RegExp(ARCHIVE_CASCADE_RULE),
-    )
+    expect(answer.subtasks.rows.map((row) => [row.id, row.level])).toEqual([[mine.id, 'user']])
     // the subtask the answer listed moves away before the delete
     await update(
       fx,
@@ -332,7 +276,7 @@ describe('a write from the task window’s own answer', () => {
       'rule',
       new RegExp(SUBTASKS_CHANGED),
     )
-    expect((await stored(fx, root.id))?.archived_at).toBeUndefined()
+    expect(await stored(fx, root.id)).not.toBeNull()
   })
 
   it('answers a Viewer and a guest their level, and refuses their writes alike', async () => {

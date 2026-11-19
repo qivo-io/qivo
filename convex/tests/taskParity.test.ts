@@ -32,7 +32,6 @@ import {
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { SUBTASK_WITH_SUBTASKS } from '../lib/limits'
-import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
 import { issueKey } from '../lib/taskRefs'
 import { sha256hex } from '../machine/auth'
@@ -224,16 +223,10 @@ describe('the single-task read names only tasks the caller can read', () => {
     const parent = await task(fx, { title: 'Parent', remaining_hours: 9, remaining_set_at: NOW })
     const a = await task(fx, { parent_id: parent.id, title: 'A', remaining_hours: 3 })
     await task(fx, { parent_id: parent.id, title: 'B', status: 'done', remaining_hours: 5 })
-    await task(fx, { parent_id: parent.id, project_id: fx.hiddenSub.id, remaining_hours: 7 })
     await task(fx, { parent_id: parent.id, archived_at: NOW, remaining_hours: 4 })
+    // a group stored before the rule of one level
     const e = await task(fx, { parent_id: parent.id, title: 'E', remaining_hours: 8 })
-    await task(fx, { parent_id: e.id, project_id: fx.sub2.id, remaining_hours: 2.5 })
-    const f = await task(fx, {
-      parent_id: parent.id,
-      project_id: fx.archivedSub.id,
-      title: 'F',
-      remaining_hours: 6,
-    })
+    await task(fx, { parent_id: e.id, remaining_hours: 2.5 })
     const blocked = await task(fx, { title: 'Blocked' })
     const blocker = await task(fx, { title: 'Blocker' })
     const related = await task(fx, { title: 'Related' })
@@ -256,14 +249,14 @@ describe('the single-task read names only tasks the caller can read', () => {
       status: t.status,
     })
     const expected = {
-      // A 3 + E's leaf 2.5; not the Done one, the hidden one, the archived
-      // one, nor F in an archived project; E's own hours are dormant
+      // A 3 + E's leaf 2.5; not the Done one nor the archived one; E's own
+      // hours are dormant
       group_remaining_hours: 5.5,
       labels: [
         { id: bug, name: 'Bug', color: '#FF0000' },
         { id: odd, name: 'Odd', color: '#8A8F98' },
       ],
-      subtasks: [ref(a), expect.objectContaining({ title: 'B' }), ref(e), ref(f)],
+      subtasks: [ref(a), expect.objectContaining({ title: 'B' }), ref(e)],
       links: [
         { kind: 'blocks', ...ref(blocked) },
         { kind: 'blocked_by', ...ref(blocker) },
@@ -300,34 +293,29 @@ describe('the single-task read names only tasks the caller can read', () => {
       'attachments_next_cursor',
       'attachments',
     ])
-    // an admin reads the hidden subtask and link too, and counts its hours
+    // an admin reads the hidden link too, and the same subtasks and hours
     const admin = await restGet(fx, parent.id, fx.admin.id)
-    expect(admin.group_remaining_hours).toBe(12.5)
-    expect(admin.subtasks).toHaveLength(5)
+    expect(admin.group_remaining_hours).toBe(5.5)
+    expect(admin.subtasks.map((t) => t.id)).toEqual(rest.subtasks.map((t) => t.id))
     expect(admin.links.map((l) => l.id)).toContain(secret.id)
     // a leaf has no group total
     expect((await restGet(fx, a.id)).group_remaining_hours).toBeNull()
   })
 
-  it('a hidden parent reads as has_hidden_parent; owner and link on rows', async () => {
+  it('a parent reads by id, with has_hidden_parent false; owner and link on rows', async () => {
     const fx = await setup()
-    const hiddenParent = await task(fx, { project_id: fx.hiddenSub.id })
     const visibleParent = await task(fx)
-    const underHidden = await task(fx, { parent_id: hiddenParent.id, assignee_id: fx.user.id })
+    const leaf = await task(fx, { assignee_id: fx.user.id })
     const underVisible = await task(fx, {
       parent_id: visibleParent.id,
       status: 'review',
       assignee_id: fx.user.id,
       reviewer_id: fx.guest.id,
     })
-    const one = await restGet(fx, underHidden.id)
-    expect(one).toMatchObject({ parent_id: null, has_hidden_parent: true, owner_id: fx.user.id })
-    expect(one.url).toBe(`http://localhost:5199/app/testbed/tasks/qn-${underHidden.num}`)
+    const one = await restGet(fx, leaf.id)
+    expect(one).toMatchObject({ parent_id: null, has_hidden_parent: false, owner_id: fx.user.id })
+    expect(one.url).toBe(`http://localhost:5199/app/testbed/tasks/qn-${leaf.num}`)
     const rows = await restList(fx, {})
-    expect(rows.find((r) => r.id === underHidden.id)).toMatchObject({
-      parent_id: null,
-      has_hidden_parent: true,
-    })
     expect(rows.find((r) => r.id === underVisible.id)).toMatchObject({
       parent_id: visibleParent.id,
       has_hidden_parent: false,
@@ -337,12 +325,10 @@ describe('the single-task read names only tasks the caller can read', () => {
     const mcpRows = (
       await mcp<{ tasks: Record<string, unknown>[] }>(fx, internal.machine.mcp.listIssues, {})
     ).tasks
-    expect(mcpRows.find((r) => r.id === underHidden.id)).toMatchObject({
-      parent_id: null,
-      has_hidden_parent: true,
+    expect(mcpRows.find((r) => r.id === underVisible.id)).toMatchObject({
+      parent_id: visibleParent.id,
+      has_hidden_parent: false,
     })
-    // the admin sees the parent
-    expect((await restGet(fx, underHidden.id, fx.admin.id)).parent_id).toBe(hiddenParent.id)
   })
 })
 
@@ -370,20 +356,17 @@ describe('a single-task read walks only the subtasks that can count', () => {
       const flags = await accessFlags(ctx, me, cat, 'read')
       const readable = (id: string) => flags.get(id)?.read === true
       const projectOf = (id: string) => cat.byUuid.get(id)
-      const live = liveIn(cat.byUuid)
       const org = await byId(ctx, 'organizations', issue.org_id)
       const forecast = taskForecaster(ctx, me, delayClock(org, TODAY), accessOf(ctx, me))
-      const view = { me, project, children, live, forecast, readable, projectOf }
+      const view = { me, project, children, forecast, projectOf }
       const row =
         surface === 'rest'
           ? await issueOut(ctx, issue, { ...view, surface })
           : await issueOut(ctx, issue, { ...view, surface })
       const detail = await wholeDetails(ctx, me, issue, {
         children,
-        live,
         isGroup: row.is_group,
         readable,
-        projectOf,
       })
       return { out: cursorsShown(out), whole: { ...row, ...detail }, metrics }
     })
@@ -419,12 +402,6 @@ describe('a single-task read walks only the subtasks that can count', () => {
     const fx = await setup()
     const root = await task(fx, { title: 'Root', remaining_hours: 9 })
     const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-16', 3) })
-    const hidden = await task(fx, {
-      parent_id: root.id,
-      project_id: fx.hiddenSub.id,
-      ...scheduled('2026-01-05', '2026-01-05', 7),
-    })
-    await task(fx, { parent_id: hidden.id, ...scheduled('2025-12-01', '2025-12-01', 2) })
     const shelved = await task(fx, {
       parent_id: root.id,
       archived_at: NOW,
@@ -435,57 +412,48 @@ describe('a single-task read walks only the subtasks that can count', () => {
       archived_at: NOW,
       ...scheduled('2025-10-06', '2025-10-06', 1),
     })
-    const nested = await task(fx, { parent_id: root.id, project_id: fx.sub2.id })
-    await task(fx, {
-      parent_id: nested.id,
-      project_id: fx.sub2.id,
-      ...scheduled('2026-05-04', '2026-06-01', 6),
-    })
+    // a group stored before the rule of one level
+    const nested = await task(fx, { parent_id: root.id })
+    await task(fx, { parent_id: nested.id, ...scheduled('2026-05-04', '2026-06-01', 6) })
     await task(fx, {
       parent_id: nested.id,
       archived_at: NOW,
       ...scheduled('2027-01-04', '2027-01-04', 5),
     })
     await task(fx, {
-      parent_id: nested.id,
-      project_id: fx.archivedSub.id,
-      ...scheduled('2027-02-01', '2027-02-01', 8),
-    })
-    await task(fx, {
       parent_id: root.id,
-      project_id: fx.roSub.id,
       status: 'done',
       ...scheduled('2026-02-02', '2026-02-09', 1),
     })
-    // an archived group counts its whole subtree, outside archived projects
+    // an archived group counts its whole subtree
     const gone = await task(fx, { archived_at: NOW, title: 'Gone' })
-    for (const project_id of [fx.sub.id, fx.hiddenSub.id, fx.archivedSub.id]) {
+    for (const week of ['2026-07-06', '2026-08-03']) {
       await task(fx, {
         parent_id: gone.id,
-        project_id,
         archived_at: NOW,
-        ...scheduled('2026-07-06', '2026-07-13', 2),
+        ...scheduled(week, week, 2),
       })
     }
     for (const me of [fx.agent, fx.admin]) {
-      for (const issue of [root, leaf, hidden, shelved, nested, gone]) {
+      for (const issue of [root, leaf, shelved, nested, gone]) {
         for (const surface of ['rest', 'mcp'] as const) {
           const { out, whole } = await readBoth(fx, issue, me, surface)
           expect(out, `${me.name} ${issue.title} ${surface}`).toEqual(whole)
         }
       }
     }
-    // what the agent is told: the hidden branch, the archived ones, the
-    // archived project and the done leaf's hours stay out
-    expect((await readBoth(fx, root, fx.agent, 'rest')).out).toMatchObject({
-      is_group: true,
-      start_week: '2026-02-02',
-      end_week: '2026-06-01',
-      group_remaining_hours: 9,
-    })
-    expect((await readBoth(fx, root, fx.admin, 'rest')).out).toMatchObject({
-      start_week: '2025-12-01',
-      group_remaining_hours: 11,
+    // what the agent and the admin are told: the archived ones and the
+    // done leaf's hours stay out
+    for (const me of [fx.agent, fx.admin])
+      expect((await readBoth(fx, root, me, 'rest')).out, me.name).toMatchObject({
+        is_group: true,
+        start_week: '2026-02-02',
+        end_week: '2026-06-01',
+        group_remaining_hours: 9,
+      })
+    expect((await readBoth(fx, gone, fx.agent, 'rest')).out).toMatchObject({
+      start_week: '2026-07-06',
+      end_week: '2026-08-03',
     })
   })
 

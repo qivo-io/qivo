@@ -134,34 +134,6 @@ describe('who works on a subtask', () => {
     expect(await issueRow(t, other.id)).toEqual(other)
   })
 
-  it('assigns a subtask of an older family to someone who cannot see its parent, and keeps the parent hidden from them', async () => {
-    const t = newT()
-    const { f, base, epic } = await scene(t)
-    // a family stored across sub-projects before the rule: the subtask sits
-    // in Firmware, where the guest can work, under the epic they cannot see
-    const kid = await plantIssue(t, { ...base, parent_id: epic.id, title: 'Older subtask' })
-    await update(t, f, kid.id, { assignee_id: f.guest.id })
-    expect(await issueRow(t, kid.id)).toMatchObject({
-      parent_id: epic.id,
-      assignee_id: f.guest.id,
-    })
-    // the guest reads the subtask without its parent, as before
-    const answer = await as(t, f.guest).query(api.taskWindow.task, {
-      org_id: f.org.id,
-      ref: kid.id,
-    })
-    if (answer.state !== 'ok') throw new Error(`the window answered ${answer.state}`)
-    expect(answer.task.parent_id).toBeUndefined()
-    expect(answer.task.has_hidden_parent).toBe(true)
-    expect(answer.parent).toBeNull()
-    // someone who can only view Firmware still gets no work there
-    const reader = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
-    await grant(t, [f.sub.id], reader.id, 'viewer')
-    const r = await expectRefusal(update(t, f, kid.id, { assignee_id: reader.id }), 'rule')
-    expect(r.data.message).toBe(ASSIGNEE_RULE)
-    expect((await issueRow(t, kid.id)).assignee_id).toBe(f.guest.id)
-  })
-
   it('refuses a parent for a task whose only subtask is archived', async () => {
     const t = newT()
     const { f, home, epic } = await scene(t)
