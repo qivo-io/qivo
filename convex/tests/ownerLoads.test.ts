@@ -366,7 +366,8 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
           // a status write clears a pause, so a paused Backlog or Done task
           // is legacy data, planted here directly
           const over: Partial<Doc<'issues'>> = {
-            project_id: where[s.project].id,
+            // a subtask is in its parent's sub-project
+            project_id: parent?.project_id ?? where[s.project].id,
             status: s.status,
             paused: s.paused,
           }
@@ -1495,7 +1496,7 @@ describe('the reads follow the owner’s open work, not the organization', () =>
     await task(fx, { ...mine, project_id: fx.sib.id, ...plan(4) })
     await task(fx, { ...mine, project_id: fx.away.id, ...plan(5) })
     const group = await task(fx, { ...mine, ...plan(2) })
-    await task(fx, { parent_id: group.id, project_id: fx.sub2.id })
+    await task(fx, { parent_id: group.id })
     await task(fx, { ...mine, status: 'backlog' })
     const measure = async (caller: Doc<'profiles'>) => {
       const loadsRead = await as(fx.t, caller).query((ctx) =>

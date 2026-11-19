@@ -431,7 +431,8 @@ describe('a single read’s load is the list’s load', () => {
               ? undefined
               : planted[s.parent % planted.length]
           const over: Partial<Doc<'issues'>> = {
-            project_id: where[s.project].id,
+            // a subtask is in its parent's sub-project
+            project_id: parent?.project_id ?? where[s.project].id,
             status: s.status,
             paused: s.paused && s.status !== 'done' && s.status !== 'backlog',
           }
