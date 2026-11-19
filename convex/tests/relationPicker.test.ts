@@ -22,7 +22,7 @@ import {
   type RelationKind,
 } from '../lib/relationPicker'
 import { issueKey } from '../lib/taskRefs'
-import { PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
+import { ONE_LEVEL_SINCE, PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
 import { NO_WRITE_ACCESS } from '../model/issues'
 import { SHAPES } from './accessShapes.setup'
 import { plantTasks } from './board.setup'
@@ -540,13 +540,9 @@ describe('the Parent picker', () => {
   it('offers top-level tasks with room in projects the reader edits, and never the task, its parent, a subtask, a full task or another project', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
-    const shelved = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: NOW,
-    })
+    // the guest's grant on TBED moves onto FW and PCB, so they only view
+    // the sub-project below
+    await plantHiddenSibling(t, f, f.guest)
     // a sub-project the guest only views
     const viewed = await plantProject(t, {
       org_id: f.org.id,
@@ -565,13 +561,10 @@ describe('the Parent picker', () => {
     const inPcb = await task(t, f, f.sub2, { title: 'Top-level in PCB' })
     const inFw = await task(t, f, f.sub, { title: 'Top-level in FW' })
     const subtask = await task(t, f, f.sub2, { title: 'A subtask', parent_id: inPcb.id })
-    // 100 active subtasks, 40 the guest cannot see and 10 in an archived
-    // sub-project, a family stored across sub-projects before the subtask
-    // rule, count; archived ones do not
+    // LIMITS.subtasks.max active subtasks fill a task; archived ones do
+    // not count
     const full = await task(t, f, f.sub2, { title: 'Full' })
-    await subtasksOf(t, f.sub2, full, 50)
-    await subtasksOf(t, sibling, full, 40)
-    await subtasksOf(t, shelved, full, 10)
+    await subtasksOf(t, f.sub2, full, LIMITS.subtasks.max)
     const roomy = await task(t, f, f.sub2, { title: 'Roomy' })
     await subtasksOf(t, f.sub2, roomy, LIMITS.subtasks.max - 1)
     await plantTasks(t, f.sub2, 5, () => ({ parent_id: roomy.id, archived_at: NOW }))
@@ -671,6 +664,35 @@ describe('the Subtasks picker', () => {
     const open = okOf(await pick(t, f.user, roomy.id, 'subtask'))
     expect(open.blocked).toBeNull()
     expect(open.rows.length).toBeGreaterThan(0)
+  })
+
+  it('stops before a candidate whose parent the batch has not scanned, and offers every candidate with its parent', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const open = await task(t, f, f.sub)
+    // the candidates come before their parents in the scan, so each
+    // parent is read by id, in the candidates' own sub-project; created
+    // under the rule of one level, they read no subtask, so the parent
+    // reads alone decide where a batch stops
+    const candidates = await plantTasks(t, f.sub, 6, (i) => ({
+      title: `Board ${i}`,
+      created_at: ONE_LEVEL_SINCE,
+    }))
+    const parents = await plantTasks(t, f.sub, candidates.length, (i) => ({ title: `Parent ${i}` }))
+    await t.run(async (ctx) => {
+      for (const [i, c] of candidates.entries())
+        await ctx.db.patch(c._id, { parent_id: (parents[i] as Doc<'issues'>).id })
+    })
+    // room for the scan's range and three parent reads a batch
+    RELATION_PICKER.reads.ranges = 4
+    const list = await batches(t, f.guest, open.id, 'subtask', { search: 'board' })
+    expect(list.map((b) => [b.rows.length, b.stopped])).toEqual([
+      [3, true],
+      [3, false],
+    ])
+    expect(list.flatMap((b) => b.rows.map((r) => [r.id, r.parent_id ?? null]))).toEqual(
+      candidates.map((c, i) => [c.id, (parents[i] as Doc<'issues'>).id]),
+    )
   })
 })
 
@@ -1090,7 +1112,7 @@ describe('the budget', () => {
 })
 
 describe('what hidden data moves', () => {
-  it('answers the same whatever the hidden tasks hold, how many hidden subtasks a candidate has, and the family a reader cannot see', async () => {
+  it('answers the same whatever the hidden tasks hold, the family a reader cannot see and the links to tasks they cannot see', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
@@ -1113,30 +1135,17 @@ describe('what hidden data moves', () => {
       return out
     }
     const before = await read()
+    for (const list of before) expect(idsOf(list)).toEqual(candidates.map((c) => c.id))
     expect(before[0]?.map((b) => b.rows.length)).toEqual([2, 2, 2])
     expect(before[0]?.[0]).toMatchObject({ stopped: true })
     expect(before[2]?.[0]).toMatchObject({ stopped: true })
-    // the hidden titles grow to the title limit, each candidate gets 99
-    // subtasks the guest cannot see, two candidates' to each of three
-    // hidden sub-projects, so none holds more than 300 open tasks, the
-    // family gets hidden and archived sub-projects, and the opened task 40
-    // links to tasks the guest cannot see
+    // the hidden titles grow to the title limit, the family gets hidden
+    // and archived sub-projects, and the opened task 40 links to tasks the
+    // guest cannot see
     await t.run(async (ctx) => {
       for (const x of secrets)
         await ctx.db.patch(x._id, { title: `Board ${'x'.repeat(LIMITS.title.max - 6)}` })
     })
-    const hiddenSubs = [
-      sibling,
-      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
-      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
-    ]
-    for (const [i, c] of candidates.entries())
-      await subtasksOf(
-        t,
-        hiddenSubs[Math.floor(i / 2)] as Doc<'projects'>,
-        c,
-        LIMITS.subtasks.max - 1,
-      )
     for (let i = 0; i < 5; i++) {
       await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
       await plantProject(t, {
@@ -1150,19 +1159,7 @@ describe('what hidden data moves', () => {
     await t.run(async (ctx) => {
       for (const end of ends) await ctx.db.insert('issue_links', linkRow(f, open, end.id))
     })
-    // the subtask picker leaves out the candidates that now have subtasks,
-    // so it is compared before them
-    const after = await read()
-    expect(after[0]).toEqual(before[0])
-    expect(after[2]).toEqual(before[2])
-    expect(idsOf(after[1] ?? [])).toEqual([])
-    // one more hidden subtask fills a candidate, which the write would
-    // refuse too, so the answer does change
-    Object.assign(RELATION_PICKER, structuredClone(DEFAULT_PICKER))
-    await subtasksOf(t, sibling, candidates[0] as Doc<'issues'>, 1)
-    expect(idsOf(await batches(t, f.guest, open.id, 'parent', { search: 'board' }))).toEqual(
-      candidates.slice(1).map((x) => x.id),
-    )
+    expect(await read()).toEqual(before)
   })
 
   it('reads a typed number alike whether it names a hidden, an archived, a foreign or no task', async () => {
