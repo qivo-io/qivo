@@ -20,8 +20,7 @@
  *      the task rather than the organization.
  *  10. Comment pages' names read by id.
  *  11. Reads at the design size, one figure a case, recorded in the
- *      budgets' docstrings (lib/core.ts RELATED_READ, SUBTASK_PAGE and
- *      TASK_DETAILS). */
+ *      budgets' docstrings (lib/core.ts RELATED_READ and TASK_DETAILS). */
 
 import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'

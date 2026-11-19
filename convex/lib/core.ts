@@ -1609,9 +1609,9 @@ export async function issueOut(
  * caller's own grants, memberships and team shares once, and never reads
  * the organization's whole catalogue (loadCatalogue). A check that a bound
  * of that reader stopped never answers a hidden row or a short list as
- * whole. About the task, its parent, its subtasks or a link it refuses the
- * whole call with its sentence (accessUnchecked), and about the owner's
- * load it answers the task with its delay unavailable.
+ * whole. About a link's other task it refuses the whole call with its
+ * sentence (accessUnchecked), and about the owner's load it answers the
+ * task with its delay unavailable.
  *
  * A list keeps its order with an id tie: subtasks and links by task number,
  * followers by name (the name key's UTF-8 bytes, lib/nameKey.ts), and
@@ -2192,9 +2192,10 @@ type TaskRead = Clock & {
  * organization, the row and the delay last. So an archived task's walk
  * takes the room the pages leave, less TASK_READ_RESERVE. `progress`, the
  * plan weeks and group_remaining_hours come from that walk, never from the
- * first subtask page. A check of the caller's access that a bound stopped
- * refuses the read whole (accessUnchecked), also inside a REST write, whose
- * change then rolls back.
+ * first subtask page. A check of the caller's access to a link's other
+ * task that a bound stopped refuses the read whole (accessUnchecked), also
+ * inside a REST write, whose change then rolls back. A check that a bound
+ * stopped in the owner's load answers the task with its delay unavailable.
  */
 export async function taskOut(
   ctx: QueryCtx,
