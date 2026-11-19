@@ -22,7 +22,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantHiddenSibling,
   plantIssue,
   plantLogin,
   plantSeat,
@@ -273,86 +272,34 @@ describe('entering Review', () => {
 })
 
 describe('task parents', () => {
-  it('compares a hidden parent without telling which one it is', async () => {
+  it('compares the stored parent, read by parent_id alone or in its pair, and matches none read hidden', async () => {
     const fx = await setup()
-    const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: sibling.id })
-    const child = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.sub.id,
-      parent_id: parent.id,
-    })
-    const detach = (expected: Record<string, unknown>) =>
-      edit(fx, fx.guest, child.id, { parent_id: null }, expected)
-    // the guest read no parent, but one is stored
-    const data = await fieldChanged(detach({ parent_id: null, has_hidden_parent: false }))
-    expect(data.changes).toEqual([
-      { record: 'task', id: child.id, field: 'parent_id', by: null, at: null },
-    ])
-    expect(JSON.stringify(data)).not.toContain(parent.id)
-    expect((await task(fx.t, child.id))?.parent_id).toBe(parent.id)
-    await detach({ parent_id: null, has_hidden_parent: true })
-    expect((await task(fx.t, child.id))?.parent_id).toBeUndefined()
-
-    // a parent seen by id still matches after it becomes hidden
-    const later = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id })
-    const second = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.sub.id,
-      parent_id: later.id,
-    })
-    await fx.t.run(async (ctx) => {
-      const row = (await byId(ctx, 'issues', later.id))!
-      await ctx.db.patch(row._id, { project_id: sibling.id })
-    })
-    await edit(
-      fx,
-      fx.guest,
-      second.id,
-      { parent_id: null },
-      { parent_id: later.id, has_hidden_parent: false },
-    )
-    expect((await task(fx.t, second.id))?.parent_id).toBeUndefined()
-  })
-
-  it('reads an archived parent as hidden in the app and by id over REST', async () => {
-    const fx = await setup()
-    const parent = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.sub2.id,
-      archived_at: NOW,
-    })
+    const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const plant = () =>
       plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: parent.id })
-    const hidden = { parent_id: null, has_hidden_parent: true }
-    const shown = { parent_id: parent.id, has_hidden_parent: false }
-
-    const inApp = await plant()
-    await fieldChanged(
-      edit(
-        fx,
-        fx.user,
-        inApp.id,
-        { parent_id: null },
-        { parent_id: null, has_hidden_parent: false },
-      ),
-    )
-    await edit(fx, fx.user, inApp.id, { parent_id: null }, hidden)
-    expect((await task(fx.t, inApp.id))?.parent_id).toBeUndefined()
-
-    const rest = (ref: string, expected: Record<string, unknown>) =>
-      fx.t.mutation(internal.machine.rest.updateIssue, {
-        callerId: fx.user.id,
-        access: 'write',
-        keyName: 'drive',
-        ref,
-        body: JSON.stringify({ parent: null, expected }),
-      })
-    const overRest = await plant()
-    await fieldChanged(rest(overRest.id, hidden))
-    expect((await task(fx.t, overRest.id))?.parent_id).toBe(parent.id)
-    await rest(overRest.id, shown)
-    expect((await task(fx.t, overRest.id))?.parent_id).toBeUndefined()
+    // the parent read by id matches, with has_hidden_parent or without it
+    for (const seen of [
+      { parent_id: parent.id },
+      { parent_id: parent.id, has_hidden_parent: false },
+    ]) {
+      const child = await plant()
+      await edit(fx, fx.guest, child.id, { parent_id: other.id }, seen)
+      expect((await task(fx.t, child.id))?.parent_id).toBe(other.id)
+    }
+    // no parent, a parent read hidden and another parent do not
+    for (const seen of [
+      { parent_id: null },
+      { parent_id: null, has_hidden_parent: true },
+      { parent_id: other.id },
+    ]) {
+      const child = await plant()
+      const data = await fieldChanged(edit(fx, fx.guest, child.id, { parent_id: null }, seen))
+      expect(data.changes).toEqual([
+        { record: 'task', id: child.id, field: 'parent_id', by: null, at: null },
+      ])
+      expect((await task(fx.t, child.id))?.parent_id).toBe(parent.id)
+    }
   })
 })
 
@@ -424,26 +371,6 @@ describe('who changed it', () => {
       edit(fx, fx.admin, hers.id, { title: 'C' }, { title: titlePrint('A') }),
     )
     expect(gone.changes?.[0]).toMatchObject({ by: null, at: null })
-  })
-
-  it('names nobody to a member who may not see the row that wrote the value', async () => {
-    const fx = await setup()
-    const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const hiddenParent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    // the row of the attach names a parent the guest cannot see: the parent
-    // is in a sub-project the guest cannot see since, a family stored
-    // across sub-projects, as only data from before the subtask rule is
-    await edit(fx, fx.user, row.id, { parent_id: hiddenParent.id })
-    await fx.t.run((ctx) => ctx.db.patch(hiddenParent._id, { project_id: sibling.id }))
-    const stale = { parent_id: null, has_hidden_parent: false }
-    const guest = await fieldChanged(edit(fx, fx.guest, row.id, { parent_id: null }, stale))
-    expect(guest.changes).toEqual([
-      { record: 'task', id: row.id, field: 'parent_id', by: null, at: null },
-    ])
-    expect(guest.message).toBe(sentence(null, 'parent', key(row)))
-    const admin = await fieldChanged(edit(fx, fx.admin, row.id, { parent_id: null }, stale))
-    expect(admin.changes?.[0].by).toBe(fx.user.id)
   })
 })
 

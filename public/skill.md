@@ -208,8 +208,9 @@ changed them. Do not send the same change again. Read the task again, look
 at the other change, and decide whether yours still applies before you
 resend it with the new values in `expected`; ask the user when the two
 changes disagree. Fields you leave out of `expected` are not checked. Send
-each value as the last read showed it, such as `parent_id` with
-`has_hidden_parent` for `parent`, and `null` for a field that was unset.
+each value as the last read showed it, such as `parent_id` for `parent`,
+and `null` for a field that was unset. Do not send `has_hidden_parent`; a
+later release refuses it.
 
 Useful field rules:
 
@@ -243,18 +244,17 @@ Useful field rules:
 - `remaining_hours` means work left, not the original estimate, from 0 to
   99999.9 hours on both interfaces. A task with
   `is_group: true` derives its progress, remaining work and planned weeks from
-  active subtasks. A subtask in an archived project makes no task in an
-  active project a group. Setting its status, dates, a non-null
-  `remaining_hours` or `paused: true` is refused, as is clearing its dates;
+  active subtasks, which share its sub-project. Setting its status, dates, a
+  non-null `remaining_hours` or `paused: true` is refused, as is clearing
+  its dates;
   `remaining_hours: null` and `paused: false` pass, so a stored value can be
   cleared. Inspect the subtasks to determine which changes match the user's
   request.
 - `start_week` and `end_week` plan a task, as `YYYY-MM-DD` on both
   interfaces. Send both to schedule, or both as `null` to clear. After a
   change, both dates must exist or both be absent, with start no later than
-  end. On a task with `is_group: true`, both dates are calculated from the
-  subtasks you can read and cannot be changed; schedule its subtasks
-  instead. `due_date` is a separate deadline. Both dates name the first day
+  end. On a task with `is_group: true`, both dates are calculated from its
+  subtasks and cannot be changed; schedule its subtasks instead. `due_date` is a separate deadline. Both dates name the first day
   of a week, and the end week is included. For a Monday-based calendar,
   `2026-09-21` through `2026-09-28` is two weeks. Read the first day of the
   week from `organization.week_start` in `get_me` or `GET /v1/me`; do not
@@ -265,9 +265,8 @@ Useful field rules:
   `owner` (REST) to find someone's work including their reviews. `status`
   takes a list on MCP and comma-separated values on REST.
 - A group's `progress` is the app's Progress, the done and total tasks
-  without subtasks under it that you can read; `partial: true` means some
-  are hidden from you, or the group holds too many to read, so its
-  completion is unknown. `delay` is the app's
+  without subtasks under it; `partial: true` means the group holds too many
+  to read, so its completion is unknown. `delay` is the app's
   projected delay (`status` `ok`, `behind` or `late`, with
   `projected_end_week`), or `null` when the project does not track delay or
   the app shows no verdict; it is judged on today's date in UTC. Its
@@ -303,8 +302,8 @@ Useful field rules:
   pass a cursor that is not `null` to `list_task_related` with `list` or to
   `GET /v1/tasks/{ref}/subtasks`, `/links`, `/followers` or `/attachments`
   until its `next_cursor` is `null`. A short or empty page is not the end.
-  A `parent_id` of `null` with `has_hidden_parent: true` means the parent
-  exists but you cannot read it.
+  `has_hidden_parent` is always `false` and a later release removes it, so
+  do not read it.
 - **Move:** send `project`, and `sub_project` when `project` names a
   meta-project, on `update_task` or PATCH. You need User or Lead access on
   both sub-projects, and the task's assignee and reviewer must be able to work

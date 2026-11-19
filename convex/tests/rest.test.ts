@@ -1994,21 +1994,10 @@ describe('PATCH /v1/tasks/{ref}', () => {
 describe("a group's dates on REST", () => {
   const span = (start_week: string, end_week: string) => ({ start_week, end_week })
 
-  it('GET calculates a group from the leaves the key can read, at any depth, and lists the same', async () => {
+  it('GET calculates a group from its leaves, at any depth, and lists the same', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const archivedSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: NOW,
-    })
     // the group's own stored dates are dormant
     const group = await plantIssue(t, {
       ...base,
@@ -2020,48 +2009,25 @@ describe("a group's dates on REST", () => {
     // counts as its start week
     const nested = await plantIssue(t, {
       ...base,
-      project_id: f.sub2.id,
       parent_id: group.id,
       ...span('2025-01-06', '2027-12-27'),
     })
     await plantIssue(t, { ...base, parent_id: nested.id, ...span('2026-02-16', '2026-02-22') })
     await plantIssue(t, { ...base, parent_id: nested.id, start_week: '2026-03-02' })
-    // never counted: an archived leaf, a leaf in an archived project
+    // never counted: an archived leaf
     await plantIssue(t, {
       ...base,
       parent_id: group.id,
       archived_at: NOW,
       ...span('2025-12-01', '2027-01-04'),
     })
-    await plantIssue(t, {
-      ...base,
-      project_id: archivedSub.id,
-      parent_id: group.id,
-      ...span('2025-10-06', '2027-03-01'),
-    })
-    // counted only once the key can read them: a hidden leaf, and a readable
-    // grandchild under a hidden middle task
-    await plantIssue(t, {
-      ...base,
-      project_id: hiddenSub.id,
-      parent_id: group.id,
-      ...span('2025-11-03', '2027-02-01'),
-    })
-    const middle = await plantIssue(t, { ...base, project_id: hiddenSub.id, parent_id: group.id })
-    await plantIssue(t, { ...base, parent_id: middle.id, ...span('2025-09-01', '2027-04-05') })
-    // a group with no scheduled leaf it can read has no dates
+    // a group with no scheduled leaf has no dates
     const empty = await plantIssue(t, {
       ...base,
       title: 'Empty',
       ...span('2026-05-04', '2026-05-10'),
     })
     await plantIssue(t, { ...base, parent_id: empty.id })
-    await plantIssue(t, {
-      ...base,
-      project_id: hiddenSub.id,
-      parent_id: empty.id,
-      ...span('2026-06-01', '2026-06-07'),
-    })
     const dates = (out: { start_week: string | null; end_week: string | null } | undefined) =>
       out && { start_week: out.start_week, end_week: out.end_week }
     const read = async () => {
@@ -2085,15 +2051,10 @@ describe("a group's dates on REST", () => {
       }
       return out
     }
-    let got = await read()
+    const got = await read()
     expect(got.get(group.id)).toEqual(span('2026-02-02', '2026-03-02'))
     expect(got.get(nested.id)).toEqual(span('2026-02-16', '2026-03-02'))
     expect(got.get(empty.id)).toEqual({ start_week: null, end_week: null })
-    // reading the hidden project brings in its leaf and the grandchild under it
-    await grant(t, f.hidden.id, f.agent.id, 'viewer')
-    got = await read()
-    expect(got.get(group.id)).toEqual(span('2025-09-01', '2027-04-05'))
-    expect(got.get(empty.id)).toEqual(span('2026-06-01', '2026-06-07'))
   })
 
   it('an archived group counts its archived subtree, and a leaf keeps its own dates', async () => {
@@ -2637,53 +2598,5 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       'not_found',
       'project not found',
     )
-  })
-
-  it('task output names a parent only when the key can read it', async () => {
-    const t = newT()
-    const { f, subOnly } = await subOnlyOrg(t)
-    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hiddenParent.id,
-    })
-    const visibleParent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const child2 = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: visibleParent.id,
-    })
-    const get = (callerId: string, ref: string) =>
-      t.query(internal.machine.rest.getIssue, { today: TODAY, callerId, access: 'read', ref })
-    const one = await get(subOnly.id, child.id)
-    const listed = (await restTasks(t, { callerId: subOnly.id, access: 'read' })).find(
-      (i) => i.id === child.id,
-    )
-    const patched = await t.mutation(internal.machine.rest.updateIssue, {
-      callerId: subOnly.id,
-      access: 'write',
-      keyName: KEY,
-      ref: child.id,
-      body: JSON.stringify({ title: 'Renamed' }),
-    })
-    for (const out of [one, listed, patched]) {
-      expect(out?.parent_id).toBeNull()
-      expect(JSON.stringify(out)).not.toContain(hiddenParent.id)
-    }
-    expect((await get(subOnly.id, child2.id)).parent_id).toBe(visibleParent.id)
-    expect((await get(f.agent.id, child.id)).parent_id).toBe(hiddenParent.id)
-    // is_group still reports subtasks the key cannot read, without naming
-    // them, even when every subtask is hidden
-    const lonely = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const hiddenKid = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: lonely.id,
-    })
-    const group = await get(subOnly.id, lonely.id)
-    expect(group.is_group).toBe(true)
-    expect(JSON.stringify(group)).not.toContain(hiddenKid.id)
-    expect(JSON.stringify(group)).not.toContain(f.sub2.id)
   })
 })

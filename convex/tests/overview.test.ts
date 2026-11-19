@@ -321,8 +321,9 @@ describe('counting', () => {
     await t.run((ctx) => ctx.db.delete(run))
     expect(await counts()).toEqual(counted)
     // a regroup of a family where the person holds no row: every scope
-    // waits for it, a project of another family too, because a regroup
-    // reconciles a parent there whose subtask older code stored in its own
+    // waits for it, a project of another family too, as every family waits
+    // for every regroup in the organization (model/overviewCounts.ts
+    // countsReady)
     const regroup = (family: Doc<'projects'>) =>
       t.run((ctx) =>
         ctx.db.insert('overview_regroups', {
@@ -580,20 +581,24 @@ describe('lists', () => {
     })
   })
 
-  it('stops a batch its reads do not fit as incomplete, with the rows it kept and their parents in another project, the next going on with no gap or duplicate', async () => {
+  it('stops a batch its reads do not fit as incomplete, with the rows it kept and their parents, the next going on with no gap or duplicate', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const task = (fields: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, paused: true, ...fields })
-    const parent = await task({ project_id: f.sub2.id, title: 'Parent in PCB', paused: false })
     // 5 paused leaves, 40 paused groups the list leaves out, then 15
-    // leaves, so a batch reads and judges candidates in several rounds
+    // leaves, so a batch reads and judges candidates in several rounds.
+    // Each leaf has a parent of its own, whose read the batch holds room
+    // for as it keeps the leaf, so a budget can stop it between them.
     const expected: string[] = []
+    const parentOf = new Map<string, string>()
     for (let i = 0; i < 60; i++) {
       const due_date = shift(DAY, i)
       if (i < 5 || i >= 45) {
         const title = `Leaf ${String(i).padStart(2, '0')}`
         expected.push(title)
+        const parent = await task({ title: `Parent ${i}`, paused: false })
+        parentOf.set(title, parent.id)
         await task({ title, due_date, parent_id: parent.id })
         continue
       }
@@ -601,13 +606,15 @@ describe('lists', () => {
       await task({ title: `Its subtask ${i}`, parent_id: group.id, paused: false })
     }
     const scope = scopeOf(f.admin, f.sub)
-    const profiles = new Map([[f.admin.org_id, f.admin]])
-    const { took } = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
     let stops = 0
-    for (let documents = took.documents + 300; documents > 0; documents--) {
-      Object.assign(OVERVIEW.reads, { documents })
+    // each row's parent read is held at a row's fixed bytes, as are the
+    // candidates a step reads, so a budget of bytes can stop a batch
+    // between the rows it keeps
+    for (let kib = 2048; kib > 0; kib -= 16) {
+      Object.assign(OVERVIEW.reads, { bytes: kib * 1024 })
       const got = await walkPaused(t, f.admin, scope)
-      for (const row of got.batches.flatMap((b) => b.rows)) expect(row.parent_id).toBe(parent.id)
+      for (const row of got.batches.flatMap((b) => b.rows))
+        expect(row.parent_id).toBe(parentOf.get(row.title))
       // a batch its reads stopped still answers the rows it kept, with room
       // held back for their parents
       stops += got.batches.filter((b) => !b.complete && b.rows.length > 0).length
@@ -620,7 +627,7 @@ describe('lists', () => {
       }
       expect(
         got.batches.flatMap((b) => titles(b.rows)),
-        `${documents} documents`,
+        `${kib} KiB`,
       ).toEqual(expected)
     }
     expect(stops).toBeGreaterThan(0)
@@ -651,24 +658,16 @@ describe('lists', () => {
     })
   })
 
-  it('links a row to a parent the reader is shown, and flags a hidden parent and hidden subtasks', async () => {
+  it('links a row to the parent the reader is shown', async () => {
     const { t, f, me } = await hiddenCase('x')
     const task = (fields: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id: f.org.id, assignee_id: me.id, project_id: f.sub.id, ...fields })
-    const hidden = await task({ project_id: f.sub2.id, title: 'Hidden parent' })
-    await task({ title: 'Under a hidden parent', parent_id: hidden.id, due_date: shift(DAY, -2) })
     const shown = await task({ title: 'Shown parent' })
     await task({ title: 'Under a shown parent', parent_id: shown.id, due_date: shift(DAY, -1) })
     for (const scope of [scopeOf(me, f.sub), { kind: 'mine' } as const]) {
       const got = await as(t, me).query(api.overview.attention, { scope, ...WEEKS })
       if (got.state !== 'ok') throw new Error(JSON.stringify(got))
       const row = (title: string) => got.rows.find((r) => r.title === title)
-      expect(row('Overdue group'), scope.kind).toMatchObject({
-        has_subtasks: true,
-        has_hidden_subtasks: true,
-      })
-      expect(row('Under a hidden parent'), scope.kind).toMatchObject({ has_hidden_parent: true })
-      expect(row('Under a hidden parent'), scope.kind).not.toHaveProperty('parent_id')
       expect(row('Under a shown parent'), scope.kind).toMatchObject({
         parent_id: shown.id,
         has_hidden_parent: false,
@@ -829,9 +828,10 @@ describe('verdicts', () => {
 
 // --------------------------------------------------------------- hidden data
 
-/** withOrg as a member who sees FW only, with an overdue group in FW whose
- * subtask is in PCB, which they cannot see, holding `title`, and a task of
- * theirs in PCB of that title. */
+/** withOrg as a member who sees FW only, with an overdue task of theirs in
+ * FW, and in PCB, which they cannot see, a task holding `title` and a
+ * paused task of theirs of that title, due before the day, which My view's
+ * Overdue reads and leaves out. */
 async function hiddenCase(title: string) {
   const t = newT()
   const f = await withReadingAdmin(t)
@@ -843,20 +843,21 @@ async function hiddenCase(title: string) {
   await t.run((ctx) =>
     ctx.db.insert('project_access', { project_id: f.sub.id, profile_id: me.id, level: 'user' }),
   )
-  const group = await plantIssue(t, {
+  await plantIssue(t, {
     org_id: f.org.id,
     project_id: f.sub.id,
-    title: 'Overdue group',
+    title: 'Overdue',
     due_date: shift(DAY, -3),
     assignee_id: me.id,
   })
-  await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, title, parent_id: group.id })
+  await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, title })
   await plantIssue(t, {
     org_id: f.org.id,
     project_id: f.sub2.id,
     title,
     assignee_id: me.id,
     paused: true,
+    due_date: shift(DAY, -5),
   })
   await plantIssue(t, {
     org_id: f.org.id,
@@ -899,7 +900,7 @@ const shapeOf = (answer: unknown): unknown =>
   )
 
 describe('hidden data', () => {
-  it("answers alike whatever a hidden subtask's or own task's title, also at a budget the visible reads just fit", async () => {
+  it('answers alike whatever the title of a task the member cannot see, theirs or not, also at a budget the visible reads just fit', async () => {
     const short = await hiddenCase('x')
     const long = await hiddenCase('漢'.repeat(255))
     for (const scopeKind of ['meta', 'mine'] as const) {

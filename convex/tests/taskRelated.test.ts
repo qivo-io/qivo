@@ -20,8 +20,7 @@
  *      the task rather than the organization.
  *  10. Comment pages' names read by id.
  *  11. Reads at the design size, one figure a case, recorded in the
- *      budgets' docstrings (lib/core.ts RELATED_READ, SUBTASK_PAGE and
- *      TASK_DETAILS). */
+ *      budgets' docstrings (lib/core.ts RELATED_READ and TASK_DETAILS). */
 
 import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -962,11 +961,10 @@ describe('order and paging', () => {
 /* ---------------------------------------------------------- 4. visibility */
 
 describe('visibility', () => {
-  it('lists subtasks and links only where the caller can read the other task, for every kind of caller', async () => {
+  it('lists subtasks, and links only where the caller can read the other task, for every kind of caller', async () => {
     const fx = await setup()
     const [task] = await plantTasks(fx, 1)
     const shownKids = await plantTasks(fx, 3, { parent_id: task.id })
-    const hiddenKids = await plantTasks(fx, 3, { parent_id: task.id, project_id: fx.hiddenSub.id })
     const shownEnds = await plantTasks(fx, 3)
     const hiddenEnds = await plantTasks(fx, 3, { project_id: fx.hiddenSub.id })
     // a task of another organization, which only bad data could link
@@ -977,7 +975,7 @@ describe('visibility', () => {
     await plantLinks(fx, task, [...shownEnds, ...hiddenEnds, foreign])
     const ownRows = { subtasks: ids(shownKids), links: ids(shownEnds) }
     const allRows = {
-      subtasks: ids([...shownKids, ...hiddenKids]),
+      subtasks: ids(shownKids),
       links: ids([...shownEnds, ...hiddenEnds]),
     }
     // the guest and the viewer hold Edit on TBED, the agent too; the admin
@@ -1012,21 +1010,15 @@ describe('visibility', () => {
     expect(ids(readOnly.links).sort()).toEqual([...ownRows.links].sort())
   })
 
-  it('leaves out a subtask and a linked task of another organization in a project the caller reads', async () => {
+  it('leaves out a linked task of another organization in a project the caller reads', async () => {
     const fx = await setup()
-    // bad data: tasks whose org_id is another organization's but whose
+    // bad data: a task whose org_id is another organization's but whose
     // project is FW, which the agent reads, so only the organization
-    // checks keep them out
+    // checks keep it out
     for (const over of [{}, { archived_at: NOW }]) {
       const [group] = await plantTasks(fx, 1, over)
       const [done] = await plantTasks(fx, 1, { parent_id: group.id, status: 'done', ...over })
       const [open] = await plantTasks(fx, 1, { parent_id: group.id, ...over })
-      await plantTasks(fx, 1, {
-        parent_id: group.id,
-        org_id: fx.otherOrg.id,
-        status: 'done',
-        ...over,
-      })
       const [end] = await plantTasks(fx, 1)
       const [strayEnd] = await plantTasks(fx, 1, { org_id: fx.otherOrg.id })
       await plantLinks(fx, group, [end, strayEnd])
@@ -1038,9 +1030,7 @@ describe('visibility', () => {
       ]) {
         expect(ids(details.subtasks as Row[]), name).toEqual(kids)
         expect(ids(details.links as Row[]), name).toEqual([end.id])
-        // the stray subtask does not count, and leaves the group's facts
-        // partial, as a hidden subtask does
-        expect(details.progress, name).toEqual({ done: 1, total: 2, percent: 50, partial: true })
+        expect(details.progress, name).toEqual({ done: 1, total: 2, percent: 50, partial: false })
       }
       for (const list of ['subtasks', 'links'] as const) {
         const want = list === 'subtasks' ? kids : [end.id]
@@ -1208,8 +1198,8 @@ describe('an archived group’s subtasks', () => {
   it('page in number order through the index, short pages carrying cursors, to the end', async () => {
     const fx = await setup()
     const [group] = await plantTasks(fx, 1, { title: 'Archived group', archived_at: NOW })
-    // 120 archived subtasks, alternately by number in FW, which the agent
-    // reads, and SKS, which it does not, numbered against creation order
+    // 120 archived subtasks in two runs whose numbers alternate, numbered
+    // against creation order
     const kids = [
       ...(await plantTasks(
         fx,
@@ -1220,12 +1210,11 @@ describe('an archived group’s subtasks', () => {
       ...(await plantTasks(
         fx,
         60,
-        { parent_id: group.id, archived_at: NOW, project_id: fx.hiddenSub.id },
+        { parent_id: group.id, archived_at: NOW },
         Array.from({ length: 60 }, (_, i) => 9_999 - 2 * i),
       )),
     ]
-    const byNum = [...kids].sort((a, b) => a.num - b.num)
-    const shown = byNum.filter((k) => k.project_id === fx.sub.id).map((k) => k.id)
+    const shown = [...kids].sort((a, b) => a.num - b.num).map((k) => k.id)
     // a page reads at most 30 documents past its start
     Object.assign(SUBTASK_PAGE, { documents: 30 })
     const pages = await everyPage((cursor) =>
@@ -1248,7 +1237,7 @@ describe('an archived group’s subtasks', () => {
       }),
     )
     expect(ids(mcp.rows)).toEqual(shown)
-    // the admin reads both sub-projects
+    // the admin reads the same subtasks
     Object.assign(SUBTASK_PAGE, structuredClone(DEFAULTS.page))
     const all = await everyPage((cursor) =>
       restList(fx, fx.admin, 'subtasks', group.id, {
@@ -1256,14 +1245,14 @@ describe('an archived group’s subtasks', () => {
         ...(cursor === null ? {} : { cursor }),
       }),
     )
-    expect(ids(all.rows)).toEqual(byNum.map((k) => k.id))
+    expect(ids(all.rows)).toEqual(shown)
     expect(all.pages).toHaveLength(3)
     // the details' first page, and has_more_subtasks follows its cursor
     const details = await restDetails(fx, fx.agent, group.id)
     expect(ids(details.subtasks)).toEqual(shown.slice(0, 50))
     expect(details.has_more_subtasks).toBe(details.subtasks_next_cursor !== null)
     expect(details.has_more_subtasks).toBe(true)
-    expect(details.progress).toMatchObject({ total: 60, partial: true })
+    expect(details.progress).toMatchObject({ total: 120, partial: false })
   })
 
   it('end on a full page with no cursor where the last subtask fills it', async () => {
@@ -1292,63 +1281,6 @@ describe('an archived group’s subtasks', () => {
     expect(ids(pages.rows)).toEqual(ids(kids))
   })
 
-  it('counts a subtask the caller may not be shown at a fixed size, so a hidden title moves no page end', async () => {
-    const fx = await setup()
-    // 20 hidden subtasks before one the agent reads, by number, with short
-    // titles under one group and the longest titles under another
-    const pagesFor = async (title: string) => {
-      const [group] = await plantTasks(fx, 1, { archived_at: NOW })
-      await plantTasks(fx, 20, {
-        parent_id: group.id,
-        archived_at: NOW,
-        project_id: fx.hiddenSub.id,
-        title,
-      })
-      const [shown] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
-      const read = await everyPage((cursor) =>
-        restList(fx, fx.agent, 'subtasks', group.id, cursor === null ? {} : { cursor }),
-      )
-      expect(ids(read.rows)).toEqual([shown.id])
-      return read.pages.length
-    }
-    // room for a few hidden subtasks at lib/limits.ts TASK_ROW_MAX_BYTES
-    Object.assign(SUBTASK_PAGE, { bytes: 10 * 1024 })
-    const short = await pagesFor('x')
-    const long = await pagesFor('x'.repeat(LIMITS.title.max))
-    expect(short).toBeGreaterThan(3)
-    expect(long).toBe(short)
-  })
-
-  it('counts a hidden subtask at a fixed size also where each asks about a project not asked yet', async () => {
-    const fx = await setup()
-    // eight sub-projects of SKNK, which the agent cannot read, one hidden
-    // subtask in each, so the tally looks at the request's reads after
-    // every hidden row, before one subtask the agent reads
-    const subs = await plantSubProjects(fx, 8, { under: fx.hidden })
-    const groupWith = async (title: string) => {
-      const [group] = await plantTasks(fx, 1, { archived_at: NOW })
-      for (const sub of subs)
-        await plantTasks(fx, 1, {
-          parent_id: group.id,
-          archived_at: NOW,
-          project_id: sub.id,
-          title,
-        })
-      const [shown] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
-      // the least page budget whose first page reaches the subtask the
-      // agent reads, past every hidden one
-      return await leastBudget(async (bytes) => {
-        SUBTASK_PAGE.bytes = bytes
-        const page = await restList(fx, fx.agent, 'subtasks', group.id)
-        return ids(page.rows).includes(shown.id)
-      })
-    }
-    const short = await groupWith('x')
-    const long = await groupWith('x'.repeat(LIMITS.title.max))
-    expect(short).toBeGreaterThan(subs.length * TASK_ROW_MAX_BYTES)
-    expect(long).toBe(short)
-  })
-
   it('reads the first row of a page whose budget is spent, so paging moves on', async () => {
     const fx = await setup()
     const [group] = await plantTasks(fx, 1, { archived_at: NOW })
@@ -1359,16 +1291,6 @@ describe('an archived group’s subtasks', () => {
     )
     expect(ids(pages.rows)).toEqual(ids(kids))
     for (const page of pages.pages) expect(page.rows.length).toBeLessThanOrEqual(1)
-    // a hidden first row moves the page on too, with no row
-    const [hidden] = await plantTasks(fx, 1, { archived_at: NOW })
-    await plantTasks(fx, 1, { parent_id: hidden.id, archived_at: NOW, project_id: fx.hiddenSub.id })
-    const [shownKid] = await plantTasks(fx, 1, { parent_id: hidden.id, archived_at: NOW })
-    const first = await restList(fx, fx.agent, 'subtasks', hidden.id)
-    expect(first).toEqual({ next_cursor: expect.any(String), rows: [] })
-    const second = await restList(fx, fx.agent, 'subtasks', hidden.id, {
-      cursor: first.next_cursor as string,
-    })
-    expect(ids(second.rows)).toEqual([shownKid.id])
   })
 })
 
@@ -1497,7 +1419,7 @@ describe('bounds and room', () => {
 
 describe('access', () => {
   /* A seat who reads FW through a grant and PCB through Hardware's share,
-   * a task in FW with a subtask and a link in PCB. */
+   * and a task in FW with a link to a task in PCB. */
   async function shared(fx: Fx) {
     const me = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Shared seat', accepted_at: NOW })
     await fx.t.run(async (ctx) => {
@@ -1518,16 +1440,14 @@ describe('access', () => {
       })
     })
     const [task] = await plantTasks(fx, 1)
-    const [kid] = await plantTasks(fx, 1, { parent_id: task.id, project_id: fx.sub2.id })
     const [end] = await plantTasks(fx, 1, { project_id: fx.sub2.id })
     await plantLinks(fx, task, [end])
-    return { me, task, kid, end }
+    return { me, task, end }
   }
 
   it('refuses the details and the list calls whole with the access sentence where a check stops', async () => {
     const fx = await setup()
-    const { me, task, kid, end } = await shared(fx)
-    expect(ids((await restDetails(fx, me, task.id)).subtasks)).toEqual([kid.id])
+    const { me, task, end } = await shared(fx)
     expect(ids((await restList(fx, me, 'links', task.id)).rows)).toEqual([end.id])
     // the shares on PCB and the seat's own rows past the bounds, and no
     // room to ask a team by itself
@@ -1541,15 +1461,16 @@ describe('access', () => {
     }
     await refusal(restDetails(fx, me, task.id))
     await refusal(mcpDetails(fx, me, task.id))
-    for (const list of ['subtasks', 'links'] as const) {
-      await refusal(restList(fx, me, list, task.id))
-      await refusal(mcpList(fx, me, list, task.id))
-    }
-    // a list that names no other task asks nothing and answers
+    await refusal(restList(fx, me, 'links', task.id))
+    await refusal(mcpList(fx, me, 'links', task.id))
+    // a list that names no task in another sub-project asks nothing and
+    // answers
     expect((await restList(fx, me, 'followers', task.id)).rows).toEqual([])
+    expect((await restList(fx, me, 'subtasks', task.id)).rows).toEqual([])
+    expect((await mcpList(fx, me, 'subtasks', task.id)).rows).toEqual([])
   })
 
-  it('makes no REST update or create whose answer refuses where a check stops', async () => {
+  it('makes no REST update whose answer refuses where a check stops, and answers a create under a parent in its own sub-project', async () => {
     const fx = await setup()
     const { me, task, end } = await shared(fx)
     const writer = { callerId: me.id, access: 'write' as const, keyName: 'related test' }
@@ -1559,9 +1480,8 @@ describe('access', () => {
         ref: task.id,
         body: JSON.stringify({ title: 'Renamed by a machine' }),
       })
-    // a subtask of the linked task in PCB, so the answer asks about its
-    // parent's sub-project (a subtask of the task itself would ask about FW
-    // alone, which no team shares)
+    // a subtask of the linked task in PCB, whose answer names its parent in
+    // its own sub-project without asking about it
     const create = () =>
       fx.t.mutation(internal.machine.rest.createIssue, {
         ...writer,
@@ -1587,56 +1507,19 @@ describe('access', () => {
             .collect()
         ).map((row) => row.title),
       }))
-    // the update's answer asks about PCB for the subtask and the link end,
-    // the create's for its parent, each past the bounds as above
+    // the update's answer asks about PCB for the link end, past the bounds
+    // as above
     Object.assign(OWN_READS, { projectShares: 0, rows: 0, teamReads: 0 })
-    for (const write of [update, create]) {
-      const e = await expectRefusal(write(), 'rule')
-      expect(e.data).toMatchObject({ reason: ACCESS_UNCHECKED })
-    }
-    expect(await stored()).toEqual({ title: task.title, under: [] })
-    // within the bounds both are made, which the check above would see
+    const e = await expectRefusal(update(), 'rule')
+    expect(e.data).toMatchObject({ reason: ACCESS_UNCHECKED })
+    expect((await create()).parent_id).toBe(end.id)
+    expect(await stored()).toEqual({ title: task.title, under: ['Created by a machine'] })
+    // within the bounds the update is made, which the check above would see
     Object.assign(OWN_READS, structuredClone(DEFAULTS.own))
     expect((await update()).title).toBe('Renamed by a machine')
-    expect((await create()).parent_id).toBe(end.id)
     expect(await stored()).toEqual({
       title: 'Renamed by a machine',
       under: ['Created by a machine'],
-    })
-  })
-
-  it('stops an archived walk before a question about a project its room no longer holds', async () => {
-    // a request of 100 index ranges, of which the walk keeps 16 back
-    const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
-    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
-    // an archived group stored before the rule of one level: one subtask
-    // in FW, and under it 28 more in 28 sub-projects of TBED, which only
-    // the walk meets, each a question of a few ranges; with FW and PCB,
-    // the 30 live sub-projects one project holds at the design size
-    const [group] = await plantTasks(fx, 1, { archived_at: NOW })
-    const [kid] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
-    const subs = await plantSubProjects(fx, 28, { under: fx.meta })
-    for (const sub of subs)
-      await plantTasks(fx, 1, { parent_id: kid.id, archived_at: NOW, project_id: sub.id })
-    for (const details of [
-      await restDetails(fx, fx.agent, group.id),
-      await mcpDetails(fx, fx.agent, group.id),
-    ]) {
-      // the walk stopped short of the request's limits, so the group's
-      // facts say they are unknown and its first page still lists the kid
-      expect(details.progress).toEqual({ done: 0, total: 0, percent: 0, partial: true })
-      expect(ids(details.subtasks as Row[])).toEqual([kid.id])
-    }
-    // with room for every question the walk reads the group whole
-    Object.assign(TASK_READ_RESERVE, structuredClone(DEFAULTS.reserve))
-    const roomy = await setup()
-    const [whole] = await plantTasks(roomy, 1, { archived_at: NOW })
-    const [under] = await plantTasks(roomy, 1, { parent_id: whole.id, archived_at: NOW })
-    for (const sub of await plantSubProjects(roomy, 28, { under: roomy.meta }))
-      await plantTasks(roomy, 1, { parent_id: under.id, archived_at: NOW, project_id: sub.id })
-    expect((await restDetails(roomy, roomy.agent, whole.id)).progress).toMatchObject({
-      total: 28,
-      partial: false,
     })
   })
 
@@ -1948,59 +1831,6 @@ describe('reads at the design size', () => {
     expect((reads['REST links at 200'].out as { links: Row[] }).links).toHaveLength(100)
     expect((reads['REST details'].out as { links: Row[] }).links).toHaveLength(50)
     expect(firstPages.ranges).toBeLessThan(TASK_DETAILS.ranges)
-  })
-
-  it('an active group whose subtasks sit in 70 sub-projects of its project, 30 live and 40 archived', async () => {
-    const fx = await setup()
-    // 68 more under TBED beside FW and PCB, 40 of them archived
-    const subs = [
-      fx.sub,
-      fx.sub2,
-      ...(await plantSubProjects(fx, 68, { under: fx.meta, archived: 40 })),
-    ]
-    // one subtask in each, so only the sub-projects reach their design size
-    const [group] = await plantTasks(fx, 1)
-    for (const sub of subs) await plantTasks(fx, 1, { parent_id: group.id, project_id: sub.id })
-    const { reads } = await measureTask(
-      fx,
-      fx.agent,
-      group.id,
-      'an active group over 70 sub-projects',
-    )
-    const details = reads['REST details'].out as Details
-    expect(details.progress).toMatchObject({ partial: false })
-    expect((reads['REST subtasks at 200'].out as { subtasks: Row[] }).subtasks).toHaveLength(70)
-  })
-
-  it('an archived group whose subtasks sit in 70 sub-projects of its project, 30 live and 40 archived', async () => {
-    const fx = await setup()
-    const subs = [
-      fx.sub,
-      fx.sub2,
-      ...(await plantSubProjects(fx, 68, { under: fx.meta, archived: 40 })),
-    ]
-    const [group] = await plantTasks(fx, 1, { archived_at: NOW })
-    // three a sub-project, numbered so each page's rows come from all 70,
-    // 210 in all, as far as a page at limit 200 reads
-    for (let k = 0; k < 3; k++)
-      for (const sub of subs)
-        await plantTasks(fx, 1, { parent_id: group.id, project_id: sub.id, archived_at: NOW })
-    const { reads } = await measureTask(
-      fx,
-      fx.agent,
-      group.id,
-      'an archived group over 70 sub-projects',
-    )
-    const page = reads['REST subtasks at 200'].out as {
-      subtasks: Row[]
-      next_cursor: string | null
-    }
-    expect(page.subtasks).toHaveLength(200)
-    expect(page.next_cursor).toEqual(expect.any(String))
-    const details = reads['REST details'].out as Details
-    // in a live project's group, those in archived sub-projects do not count
-    expect(details.progress).toMatchObject({ total: 90 })
-    expect(details.subtasks as Row[]).toHaveLength(50)
   })
 
   /* `teams` new teams with `me` in the first `mine` of them and another

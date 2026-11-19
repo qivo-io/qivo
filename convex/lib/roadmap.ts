@@ -26,19 +26,20 @@
  * grid. A stored day's week is the whole number of weeks from `from`,
  * floored, so the window is weeks 0 to (to - from) / 7, both counted.
  *
- * Beside lib/viewReads.ts's list, these still follow hidden data at a
- * budget's margin. How many subtasks a shown group has, hidden ones
- * included; how many of a person's own tasks and count rows are in projects
- * they cannot see, and where those projects' ids sort among the others
- * (lib/viewReads.ts mineCounts); the hidden sub-projects of a navigated
- * top-level project; and for the dependency read, how many links a task of
- * a part has to tasks the reader is not shown, archived tasks included,
- * each read by id and dropped. Each such task or link counts at a fixed
- * size, so its contents move no answer. A `counting` Remaining also
- * follows a regroup anywhere in the organization (model/overviewCounts.ts
- * countsReady), so a reader learns for a while that some project, one they
- * cannot see included, was archived, restored or moved to Deleted items, as
- * the Overview's figures do (lib/overview.ts). */
+ * A shown group's subtasks are in its own sub-project, so the reader sees
+ * them all. Beside lib/viewReads.ts's list, these still follow hidden data
+ * at a budget's margin: how many of a person's own tasks and count rows
+ * are in projects they cannot see, and where those projects' ids sort
+ * among the others (lib/viewReads.ts mineCounts); the hidden sub-projects
+ * of a navigated top-level project; and for the dependency read, how many
+ * links a task of a part has to tasks the reader is not shown, archived
+ * tasks included, each read by id and dropped. Each such task or link
+ * counts at a fixed size, so its contents move no answer. A `counting`
+ * Remaining also follows a regroup anywhere in the organization
+ * (model/overviewCounts.ts countsReady), so a reader learns for a while
+ * that some project, one they cannot see included, was archived, restored
+ * or moved to Deleted items, as the Overview's figures do
+ * (lib/overview.ts). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -240,7 +241,7 @@ export type RoadmapAnswer =
       parents: ViewRow[]
       /** every shown descendant of a group row, at any depth, that is
        * neither a row nor a parent, such as Backlog subtasks, Done ones outside
-       * the window, filtered-out ones and those in another sub-project. With
+       * the window and filtered-out ones. With
        * the rows and parents they hold every shown descendant of a group
        * row, so a group's bar during a drag (src/lib/issueGroups.ts
        * groupSpan) and its stale fade (the newest activity of its shown
@@ -570,7 +571,7 @@ async function roadmapOf(
           tenths: Object.fromEntries([...counts].map(([id, c]) => [id, c.left_tenths])),
         }
       : { state: 'unavailable', reason: counts }
-  return await roadmapAnswer(ctx, guard, seats, got, {
+  return await roadmapAnswer(ctx, guard, got, {
     remaining,
     ...(held === null ? {} : { held_sub_projects: held }),
     ...(selection === null ? {} : { projects: selection.subProjects.map((p) => p.id) }),
@@ -635,7 +636,7 @@ async function keepPlanned(
     }
   }
   if (t === undefined || t.project_id !== planned.project_id) return
-  await groupCheck(ctx, guard, seats, [t], got.subtasks)
+  await groupCheck(ctx, guard, [t], got.subtasks)
   const group = isGroupIn(got.subtasks, t.id) === true
   if (selection === null && !ownedBy(t, group, seats.get(t.org_id)?.me.id ?? '')) return
   if (group) await got.factsOf([t])
@@ -684,7 +685,7 @@ async function heldSubProjects(
     else if (ownedBy(t, false, meOf(t))) held.add(t.project_id)
   }
   const checking = open.filter((t) => !held.has(t.project_id))
-  await groupCheck(ctx, guard, seats, checking, known)
+  await groupCheck(ctx, guard, checking, known)
   for (const t of checking)
     if (ownedBy(t, isGroupIn(known, t.id) === true, meOf(t))) held.add(t.project_id)
   return [...held].sort(order)
@@ -695,7 +696,6 @@ async function heldSubProjects(
 async function roadmapAnswer(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   got: FilterResult,
   rest: Pick<
     Extract<RoadmapAnswer, { state: 'ok' }>,
@@ -703,7 +703,7 @@ async function roadmapAnswer(
   >,
 ): Promise<RoadmapAnswer> {
   const { rows, isGroup, subtasks: known } = got
-  const parents = await shownParents(ctx, guard, seats, rows, got.read, ROADMAP.context)
+  const parents = await shownParents(ctx, guard, rows, got.read, ROADMAP.context)
   const rowIds = new Set(rows.map((t) => t.id))
   const parentIds = new Set(parents.map((t) => t.id))
   // every shown descendant of a group row, through nested groups stored
@@ -724,8 +724,7 @@ async function roadmapAnswer(
   if (parents.length + subtasks.length > ROADMAP.context) throw new OverBudget()
   const nested = subtasks.filter((t) => isGroupIn(known, t.id) === true)
   await got.factsOf([...groupRows, ...parents, ...nested])
-  const shownIds = new Set([...rowIds, ...parentIds, ...subtasks.map((t) => t.id)])
-  const shown = (id: string) => shownIds.has(id)
+  const shown = new Map([...rows, ...parents, ...subtasks].map((t) => [t.id, t]))
   const out = (t: Doc<'issues'>) =>
     viewRow(t, shown, isGroupIn(known, t.id) === true ? (got.facts.get(t.id) ?? null) : null)
   return {
@@ -864,11 +863,10 @@ function dependencyGraph(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats) {
     const fresh = [...new Map(tasks.filter((t) => !node.has(t.id)).map((t) => [t.id, t])).values()]
     for (let at = 0; at < fresh.length; at += STEP) {
       const step = fresh.slice(at, at + STEP)
-      await groupCheck(ctx, guard, seats, step, known)
+      await groupCheck(ctx, guard, step, known)
       const groups = step.filter((t) => isGroupIn(known, t.id) === true && !facts.has(t.id))
       if (groups.length > 0)
-        for (const [id, got] of await groupFacts(ctx, guard, seats, groups, known))
-          facts.set(id, got)
+        for (const [id, got] of await groupFacts(ctx, guard, groups, known)) facts.set(id, got)
       for (const t of step)
         node.set(
           t.id,
@@ -1065,8 +1063,7 @@ async function partsOf(
   // every part holds a selected task, as the parts grew from them
   const withLink = new Set(partLinks.map((link) => find(link.source_id)))
   const kept = [...nodes.values()].filter((t) => withLink.has(find(t.id)))
-  const keptIds = new Set(kept.map((t) => t.id))
-  const shown = (id: string) => keptIds.has(id)
+  const shown = new Map(kept.map((t) => [t.id, t]))
   // the projects of the kept tasks the reader may edit
   const editable: string[] = []
   for (const [org, theirs] of groupBy(kept, (t) => t.org_id)) {
@@ -1099,7 +1096,7 @@ async function partsOf(
       }
     }),
     pairs: partLinks
-      .filter((link) => keptIds.has(link.source_id))
+      .filter((link) => shown.has(link.source_id))
       .sort(byCreation)
       .map(pairOf),
     editable_projects: editable.sort(order),

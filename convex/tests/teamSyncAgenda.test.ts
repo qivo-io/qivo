@@ -413,7 +413,7 @@ describe('scope', () => {
 /* ---------------------------------------------------------------------- rows */
 
 describe('rows', () => {
-  it("holds every open task without subtasks of the scope, whoever owns it, a subtask under another sub-project's group included", async () => {
+  it('holds every open task without subtasks of the scope, whoever owns it, a subtask included', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const team = await plantTeam(t, f.org.id, 'Platform', [f.user], [f.meta])
@@ -424,18 +424,16 @@ describe('rows', () => {
     await task(t, f.sub, { title: 'Archived', assignee_id: f.user.id, archived_at: NOW })
     const group = await task(t, f.sub, { title: 'Group', assignee_id: f.user.id })
     await task(t, f.sub, { title: 'Its subtask', parent_id: group.id, assignee_id: f.user.id })
-    await task(t, f.sub2, { title: 'Subtask in PCB', parent_id: group.id, assignee_id: f.user.id })
     const leaves = ['Leaf progress', 'Leaf review', 'Leaf todo']
     const meta = okOf(await agendaFor(t, f.viewer, projectScope(f.meta)))
     // this must fail for a rule that takes a group or a Backlog task as a row
-    expect(titles(meta.rows)).toEqual(sorted([...leaves, 'Its subtask', 'Subtask in PCB']))
+    expect(titles(meta.rows)).toEqual(sorted([...leaves, 'Its subtask']))
     expect(meta.rows.every((r) => !r.has_subtasks)).toBe(true)
-    // the group in FW is the PCB subtask's shown parent
-    const pcb = okOf(await agendaFor(t, f.viewer, projectScope(f.sub2)))
-    expect(titles(pcb.rows)).toEqual(['Subtask in PCB'])
-    expect(titles(pcb.parents)).toEqual(['Group'])
-    expect(pcb.rows[0].parent_id).toBe(group.id)
-    expect(pcb.parents[0].has_subtasks).toBe(true)
+    // the group is its subtask's shown parent
+    const fw = okOf(await agendaFor(t, f.viewer, projectScope(f.sub)))
+    expect(titles(fw.parents)).toEqual(['Group'])
+    expect(fw.rows.find((r) => r.title === 'Its subtask')?.parent_id).toBe(group.id)
+    expect(fw.parents[0].has_subtasks).toBe(true)
     // a team scope narrows the people, not the rows, and the admin is not in it
     const scoped = okOf(await agendaFor(t, f.viewer, { kind: 'team', team_id: team }))
     expect(titles(scoped.rows)).toEqual(titles(meta.rows))
@@ -953,7 +951,7 @@ describe('the ceiling', () => {
     // leaves the answer ok with every task and the week unavailable
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    const parents = await plantTasks(t, f.sub2, 5, ordinary)
+    const parents = await plantTasks(t, f.sub, 5, ordinary)
     await plantTasks(t, f.sub, 40, (i) => ({
       ...ordinary(i),
       assignee_id: f.user.id,
@@ -984,22 +982,17 @@ describe('the ceiling', () => {
 /* --------------------------------------------------------------- hidden data */
 
 /** A fixture whose hidden rows carry ordinary text when `wide`: the
- * sibling's tasks, a hidden parent of a row, a hidden blocker of a row and
- * a hidden subtask of a parent. Every task has the same number in both. */
+ * sibling's tasks, a hidden blocker of a row among them, beside a shown
+ * group and its subtask. Every task has the same number in both. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
   const f = await withReadingAdmin(t)
   const sibling = await plantHiddenSibling(t, f, f.viewer)
   const text = (i: number) => (wide ? ordinary(i) : { title: 'h', text: '' })
-  const [parent] = await plantTasks(t, sibling, 1, () => ({
-    ...text(1),
-    num: 1,
-    assignee_id: f.user.id,
-  }))
+  await plantTasks(t, sibling, 1, () => ({ ...text(1), num: 1, assignee_id: f.user.id }))
   const row = await task(t, f.sub, {
-    title: 'Under a hidden parent',
+    title: 'Blocked by a hidden task',
     num: 2,
-    parent_id: parent.id,
     assignee_id: f.user.id,
   })
   const [blocker] = await plantTasks(t, sibling, 1, () => ({ ...text(3), num: 3 }))
@@ -1011,7 +1004,7 @@ async function hiddenOrg(wide: boolean) {
     parent_id: shownGroup.id,
     assignee_id: f.user.id,
   })
-  await plantTasks(t, sibling, 1, () => ({ ...text(6), num: 6, parent_id: shownGroup.id }))
+  await plantTasks(t, sibling, 1, () => ({ ...text(6), num: 6 }))
   await plantTasks(t, sibling, 5, (i) => ({ ...text(i + 7), num: 7 + i, assignee_id: f.user.id }))
   await plantTasks(t, f.sub, 20, (i) => ({ ...ordinary(i), num: 20 + i, assignee_id: f.admin.id }))
   await withReach(t)

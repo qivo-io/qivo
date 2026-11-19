@@ -55,6 +55,47 @@ let summaries: (() => Promise<ProjectRemovalSummary>)[]
 // its failures
 let windowRead: ((value: unknown) => void) | null
 let windowFail: ((error: unknown) => void) | null
+/* Whether `mixed`'s window answers as a backend before the release after
+   v0.1.170 did, which followed its link to `read-only` in Manuals and
+   listed that subtask at the caller's Viewer level there, and said beside
+   a complete list that more subtasks were in projects the caller cannot
+   open, as the row's has_hidden_subtasks says. This backend follows no
+   link across sub-projects and sets has_hidden_subtasks only for an
+   incomplete list, so only such a backend shows the app a subtask it
+   cannot edit or one it cannot open, which the app still handles. */
+let earlierBackend = false
+
+/* `mixed`'s window answer from an earlier backend (earlierBackend), over
+   the stand-in's answer for `args`. Such a backend set has_hidden_subtasks
+   beside a complete list only when it counted a subtask, so the task then
+   has subtasks even when the list shows none. */
+function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
+  const answer = taskWindowStandIn(whole, 'taskWindow:task', args) as {
+    state: string
+    task?: Record<string, unknown>
+  }
+  if (!earlierBackend || args.ref !== 'mixed' || answer.state !== 'ok') return answer
+  const hidden = whole.issues.find((row) => row.id === 'mixed')?.has_hidden_subtasks === true
+  const task = {
+    ...answer.task,
+    has_hidden_subtasks: hidden,
+    ...(hidden && { has_subtasks: true }),
+  }
+  const kid = whole.issues.find((row) => row.id === 'read-only')
+  if (kid === undefined) return { ...answer, task }
+  const {
+    description: _text,
+    parent_id: _parent,
+    has_hidden_parent: _hiddenParent,
+    has_hidden_subtasks: _hidden,
+    ...row
+  } = kid
+  return {
+    ...answer,
+    task: { ...task, has_subtasks: true },
+    subtasks: { rows: [{ ...row, has_subtasks: false, level: 'viewer' }], complete: true },
+  }
+}
 // the answers of the windows open on a fixture task, run again on each
 // delivery
 const fixtureWindows = new Set<() => void>()
@@ -122,6 +163,7 @@ async function load() {
   )
   windowRead = null
   windowFail = null
+  earlierBackend = false
   fixtureWindows.clear()
   // a project's page and Archived projects read the server from the
   // snapshot last delivered
@@ -149,7 +191,7 @@ async function load() {
         windowRead = next
         windowFail = fail
       } else {
-        const answer = () => next(taskWindowStandIn(held, name, args))
+        const answer = () => next(earlierWindow(held, args))
         fixtureWindows.add(answer)
         answer()
         return () => fixtureWindows.delete(answer)
@@ -448,6 +490,7 @@ describe('Archive or delete a task', () => {
   })
 
   it("refuses to archive with a subtask in a project I can't edit, until the subtasks are kept", async () => {
+    earlierBackend = true
     answers['issues:archive'] = () => Promise.resolve(null)
     await openTask('mixed')
     expect(text('[data-fate-lead]')).toBe(
@@ -474,6 +517,7 @@ describe('Archive or delete a task', () => {
   })
 
   it("says why subtasks I can't delete stay, and deletes the task alone", async () => {
+    earlierBackend = true
     answers['issues:deleteDeep'] = () => Promise.resolve(null)
     await openTask('mixed')
     await choose('delete')
@@ -490,7 +534,8 @@ describe('Archive or delete a task', () => {
     expect(writes()[0].args).not.toHaveProperty('subtask_ids')
   })
 
-  it('warns that subtasks I cannot see can refuse the archive', async () => {
+  it("warns, on an earlier backend's answer, that subtasks I cannot see can refuse the archive", async () => {
+    earlierBackend = true
     snap.issues = snap.issues.filter((it) => it.id !== 'read-only')
     await act(async () => deliver(snap))
     await openTask('mixed')

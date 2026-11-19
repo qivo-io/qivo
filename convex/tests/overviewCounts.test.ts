@@ -1,8 +1,8 @@
 /* The Overview's counts (schema.ts overview_counts, model/overviewCounts.ts):
  * after every writer, each sub-project's and each owner's rows equal a
  * recount of the tasks, and overview_tasks marks as groups exactly the
- * active tasks with an active subtask in a live project. Project archives, restores and
- * moves to Deleted items reconcile in background steps (overviewRegroup.ts)
+ * active tasks with an active subtask (lib/liveTasks.ts countsAsSubtask).
+ * Project archives, restores and moves to Deleted items reconcile in background steps (overviewRegroup.ts)
  * while the counts answer `counting`; the backfill
  * (internal/overviewCountsBackfill.ts) counts an organization exactly while
  * writes go on between its steps; seeds and teardowns leave counted
@@ -20,7 +20,6 @@ import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   CountMoves,
-  countsKept,
   countsOfRows,
   countsReady,
   countWhole,
@@ -30,20 +29,18 @@ import {
   overviewCountRun,
   overviewRegroupOf,
   ownerRows,
-  reconcileTask,
+  slotOf,
   stampOverview,
   subProjectCounts,
-  taskPage,
+  taskRecord,
 } from '../model/overviewCounts'
 import { removeProjectGrantCore } from '../model/projectAccess'
 import { OVERVIEW_REGROUP, STALLED_MS } from '../overviewRegroup'
-import { plantTasks } from './board.setup'
 import {
   as,
   NOW,
   newT,
   type OrgFixture,
-  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -55,7 +52,6 @@ import {
   countOrg,
   countStep,
   expectCountsExact,
-  stored,
   truth,
 } from './overviewCounts.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -95,33 +91,6 @@ function writers(t: T, f: OrgFixture) {
       as(t, f.user).mutation(api.issues.move, { org_id, id, project_id }),
     archive: (id: string) => as(t, f.user).mutation(api.issues.archive, { org_id, id }),
     unarchive: (id: string) => as(t, f.user).mutation(api.issues.unarchive, { org_id, id }),
-    /* A subtask of `parentId` in `projectId`, another sub-project than its
-     * parent's, as a family stored before the rule that a subtask stays in
-     * its parent's sub-project: created under the parent in the parent's
-     * sub-project, then moved in place with what such a family's counts
-     * would hold, which a write reconciles (model/overviewCounts.ts
-     * reconcileTask). No write makes such a family any more. */
-    older: async (parentId: string, projectId: string, extra: Record<string, unknown> = {}) => {
-      const parent = await t.run((ctx) => byId(ctx, 'issues', parentId))
-      if (parent === null) throw new Error('missing parent')
-      const kid = await as(t, f.user).mutation(api.issues.create, {
-        org_id,
-        id: uuid(),
-        project_id: parent.project_id,
-        title: 'Counted task',
-        parent_id: parentId,
-        ...extra,
-      })
-      await t.run(async (ctx) => {
-        const row = await byId(ctx, 'issues', kid.id)
-        if (row === null) throw new Error('missing subtask')
-        await ctx.db.patch(row._id, { project_id: projectId })
-        if (!(await countsKept(ctx.db, org_id))) return
-        await reconcileTask(ctx.db, org_id, row.id, await ctx.db.get(row._id), 'read')
-        await reconcileTask(ctx.db, org_id, parentId, await byId(ctx, 'issues', parentId), 'read')
-      })
-      return { ...kid, project_id: projectId }
-    },
   }
 }
 
@@ -149,17 +118,15 @@ describe('overview counts', () => {
     await w.update(b.id, { assignee_id: null })
     await exact('edits')
 
-    // a subtask in the sibling sub-project makes its parent a group, and
-    // its moves, detach and archive take it back and forth
-    const kid = await w.older(a.id, f.sub2.id, {
+    // a subtask makes its parent a group, and its detach and archive take
+    // it back and forth
+    const kid = await w.create({
+      parent_id: a.id,
       status: 'todo',
       assignee_id: f.user.id,
       remaining_hours: 2,
     })
-    await exact('a subtask in the sibling sub-project')
-    // a move into its parent's sub-project brings the family together
-    await w.move(kid.id, f.sub.id)
-    await exact('the subtask moved')
+    await exact('a subtask')
     await w.update(kid.id, { parent_id: null })
     await exact('the subtask detached')
     await w.update(kid.id, { parent_id: a.id })
@@ -349,8 +316,8 @@ describe('overview counts', () => {
       assignee_id: f.user.id,
       remaining_hours: 2,
     })
-    await w.older(parent.id, f.sub2.id, { assignee_id: f.user.id })
-    await expectCountsExact(t, org_id, 'a subtask in the sibling')
+    await w.create({ project_id: f.sub2.id, assignee_id: f.user.id })
+    await expectCountsExact(t, org_id, 'a task in the sibling')
 
     // the sibling archived: until the step runs its project's counts are
     // not whole, and a write meanwhile reconciles the parent first
@@ -386,8 +353,12 @@ describe('overview counts', () => {
     // steps that stop on their room after one task each
     Object.assign(OVERVIEW_REGROUP, { tasks: 2, room: 0 })
     for (let n = 0; n < 5; n++) {
-      const p = await w.create({ assignee_id: f.admin.id, remaining_hours: n })
-      await w.older(p.id, f.sub2.id)
+      const p = await w.create({
+        project_id: f.sub2.id,
+        assignee_id: f.admin.id,
+        remaining_hours: n,
+      })
+      await w.create({ project_id: f.sub2.id, parent_id: p.id })
     }
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     await runSteps(t)
@@ -528,7 +499,7 @@ describe('overview counts', () => {
           remaining_hours: n / 2,
         }),
       )
-    const kid = await w.older(tasks[0].id, f.sub2.id)
+    const kid = await w.create({ parent_id: tasks[0].id })
     await t.run(async (ctx) => {
       for (let shard = 0; shard < 2; shard++)
         await ctx.db.insert('overview_counts', {
@@ -698,7 +669,7 @@ describe('overview counts', () => {
     const w = writers(t, f)
     for (let n = 0; n < 6; n++) {
       const p = await w.create({ assignee_id: f.user.id, remaining_hours: n })
-      await w.older(p.id, f.sub2.id)
+      await w.create({ parent_id: p.id })
     }
     await t.run((ctx) =>
       ctx.db.insert('org_removals', {
@@ -735,53 +706,14 @@ describe('overview counts', () => {
     await assertNoDanglingRefs(t, 'organization deletion')
   })
 
-  it('a parent whose only subtask leaves with its project is read again, whatever lands first', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    await stamp(t, org_id)
-    const w = writers(t, f)
-    // its only subtask in a sibling sub-project that goes to Deleted items,
-    // which deletes the project row before it moves the subtask
-    const parent = await w.create({
-      status: 'progress',
-      assignee_id: f.user.id,
-      remaining_hours: 2,
-    })
-    await w.older(parent.id, f.sub2.id)
-    await expectCountsExact(t, org_id, 'a group through a sibling subtask')
-    await deleteProject(t, f, f.sub2.id)
-    // the move read the parent again in its own transaction; the readers
-    // answer counting until the regroup ends
-    expect(await stored(t, org_id), 'its sibling sub-project in Deleted items').toEqual(
-      await truth(t, org_id),
-    )
-    await runSteps(t)
-    await expectCountsExact(t, org_id, 'after the regroup')
-
-    // its only subtask in a sibling archived, then archived itself before
-    // the regroup's step reads that sibling
-    const sibling = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
-    const other = await w.create({ status: 'todo', remaining_hours: 1 })
-    const kid = await w.older(other.id, sibling.id)
-    await expectCountsExact(t, org_id, 'a second group')
-    await as(t, f.admin).mutation(api.projects.archive, { org_id, id: sibling.id })
-    await w.archive(kid.id)
-    expect(await stored(t, org_id), 'its subtask archived before the step').toEqual(
-      await truth(t, org_id),
-    )
-    await runSteps(t)
-    await expectCountsExact(t, org_id, 'after that regroup')
-  })
-
   it('a regroup that a project change starts while the backfill counts goes on after the count', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     // written while the organization is not counted
-    const parent = await w.create({ status: 'todo', remaining_hours: 1 })
-    await w.older(parent.id, f.sub2.id)
+    const parent = await w.create({ project_id: f.sub2.id, status: 'todo', remaining_hours: 1 })
+    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
     await w.create({ status: 'progress' })
     Object.assign(COUNT_PAGE, { tasks: 1 })
     const step = (at?: CountPosition) => countStep(t, org_id, at)
@@ -794,7 +726,7 @@ describe('overview counts', () => {
     expect(got).toMatchObject({ done: false, tasks: 1 })
     // count steps leave the run row, which every task write reads, as it is
     expect(await t.run((ctx) => overviewCountRun(ctx.db, org_id))).toEqual(run)
-    // the subtask's project archived while the count goes on
+    // the family's project archived while the count goes on
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     for (let n = 0; n < 20 && !got.done; n++) got = await step(got)
     expect(got.done).toBe(true)
@@ -806,55 +738,18 @@ describe('overview counts', () => {
     await expectCountsExact(t, org_id, 'counted, then regrouped')
   })
 
-  it('a count page whose subtasks fill their project in 7 archived sub-projects stays inside the limits', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    // 100 parents created together, each with a subtask in each of 7
-    // archived sibling sub-projects: the project's 800 open tasks
-    const parents = await plantTasks(t, f.sub, 100)
-    for (let n = 0; n < 7; n++) {
-      const sibling = await plantProject(t, {
-        org_id,
-        type: 'project',
-        parent_id: f.meta.id,
-        archived_at: NOW,
-      })
-      await plantTasks(t, sibling, 100, (i) => ({ parent_id: parents[i].id }))
-    }
-    const dry = await backfill(t, { dry_run: true })
-    expect(dry).toMatchObject({ unchecked: 0, unsettled: 0 })
-    expect(dry.to_count).toContainEqual({ org_id, tasks: 800, rows: expect.any(Number) })
-    await countOrg(t, org_id)
-    // the parents count as leaves, as their subtasks are in archived projects
-    expect((await t.run((ctx) => subProjectCounts(ctx.db, f.sub)))?.leaves.todo).toBe(100)
-    // what one count step's page reads, the parents' subtasks with it
-    const took = await t.run(async (ctx) => {
-      const page = await taskPage(ctx.db, org_id, Number.MIN_SAFE_INTEGER, COUNT_PAGE)
-      const live = new Map<string, boolean>()
-      for (const task of page?.tasks ?? [])
-        await reconcileTask(ctx.db, org_id, task.id, task, 'read', live)
-      const m = await ctx.meta.getTransactionMetrics()
-      return { ranges: m.databaseQueries.used, documents: m.documentsRead.used }
-    })
-    // 373 ranges and 1,040 documents when measured; reading each
-    // subtask's project, not each project once, would take about 700 more
-    console.log('one count page over 7 archived sub-projects:', took)
-    expect(took.ranges).toBeLessThan(500)
-  })
-
   it('a project changed again while its regroup is partway through it is read again whole', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
-    // three parents in FW, each with its only subtask in PCB
+    // three families in PCB
     for (let n = 0; n < 3; n++) {
-      const parent = await w.create({ status: 'todo' })
-      await w.older(parent.id, f.sub2.id)
+      const parent = await w.create({ project_id: f.sub2.id, status: 'todo' })
+      await w.create({ project_id: f.sub2.id, parent_id: parent.id })
     }
-    await expectCountsExact(t, org_id, 'groups through PCB')
+    await expectCountsExact(t, org_id, 'groups in PCB')
     Object.assign(OVERVIEW_REGROUP, { tasks: 1 })
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     // one step reads PCB's first page as archived, then PCB is restored
@@ -868,6 +763,34 @@ describe('overview counts', () => {
     ])
     await runSteps(t)
     await expectCountsExact(t, org_id, 'restored between two steps')
+  })
+
+  it('a group the earlier rule stored as a leaf in an archived sub-project counts as a group once it moves out with its subtask', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const parent = await earlierLeafInArchive(t, f)
+    await writers(t, f).move(parent.id, f.sub.id)
+    await expectCountsExact(t, org_id, 'moved out with its subtask')
+    expect((await countsNow(t, f.sub.id))?.leaves).toMatchObject({ progress: 0, todo: 1 })
+  })
+
+  it('a group the earlier rule stored as a leaf in an archived sub-project counts as a group once the sub-project is restored', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    await earlierLeafInArchive(t, f)
+    // a dry run lists the archived sub-project's row and its owner's row,
+    // which no reader shows while the sub-project is archived
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 2 })
+    expect(await countsNow(t, f.sub2.id)).toBeNull()
+    await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.sub2.id })
+    await runSteps(t)
+    await expectCountsExact(t, org_id, 'restored')
+    expect((await countsNow(t, f.sub2.id))?.leaves).toMatchObject({ progress: 0, todo: 1 })
+    expect((await backfill(t, { dry_run: true })).differing).toBe(0)
   })
 
   it('a replayed continuation and one a recount overtook count the organization from its start', async () => {
@@ -915,8 +838,8 @@ describe('overview counts', () => {
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
-    const parent = await w.create({ status: 'todo' })
-    await w.older(parent.id, f.sub2.id)
+    const parent = await w.create({ project_id: f.sub2.id, status: 'todo' })
+    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     const row = await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))
     if (row?.scheduled_id === undefined) throw new Error('no regroup step')
@@ -1002,6 +925,49 @@ describe('overview counts', () => {
     expect(await t.run((ctx) => countsReady(ctx.db, f.org.id))).toBe(true)
   })
 })
+
+/** A parent in progress with a subtask to do, both the user's and in the
+ * fixture's second sub-project, which is then archived, with the parent's
+ * counts as the group rule before this release stored them there: a leaf
+ * with its slot in the sub-project's and its owner's rows, as that rule
+ * counted only an active subtask in a live project. */
+async function earlierLeafInArchive(t: T, f: OrgFixture): Promise<Doc<'issues'>> {
+  const org_id = f.org.id
+  const w = writers(t, f)
+  const parent = await w.create({
+    project_id: f.sub2.id,
+    status: 'progress',
+    assignee_id: f.user.id,
+    remaining_hours: 2,
+  })
+  await w.create({
+    project_id: f.sub2.id,
+    parent_id: parent.id,
+    status: 'todo',
+    assignee_id: f.user.id,
+  })
+  await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+  await runSteps(t)
+  await expectCountsExact(t, org_id, 'archived')
+  return await t.run(async (ctx) => {
+    const task = (await byId(ctx, 'issues', parent.id)) as Doc<'issues'>
+    const slot = slotOf(task, await byId(ctx, 'projects', task.project_id), false)
+    const record = await taskRecord(ctx.db, task.id)
+    if (slot === undefined || record === null || !record.group) throw new Error('no group')
+    const moves = new CountMoves()
+    moves.add(org_id, slot, 1)
+    await moves.apply(ctx.db)
+    await ctx.db.patch(record._id, { group: false, slot })
+    return task
+  })
+}
+
+/** The leaf counts of sub-project `projectId` as it is stored now
+ * (subProjectCounts). */
+const countsNow = (t: T, projectId: string) =>
+  t.run(async (ctx) =>
+    subProjectCounts(ctx.db, (await byId(ctx, 'projects', projectId)) as Doc<'projects'>),
+  )
 
 const backfill = (t: T, args: Omit<RunArgs, never>) =>
   t.action(internal.internal.overviewCountsBackfill.run, args)

@@ -246,14 +246,10 @@ describe('the working-set rules', () => {
       plantIssue(t, { org_id: f.org.id, ...extra })
     const parent = await task({ project_id: f.sub.id, title: 'Parent' })
     const shownKid = await task({ project_id: f.sub.id, parent_id: parent.id, remaining_hours: 2 })
-    const hiddenKid = await task({ project_id: away.id, parent_id: parent.id, remaining_hours: 5 })
-    const archivedHome = await task({ project_id: arch.id, parent_id: parent.id })
-    const underHidden = await task({ project_id: f.sub.id, parent_id: hiddenKid.id })
+    const hiddenTask = await task({ project_id: away.id, remaining_hours: 5 })
+    const archivedHome = await task({ project_id: arch.id })
     const loner = await task({ project_id: f.sub2.id })
-    // its only active subtask is in the archived sub-project
-    const shelvedOnly = await task({ project_id: f.sub2.id, title: 'Shelved only' })
-    await task({ project_id: arch.id, parent_id: shelvedOnly.id })
-    return { parent, shownKid, hiddenKid, archivedHome, underHidden, loner, shelvedOnly }
+    return { parent, shownKid, hiddenTask, archivedHome, loner }
   }
 
   it('the working set holds the active tasks of visible, active projects', async () => {
@@ -271,52 +267,38 @@ describe('the working-set rules', () => {
       )
       return workingSetOf(active, await orgProjectView(ctx, f.guest)).tasks.map((i) => i.id)
     })
-    expect(ws.sort()).toEqual(
-      [r.parent.id, r.shownKid.id, r.underHidden.id, r.loner.id, r.shelvedOnly.id].sort(),
-    )
-    expect(ws).not.toContain(r.hiddenKid.id) // a project the guest cannot see
+    expect(ws.sort()).toEqual([r.parent.id, r.shownKid.id, r.loner.id].sort())
+    expect(ws).not.toContain(r.hiddenTask.id) // a project the guest cannot see
     expect(ws).not.toContain(r.archivedHome.id) // an archived project
     expect(ws).not.toContain(archived.id) // an archived task
   })
 
-  it('flags hidden subtasks and parents, and sends neither id', async () => {
+  it('names a parent the reader is shown, and sends a link only between shown tasks', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const r = await tree(t, f)
     const { rows, links } = await t.run(async (ctx) => {
       const active = await ctx.db.query('issues').collect()
       const ws = workingSetOf(active, await orgProjectView(ctx, f.guest))
+      const byTask = new Map(active.map((i) => [i.id, i]))
+      const parentOf = (i: Doc<'issues'>) =>
+        i.parent_id === undefined || !ws.shown(i.parent_id) ? undefined : byTask.get(i.parent_id)
       return {
-        rows: ws.tasks.map((i) => ({
-          id: i.id,
-          flags: { ...parentLink(i, ws.shown), hidden_subtasks: ws.hasHiddenSubtasks(i.id) },
-        })),
+        rows: ws.tasks.map((i) => ({ id: i.id, link: parentLink(i, parentOf(i)) })),
         links: [
           linkShown({ source_id: r.parent.id, target_id: r.loner.id }, ws.shown),
-          linkShown({ source_id: r.parent.id, target_id: r.hiddenKid.id }, ws.shown),
+          linkShown({ source_id: r.parent.id, target_id: r.hiddenTask.id }, ws.shown),
           linkShown({ source_id: r.archivedHome.id, target_id: r.loner.id }, ws.shown),
         ],
       }
     })
-    const flags = new Map(rows.map((row) => [row.id, row.flags]))
-    // the parent has subtasks in a hidden and in an archived project; only
-    // the hidden one makes it a group
-    expect(flags.get(r.parent.id)).toEqual({ has_hidden_parent: false, hidden_subtasks: true })
-    // a subtask in an archived project alone hides nothing, so it is no group
-    expect(flags.get(r.shelvedOnly.id)).toEqual({
-      has_hidden_parent: false,
-      hidden_subtasks: false,
-    })
-    expect(flags.get(r.shownKid.id)).toEqual({
-      parent_id: r.parent.id,
-      has_hidden_parent: false,
-      hidden_subtasks: false,
-    })
-    // the subtask under the hidden one learns only that a parent exists
-    expect(flags.get(r.underHidden.id)).toEqual({ has_hidden_parent: true, hidden_subtasks: false })
-    expect(flags.get(r.loner.id)).toEqual({ has_hidden_parent: false, hidden_subtasks: false })
+    const link = new Map(rows.map((row) => [row.id, row.link]))
+    expect(link.get(r.parent.id)).toEqual({ has_hidden_parent: false })
+    expect(link.get(r.shownKid.id)).toEqual({ parent_id: r.parent.id, has_hidden_parent: false })
+    expect(link.get(r.loner.id)).toEqual({ has_hidden_parent: false })
     expect(links).toEqual([true, false, false])
-    expect(parentLink({ parent_id: undefined }, () => true)).toEqual({ has_hidden_parent: false })
+    // a task that is not the one the link names is no parent
+    expect(parentLink(r.loner, r.parent)).toEqual({ has_hidden_parent: false })
   })
 
   it('keeps only rows about shown tasks', () => {
@@ -349,10 +331,9 @@ describe('the working-set rules', () => {
     const shown = (id: string) => active.has(id) && id !== hidden.id
     // 1.25 + 2.1: the nested group's own 40 h, the done leaf, the hidden
     // subtask with everything under it and the archived one never count
-    const live = () => true
-    expect(groupRemainingHours(group, childrenOf, shown, live)).toBe(3.4)
-    expect(groupRemainingHours(group, childrenOf, () => false, live)).toBeNull()
+    expect(groupRemainingHours(group, childrenOf, shown)).toBe(3.4)
+    expect(groupRemainingHours(group, childrenOf, () => false)).toBeNull()
     // with every active task shown, the hidden subtask is a group of one 7 h leaf
-    expect(groupRemainingHours(group, childrenOf, (id) => active.has(id), live)).toBe(10.4)
+    expect(groupRemainingHours(group, childrenOf, (id) => active.has(id))).toBe(10.4)
   })
 })

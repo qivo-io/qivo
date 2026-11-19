@@ -821,7 +821,9 @@ export type SectionAttachmentVM = AttachmentVM
 
 /** The watched task's Subtasks, Linked tasks and Attachments (P.sections),
     for the task `task`, whose windows alone show them. `hidden` says the
-    task has subtasks the person cannot see. An attachment row of a
+    answer's subtask list leaves some out (has_hidden_subtasks): this
+    backend says so of an incomplete list, and an earlier one also said so
+    of subtasks in projects the person cannot open. An attachment row of a
     description image (`inline`) is no row of the section, and `count`
     counts what the per-task cap counts: every attachment row but those a
     description save took out, images included. */
@@ -13144,8 +13146,11 @@ export const PLANNER = {
      with whether I can delete it (Edit access to its project). A subtask I
      cannot delete stays, keeping its own subtasks, so those are not listed.
      `hidden` is true when the task, or a subtask that would be deleted, has
-     subtasks in projects I cannot see; how many is not known here. The
-     task and its subtasks are those of `family` (P.familyOf). */
+     subtasks the window's answer left out (hasHiddenSubtasks). The task
+     and its subtasks are those of `family` (P.familyOf), which holds only
+     a complete list of leaf subtasks, so this backend's answer never sets
+     it. Only an earlier backend's answer does, beside a complete list, for
+     subtasks in projects I cannot open; how many is not known here. */
   deletePlan: (
     family: TaskFamily,
   ): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {

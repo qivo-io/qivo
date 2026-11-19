@@ -80,8 +80,9 @@ export type TaskDetailVM = {
   /** whether a group's dates are known (always true for a leaf); unknown
       dates are null in `view` */
   datesKnown: boolean
-  /** whether a group's span leaves out subtasks the person cannot see,
-      which limits its delay verdict (convex/lib/delay.ts) */
+  /** whether a group's span leaves out subtasks the window does not hold,
+      as when its answer's subtask list is incomplete, which limits its
+      delay verdict (convex/lib/delay.ts) */
   partial: boolean
   /** whether the task is Done: for a group, every leaf of a whole list,
       at least one, since P.isDone walks the workspace's tasks */

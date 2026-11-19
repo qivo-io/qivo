@@ -1908,10 +1908,9 @@ export default defineSchema({
   // The Overview's stored-fact figures (model/overviewCounts.ts): of the
   // active tasks of one sub-project, the leaves by status, the paused
   // leaves and the remaining hours of the leaves not Done, in whole tenths.
-  // A leaf is an active task with no active subtask in a live project,
-  // whoever reads it, which for a task in a live project is
-  // lib/liveTasks.ts countsAsSubtask's rule, as the app's P.isGroup decides;
-  // an archived sub-project's rows wait for a restore's regroup and give no
+  // A leaf is an active task with no active subtask (lib/liveTasks.ts
+  // countsAsSubtask), whoever reads it, as the app's P.isGroup decides; an
+  // archived sub-project's rows wait for a restore's regroup and give no
   // figure meanwhile. A sub-project's rows have no owner_id; a person's
   // rows (owner_id) hold the leaves they own there by the Reviewer rule
   // (lib/review.ts taskOwnerId), for My view. Both split their leaves over
@@ -1951,12 +1950,12 @@ export default defineSchema({
 
   // What the overview counts hold for each active task of a counted
   // organization (model/overviewCounts.ts): whether they take it as a group
-  // (an active subtask in a live project), and the leaf it adds to its
-  // sub-project's and its owner's rows (`slot`), absent where it adds none:
-  // a group, or a task outside any sub-project. Every write, background step
-  // and backfill step reconciles a task with this row, moving the counts by
-  // the difference, so each can run in any order and a second finds nothing
-  // to do. `task_at` is the task row's _creationTime: a row of an earlier
+  // (an active subtask, lib/liveTasks.ts countsAsSubtask), and the leaf it
+  // adds to its sub-project's and its owner's rows (`slot`), absent where it
+  // adds none: a group, or a task outside any sub-project. Every write,
+  // background step and backfill step reconciles a task with this row,
+  // moving the counts by the difference, so each can run in any order and a
+  // second finds nothing to do. `task_at` is the task row's _creationTime: a row of an earlier
   // task with the same id holds nothing. Deleted when its task leaves the
   // active tasks, so an organization holds one row per active task. A task
   // write reads its row (one index range) beside the count rows it moves,
@@ -2000,16 +1999,14 @@ export default defineSchema({
 
   // A top-level project with sub-projects archived, restored, moved to
   // Deleted items or back, whose overview counts background steps reconcile
-  // (overviewRegroup.ts): a project's liveness decides whether its tasks
-  // make their parents groups, in any sub-project of the same top-level
-  // project, and a project's presence whether its tasks count at all.
+  // (overviewRegroup.ts): a project's presence decides whether its tasks
+  // count at all, and the readers give an archived sub-project no figure.
   // `projects` holds the projects whose tasks, and their parents, a step
   // reconciles, read in order from `at`, a page at a time from `cursor`,
   // and within a page past `after`, the creation time of the last task a
   // step finished and the ids of those finished at that time. The counts of
   // every top-level project of the organization answer `counting` while it
-  // exists, because a parent that older code left in another top-level
-  // project waits for it too (model/overviewCounts.ts countsReady).
+  // exists (model/overviewCounts.ts countsReady).
   // `progress_at` is the last committed step, which recovery restarts a
   // stalled chain from (overviewRegroup.ts recover), and `scheduled_id` the
   // next step.

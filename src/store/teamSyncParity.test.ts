@@ -428,7 +428,7 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     await plantBlocks(t, [[blocker, blocked]])
   }
   const group = await task(f.sub, { title: 'A group', assignee_id: subject.id })
-  await task(sibling, { title: 'Its subtask', parent_id: group.id, assignee_id: f.user.id })
+  await task(f.sub, { title: 'Its subtask', parent_id: group.id, assignee_id: f.user.id })
   await task(f.sub, { title: 'Unassigned urgent', priority: 'urgent' })
   await plantStamp(t, subject, {
     at: '2026-01-01T15:30:00.000Z',

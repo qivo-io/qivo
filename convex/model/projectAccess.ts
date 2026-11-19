@@ -44,7 +44,6 @@ import { usedMoreThan } from '../lib/db'
 import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { grouped, LIMITS } from '../lib/limits'
-import { liveIn } from '../lib/liveTasks'
 import { nameKey } from '../lib/nameKey'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, exact, type Fields, oneOf } from './expected'
@@ -485,12 +484,11 @@ export async function findLost(
     const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
       (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
     const lost: Lost[] = []
-    const live = liveIn(new Map(orgProjects.map((p) => [p.id, p])))
     for (const h of candidates) {
       if (!sees(before, h) || sees(after, h)) continue
       if (h.role === 'reviewer') {
         await assertRoom(ctx)
-        if (await hasSubtasks(ctx, h.task, live)) continue
+        if (await hasSubtasks(ctx, h.task)) continue
       }
       lost.push(h)
     }

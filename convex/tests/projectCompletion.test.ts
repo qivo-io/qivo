@@ -103,18 +103,14 @@ async function updates(fx: Fx, callerId: string, ref: string) {
 const task = (fx: Fx, over: Partial<Doc<'issues'>> & { project_id: string }) =>
   plantIssue(fx.t, { org_id: fx.org.id, ...over })
 
-/* FW holds a Done leaf, a To Do leaf, a group whose one subtask is in PCB,
- * and a task whose one subtask is in SKNK, another top-level project, which
- * makes it a group by the stored rule. PCB holds the group's subtask and a
- * Done leaf. */
+/* FW holds a Done leaf and a To Do leaf, and PCB a group with one subtask
+ * and a Done leaf. */
 async function plantFamily(fx: Fx) {
   await task(fx, { project_id: fx.sub.id, status: 'done' })
   await task(fx, { project_id: fx.sub.id })
-  const group = await task(fx, { project_id: fx.sub.id, title: 'Group' })
+  const group = await task(fx, { project_id: fx.sub2.id, title: 'Group' })
   await task(fx, { project_id: fx.sub2.id, parent_id: group.id })
   await task(fx, { project_id: fx.sub2.id, status: 'done' })
-  const legacy = await task(fx, { project_id: fx.sub.id, title: 'Legacy parent' })
-  await task(fx, { project_id: fx.hidden.id, parent_id: legacy.id })
 }
 
 const ok = (done: number, total: number): CompletionJson => ({
@@ -149,54 +145,6 @@ const rangesOfGet = (t: T, callerId: string, ref: string) =>
       ref,
     })
     return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-  })
-
-/* setup, with AWAY, a sub-project of SKNK that the user leads, archived
- * or not, and in FW a To Do parent whose only subtask older code stored in
- * AWAY, beside a Done leaf, counted. */
-async function legacyFamily(archived: boolean) {
-  const fx = await setup()
-  const away = await plantProject(fx.t, {
-    org_id: fx.org.id,
-    type: 'project',
-    parent_id: fx.hidden.id,
-    key: 'AWAY',
-    ...(archived ? { archived_at: NOW } : {}),
-  })
-  const legacy = await task(fx, { project_id: fx.sub.id, title: 'Legacy parent' })
-  await task(fx, { project_id: away.id, parent_id: legacy.id })
-  await task(fx, { project_id: fx.sub.id, status: 'done' })
-  await countOrg(fx.t, fx.org.id)
-  return { ...fx, away }
-}
-
-/* FW's and TBED's completion for the agent, over REST and MCP. */
-async function legacyReads(fx: Fx) {
-  const out: Record<string, CompletionJson | null> = {}
-  for (const ref of ['FW', 'TBED']) {
-    out[`rest ${ref}`] = await restCompletion(fx, fx.agent.id, ref)
-    out[`mcp ${ref}`] = await mcpCompletion(fx, fx.agent.id, ref)
-  }
-  return out
-}
-
-/* What legacyReads answers when every read is `c`. */
-const everywhere = (c: CompletionJson) => ({
-  'rest FW': c,
-  'mcp FW': c,
-  'rest TBED': c,
-  'mcp TBED': c,
-})
-
-/* REST PATCH /v1/projects/{ref} archiving or restoring `project` as the
- * user, who leads TBED and SKNK. */
-const restArchive = (fx: Fx, project: Doc<'projects'>, archived: boolean) =>
-  fx.t.mutation(internal.machine.projects.restUpdateProject, {
-    callerId: fx.user.id,
-    access: 'write',
-    keyName: 'drive',
-    ref: project.key,
-    body: JSON.stringify({ archived }),
   })
 
 describe('project completion from the counts', () => {
@@ -247,25 +195,6 @@ describe('project completion from the counts', () => {
       }
   })
 
-  it('keeps a parent whose only subtask is hidden or in another top-level project a group', async () => {
-    const fx = await setup()
-    // FW holds a parent whose one subtask is in PCB, which fwOnly cannot read,
-    // one whose one subtask is in SKNK, and one leaf
-    const hidden = await task(fx, { project_id: fx.sub.id, title: 'Hidden subtask' })
-    await task(fx, { project_id: fx.sub2.id, parent_id: hidden.id })
-    const away = await task(fx, { project_id: fx.sub.id, title: 'Away subtask' })
-    const sknkSub = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      type: 'project',
-      parent_id: fx.hidden.id,
-    })
-    await task(fx, { project_id: sknkSub.id, parent_id: away.id })
-    await task(fx, { project_id: fx.sub.id, status: 'done' })
-    await countOrg(fx.t, fx.org.id)
-    for (const caller of [fx.fwOnly, fx.agent, fx.admin])
-      expect(await restCompletion(fx, caller.id, 'FW'), caller.name).toEqual(ok(1, 1))
-  })
-
   it('answers counting while the counts are not whole, and the figure once they are', async () => {
     const fx = await setup()
     await plantFamily(fx)
@@ -292,9 +221,9 @@ describe('project completion from the counts', () => {
     expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(COUNTING_COMPLETION)
     expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(COUNTING_COMPLETION)
     await fx.t.finishAllScheduledFunctions(() => {})
-    // the group's subtask is archived away, so the group is a leaf again
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(ok(1, 3))
-    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(1, 3))
+    // an archived sub-project gives no figure, so TBED counts FW alone
+    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(ok(1, 2))
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(1, 2))
     // a restore answers counting in its own answer, on both surfaces
     const restored = JSON.parse(
       await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
@@ -325,32 +254,6 @@ describe('project completion from the counts', () => {
       await restCompletion(fx, fx.agent.id, 'FW'),
       await restCompletion(fx, fx.agent.id, 'PCB'),
     ]).toContainEqual(COUNTING_COMPLETION)
-  })
-
-  it('answers counting in the family of a parent whose only subtask is in another family, from that family’s archive until its steps have run', async () => {
-    const fx = await legacyFamily(false)
-    // the parent is a group while its subtask's project is live
-    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 1)))
-    // archived: TBED's counts still hold the parent a group until SKNK's
-    // regroup reaches it, so they answer counting, never the stale figure
-    expect((await restArchive(fx, fx.away, true)).completion).toBeNull()
-    expect(await legacyReads(fx)).toEqual(everywhere(COUNTING_COMPLETION))
-    await fx.t.finishAllScheduledFunctions(() => {})
-    // its only subtask archived away, the parent is a To Do leaf
-    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 2)))
-  })
-
-  it('answers counting in the family of a parent whose only subtask is in another family, from that family’s restore until its steps have run', async () => {
-    const fx = await legacyFamily(true)
-    // the parent is a leaf while its subtask's project is archived
-    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 2)))
-    // restored: TBED's counts still hold the parent a leaf until SKNK's
-    // regroup reaches it, so they answer counting, as the restore's own
-    // answer does
-    expect((await restArchive(fx, fx.away, false)).completion).toEqual(COUNTING_COMPLETION)
-    expect(await legacyReads(fx)).toEqual(everywhere(COUNTING_COMPLETION))
-    await fx.t.finishAllScheduledFunctions(() => {})
-    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 1)))
   })
 
   it('answers unavailable where the request has no room for the counts, and the update commits', async () => {

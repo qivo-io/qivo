@@ -10,7 +10,7 @@ import type { QueryCtx } from '../_generated/server'
 import { type Caller, type ChildIndex, taskRefOf } from '../lib/core'
 import { byId } from '../lib/db'
 import { DEFAULT_PAGE_SIZE } from '../lib/limits'
-import type { ProjectLive } from '../lib/liveTasks'
+import { liveLink } from '../lib/liveTasks'
 import { compareNamed } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { groupRemainingHours, linkShown } from '../lib/workingSet'
@@ -99,8 +99,8 @@ export const cursorsShown = <D extends Record<string, unknown>>(details: D): D =
  * whole subtree, and the first DEFAULT_PAGE_SIZE rows of each related list
  * read whole, each cursor null when its list ends there and SOME_CURSOR
  * otherwise. `readable` is the caller's read flag from the organization's
- * catalogue (lib/core.ts accessFlags) and `projectOf` its projects, so the
- * oracle asks no question the read under test asks.
+ * catalogue (lib/core.ts accessFlags), so the oracle asks no question the
+ * read under test asks.
  */
 export async function wholeDetails(
   ctx: QueryCtx,
@@ -108,27 +108,22 @@ export async function wholeDetails(
   issue: Doc<'issues'>,
   o: {
     children: ChildIndex
-    live: ProjectLive
     isGroup: boolean
     readable: (projectId: string) => boolean
-    projectOf: (projectId: string) => Doc<'projects'> | undefined
   },
 ) {
   const shown = (task: Doc<'issues'>) => task.org_id === me.org_id && o.readable(task.project_id)
   const allArchived = issue.archived_at !== undefined
+  // its subtasks in its own sub-project (lib/liveTasks.ts liveLink)
   const kids = (o.children.get(issue.id) ?? [])
-    .filter((kid) => (allArchived || kid.archived_at === undefined) && shown(kid))
+    .filter((kid) => (allArchived || kid.archived_at === undefined) && liveLink(issue, kid))
     .sort((a, b) => a.num - b.num)
     .map(taskRefOf)
-  // groupCounter's rule, said again
-  const rootProject = o.projectOf(issue.project_id)
-  const counts = (task: Doc<'issues'>) => {
-    if (task.org_id !== me.org_id || (!allArchived && task.archived_at !== undefined)) return false
-    const p = o.projectOf(task.project_id)
-    if (p === undefined) return false
-    if (rootProject?.archived_at === undefined && p.archived_at !== undefined) return false
-    return o.readable(p.id)
-  }
+  // groupCounter's rule, said again: the root's own sub-project
+  const counts = (task: Doc<'issues'>) =>
+    task.org_id === issue.org_id &&
+    task.project_id === issue.project_id &&
+    (allArchived || task.archived_at === undefined)
   const tasks = new Map([...o.children.values()].flat().map((t) => [t.id, t]))
   const group_remaining_hours = o.isGroup
     ? groupRemainingHours(
@@ -138,7 +133,6 @@ export async function wholeDetails(
           const task = tasks.get(id)
           return task !== undefined && counts(task)
         },
-        o.live,
       )
     : null
   const links = []

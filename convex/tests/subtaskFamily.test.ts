@@ -1,11 +1,9 @@
 /* A subtask stays in its parent task's own sub-project. Creating a subtask
  * and setting a parent are refused across sub-projects on every surface, a
  * move to any other sub-project carries the task's subtasks along, and a
- * subtask that moves must leave its parent in the same change. A family
- * stored before the rule may span sub-projects; its rows are planted.
+ * subtask that moves must leave its parent in the same change.
  * withOrg's TBED holds FW (f.sub) and PCB (f.sub2); the scene adds a second
  * top-level project, Cloud, with the Backend and Frontend sub-projects. */
-/// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -15,7 +13,6 @@ import type { EventOwner } from '../lib/taskEvents'
 import { issueKey } from '../lib/taskRefs'
 import {
   MOVE_SUBTASK_RULE,
-  MOVE_SUBTREE_EDIT_RULE,
   MOVE_TOO_LARGE,
   moveSubtreeHolderRule,
   parentChainCheck,
@@ -347,35 +344,11 @@ describe('moving a task with subtasks', () => {
     expect(await row(t, second.id)).toMatchObject({ project_id: f.sub2.id, parent_id: there.id })
   })
 
-  it('refuses subtasks the caller cannot edit, people who cannot work there and too many', async () => {
+  it('refuses people who cannot work there and too many', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
-    // someone who edits FW and Backend but not PCB
-    const editor = await plantSeat(t, { org_id: f.org.id, auth_user_id: `editor_${uuid()}` })
-    for (const project of [f.sub.id, backend.id]) await grant(t, project, editor.id)
     const root = await plantIssue(t, base)
-    // a subtask stored in PCB before the rule, which the editor cannot edit
-    const inPcb = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: root.id })
-    const asEditor = as(t, editor).mutation(api.issues.move, {
-      org_id: f.org.id,
-      id: root.id,
-      project_id: backend.id,
-    })
-    expect((await expectRefusal(asEditor, 'rule')).data.message).toBe(MOVE_SUBTREE_EDIT_RULE)
-    expect(await row(t, root.id)).toEqual(root)
-    // the public docs quote it as it is sent, a wrapped line as one space
-    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
-      eager: true,
-      query: '?raw',
-      import: 'default',
-    }) as Record<string, string>
-    expect(Object.keys(docs)).toHaveLength(2)
-    for (const [path, text] of Object.entries(docs))
-      expect(text.replace(/\s+/g, ' '), path).toContain(MOVE_SUBTREE_EDIT_RULE)
-    await t.run(async (ctx) => {
-      await ctx.db.delete(inPcb._id)
-    })
     // the guest edits TBED but nothing in Cloud
     const kid = await plantIssue(t, { ...base, parent_id: root.id, assignee_id: f.guest.id })
     const named = moveSubtreeHolderRule([{ name: f.guest.name, tasks: [issueKey(kid.num)] }])
@@ -468,102 +441,6 @@ describe('moving a task with subtasks', () => {
         .sort(),
     )
     expect(moved).toHaveLength(LIMITS.moveSubtree.max + 1)
-  })
-})
-
-describe("older subtasks outside their parent's sub-project", () => {
-  it("stay editable, and move only into their parent's sub-project or away from their parent", async () => {
-    const t = newT()
-    const { f, backend, frontend } = await scene(t)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const stray = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: backend.id,
-      parent_id: parent.id,
-    })
-    const sibling = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: parent.id,
-    })
-    await appUpdate(t, f, stray.id, { title: 'Still editable', status: 'progress' })
-    // another sub-project than the parent's, in its own top-level project or not
-    for (const [task, project] of [
-      [stray, frontend.id],
-      [sibling, backend.id],
-    ] as const) {
-      const r = await expectRefusal(appMove(t, f, task.id, project), 'rule')
-      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
-    }
-    // into the parent's sub-project, which brings the family together
-    for (const task of [stray, sibling]) {
-      await appMove(t, f, task.id, f.sub.id)
-      expect(await row(t, task.id)).toMatchObject({ project_id: f.sub.id, parent_id: parent.id })
-    }
-    expect(await row(t, stray.id)).toMatchObject({ title: 'Still editable', status: 'progress' })
-  })
-
-  it('come along when their parent moves, wherever they are', async () => {
-    const t = newT()
-    const { f, backend, frontend } = await scene(t)
-    const base = { org_id: f.org.id, project_id: f.sub.id }
-    const parent = await plantIssue(t, base)
-    const inPcb = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: parent.id })
-    const inBackend = await plantIssue(t, { ...base, project_id: backend.id, parent_id: parent.id })
-    const archived = await plantIssue(t, {
-      ...base,
-      project_id: frontend.id,
-      parent_id: parent.id,
-      archived_at: ARCHIVED,
-    })
-    await appMove(t, f, parent.id, f.sub2.id)
-    for (const task of [parent, inPcb, inBackend, archived])
-      expect((await row(t, task.id)).project_id).toBe(f.sub2.id)
-    // the subtask already there is left as it was
-    expect(await row(t, inPcb.id)).toEqual(inPcb)
-  })
-})
-
-describe('an older subtask whose parent the mover cannot see', () => {
-  it('moves only when it leaves the parent, wherever the parent is', async () => {
-    const t = newT()
-    const { f, backend } = await scene(t)
-    // Vault's Open sub-project is the agent's; its Closed one is not, so the
-    // agent sees Vault only for navigation and cannot see the parent
-    const vault = await plantProject(t, { org_id: f.org.id, key: 'VLT', name: 'Vault' })
-    const under = { org_id: f.org.id, type: 'project' as const, parent_id: vault.id }
-    const open = await plantProject(t, { ...under, key: 'OPN', name: 'Open' })
-    const closed = await plantProject(t, { ...under, key: 'CLS', name: 'Closed' })
-    await grant(t, open.id, f.agent.id)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: closed.id })
-    const elsewhere = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const strays = []
-    for (const parent_id of [parent.id, elsewhere.id]) {
-      // the agent cannot see the TBED parent either once its grant goes below
-      strays.push(await plantIssue(t, { org_id: f.org.id, project_id: backend.id, parent_id }))
-    }
-    await t.run(async (ctx) => {
-      const tbed = await ctx.db
-        .query('project_access')
-        .withIndex('by_project_profile', (q) =>
-          q.eq('project_id', f.meta.id).eq('profile_id', f.agent.id),
-        )
-        .unique()
-      await ctx.db.delete(tbed!._id)
-    })
-    // the parent under Vault and the one under TBED answer alike
-    for (const stray of strays) {
-      const r = await expectRefusal(
-        restPatch(t, f, `QN-${stray.num}`, { project: open.id }),
-        'rule',
-      )
-      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
-      expect(await row(t, stray.id)).toEqual(stray)
-    }
-    // leaving the parent in the same request moves it
-    await restPatch(t, f, `QN-${strays[0].num}`, { project: open.id, parent: null })
-    const moved = await row(t, strays[0].id)
-    expect([moved.project_id, moved.parent_id]).toEqual([open.id, undefined])
   })
 })
 
@@ -764,7 +641,7 @@ describe('a parent whose subtasks are too large to count', () => {
 describe('asking whether a move carries subtasks', () => {
   it('counts archived subtasks, which the app cannot see, for any other sub-project', async () => {
     const t = newT()
-    const { f, backend, frontend } = await scene(t)
+    const { f, backend } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const ask = (id: string, project_id: string, who = f.admin) =>
       as(t, who).query(api.issues.moveCarriesSubtasks, { org_id: f.org.id, id, project_id })
@@ -772,13 +649,9 @@ describe('asking whether a move carries subtasks', () => {
     const root = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: root.id, archived_at: ARCHIVED })
     for (const project of [backend.id, f.sub2.id]) expect(await ask(root.id, project)).toBe(true)
-    // no subtasks, or only an older one already in the destination
+    // no subtasks
     const lone = await plantIssue(t, base)
-    const settledRoot = await plantIssue(t, base)
-    await plantIssue(t, { ...base, project_id: frontend.id, parent_id: settledRoot.id })
     expect(await ask(lone.id, backend.id)).toBe(false)
-    expect(await ask(settledRoot.id, frontend.id)).toBe(false)
-    expect(await ask(settledRoot.id, backend.id)).toBe(true)
     // the guest edits TBED but not Cloud, so the answer tells them nothing
     expect(await ask(root.id, backend.id, f.guest)).toBe(false)
   })

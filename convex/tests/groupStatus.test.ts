@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
 import type { McpIssueOut } from '../lib/core'
 import {
   appLoadRows,
   as,
   expectRefusal,
-  NOW,
   newT,
   plantIssue,
-  plantProject,
   restTasks,
   TODAY,
   uuid,
@@ -138,98 +135,6 @@ describe('parent task status', () => {
     )
     const snapshot = await workingSetOf(as(t, f.admin))
     expect(snapshot?.issues.map((i) => i.id).sort()).toEqual([root.id, middle.id, leaf.id].sort())
-  })
-
-  it('hidden children preserve grouping without revealing child identities; archived-project ones do not', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
-    const hiddenProject = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const hiddenChild = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenProject.id,
-      parent_id: parent.id,
-    })
-    const visibleChild = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-    })
-    // the task window's answer, the app's read of one task
-    const windowOf = async (who: Doc<'profiles'>) => {
-      const answer = await as(t, who).query(api.taskWindow.task, {
-        org_id: f.org.id,
-        ref: parent.id,
-      })
-      if (answer.state !== 'ok') throw new Error(answer.state)
-      return answer
-    }
-    const guestWindow = await windowOf(f.guest)
-    expect(guestWindow.task.has_hidden_subtasks).toBe(true)
-    expect(guestWindow.subtasks.rows.map((row) => row.id)).toEqual([visibleChild.id])
-    expect(JSON.stringify(guestWindow)).not.toContain(hiddenChild.id)
-    expect(
-      await t.query(internal.machine.rest.getIssue, {
-        today: TODAY,
-        callerId: f.guest.id,
-        access: 'read',
-        ref: parent.id,
-      }),
-    ).toMatchObject({ is_group: true, status: 'done' })
-    await expectRefusal(
-      as(t, f.guest).mutation(api.issues.update, {
-        org_id: f.org.id,
-        id: parent.id,
-        patch: { status: 'todo' },
-      }),
-      'rule',
-      /status cannot be set/,
-    )
-    // An administrator sees the child, so nothing is hidden from them
-    const adminFlag = async () => (await windowOf(f.admin)).task.has_hidden_subtasks
-    expect(await adminFlag()).toBe(false)
-    // A subtask in an archived project makes a task in an active one no
-    // group, so its project's archive hides nothing and leaves the parent a
-    // group of its visible subtask only
-    await t.run(async (ctx) => {
-      await ctx.db.patch(hiddenProject._id, { archived_at: NOW })
-    })
-    expect(await adminFlag()).toBe(false)
-    const guestFlag = async () => (await windowOf(f.guest)).task.has_hidden_subtasks
-    expect(await guestFlag()).toBe(false)
-    // once the visible subtask is archived too, the parent is a task again
-    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: visibleChild.id })
-    expect(
-      await t.query(internal.machine.rest.getIssue, {
-        callerId: f.guest.id,
-        access: 'read',
-        today: TODAY,
-        ref: parent.id,
-      }),
-    ).toMatchObject({ is_group: false, status: 'done' })
-    await as(t, f.guest).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: parent.id,
-      patch: { status: 'todo', start_week: '2026-09-07', end_week: '2026-09-14' },
-    })
-    // and restoring the subtask's project makes it a group again
-    await t.run(async (ctx) => {
-      await ctx.db.patch(hiddenProject._id, { archived_at: undefined })
-    })
-    expect(await guestFlag()).toBe(true)
-    await expectRefusal(
-      as(t, f.guest).mutation(api.issues.update, {
-        org_id: f.org.id,
-        id: parent.id,
-        patch: { status: 'done' },
-      }),
-      'rule',
-      /status cannot be set/,
-    )
   })
 
   it('groups contribute no independent planning load regardless of stored status', async () => {

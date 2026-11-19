@@ -13,16 +13,15 @@
  * Since the admin access split an admin's readable projects are those
  * their own leads, grants and team shares reach, as anyone's.
  *
- * The reads that follow hidden data are those lib/machineSubtree.ts names:
- * how many active subtasks a row has in projects the caller cannot read,
- * each counted at a fixed size, and the real bytes of hidden documents past
- * the caps at the real-bytes stop. Before the page the list reads the
- * organization's projects and the caller's access to them (lib/core.ts
- * loadCatalogue and accessFlags), its roster, and for a search up to
- * ARCHIVE_LABELS.scan of its labels, which hidden projects' rows fill too,
- * but the page's budget counts from its own start, and a request without
- * room for the whole budget is refused (TASK_LIST_UNREADABLE) rather than
- * answered with a shorter page. */
+ * The group and parent reads of the page's rows (lib/machineSubtree.ts)
+ * read a row's subtasks and parent in its own sub-project, which the
+ * caller reads, so they follow no hidden data. Before the page the list
+ * reads the organization's projects and the caller's access to them
+ * (lib/core.ts loadCatalogue and accessFlags), its roster, and for a
+ * search up to ARCHIVE_LABELS.scan of its labels, which hidden projects'
+ * rows fill too, but the page's budget counts from its own start, and a
+ * request without room for the whole budget is refused
+ * (TASK_LIST_UNREADABLE) rather than answered with a shorter page. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -51,7 +50,6 @@ import { badRequest } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS, MIB } from './limits'
 import { CURSOR_REFUSAL, filtersKey, listCursorText, openListCursor } from './listCursor'
-import { liveIn } from './liveTasks'
 import { delayClock, pageForecaster } from './machineDelay'
 import { type ReadTally, readTally, subtreeReads, totalsOf } from './machineSubtree'
 import { taskOwnerId } from './review'
@@ -261,7 +259,6 @@ export async function listActiveIssuesCore(
   ]
   const after = o.cursor === null ? null : await cursorPosition(o.cursor, view.surface, scope)
   const projectOf = (id: string) => cat.byUuid.get(id)
-  const live = liveIn(cat.byUuid)
   // the list's projects, each read once
   const ids = [
     ...new Set(
@@ -298,7 +295,7 @@ export async function listActiveIssuesCore(
     bytes: start.bytes + ACTIVE_PAGE.bytes - ACTIVE_PAGE.delays.bytes,
   }
   const tally = await readTally(ctx, hard)
-  const reads = subtreeReads(ctx, { me, readable, projectOf, live }, tally)
+  const reads = subtreeReads(ctx, { me, readable }, tally)
   // a group check a task's filters or search need reads past the rows'
   // budget, up to the request's room, which LIMITS.subtasks.max holds
   const groupOf = async (task: Doc<'issues'>): Promise<boolean> => {
@@ -430,7 +427,6 @@ export async function listActiveIssuesCore(
       kept.map(({ task, partial }) => {
         const shared = {
           me,
-          readable,
           project: projectOf(task.project_id),
           projectOf,
           names,
@@ -439,7 +435,6 @@ export async function listActiveIssuesCore(
           lastComments,
           texts,
           children: reads.kids,
-          live,
           partial,
           forecast,
         }

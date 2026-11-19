@@ -723,7 +723,8 @@ describe('the hours', () => {
               ? undefined
               : planted[s.parent % planted.length]
           const over: Partial<Doc<'issues'>> = {
-            project_id: where[s.project].id,
+            // a subtask is in its parent's own sub-project
+            project_id: parent?.project_id ?? where[s.project].id,
             status: s.status,
             paused: s.paused && s.status !== 'done' && s.status !== 'backlog',
           }

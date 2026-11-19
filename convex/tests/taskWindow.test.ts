@@ -239,25 +239,21 @@ async function plantWorld(t: T, f: OrgFixture) {
   const parent = await task(f.sub, { title: 'Parent', description: 'Bring up the board' })
   const kids = {
     shown: await task(f.sub, { title: 'Shown subtask', status: 'done', parent_id: parent.id }),
-    other: await task(f.sub2, {
-      title: 'Subtask in PCB',
-      parent_id: parent.id,
-      remaining_hours: 3,
-      remaining_set_at: NOW,
-    }),
-    hidden: await task(sibling, { title: 'Subtask the guest cannot see', parent_id: parent.id }),
-    shelved: await task(shelved, { title: 'Subtask in an archived project', parent_id: parent.id }),
     archived: await task(f.sub, {
       title: 'Archived subtask',
       parent_id: parent.id,
       archived_at: NOW,
     }),
   }
-  const hiddenParent = await task(sibling, { title: 'Parent the guest cannot see' })
-  const orphan = await task(f.sub, {
-    title: 'Subtask of a hidden parent',
-    parent_id: hiddenParent.id,
+  // tasks in PCB, in the sibling the guest cannot see and in the archived
+  // sub-project
+  const other = await task(f.sub2, {
+    title: 'Task in PCB',
+    remaining_hours: 3,
+    remaining_set_at: NOW,
   })
+  const hidden = await task(sibling, { title: 'Task the guest cannot see' })
+  const inShelved = await task(shelved, { title: 'Task in an archived project' })
   // a group whose subtask is a group too, stored before the rule of one level
   const legacy = await task(f.sub, { title: 'Legacy group' })
   const legacyKid = await task(f.sub, { title: 'Legacy subgroup', parent_id: legacy.id })
@@ -285,12 +281,12 @@ async function plantWorld(t: T, f: OrgFixture) {
   const links = await t.run(async (ctx) => {
     const rows = {
       toShown: linkRow(f, parent, kids.shown.id),
-      fromOther: linkRow(f, kids.other, parent.id, { type: 'relates' }),
+      fromOther: linkRow(f, other, parent.id, { type: 'relates' }),
       toSecret: linkRow(f, parent, secret.id),
       fromArchived: linkRow(f, archived, parent.id, { task_archived: true }),
-      toShelved: linkRow(f, parent, kids.shelved.id),
+      toShelved: linkRow(f, parent, inShelved.id),
       toGone: linkRow(f, parent, gone),
-      fromHidden: linkRow(f, hiddenParent, parent.id),
+      fromHidden: linkRow(f, hidden, parent.id),
       fromMarked: linkRow(f, marked, parent.id, { task_archived: true }),
       // marked links into the restored task: the tasks part sends the one
       // from an unflagged source with the flagged task, and the one between
@@ -353,8 +349,9 @@ async function plantWorld(t: T, f: OrgFixture) {
     shelved,
     parent,
     kids,
-    hiddenParent,
-    orphan,
+    other,
+    hidden,
+    inShelved,
     legacy,
     legacyKid,
     secret,
@@ -409,7 +406,7 @@ describe('parity with the tasks oracle', () => {
         await states(person, w.onMeta, w.archivedOnMeta, w.archivedInSibling, w.archivedShelved),
         person.name,
       ).toEqual(['ok', 'archived', 'unavailable', 'unavailable'])
-    expect(await states(f.user, w.archivedInSibling, w.archivedShelved, w.kids.shelved)).toEqual([
+    expect(await states(f.user, w.archivedInSibling, w.archivedShelved, w.inShelved)).toEqual([
       'archived',
       'archived',
       'unavailable',
@@ -429,31 +426,6 @@ describe('parity with the tasks oracle', () => {
     for (const person of profiles.filter((p) => p.auth_user_id !== undefined))
       compared += await expectParity(t, org.id, person)
     expect(compared).toBeGreaterThan(100)
-  })
-
-  it('tells a hidden subtask by has_hidden_subtasks, and a subtask in an archived project not at all', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const w = await plantWorld(t, f)
-    const ask = (person: Doc<'profiles'>) =>
-      as(t, person).query(api.taskWindow.task, { org_id: f.org.id, ref: w.parent.id })
-    const guest = await ask(f.guest)
-    if (guest.state !== 'ok') throw new Error(guest.state)
-    expect(guest.task.has_subtasks).toBe(true)
-    expect(guest.task.has_hidden_subtasks).toBe(true)
-    expect(guest.subtasks.rows.map((row) => row.id)).toEqual([w.kids.shown.id, w.kids.other.id])
-    expect(JSON.stringify(guest)).not.toContain(w.kids.hidden.id)
-    expect(JSON.stringify(guest)).not.toContain(w.kids.shelved.id)
-    const part = await oracleOf(t, f.guest)
-    expect(part.issues.find((row) => row.id === w.parent.id)?.has_hidden_subtasks).toBe(true)
-    const admin = await ask(f.admin)
-    if (admin.state !== 'ok') throw new Error(admin.state)
-    expect(admin.task.has_hidden_subtasks).toBe(false)
-    expect(admin.subtasks.rows.map((row) => row.id)).toEqual([
-      w.kids.shown.id,
-      w.kids.other.id,
-      w.kids.hidden.id,
-    ])
   })
 })
 
@@ -508,7 +480,7 @@ describe('refusals', () => {
       ['a task in a project the caller cannot see', f.guest, w.secret.id],
       ['a task moved to Deleted items', f.admin, deleted.id],
       ['an archived task moved to Deleted items', f.admin, deletedArchived.id],
-      ['an active task in an archived project', f.admin, w.kids.shelved.id],
+      ['an active task in an archived project', f.admin, w.inShelved.id],
       [
         "an archived task of another organization of the caller's login",
         f.admin,
@@ -749,27 +721,18 @@ describe('what a read reveals', () => {
     }
   })
 
-  it('names a parent only when the caller is shown it', async () => {
+  it('names the parent, in the task’s own sub-project, and says of no hidden one', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
-    const guest = await as(t, f.guest).query(api.taskWindow.task, {
+    const kid = await as(t, f.guest).query(api.taskWindow.task, {
       org_id: f.org.id,
-      ref: w.orphan.id,
+      ref: w.kids.shown.id,
     })
-    if (guest.state !== 'ok') throw new Error(guest.state)
-    expect(guest.parent).toBeNull()
-    expect(guest.task.has_hidden_parent).toBe(true)
-    expect('parent_id' in guest.task).toBe(false)
-    expect(JSON.stringify(guest)).not.toContain(w.hiddenParent.id)
-    const admin = await as(t, f.admin).query(api.taskWindow.task, {
-      org_id: f.org.id,
-      ref: w.orphan.id,
-    })
-    expect(admin).toMatchObject({
+    expect(kid).toMatchObject({
       state: 'ok',
-      task: { parent_id: w.hiddenParent.id, has_hidden_parent: false },
-      parent: { id: w.hiddenParent.id, has_subtasks: true, level: 'user' },
+      task: { parent_id: w.parent.id, has_hidden_parent: false },
+      parent: { id: w.parent.id, has_subtasks: true, level: 'user' },
     })
   })
 
@@ -949,49 +912,6 @@ const ordinary = (i: number) => ({
   description: 'Measure each rail under load and note any that drift from nominal.',
 })
 
-/* The number of the next project readableProjects plants. */
-let nextProject = 5000
-
-/** `n` sub-projects the guest reads, three under each of new top-level
- * projects that grant the guest User, so each sub-project and its
- * top-level project are new to the guest's access. */
-const readableProjects = (t: T, f: OrgFixture, n: number) =>
-  t.run(async (ctx) => {
-    const row = (extra: Pick<Doc<'projects'>, 'type' | 'parent_id'>) => {
-      const num = nextProject++
-      return {
-        id: uuid(),
-        org_id: f.org.id,
-        key: `R${num}`,
-        name: `Rev ${num} bring-up`,
-        description: '',
-        sort_order: num,
-        num,
-        track_delay: false,
-        created_at: NOW,
-        window_key: newWindowKey(),
-        ...extra,
-      }
-    }
-    const out: Doc<'projects'>[] = []
-    let top = ''
-    for (let i = 0; i < n; i++) {
-      if (i % 3 === 0) {
-        const parent = row({ type: 'meta' })
-        await ctx.db.insert('projects', parent)
-        top = parent.id
-        await ctx.db.insert('project_access', {
-          project_id: top,
-          profile_id: f.guest.id,
-          level: 'user',
-        })
-      }
-      const _id = await ctx.db.insert('projects', row({ type: 'project', parent_id: top }))
-      out.push((await ctx.db.get(_id)) as Doc<'projects'>)
-    }
-    return out
-  })
-
 describe('real limits', () => {
   it('reads an archived task at the description cap with its labels within TASK_WINDOW', async () => {
     const t = newT({ transactionLimits: true })
@@ -1074,48 +994,6 @@ describe('real limits', () => {
     expect(answer.tasks).toHaveLength(LIMITS.links.max)
     expect(answer.tasks.every((row) => row.has_subtasks)).toBe(true)
     expect(read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  })
-
-  it('reads 100 links to groups whose subtasks are each in a sub-project of their own, complete and within TASK_WINDOW.linkBytes', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const projects = await readableProjects(t, f, LIMITS.links.max)
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
-    const groups = await plantMany(t, f, projects.length, ordinary, { each: 100, rows: true })
-    await plantMany(
-      t,
-      f,
-      groups.length,
-      (i) => ({ ...ordinary(i), parent_id: groups[i].id, project_id: projects[i].id }),
-      { each: 100, rows: true },
-    )
-    await linkAll(t, f, task, groups)
-    const { answer, read } = await linksRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.complete).toBe(true)
-    expect(answer.tasks).toHaveLength(LIMITS.links.max)
-    expect(answer.tasks.every((row) => row.has_subtasks)).toBe(true)
-    expect(read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  })
-
-  it('reads 100 subtasks, each in a sub-project of their own, complete and within TASK_WINDOW.bytes', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const projects = await readableProjects(t, f, LIMITS.subtasks.max)
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
-    await plantMany(
-      t,
-      f,
-      projects.length,
-      (i) => ({ ...ordinary(i), parent_id: task.id, project_id: projects[i].id }),
-      { each: 100, rows: true },
-    )
-    const { answer, read } = await taskRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.subtasks.complete).toBe(true)
-    expect(answer.subtasks.rows).toHaveLength(LIMITS.subtasks.max)
-    expect(answer.task.has_hidden_subtasks).toBe(false)
-    expect(read).toBeLessThan(TASK_WINDOW.bytes / MIB)
   })
 
   it("reads at most OWN_READS.projectShares and one more of the team shares on each link end's sub-project", async () => {
@@ -1315,62 +1193,6 @@ describe('real limits', () => {
     ).toMatchObject({ state: 'archived', task: { id: task.id, is_group: false } })
   })
 
-  it('stops the group checks of an end whose subtasks are in 40 archived sub-projects before the index ranges run out', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const [task, end] = await plantMany(t, f, 2, () => ({}), { each: 2, rows: true })
-    await linkAll(t, f, task, [end])
-    // each subtask in an archived sub-project of its own, the most one
-    // project holds at the design size, so none makes the end a group, and
-    // each one's project is one more read
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 40; i++) {
-        const project = uuid()
-        await ctx.db.insert('projects', {
-          id: project,
-          org_id: f.org.id,
-          type: 'project',
-          parent_id: f.meta.id,
-          key: `A${i}`,
-          name: `Archived ${i}`,
-          description: '',
-          sort_order: 1000 + i,
-          num: 1000 + i,
-          track_delay: false,
-          created_at: NOW,
-          archived_at: NOW,
-          window_key: newWindowKey(),
-        })
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: project,
-          parent_id: end.id,
-          num: nextNum++,
-          title: `Subtask ${i}`,
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          window_key: newWindowKey(),
-        })
-      }
-    })
-    // the default ranges hold every check, and the end is no group
-    expect((await linksRead(t, f, task.id)).answer).toMatchObject({
-      state: 'ok',
-      tasks: [{ id: end.id, has_subtasks: false }],
-      complete: true,
-    })
-    // room for the reads before the checks and for a few of the projects,
-    // each asked only while the ranges lib/taskWindow.ts PROJECT keeps back fit
-    TASK_WINDOW.ranges = 290
-    const { answer, ranges } = await linksRead(t, f, task.id)
-    expect(answer).toEqual({ state: 'ok', links: [], tasks: [], complete: false })
-    expect(ranges).toBeLessThanOrEqual(TASK_WINDOW.ranges + 50)
-  })
-
   it('answers complete for exactly the subtasks the budget holds, and incomplete for one more', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
@@ -1422,7 +1244,7 @@ describe('a check of the caller access that a bound stops', () => {
   const UNCHECKED = { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 }
   const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, teamReads: 2 }
 
-  it('answers unavailable for the task or its parent, ends a subtask or link list there as incomplete, and one bound up answers as with the default bounds', async () => {
+  it('answers unavailable for a task whose check stops, ends a link list there as incomplete, and one bound up answers as with the default bounds', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // a user grant on FW, which no team shares, and a team that shares PCB
@@ -1450,37 +1272,28 @@ describe('a check of the caller access that a bound stops', () => {
       project_id: f.sub.id,
       parent_id: opened.id,
     })
-    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: opened.id })
     const onPcb = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: onPcb.id,
-    })
     await t.run((ctx) => ctx.db.insert('issue_links', linkRow(f, opened, onPcb.id)))
     const caller = as(t, me)
     const read = async () => ({
       opened: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: opened.id }),
       links: await caller.query(api.taskWindow.links, { org_id: f.org.id, issue_id: opened.id }),
       onPcb: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: onPcb.id }),
-      child: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: child.id }),
     })
     const usual = await read()
     expect(usual.opened.state === 'ok' && usual.opened.subtasks.complete).toBe(true)
-    expect(usual.child.state === 'ok' && usual.child.parent?.id).toBe(onPcb.id)
     Object.assign(OWN_READS, UNCHECKED)
     const stopped = await read()
-    // the subtask in PCB ends the list after the one in FW, and the link to
-    // the task in PCB ends the links
+    // the subtask in FW asks nothing, and the link to the task in PCB ends
+    // the links
     expect(stopped.opened.state === 'ok' && stopped.opened.subtasks).toEqual({
       rows: [expect.objectContaining({ id: mine.id })],
-      complete: false,
+      complete: true,
     })
-    expect(stopped.opened.state === 'ok' && stopped.opened.task.has_hidden_subtasks).toBe(true)
+    expect(stopped.opened.state === 'ok' && stopped.opened.task.has_hidden_subtasks).toBe(false)
     expect(stopped.links).toMatchObject({ state: 'ok', links: [], tasks: [], complete: false })
-    // a task in PCB, and one whose parent is there, answer as hidden ones do
+    // a task in PCB answers as a hidden one does
     expect(stopped.onPcb).toEqual({ state: 'unavailable' })
-    expect(stopped.child).toEqual({ state: 'unavailable' })
     Object.assign(OWN_READS, ONE_UP)
     expect(await read()).toEqual(usual)
   })

@@ -2046,10 +2046,10 @@ function Roadmap({
       color = 'var(--warn)'
       state = 'tight, due falls in the final planned week'
     } else if (P.isGroup(iss) && view.family.partial(iss)) {
-      // subtasks outside this view may end later, so the visible plan cannot
-      // show the group finishing before its due date
+      // subtasks Qivo could not read may end later, so the plan it read
+      // cannot show the group finishing before its due date
       color = 'var(--text-3)'
-      state = 'some subtasks are outside your view'
+      state = 'Qivo could not read all of its subtasks'
     } else {
       color = 'var(--success)'
       state = 'on track, plan ends before the due date'

@@ -101,9 +101,8 @@ Qivo could not read its owner's workload to judge it. A **paused** task keeps it
 its connected and adjacent edge badges.
 
 A task with subtasks takes its dates from them. Its bar runs from the
-earliest start to the latest end of the active scheduled subtasks you can
-access, at any depth and in any status. A subtask you cannot access hides
-the subtasks below it. To change the bar, move its subtasks.
+earliest start to the latest end of its active scheduled subtasks, at any
+depth and in any status. To change the bar, move its subtasks.
 A task with subtasks but none scheduled shows as unplanned. While you drag a
 subtask, its parent's bar follows it.
 

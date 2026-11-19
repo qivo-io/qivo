@@ -24,12 +24,14 @@
  * - viewRow, a task as a view sends it.
  *
  * Every read follows the working-set rules (lib/workingSet.ts): a view
- * holds only active tasks in live projects the reader can see, and says of
- * any other task only that it exists (has_hidden_subtasks,
- * has_hidden_parent). The reads that can touch a task or project the reader
- * is not shown are a task's subtasks, a parent read by id, the projects of
- * those and of a person's own tasks, a top-level project's sub-projects,
- * and a person's own tasks in projects they cannot see. Each document such
+ * holds only active tasks in live projects the reader can see, names a
+ * parent or a subtask only inside its task's own sub-project
+ * (lib/liveTasks.ts liveLink), and says nothing of any other task
+ * (has_hidden_subtasks and has_hidden_parent are always false). The reads
+ * that can touch a task or project the reader is not shown are a task's
+ * subtasks, a parent read by id, the projects of a person's own tasks, a
+ * top-level project's sub-projects, and a person's own tasks in projects
+ * they cannot see. Each document such
  * a read returns, a row read again where a step goes on included, is
  * charged at a fixed size in every budget decision (viewBudget charge), so a
  * hidden title's or description's length moves no answer. Only the `mine`
@@ -41,8 +43,6 @@
  * What still follows hidden data is how many documents and ranges those
  * reads take, which can move a view's answer at its budget's margin only:
  *
- * - how many subtasks a shown group has, hidden ones included, as the
- *   caller's working set counts them (lib/workingSet.ts);
  * - how many of a person's own tasks are in projects they cannot see
  *   (ownTasks), and how many count rows they hold there (mineCounts);
  * - how many of a selected top-level project's sub-projects the reader
@@ -78,8 +78,9 @@ import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { type AccessLevel, ISSUE_STATUSES, type IssueStatus } from './enums'
 import { MIB, PROJECT_ROW_MAX_BYTES, TASK_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
+import { countsAsSubtask, liveLink } from './liveTasks'
 import { taskOwnerId } from './review'
-import { parentLink, type Shown } from './workingSet'
+import { parentLink } from './workingSet'
 import { type TaskRow, taskFields } from './workspaceParts'
 
 // --- the budget -----------------------------------------------------------
@@ -541,13 +542,6 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
 /** The seats a view reads with, the reader's access in each organization,
  * by organization id. */
 export type ViewSeats = ReadonlyMap<string, ViewAccess>
-
-/* The seat of the organization `task` belongs to. */
-function seatOf(seats: ViewSeats, task: Pick<Doc<'issues'>, 'org_id'>): ViewAccess {
-  const seat = seats.get(task.org_id)
-  if (seat === undefined) throw new Error('a view read a task of an organization it has no seat in')
-  return seat
-}
 
 // --- ranges in steps ----------------------------------------------------------
 
@@ -1030,13 +1024,12 @@ const activeKids = (ctx: QueryCtx, id: string, from?: number) =>
   })
 
 /** What a view knows of its tasks' subtasks: by task id, the active
- * subtasks in live projects, which make it a group (lib/liveTasks.ts
- * countsAsSubtask), once read (groupCheck); by task id whether the reader
- * is shown it (groupFacts, and the view for the tasks it read in the
- * reader's working set, whose reads as subtasks then count at their real
- * size); and the tasks known to be groups before
- * that read, the parents of tasks the view read in its working set
- * (`parents`), which an active subtask in a live project makes groups. */
+ * subtasks, which make it a group (lib/liveTasks.ts countsAsSubtask), once
+ * read (groupCheck); by task id whether the reader is shown it (groupFacts,
+ * and the view for the tasks it read in the reader's working set, whose
+ * reads as subtasks then count at their real size); and the tasks known to
+ * be groups before that read, the parents of tasks the view read in its
+ * working set (`parents`), which an active subtask makes groups. */
 export type Subtasks = {
   kids: Map<string, Doc<'issues'>[]>
   shown: Map<string, boolean>
@@ -1077,22 +1070,22 @@ export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
 
 /**
  * Reads into `known` whether each of `tasks`, active tasks in live projects,
- * is a group: its active subtasks (issues by_parent_archived) in live
- * projects (lib/liveTasks.ts countsAsSubtask), each task read once. It
- * takes each task's first subtask, a step of CHECKS tasks at a time, one range and no document for a task
- * without one, and then the rest of those that have one in steps
+ * is a group: its active subtasks (issues by_parent_archived,
+ * lib/liveTasks.ts countsAsSubtask), each task read once. It takes each
+ * task's first subtask, a step of CHECKS tasks at a time, one range and no
+ * document for a task without one, and then the rest of those that have
+ * one in steps
  * (inSteps), so it sees every row it reads. A task known to be a group
  * (Subtasks parents) skips the first look and reads its subtasks in steps
  * from the start, a range less, and a subtask created under the rule of one
  * level (withoutSubtasks) reads nothing. Each subtask counts at lib/limits.ts
- * TASK_ROW_MAX_BYTES, as the reader may not be shown it, unless `known`
- * says they are, and so does each subtask's project (viewAccess). A group's subtasks are read whole, so its
- * group facts need no other range.
+ * TASK_ROW_MAX_BYTES unless `known` says the reader is shown it. A group's
+ * subtasks are read whole, so its group facts need no other range. It asks
+ * no access, as a subtask is in its task's sub-project.
  */
 export async function groupCheck(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   tasks: readonly Doc<'issues'>[],
   known: Subtasks,
 ): Promise<void> {
@@ -1131,18 +1124,10 @@ export async function groupCheck(
     }
     for await (const kids of inSteps(guard, rest, ROW, charge))
       for (const kid of kids) if (kid.parent_id !== undefined) found.get(kid.parent_id)?.push(kid)
-    // whether each subtask's project is live, asked once a seat
-    const live = new Map<string, boolean>()
-    for (const [org, theirs] of groupBy(step, (t) => t.org_id)) {
-      const kids = theirs.flatMap((t) => found.get(t.id) ?? [])
-      const seat = seatOf(seats, { org_id: org })
-      const answers = await seat.live(kids.map((kid) => kid.project_id))
-      for (const [i, kid] of kids.entries()) live.set(kid.id, answers[i])
-    }
     for (const t of step)
       known.kids.set(
         t.id,
-        (found.get(t.id) ?? []).filter((kid) => live.get(kid.id) === true),
+        (found.get(t.id) ?? []).filter((kid) => countsAsSubtask(t, kid)),
       )
   }
 }
@@ -1158,20 +1143,18 @@ export const isGroupKnown = (known: Subtasks, id: string): boolean | undefined =
  * is a group from its first active subtask alone (issues by_parent_archived,
  * one range and at most one document), where groupCheck reads every
  * subtask of a group: a view that needs to know only which tasks are
- * groups, not what a group shows, reads a range a task. A first subtask in
- * a live project makes its task a group, kept in `known` as a parent so a
- * later groupCheck or groupFacts reads its subtasks from the start; a task
- * without one gets no subtasks; a task whose first subtask is in a project
- * that is not live goes to groupCheck, which reads the rest. Tasks known
- * already, and subtasks created under the rule of one level
+ * groups, not what a group shows, reads a range a task. A first subtask
+ * makes its task a group (lib/liveTasks.ts countsAsSubtask), kept in
+ * `known` as a parent so a later groupCheck or groupFacts reads its
+ * subtasks from the start; a task without one gets no subtasks. Tasks
+ * known already, and subtasks created under the rule of one level
  * (withoutSubtasks), read nothing. Each first subtask counts at
  * lib/limits.ts TASK_ROW_MAX_BYTES unless `known` says the reader is shown
- * it, and so does its project (viewAccess). Answer with isGroupKnown.
+ * it. Answer with isGroupKnown.
  */
 export async function firstSubtaskCheck(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   tasks: readonly Doc<'issues'>[],
   known: Subtasks,
 ): Promise<void> {
@@ -1183,61 +1166,49 @@ export async function firstSubtaskCheck(
       tasks.filter((t) => !known.kids.has(t.id) && !known.parents.has(t.id)).map((t) => [t.id, t]),
     ).values(),
   ]
-  const rest: Doc<'issues'>[] = []
   for (let at = 0; at < todo.length; ) {
     const step = todo.slice(at, at + (await guard.upTo(BY_ID, Math.min(CHECKS, todo.length - at))))
     at += step.length
     const firsts = await settled(step.map((t) => activeKids(ctx, t.id).first()))
-    const found: [Doc<'issues'>, Doc<'issues'>][] = []
     for (const [i, kid] of firsts.entries()) {
-      if (kid === null) {
-        known.kids.set(step[i].id, [])
-        continue
-      }
-      if (known.shown.get(kid.id) !== true) guard.charge(kid, TASK_ROW_MAX_BYTES)
-      found.push([step[i], kid])
-    }
-    for (const [org, pairs] of groupBy(found, ([t]) => t.org_id)) {
-      const live = await seatOf(seats, { org_id: org }).live(pairs.map(([, kid]) => kid.project_id))
-      for (const [i, [t]] of pairs.entries()) {
-        if (live[i]) known.parents.add(t.id)
-        else rest.push(t)
-      }
+      const t = step[i]
+      if (kid !== null && known.shown.get(kid.id) !== true) guard.charge(kid, TASK_ROW_MAX_BYTES)
+      if (kid !== null && countsAsSubtask(t, kid)) known.parents.add(t.id)
+      else known.kids.set(t.id, [])
     }
   }
-  if (rest.length > 0) await groupCheck(ctx, guard, seats, rest, known)
 }
 
 /** What a view shows of a group's subtasks. */
 export type GroupFacts = {
-  /** an active subtask in a live project the reader cannot see */
-  has_hidden_subtasks: boolean
-  /** every leaf under the group the reader is shown is Done, none is
-   * hidden and it has at least one (src/lib/issueGroups.ts isIssueDone) */
+  /** always false: every subtask that counts is in the group's own
+   * sub-project, which the reader is shown; a later release removes it */
+  has_hidden_subtasks: false
+  /** every leaf under the group is Done and it has at least one
+   * (src/lib/issueGroups.ts isIssueDone) */
   done: boolean
-  /** the newest updated_at, in ms, of the group and the descendants the
-   * reader is shown, which the Stale filter reads (src/store/planner.ts
-   * isStale) */
+  /** the newest updated_at, in ms, of the group and its descendants, which
+   * the Stale filter reads (src/store/planner.ts isStale) */
   newest: number
   /** the group's calculated dates (src/lib/issueGroups.ts groupSpan): the
-   * earliest start and latest end week of the scheduled leaves under it the
-   * reader is shown, absent when none is scheduled, and whether the walk
-   * could not see the whole subtree, the `unknown` of groupProgress */
+   * earliest start and latest end week of the scheduled leaves under it,
+   * absent when none is scheduled, and whether the walk could not see the
+   * whole subtree, the `unknown` of groupProgress */
   span: { start_week?: string; end_week?: string; partial: boolean }
 }
 
 /**
  * The facts of each of `groups`, groups the reader is shown, by group id,
  * walking their subtasks as src/lib/issueGroups.ts walkLeaves does: through
- * the subtasks the reader is shown, into nested groups stored before the
- * rule of one level, cycle-safe. It reads each group's and each shown
- * descendant's subtasks once (groupCheck) and whether the reader can see
- * each subtask's project (viewAccess), all into `known`.
+ * the subtasks that count for them (groupCheck), into nested groups stored
+ * before the rule of one level, cycle-safe. A subtask that counts is in its
+ * group's sub-project, so the reader is shown it as it is shown the group,
+ * and the walk asks no access. It reads each group's and each descendant's
+ * subtasks once, into `known`, which then holds those subtasks as shown.
  */
 export async function groupFacts(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   groups: readonly Doc<'issues'>[],
   known: Subtasks,
 ): Promise<Map<string, GroupFacts>> {
@@ -1247,7 +1218,7 @@ export async function groupFacts(
   let level: readonly Doc<'issues'>[] = [...new Map(groups.map((g) => [g.id, g])).values()]
   while (level.length > 0) {
     for (const t of level) visited.add(t.id)
-    await groupCheck(ctx, guard, seats, level, known)
+    await groupCheck(ctx, guard, level, known)
     // a subtask a group gained under the rule of one level has none of its
     // own (ONE_LEVEL_SINCE), so only those of older groups get a check
     for (const t of level)
@@ -1255,25 +1226,15 @@ export async function groupFacts(
         for (const kid of known.kids.get(t.id) ?? [])
           if (!known.kids.has(kid.id) && !known.parents.has(kid.id)) known.kids.set(kid.id, [])
     const kids = level.flatMap((t) => known.kids.get(t.id) ?? [])
-    const asking = kids.filter((k) => !known.shown.has(k.id))
-    for (const [org, theirs] of groupBy(asking, (k) => k.org_id)) {
-      // an active subtask in a live project is shown when its project is
-      const shown = await seatOf(seats, { org_id: org }).visible(theirs.map((k) => k.project_id))
-      for (const [i, kid] of theirs.entries()) known.shown.set(kid.id, shown[i])
-    }
-    level = [
-      ...new Map(
-        kids.filter((k) => known.shown.get(k.id) && !visited.has(k.id)).map((k) => [k.id, k]),
-      ).values(),
-    ]
+    for (const kid of kids) known.shown.set(kid.id, true)
+    level = [...new Map(kids.filter((k) => !visited.has(k.id)).map((k) => [k.id, k])).values()]
   }
-  const shownKids = (id: string) => (known.kids.get(id) ?? []).filter((k) => known.shown.get(k.id))
-  const hiddenIn = (id: string) => (known.kids.get(id) ?? []).some((k) => !known.shown.get(k.id))
+  const kidsOf = (id: string) => known.kids.get(id) ?? []
   const out = new Map<string, GroupFacts>()
   for (const group of groups) {
     const seen = new Set([group.id])
-    const stack = shownKids(group.id)
-    let unknown = hiddenIn(group.id) || stack.length === 0
+    const stack = [...kidsOf(group.id)]
+    let unknown = stack.length === 0
     let total = 0
     let done = 0
     let newest = Date.parse(group.updated_at)
@@ -1287,8 +1248,8 @@ export async function groupFacts(
       seen.add(task.id)
       newest = Math.max(newest, Date.parse(task.updated_at))
       if (isGroupIn(known, task.id)) {
-        const below = shownKids(task.id)
-        unknown ||= hiddenIn(task.id) || below.length === 0
+        const below = kidsOf(task.id)
+        unknown ||= below.length === 0
         stack.push(...below)
         continue
       }
@@ -1303,7 +1264,7 @@ export async function groupFacts(
       if (end === undefined || last > end) end = last
     }
     out.set(group.id, {
-      has_hidden_subtasks: hiddenIn(group.id),
+      has_hidden_subtasks: false,
       done: !unknown && total > 0 && total === done,
       newest,
       span:
@@ -1320,19 +1281,17 @@ export async function groupFacts(
 /**
  * The tasks the reader is shown above `rows`, a view's rows, that are not
  * rows themselves, each once, cycle-safe, as src/lib/boardGroups.ts
- * groupBoardCell walks a card's parents. A parent is shown when it is a row
- * or one of `read`, tasks the view read that are in the reader's working
- * set; else it is read by id, charged at lib/limits.ts TASK_ROW_MAX_BYTES,
- * and shown when it is of the row's organization and in the reader's
- * working set (viewAccess holds). The walk goes on above each shown parent.
- * More than `most` of them throws OverBudget. A check of the reader's
- * access that a bound stopped rejects with lib/access.ts accessUnchecked,
- * as for the task window's parent.
+ * groupBoardCell walks a card's parents. A parent is shown only in the
+ * row's own sub-project (lib/liveTasks.ts liveLink), which the reader is
+ * shown, so no access is asked: when it is a row or one of `read`, tasks
+ * the view read that are in the reader's working set, or else when, read
+ * by id and charged at lib/limits.ts TASK_ROW_MAX_BYTES, it is active. The
+ * walk goes on above each shown parent. More than `most` of them throws
+ * OverBudget.
  */
 export async function shownParents(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   rows: readonly Doc<'issues'>[],
   read: ReadonlyMap<string, Doc<'issues'>>,
   most: number,
@@ -1349,33 +1308,26 @@ export async function shownParents(
       const id = t.parent_id
       if (id === undefined || decided.has(id) || wanted.has(id)) continue
       const known = read.get(id)
-      if (known !== undefined) {
+      if (known === undefined) wanted.set(id, t)
+      else if (liveLink(known, t)) {
         decided.set(id, known)
         next.push(known)
-      } else wanted.set(id, t)
+      }
     }
     const ids = [...wanted.keys()]
     for (let at = 0; at < ids.length; ) {
       const step = ids.slice(at, at + (await guard.upTo(BY_ID, Math.min(CHECKS, ids.length - at))))
       at += step.length
       const found = await settled(step.map((id) => byId(ctx, 'issues', id)))
-      const ours: Doc<'issues'>[] = []
       for (const [i, parent] of found.entries()) {
         const child = wanted.get(step[i])
         decided.set(step[i], null)
         if (parent === null) continue
         guard.charge(parent, TASK_ROW_MAX_BYTES)
-        if (child !== undefined && parent.org_id === child.org_id) ours.push(parent)
-      }
-      for (const [org, theirs] of groupBy(ours, (t) => t.org_id)) {
-        const seat = seats.get(org)
-        if (seat === undefined) continue
-        const held = await seat.holds(theirs)
-        for (const [i, parent] of theirs.entries())
-          if (held[i]) {
-            decided.set(parent.id, parent)
-            next.push(parent)
-          }
+        if (child === undefined || !liveLink(parent, child) || parent.archived_at !== undefined)
+          continue
+        decided.set(parent.id, parent)
+        next.push(parent)
       }
     }
     for (const parent of next) if (!inRows.has(parent.id)) out.push(parent)
@@ -1517,11 +1469,14 @@ export type ViewRow = ReturnType<typeof taskFields> &
     span?: GroupFacts['span']
   }
 
+/** The tasks a view shows, by id. */
+export type ShownTasks = ReadonlyMap<string, Doc<'issues'>>
+
 /** `task` as a view sends it (ViewRow), with `facts` for a group and null
- * for a task without subtasks. `shown` tells the tasks the reader is
- * shown. */
-export function viewRow(task: Doc<'issues'>, shown: Shown, facts: GroupFacts | null): ViewRow {
-  const row = { ...taskFields(task), ...parentLink(task, shown) }
+ * for a task without subtasks. `shown` holds the tasks the view shows. */
+export function viewRow(task: Doc<'issues'>, shown: ShownTasks, facts: GroupFacts | null): ViewRow {
+  const parent = task.parent_id === undefined ? undefined : shown.get(task.parent_id)
+  const row = { ...taskFields(task), ...parentLink(task, parent) }
   return facts === null
     ? { ...row, has_subtasks: false, has_hidden_subtasks: false }
     : {

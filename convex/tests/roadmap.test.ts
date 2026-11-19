@@ -124,25 +124,13 @@ describe('roadmap visit undo', () => {
     expect((await task(t, a.id))?.start_week).toBeUndefined()
   })
 
-  it('journals and writes only the task an operation names, never its ancestors', async () => {
+  it('journals and writes only the task an operation names, never its parent', async () => {
     const t = newT(),
       f = await withReadingAdmin(t),
       guest = as(t, f.guest),
       session_id = uuid()
-    // the middle task sits in a project the guest cannot see
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
     const narrow = { start_week: '2026-01-05', end_week: '2026-01-12' }
-    const ancestor = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...narrow })
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      parent_id: ancestor.id,
-      ...narrow,
-    })
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...narrow })
     const child = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -157,13 +145,13 @@ describe('roadmap visit undo', () => {
     const changes = JSON.parse((await rows(t))[0].changes) as { id: string }[]
     expect(changes.map((change) => change.id)).toEqual([child.id])
     expect(changes[0]).not.toHaveProperty('authorities')
-    for (const row of [ancestor, parent]) expect(await task(t, row.id)).toEqual(row)
+    expect(await task(t, parent.id)).toEqual(parent)
     await guest.mutation(api.roadmap.undo, { session_id, all: false })
     expect(await task(t, child.id)).toMatchObject({
       start_week: '2026-01-05',
       end_week: '2026-01-05',
     })
-    for (const row of [ancestor, parent]) expect(await task(t, row.id)).toEqual(row)
+    expect(await task(t, parent.id)).toEqual(parent)
   })
 
   it('refuses external schedule conflicts and leaves the whole revert-all transaction intact', async () => {

@@ -245,19 +245,13 @@ describe('rows', () => {
     expect(bytesWith - (await boardBytes(t, f.guest, scope))).toBeGreaterThanOrEqual(TEXT_CHARS)
   })
 
-  it('sends a parent id only for a parent the caller is shown', async () => {
+  it('sends a parent id, and a parent of a row as context', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
     const shown = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       title: 'Shown parent',
-    })
-    const hidden = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: sibling.id,
-      title: 'Hidden',
     })
     const under = await plantIssue(t, {
       org_id: f.org.id,
@@ -266,61 +260,38 @@ describe('rows', () => {
       title: 'Under shown',
       priority: 'high',
     })
-    const orphan = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hidden.id,
-      title: 'Under hidden',
-      priority: 'high',
-    })
     // the parent is a row, and a parent of a row only (priority leaves it out)
     for (const filters of [{}, { priority: 'high' as const }]) {
       const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), filters)
       if (answer.state !== 'ok') throw new Error(answer.state)
       const byId = new Map([...answer.rows, ...answer.parents].map((row) => [row.id, row]))
       expect(byId.get(under.id)).toMatchObject({ parent_id: shown.id, has_hidden_parent: false })
-      expect(byId.get(orphan.id)?.parent_id).toBeUndefined()
-      expect(byId.get(orphan.id)?.has_hidden_parent).toBe(true)
-      expect(byId.has(hidden.id)).toBe(false)
       expect(byId.get(shown.id)?.has_subtasks).toBe(true)
       expect(answer.parents.map((row) => row.id)).toEqual(filters.priority ? [shown.id] : [])
     }
   })
 
-  it('makes no group of a subtask in an archived project or an archived subtask, and a group of a live hidden one', async () => {
+  it('makes no group of an archived subtask, and a group of an active one', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
-    const archived = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: NOW,
-    })
     const task = (title: string) => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title })
-    const [inArchived, archivedKid, hiddenKid] = await Promise.all([
-      task('Kid in an archived project'),
-      task('Archived kid'),
-      task('Kid in a hidden project'),
-    ])
-    await plantIssue(t, { org_id: f.org.id, project_id: archived.id, parent_id: inArchived.id })
+    const [archivedKid, activeKid] = await Promise.all([task('Archived kid'), task('Active kid')])
     await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       parent_id: archivedKid.id,
       archived_at: NOW,
     })
-    await plantIssue(t, { org_id: f.org.id, project_id: sibling.id, parent_id: hiddenKid.id })
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: activeKid.id })
     const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id))
     if (answer.state !== 'ok') throw new Error(answer.state)
     const byTitle = new Map(answer.rows.map((row) => [row.title, row]))
-    expect(byTitle.get('Kid in an archived project')).toMatchObject({ has_subtasks: false })
     expect(byTitle.get('Archived kid')).toMatchObject({ has_subtasks: false })
-    expect(byTitle.get('Kid in a hidden project')).toMatchObject({
+    expect(byTitle.get('Active kid')).toMatchObject({
       has_subtasks: true,
-      has_hidden_subtasks: true,
+      has_hidden_subtasks: false,
       group_done: false,
-      span: { partial: true },
+      span: { partial: false },
     })
   })
 })

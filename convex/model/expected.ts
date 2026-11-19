@@ -63,6 +63,9 @@ export type Field<Row> = {
    * value (a task's parent_id and has_hidden_parent). The first key of the
    * pair carries `compare`. */
   pair?: string
+  /** This key may come without its pair, though the pair's other key may
+   * not come without this one. */
+  alone?: true
   /** A rule of the request's shape across keys: a refusal sentence, or
    * undefined when `expected` keeps it. */
   shape?: (expected: Readonly<Record<string, unknown>>) => string | undefined
@@ -261,7 +264,7 @@ function checkKeys<Row>(
     if (!sent.has(key)) {
       throw badRequest(`expected.${key} applies only when the request sends ${field.sends}`)
     }
-    if (field.pair !== undefined && !Object.hasOwn(expected, field.pair)) {
+    if (field.pair !== undefined && field.alone !== true && !Object.hasOwn(expected, field.pair)) {
       const [first, second] = Object.keys(fields).filter((k) => k === key || k === field.pair)
       throw badRequest(`expected.${first} and expected.${second} go together`)
     }

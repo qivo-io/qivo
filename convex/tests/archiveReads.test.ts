@@ -127,7 +127,7 @@ describe('archiving a task', () => {
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: f.sub2.id,
+      project_id: f.sub.id,
       parent_id: parent.id,
     })
     const sibling = await plantIssue(t, {

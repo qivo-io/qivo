@@ -17,7 +17,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { isOrgStaff } from '../lib/access'
 import { byId } from '../lib/db'
-import { layerOf, liveIn, type ProjectLive } from '../lib/liveTasks'
+import { countsAsSubtask, liveIn } from '../lib/liveTasks'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { roundTenths } from '../lib/numbers'
 import { canonicalLoad, committedByWeek, type LoadSpan, weekGrid } from '../lib/workload'
@@ -30,25 +30,16 @@ import { type OrgProjectView, orgProjectView } from './orgProjectView.setup'
  * active tasks may ask only about active tasks.
  */
 export function groupTest(
-  rows: Iterable<Pick<Doc<'issues'>, 'parent_id' | 'archived_at' | 'project_id'>>,
-  live: ProjectLive,
-): (task: Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>) => boolean {
-  // parents with any child, with an active child, and with a live child
-  const any = new Set<string>()
-  const active = new Set<string>()
-  const liveKid = new Set<string>()
-  for (const row of rows) {
-    if (row.parent_id === undefined) continue
-    any.add(row.parent_id)
-    if (row.archived_at !== undefined) continue
-    active.add(row.parent_id)
-    if (live(row.project_id)) liveKid.add(row.parent_id)
-  }
-  return (task) => {
-    const parent = layerOf(task, live)
-    if (parent.archived) return any.has(task.id)
-    return parent.projectLive ? liveKid.has(task.id) : active.has(task.id)
-  }
+  rows: Iterable<Pick<Doc<'issues'>, 'parent_id' | 'org_id' | 'archived_at' | 'project_id'>>,
+): (task: Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>) => boolean {
+  const kids = new Map<
+    string,
+    Pick<Doc<'issues'>, 'parent_id' | 'org_id' | 'archived_at' | 'project_id'>[]
+  >()
+  for (const row of rows)
+    if (row.parent_id !== undefined)
+      kids.set(row.parent_id, [...(kids.get(row.parent_id) ?? []), row])
+  return (task) => (kids.get(task.id) ?? []).some((kid) => countsAsSubtask(task, kid))
 }
 
 /**
@@ -80,7 +71,8 @@ export async function liveTasksOf(
  * (lib/loadRows.ts loadRowFor). orgProfileIds = ALL profile ids of the org
  * (active + inactive + agents), the 0065 owner fence. A task's group state
  * comes from `issues`, which must hold every subtask that makes a task in
- * an active project a group, as liveTasksOf's answer does. */
+ * an active project a group, as liveTasksOf's answer does, as a subtask
+ * that counts shares its parent's project. */
 export function orgLoadRows(
   me: Doc<'profiles'>,
   view: Pick<OrgProjectView, 'byUuid' | 'visible'>,
@@ -89,7 +81,7 @@ export function orgLoadRows(
 ): OrgLoadRow[] {
   const staff = isOrgStaff(me)
   const live = liveIn(view.byUuid)
-  const isGroup = groupTest(issues, live)
+  const isGroup = groupTest(issues)
   const ownerInOrg = (id: string) => orgProfileIds.has(id)
   const rows: OrgLoadRow[] = []
   for (const i of issues) {

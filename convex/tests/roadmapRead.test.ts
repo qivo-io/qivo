@@ -218,7 +218,7 @@ describe('access', () => {
     }
   })
 
-  it('adds no row, parent, subtask or Remaining of a hidden or an archived sub-project', async () => {
+  it('adds no row or Remaining of a hidden or an archived sub-project', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
@@ -228,29 +228,21 @@ describe('access', () => {
       parent_id: f.meta.id,
       archived_at: NOW,
     })
-    const shown = await task(t, f.sub, { title: 'Shown', assignee_id: f.guest.id })
-    const group = await task(t, f.sub, { title: 'Group', assignee_id: f.guest.id })
-    for (const p of [sibling, archived]) {
+    const _shown = await task(t, f.sub, { title: 'Shown', assignee_id: f.guest.id })
+    await task(t, f.sub, { title: 'Group', assignee_id: f.guest.id })
+    for (const p of [sibling, archived])
       await task(t, p, { title: `Open in ${p.id}`, remaining_hours: 4, assignee_id: f.guest.id })
-      await task(t, p, { title: `Kid in ${p.id}`, parent_id: group.id, assignee_id: f.guest.id })
-      await task(t, p, { title: `Under shown ${p.id}`, parent_id: shown.id })
-    }
     await countOrg(t, f.org.id)
     for (const scope of [projectScope(f.guest, f.meta.id), { kind: 'mine' } as const]) {
       const answer = await roadmapFor(t, f.guest, scope)
       if (answer.state !== 'ok') throw new Error(answer.state)
       expect(answer.rows.map((r) => r.title).sort()).toEqual(['Group', 'Shown'])
       expect(answer.parents).toEqual([])
-      expect(answer.subtasks).toEqual([])
       if (answer.remaining.state !== 'ok') throw new Error('counts')
       for (const id of [sibling.id, archived.id]) {
         expect(answer.remaining.tenths).not.toHaveProperty(id)
         expect(JSON.stringify(answer)).not.toContain(id)
       }
-      // a hidden subtask keeps a group not done
-      const row = answer.rows.find((r) => r.title === 'Group')
-      expect(row?.has_hidden_subtasks).toBe(true)
-      expect(row?.group_done).toBe(false)
     }
   })
 
@@ -311,7 +303,6 @@ describe('visibility', () => {
   async function visibilityCase() {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
     const first = DEFAULT_WINDOW.from
     const last = DEFAULT_WINDOW.to
     const shown: string[] = []
@@ -375,13 +366,6 @@ describe('visibility', () => {
     })
     const doneOpen = await plant('Done group with an open kid', { status: 'done' }, true)
     await task(t, f.sub, { title: 'Its open kid', parent_id: doneOpen.id })
-    const hiddenKid = await plant('Group with a hidden kid', { status: 'todo' }, true)
-    await task(t, f.sub, {
-      title: 'Shown done kid',
-      parent_id: hiddenKid.id,
-      ...doneIn(dayPlus(last, 7)),
-    })
-    await task(t, sibling, { title: 'Hidden done kid', parent_id: hiddenKid.id, status: 'done' })
     await plant(
       'Open outside the window',
       { start_week: dayPlus(last, 700), end_week: dayPlus(last, 707) },
@@ -865,18 +849,11 @@ describe("My view's sub-projects", () => {
 /* --------------------------------------------------------- parents and subtasks */
 
 describe('parents and subtasks', () => {
-  it("sends a row's parent in a sibling sub-project only where the caller is shown it, and a group row's subtasks that are not rows", async () => {
+  it("sends a row's parent and a group row's subtasks that are not rows", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const sibling = await plantHiddenSibling(t, f, f.guest)
-    const shownParent = await task(t, f.sub2, { title: 'Parent in PCB', priority: 'low' })
-    const hiddenParent = await task(t, sibling, { title: 'Parent in the sibling' })
-    await task(t, f.sub, { title: 'Under PCB', parent_id: shownParent.id, priority: 'high' })
-    await task(t, f.sub, {
-      title: 'Under the sibling',
-      parent_id: hiddenParent.id,
-      priority: 'high',
-    })
+    const parent = await task(t, f.sub, { title: 'Parent in FW', priority: 'low' })
+    await task(t, f.sub, { title: 'Under FW', parent_id: parent.id, priority: 'high' })
     const group = await task(t, f.sub, { title: 'Group', priority: 'high' })
     await task(t, f.sub, {
       title: 'Backlog kid',
@@ -885,7 +862,6 @@ describe('parents and subtasks', () => {
       priority: 'high',
     })
     await task(t, f.sub, { title: 'Low kid', parent_id: group.id, priority: 'low' })
-    await task(t, f.sub2, { title: 'Kid in PCB', parent_id: group.id, priority: 'high' })
     await task(t, f.sub, {
       title: 'Done kid outside',
       parent_id: group.id,
@@ -897,27 +873,20 @@ describe('parents and subtasks', () => {
       priority: 'high',
     })
     if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.rows.map((r) => r.title).sort()).toEqual([
-      'Group',
-      'Open kid',
-      'Under PCB',
-      'Under the sibling',
-    ])
-    expect(answer.parents.map((r) => r.title)).toEqual(['Parent in PCB'])
+    expect(answer.rows.map((r) => r.title).sort()).toEqual(['Group', 'Open kid', 'Under FW'])
+    expect(answer.parents.map((r) => r.title)).toEqual(['Parent in FW'])
     expect(answer.subtasks.map((r) => r.title).sort()).toEqual([
       'Backlog kid',
       'Done kid outside',
-      'Kid in PCB',
       'Low kid',
     ])
-    const under = answer.rows.find((r) => r.title === 'Under the sibling')
-    expect(under?.parent_id).toBeUndefined()
-    expect(under?.has_hidden_parent).toBe(true)
-    expect(answer.rows.find((r) => r.title === 'Under PCB')?.parent_id).toBe(shownParent.id)
-    expect(JSON.stringify(answer)).not.toContain(hiddenParent.id)
+    expect(answer.rows.find((r) => r.title === 'Under FW')).toMatchObject({
+      parent_id: parent.id,
+      has_hidden_parent: false,
+    })
     for (const kid of answer.subtasks) expect(kid.parent_id).toBe(group.id)
     // past ROADMAP.context the answer is over_budget
-    ROADMAP.context = 4
+    ROADMAP.context = 3
     expect(
       (await roadmapFor(t, f.guest, projectScope(f.guest, f.sub.id), { priority: 'high' })).state,
     ).toBe('over_budget')
@@ -927,8 +896,8 @@ describe('parents and subtasks', () => {
 /* --------------------------------------------------------------- hidden data */
 
 /** A fixture whose hidden rows carry ordinary text when `wide`, the
- * sibling's tasks, a hidden subtask of a shown group, a hidden parent of a
- * shown task, all the guest's own, so My view reads them too. Every task
+ * sibling's tasks, beside a shown group with its subtask, all the guest's
+ * own, so My view reads them too. Every task
  * has the same number in both, so their count rows fall in the same shards
  * (model/overviewCounts.ts OVERVIEW_SHARDS), and the sibling's id sorts
  * after FW's in both. How many count rows a person holds in projects they
@@ -946,9 +915,8 @@ async function hiddenOrg(wide: boolean) {
   const text = (i: number) => (wide ? ordinary(i) : { title: 'h', text: '' })
   const mine = { assignee_id: f.guest.id }
   const group = await task(t, f.sub, { title: 'Quartz group', num: 1, ...mine })
-  await plantTasks(t, sibling, 1, () => ({ ...text(1), num: 2, parent_id: group.id, ...mine }))
-  const [parent] = await plantTasks(t, sibling, 1, () => ({ ...text(2), num: 3, ...mine }))
-  await task(t, f.sub, { title: 'Under a hidden parent', num: 4, parent_id: parent.id, ...mine })
+  await task(t, f.sub, { title: 'Its subtask', num: 4, parent_id: group.id, ...mine })
+  await plantTasks(t, sibling, 2, (i) => ({ ...text(i + 1), num: 2 + i, ...mine }))
   await plantTasks(t, sibling, 5, (i) => ({ ...text(i + 3), num: 5 + i, ...mine }))
   await plantTasks(t, f.sub, 20, (i) => ({
     num: 10 + i,

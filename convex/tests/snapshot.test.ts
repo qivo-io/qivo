@@ -818,14 +818,8 @@ describe('navigation-only parents', () => {
   })
 })
 
-describe('hidden parents', () => {
-  it("the task window's row names its parent only when the parent is in the working set", async () => {
-    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hiddenParent.id,
-    })
+describe('parents and hidden tasks in the task window', () => {
+  it("the task window's row names its parent", async () => {
     const near = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -837,80 +831,27 @@ describe('hidden parents', () => {
       if (answer.state !== 'ok') throw new Error(answer.state)
       return { task: answer.task, parent: answer.parent?.id ?? null }
     }
-    const guestChild = await row(f.guest, child.id)
-    expect('parent_id' in guestChild.task).toBe(false)
-    expect(guestChild.parent).toBeNull()
-    expect(JSON.stringify(await windowOf(f.guest, child.id))).not.toContain(hiddenParent.id)
-    expect(await row(f.admin, child.id)).toMatchObject({
-      task: { parent_id: hiddenParent.id },
-      parent: hiddenParent.id,
-    })
-    expect(await row(f.guest, near.id)).toMatchObject({
-      task: { parent_id: issueVis.id },
-      parent: issueVis.id,
-    })
-    // a parent in an archived project is outside everyone's working set
-    await t.run(async (ctx) => {
-      const sub2 = await ctx.db.get(f.sub2._id)
-      await ctx.db.patch(sub2!._id, { archived_at: NOW })
-      await ctx.db.patch(near._id, { parent_id: undefined })
-    })
-    const inSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    const underArchived = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: inSub2.id,
-    })
-    for (const p of [f.guest, f.admin]) {
-      const under = await row(p, underArchived.id)
-      expect('parent_id' in under.task).toBe(false)
-      expect(under.parent).toBeNull()
-    }
-  })
-
-  it('browser task results never return a parent the caller cannot see', async () => {
-    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hiddenParent.id,
-    })
-    const updated = await as(t, f.guest).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: child.id,
-      patch: { title: 'Renamed' },
-    })
-    expect('parent_id' in updated).toBe(false)
-    const adminUpdated = await as(t, f.admin).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: child.id,
-      patch: { title: 'Renamed again' },
-    })
-    expect(adminUpdated.parent_id).toBe(hiddenParent.id)
-    await t.run((ctx) => ctx.db.patch(child._id, { archived_at: NOW }))
-    const window = await as(t, f.guest).query(api.taskWindow.task, {
-      org_id: f.org.id,
-      ref: child.id,
-    })
-    expect(window).toMatchObject({ state: 'archived', task: { id: child.id } })
-    expect(JSON.stringify(window)).not.toContain(hiddenParent.id)
+    for (const p of [f.guest, f.admin])
+      expect(await row(p, near.id), p.name).toMatchObject({
+        task: { parent_id: issueVis.id, has_hidden_parent: false },
+        parent: issueVis.id,
+      })
   })
 
   it("no task id outside a person's working set leaves the task window's reads", async () => {
+    // a task the guest sees, linked to one they cannot see, which they
+    // follow and hold a message about; the guard on parent links has its
+    // own test (convex/tests/liveTasks.test.ts)
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hiddenTask.id,
-    })
+    const shown = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       await ctx.db.insert('issue_links', {
         id: uuid(),
         org_id: f.org.id,
-        source_id: child.id,
+        source_id: shown.id,
         target_id: hiddenTask.id,
         type: 'blocks',
-        pair_key: [child.id, hiddenTask.id].sort().join(':'),
+        pair_key: [shown.id, hiddenTask.id].sort().join(':'),
         created_at: NOW,
       })
       await ctx.db.insert('issue_subscriptions', {
@@ -929,14 +870,14 @@ describe('hidden parents', () => {
         created_at: NOW,
       })
     })
-    // the guest's window of the child, its links and attachments, as the
+    // the guest's window of the shown task, its links and attachments, as the
     // app reads them, and the hidden task's own window
     const reads = [
-      await windowOf(f.guest, child.id),
-      await as(t, f.guest).query(api.taskWindow.links, { org_id: f.org.id, issue_id: child.id }),
+      await windowOf(f.guest, shown.id),
+      await as(t, f.guest).query(api.taskWindow.links, { org_id: f.org.id, issue_id: shown.id }),
       await as(t, f.guest).query(api.taskWindow.attachments, {
         org_id: f.org.id,
-        issue_id: child.id,
+        issue_id: shown.id,
       }),
     ]
     expect(reads.map((answer) => answer.state)).toEqual(['ok', 'ok', 'ok'])

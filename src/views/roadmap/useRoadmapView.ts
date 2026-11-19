@@ -109,7 +109,7 @@ export type RoadmapFamily = {
   /** Whether task `it` is stale: not Done, and nothing in it or its family
       on screen changed for 120 days (P.isStale's rule). */
   stale: (it: IssueVM) => boolean
-  /** Whether group `it` has subtasks outside the reader's view, so its
+  /** Whether Qivo could not read all of group `it`'s subtasks, so its
       plan cannot show it finishing in time. */
   partial: (it: IssueVM) => boolean
 }

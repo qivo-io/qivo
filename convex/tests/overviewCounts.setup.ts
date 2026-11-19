@@ -12,6 +12,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import { ISSUE_STATUSES } from '../lib/enums'
+import { countsAsSubtask } from '../lib/liveTasks'
 import { taskOwnerId } from '../lib/review'
 import {
   addCounts,
@@ -57,10 +58,9 @@ const isZero = (c: LeafCounts) =>
 
 /** What the organization's tasks give, counted from the rows themselves
  * by the stored rule (model/overviewCounts.ts hasLiveSubtask: an active
- * subtask in a live project, whatever the parent's project) and
+ * subtask, lib/liveTasks.ts countsAsSubtask) and
  * lib/review.ts taskOwnerId: the rows of every sub-project (live or
- * archived) and owner, and the active tasks with an active subtask in a
- * live project. */
+ * archived) and owner, and the active tasks with such a subtask. */
 export const truth = (t: T, orgId: string) =>
   t.run(async (ctx) => {
     const projects = new Map(
@@ -75,12 +75,12 @@ export const truth = (t: T, orgId: string) =>
       .query('issues')
       .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
       .collect()
-    const live = (id: string) => projects.get(id)?.archived_at === undefined && projects.has(id)
-    const active = new Set(tasks.map((task) => task.id))
+    const active = new Map(tasks.map((task) => [task.id, task]))
     const groups = new Set<string>()
-    for (const kid of tasks)
-      if (kid.parent_id !== undefined && live(kid.project_id) && active.has(kid.parent_id))
-        groups.add(kid.parent_id)
+    for (const kid of tasks) {
+      const parent = kid.parent_id === undefined ? undefined : active.get(kid.parent_id)
+      if (parent !== undefined && countsAsSubtask(parent, kid)) groups.add(parent.id)
+    }
     const rows: Rows = {}
     const add = (key: string, task: Doc<'issues'>) => {
       const c = noCounts()

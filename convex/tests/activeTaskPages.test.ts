@@ -444,48 +444,24 @@ describe('visibility', () => {
   })
 
   it("pages the same whatever the caller's hidden projects hold, also where its budget stops them", async () => {
-    /* An organization where the agent reads FW, with a parent and subtasks
-     * in SKNK, which it cannot read. `heavy` gives those hidden tasks long
-     * titles and adds 300 more hidden tasks with long texts; `distinct`
-     * gives each of the rows with a hidden parent a parent of its own. */
-    const build = async (heavy: boolean, distinct = false) => {
+    /* An organization where the agent reads FW, with 24 tasks there, and
+     * tasks in SKNK, which it cannot read. `heavy` gives those hidden tasks
+     * long titles and adds 300 more hidden tasks with long texts. */
+    const build = async (heavy: boolean) => {
       const fx = await setup()
       const long = '€'.repeat(255)
-      const parent = await plantIssue(fx.t, {
-        org_id: fx.org.id,
-        project_id: fx.hidden.id,
-        title: heavy ? long : 'Hidden parent',
-        created_at: at(0),
-      })
       for (let i = 0; i < 24; i++) {
-        const row = await plantIssue(fx.t, {
+        await plantIssue(fx.t, {
           org_id: fx.org.id,
           project_id: fx.sub.id,
           title: `Row ${i}`,
           created_at: at(1 + i),
-          ...(i % 6 === 0
-            ? {
-                parent_id: distinct
-                  ? (
-                      await plantIssue(fx.t, {
-                        org_id: fx.org.id,
-                        project_id: fx.hidden.id,
-                        title: `Hidden parent ${i}`,
-                        created_at: at(0),
-                      })
-                    ).id
-                  : parent.id,
-              }
-            : {}),
         })
-        // a subtask stored in a project the agent cannot read, as before
-        // the family rule
         if (i % 4 === 1)
           await plantIssue(fx.t, {
             org_id: fx.org.id,
             project_id: fx.hidden.id,
-            parent_id: row.id,
-            title: heavy ? long : 'Hidden subtask',
+            title: heavy ? long : 'Hidden task',
             created_at: at(100 + i),
           })
       }
@@ -516,12 +492,6 @@ describe('visibility', () => {
     const heavyPages = await lowered({ page }, () => shape(heavy))
     expect(lightPages.sizes.length).toBeGreaterThan(2)
     expect(heavyPages).toEqual(lightPages)
-    // rows with a hidden parent each answer the same whether those parents
-    // are one task or several; where a page stops can move by a row at its
-    // budget's margin (lib/machineSubtree.ts lists that channel)
-    const distinct = await build(false, true)
-    expect(await shape(distinct)).toEqual(await shape(light))
-    expect((await lowered({ page }, () => shape(distinct))).rows).toEqual(lightPages.rows)
   })
 })
 
@@ -540,7 +510,7 @@ describe('groups created under the rule of one level', () => {
     for (const [i, status] of (['done', 'todo'] as const).entries())
       await plantIssue(fx.t, {
         org_id: fx.org.id,
-        project_id: i === 0 ? fx.sub.id : fx.sub2.id,
+        project_id: fx.sub.id,
         parent_id: group.id,
         status,
         start_week: '2026-11-02',

@@ -74,37 +74,36 @@ const task = (fx: Fx, over: Partial<Doc<'issues'>> = {}) =>
   plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, ...over })
 
 /* The tree of groups the progress and completion cases read. Leaves are
- * named l*, groups g*, and the archived group ga. */
+ * named l*, groups g*, and the archived group ga. Each family is in one
+ * sub-project. */
 async function tree(fx: Fx) {
   const pcb = fx.sub2.id
   const sib = fx.hiddenSib.id
   const g1 = await task(fx, { title: 'G1' })
   const l1 = await task(fx, { parent_id: g1.id, status: 'todo' })
-  const l2 = await task(fx, { parent_id: g1.id, project_id: pcb, status: 'done' })
+  const l2 = await task(fx, { parent_id: g1.id, status: 'done' })
   const g2 = await task(fx, { parent_id: g1.id, title: 'G2' })
   const l3 = await task(fx, { parent_id: g2.id, status: 'done' })
-  // hidden from the guest, and an archived subtask nobody counts
-  const l4 = await task(fx, { parent_id: g2.id, project_id: sib, status: 'progress' })
+  // and an archived subtask nobody counts
+  const l4 = await task(fx, { parent_id: g2.id, status: 'progress' })
   await task(fx, { parent_id: g2.id, status: 'done', archived_at: NOW })
-  // only a subtask the guest cannot see
-  const g3 = await task(fx, { title: 'G3' })
+  // a family the guest cannot see
+  const g3 = await task(fx, { project_id: sib, title: 'G3' })
   await task(fx, { parent_id: g3.id, project_id: sib, status: 'todo' })
-  // a subtask in an archived project, which makes no task in an active one a group
   const g4 = await task(fx, { project_id: pcb, title: 'G4' })
   await task(fx, { parent_id: g4.id, project_id: pcb, status: 'done' })
-  await task(fx, { parent_id: g4.id, project_id: fx.archivedSub.id, status: 'todo' })
   const g5 = await task(fx, { title: 'G5' })
   await task(fx, { parent_id: g5.id, status: 'done' })
-  await task(fx, { parent_id: g5.id, project_id: pcb, status: 'done' })
+  await task(fx, { parent_id: g5.id, status: 'done' })
   const g6 = await task(fx, { title: 'G6' })
   const g7 = await task(fx, { parent_id: g6.id, title: 'G7' })
   await task(fx, { parent_id: g7.id, status: 'done' })
   await task(fx, { parent_id: g6.id, status: 'backlog' })
   const l13 = await task(fx, { title: 'Leaf' })
-  // an archived group counts its whole subtree; the guest cannot see la2
+  // an archived group counts its whole subtree
   const ga = await task(fx, { title: 'GA', archived_at: NOW })
   await task(fx, { parent_id: ga.id, status: 'done', archived_at: NOW })
-  await task(fx, { parent_id: ga.id, project_id: sib, status: 'todo', archived_at: NOW })
+  await task(fx, { parent_id: ga.id, status: 'todo', archived_at: NOW })
   await task(fx, { status: 'done', archived_at: NOW })
   return { g1, g2, g3, g4, g5, g6, g7, ga, l1, l2, l3, l4, l13 }
 }
@@ -192,26 +191,21 @@ describe('a group’s progress is the app task window’s Progress', () => {
       percent,
       partial,
     })
+    // the archived subtask counts for no one, and only the admin reads G3
     const expected = {
-      // l4 is hidden from the guest; the archived subtask counts for no one
       guest: [
-        [g1, p(2, 3, 67, true)],
-        [g2, p(1, 1, 100, true)],
-        [g3, p(0, 0, 0, true)],
+        [g1, p(2, 4, 50, false)],
+        [g2, p(1, 2, 50, false)],
         [g4, p(1, 1, 100, false)],
         [g5, p(2, 2, 100, false)],
         [g6, p(1, 2, 50, false)],
         [g7, p(1, 1, 100, false)],
-        [ga, p(1, 1, 100, true)],
+        [ga, p(1, 2, 50, false)],
         [l13, null],
       ],
-      // the admin sees l4, so nothing stays unknown; G4's subtask in ARC
-      // leaves out nothing, because it does not count
       admin: [
         [g1, p(2, 4, 50, false)],
-        [g2, p(1, 2, 50, false)],
         [g3, p(0, 1, 0, false)],
-        [g4, p(1, 1, 100, false)],
         [ga, p(1, 2, 50, false)],
       ],
     } as const
@@ -239,7 +233,7 @@ describe('a group’s progress is the app task window’s Progress', () => {
       access: 'read',
       project: 'FW',
     })
-    expect(page.tasks.find((r) => r.id === ga.id)?.progress).toEqual(p(1, 1, 100, true))
+    expect(page.tasks.find((r) => r.id === ga.id)?.progress).toEqual(p(1, 2, 50, false))
   })
 
   /* Valid writes keep one level of subtasks (assertParentChain). The walk
@@ -275,8 +269,8 @@ describe('a project’s completion is the app Overview’s Completion', () => {
       const app = appCompletion(await appView(fx, person), fx.meta.id)
       expect((await restProject(fx, person, 'TBED')).completion, person.name).toEqual(app)
     }
-    // the admin counts hiddenSib's two leaves too; ARC's task, the archived
-    // ones and every group stay out
+    // the admin counts G3's leaf in hiddenSib too; the archived ones and
+    // every group stay out
     expect((await restProject(fx, fx.admin, 'TBED')).completion).toEqual({
       status: 'ok',
       done: 6,
@@ -286,11 +280,11 @@ describe('a project’s completion is the app Overview’s Completion', () => {
     expect((await restProject(fx, fx.guest, 'TBED')).completion).toEqual({
       status: 'ok',
       done: 6,
-      total: 9,
-      percent: 67,
+      total: 10,
+      percent: 60,
     })
     // a sub-project counts its own tasks
-    const fw = { status: 'ok', done: 3, total: 6, percent: 50 }
+    const fw = { status: 'ok', done: 5, total: 9, percent: 56 }
     expect((await restProject(fx, fx.admin, 'FW')).completion).toEqual(fw)
     const viaMcp = JSON.parse(
       await fx.t.query(internal.machine.projects.mcpGetProject, {

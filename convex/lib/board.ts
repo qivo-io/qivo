@@ -285,7 +285,7 @@ async function boardOf(
         : selectionTasks(ctx, guard, selection.subProjects, statuses),
       (t) => ids.has(t.project_id),
     )
-    return await boardAnswer(ctx, guard, seats, f, await board.finish(), { selection })
+    return await boardAnswer(ctx, guard, f, await board.finish(), { selection })
   }
   const seats = new Map(
     [...profiles.values()].map((me): [string, ViewAccess] => [
@@ -296,7 +296,7 @@ async function boardOf(
   const board = filterRead(ctx, guard, seats, f, { mine: true, whole: false, rule, limits: BOARD })
   for (const seat of seats.values())
     await board.take(ownTasks(ctx, guard, seat, statuses ?? ISSUE_STATUSES))
-  return await boardAnswer(ctx, guard, seats, f, await board.finish(), { seats })
+  return await boardAnswer(ctx, guard, f, await board.finish(), { seats })
 }
 
 /* The ok answer of the Board read `got`, with the parents, the group facts
@@ -304,7 +304,6 @@ async function boardOf(
 async function boardAnswer(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   f: Filters,
   got: FilterResult,
   at: { selection: Selection } | { seats: ViewSeats },
@@ -312,18 +311,10 @@ async function boardAnswer(
   const { rows: list, isGroup } = got
   const groups = list.filter((t) => isGroup(t))
   if (groups.length > BOARD.context) throw new OverBudget()
-  const parents = await shownParents(
-    ctx,
-    guard,
-    seats,
-    list,
-    got.read,
-    BOARD.context - groups.length,
-  )
+  const parents = await shownParents(ctx, guard, list, got.read, BOARD.context - groups.length)
   await got.factsOf([...groups, ...parents])
   const held = await heldLanes(ctx, guard, f, list, isGroup, at)
-  const shownIds = new Set([...list.map((t) => t.id), ...parents.map((p) => p.id)])
-  const shown = (id: string) => shownIds.has(id)
+  const shown = new Map([...list, ...parents].map((t) => [t.id, t]))
   const out = (t: Doc<'issues'>) =>
     viewRow(t, shown, isGroup(t) === true ? (got.facts.get(t.id) ?? null) : null)
   return {

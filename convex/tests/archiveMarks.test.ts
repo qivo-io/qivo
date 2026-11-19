@@ -181,14 +181,14 @@ const pending = (t: T, name: string) =>
     ),
   )
 
-/* An active task, a parent, and its subtask in another project, each with
- * relation rows; the parent and the subtask each link to the active task. */
+/* An active task, a parent, and its subtask, each with relation rows; the
+ * parent and the subtask each link to the active task. */
 async function family(t: T, f: OrgFixture) {
   const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
   const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
   const child = await plantIssue(t, {
     org_id: f.org.id,
-    project_id: f.sub2.id,
+    project_id: f.sub.id,
     parent_id: parent.id,
   })
   await plantRelations(t, f, other)

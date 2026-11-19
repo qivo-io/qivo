@@ -339,13 +339,13 @@ async function agendaOf(
   const stamps = await byIdSteps(guard, walkers, (p) => stampOf(ctx, p.id))
 
   // the Done tasks each walker's Done since can show
-  const done = await doneOf(ctx, guard, seats, read, walkers, stamps, args, me.org_id)
+  const done = await doneOf(ctx, guard, read, walkers, stamps, args, me.org_id)
   const agenda = [...rows, ...asks, ...done]
   const inAgenda = new Set(agenda.map((t) => t.id))
 
   // the parents, then the blockers, within AGENDA.context together
-  const parents = await shownParents(ctx, guard, seats, agenda, tasks, AGENDA.context)
-  const facts = await groupFacts(ctx, guard, seats, parents, known)
+  const parents = await shownParents(ctx, guard, agenda, tasks, AGENDA.context)
+  const facts = await groupFacts(ctx, guard, parents, known)
   const blockers = await blockersOf(ctx, guard, seats, read)
   const related = new Set(parents.map((t) => t.id))
   for (const id of blockers.ids) if (!inAgenda.has(id)) related.add(id)
@@ -358,8 +358,7 @@ async function agendaOf(
 
   const { delays, weeks } = await loadsOf(v, me, clock, read, walkers)
   // the tasks the answer holds, which a row's parent_id may name
-  const shownIds = new Set([...inAgenda, ...parents.map((t) => t.id)])
-  const shown = (id: string) => shownIds.has(id)
+  const shown = new Map([...agenda, ...parents].map((t) => [t.id, t]))
   const out = (t: Doc<'issues'>) => viewRow(t, shown, null)
   return {
     state: 'ok',
@@ -456,7 +455,7 @@ function scopeRead(
     pending = []
     for (let at = 0; at < waiting.length; at += CHECK_STEP) {
       const step = waiting.slice(at, at + CHECK_STEP)
-      await firstSubtaskCheck(ctx, guard, seats, step, known)
+      await firstSubtaskCheck(ctx, guard, step, known)
       for (const t of step) {
         if (isGroupKnown(known, t.id) === true) continue
         ;(t.status === 'backlog' ? asks : rows).push(t)
@@ -689,7 +688,6 @@ const doneFacts = (t: Doc<'issues'>): DoneFacts => ({
 async function doneOf(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
   read: ScopeRead,
   walkers: readonly Doc<'profiles'>[],
   stamps: readonly (SyncStamp | null)[],
@@ -721,7 +719,7 @@ async function doneOf(
   const decide = async (waiting: readonly Doc<'issues'>[]) => {
     for (let at = 0; at < waiting.length; at += CHECK_STEP) {
       const step = waiting.slice(at, at + CHECK_STEP)
-      await firstSubtaskCheck(ctx, guard, seats, step, read.known)
+      await firstSubtaskCheck(ctx, guard, step, read.known)
       for (const t of step) {
         if (isGroupKnown(read.known, t.id) === true) continue
         done.push(t)
@@ -818,9 +816,9 @@ async function blockersOf(
   }
   const blockers = [...kept.values()]
   for (let at = 0; at < blockers.length; at += CHECK_STEP)
-    await firstSubtaskCheck(ctx, guard, seats, blockers.slice(at, at + CHECK_STEP), read.known)
+    await firstSubtaskCheck(ctx, guard, blockers.slice(at, at + CHECK_STEP), read.known)
   const groups = blockers.filter((t) => isGroupKnown(read.known, t.id) === true)
-  const facts = await groupFacts(ctx, guard, seats, groups, read.known)
+  const facts = await groupFacts(ctx, guard, groups, read.known)
   const isDone = (t: Doc<'issues'>) =>
     isGroupKnown(read.known, t.id) === true ? facts.get(t.id)?.done === true : t.status === 'done'
   const byCreation = (a: Doc<'issue_links'>, b: Doc<'issue_links'>) =>

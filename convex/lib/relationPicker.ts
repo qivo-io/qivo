@@ -80,8 +80,7 @@
  * whose scope holds a project or whose typed task ID names a row, as a
  * link they send would be refused for it.
  * Any other such batch reads on as if unblocked. The write keeps the rest
- * with its own sentence, which is the holders' sight of a new parent
- * (design specification row 328), the link limit on the other end, and
+ * with its own sentence, which is the link limit on the other end and
  * anything that changed since the batch was read.
  *
  * Reads that can touch rows the reader may not see, and what each costs:
@@ -102,16 +101,11 @@
  *   read returned. These are a parent candidate's active subtasks
  *   (LIMITS.subtasks.max rows of TASK_ROW_MAX_BYTES), a subtask candidate's
  *   first subtask (one row), a subtask candidate's parent, which costs one
- *   read by id and one access question (PROJECT_ASK and PROJECT_READ)
- *   whatever it finds, also where an earlier candidate read the same
- *   parent or the parent sits in the family and no question is asked, and
- *   a typed task ID's lookup with one access question, whatever it finds.
- *   Only a parent the batch's scan read before costs nothing, as the reader
- *   is shown it. A parent outside the opened task's sub-project is in data
- *   stored before the rule that a subtask stays in its parent's
- *   sub-project, and the question is asked only for one outside the family,
- *   which only data stored before the earlier rule of one top-level project
- *   holds.
+ *   read by id whatever it finds, also where an earlier candidate read the
+ *   same parent, and asks no access, as it shares the candidate's
+ *   sub-project (lib/liveTasks.ts liveLink), and a typed task ID's lookup
+ *   with one access question, whatever it finds. Only a parent the batch's
+ *   scan read before costs nothing, as the reader is shown it.
  *
  * So where a batch stops follows only the tasks the reader is shown and
  * their own facts. How many subtasks a candidate has that the reader cannot
@@ -122,8 +116,7 @@
  * candidate they make full and a Subtasks candidate that has any, so
  * excluding a candidate for its hidden or archived subtasks tells no more
  * than the write's refusal of that pick does. A subtask row names its
- * parent only when the reader is shown it (lib/workingSet.ts parentLink),
- * and else says it has a hidden one.
+ * active parent (lib/workingSet.ts parentLink) and says of no hidden one.
  *
  * RELATION_PICKER names the budgets and the reads measured at the design
  * size. */
@@ -228,9 +221,10 @@ export type RelationBlock = 'has_subtasks' | 'is_subtask' | 'full'
  * without its group fact, which a pick decides. A new parent has the opened
  * task as a subtask, and a new subtask has none of its own. */
 export type RelationCandidate = Omit<ShortRow, 'has_subtasks'> & {
-  /** In the Subtasks picker only, the task's parent as the reader is shown
-   * it (lib/workingSet.ts parentLink), the pair a pick sends as its
-   * expected values. The other pickers leave both out. */
+  /** In the Subtasks picker only, the task's parent as a read states it
+   * (lib/workingSet.ts parentLink), the pair a pick sends as its expected
+   * values; has_hidden_parent is always false, and a later release removes
+   * it. The other pickers leave both out. */
   parent_id?: string
   has_hidden_parent?: boolean
   /** the task a search of exactly its task ID names, found by its number
@@ -327,9 +321,9 @@ const ASK: Reads = plus(PROJECT_ASK, PROJECT_READ)
  * one access question, whatever the number names. */
 const TYPED: Reads = plus(HIDDEN_BY_ID, ASK)
 
-/** A subtask candidate's parent, read by id at its fixed size, and one
- * access question about its project, whatever the parent is. */
-const PARENT: Reads = plus(HIDDEN_BY_ID, ASK)
+/** A subtask candidate's parent, read by id at its fixed size, whatever
+ * the parent is. */
+const PARENT: Reads = HIDDEN_BY_ID
 
 /** One project row of the family's listing, at its fixed size. */
 const PROJECT_ROW: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 0 }
@@ -869,41 +863,33 @@ async function batchOf(
   const typed = ref !== null && 'num' in ref ? ref.num : null
   // the tasks the batch looked at, which the reader is shown, and the
   // parents of those, which have a subtask
-  const read = new Set<string>()
+  const read = new Map<string, Doc<'issues'>>()
   const parents = new Set<string>()
-  // each parent's pair as the reader is shown it, read once
-  const pairs = new Map<string, Pair>()
+  // each parent read by id, or null for none, read once
+  const parentRows = new Map<string, Doc<'issues'> | null>()
 
-  /* The parent of `task` as the reader is shown it, or 'stop'. */
+  /* The parent of `task` as a row states it, or 'stop': its id where the
+   * parent is active in the task's own sub-project (lib/liveTasks.ts
+   * liveLink), which the reader is shown, so no access is asked. */
   const pairOf = async (task: Doc<'issues'>): Promise<Pair | 'stop'> => {
     const id = task.parent_id
     if (id === undefined) return { has_hidden_parent: false }
-    if (read.has(id)) return parentLink(task, () => true)
-    // the parent by id and one access question, taken whatever the parent
-    // is and wherever it sits, also when an earlier candidate read it, so
-    // a hidden parent moves no stop; the guard takes only the real reads
+    const shown = (parent: Doc<'issues'> | null | undefined) =>
+      parent != null && parent.archived_at === undefined ? parent : null
+    const scanned = read.get(id)
+    if (scanned !== undefined) return parentLink(task, shown(scanned))
+    // the parent by id, taken at a parent's cost also when an earlier
+    // candidate read it; the guard takes only the real reads
     if (!count.fits(PARENT)) return 'stop'
     count.take(PARENT)
-    const known = pairs.get(id)
-    if (known !== undefined) return known
-    await guard.take(HIDDEN_BY_ID)
-    const parent = await byId(ctx, 'issues', id)
-    if (parent !== null) guard.charge(parent, TASK_ROW_MAX_BYTES)
-    let shown = false
-    if (parent !== null && parent.org_id === me.org_id && parent.archived_at === undefined) {
-      const home = family.projects.get(parent.project_id)
-      if (home !== undefined) shown = home.live && home.level !== null
-      else {
-        // a parent outside the family, only in data stored before the
-        // earlier rule that a subtask stays in its parent's top-level
-        // project; viewAccess takes the question's room from the guard
-        // itself
-        shown = (await seat.holds([parent]))[0] === true
-      }
+    let parent = parentRows.get(id)
+    if (parent === undefined) {
+      await guard.take(HIDDEN_BY_ID)
+      parent = await byId(ctx, 'issues', id)
+      if (parent !== null) guard.charge(parent, TASK_ROW_MAX_BYTES)
+      parentRows.set(id, parent)
     }
-    const pair = parentLink(task, () => shown)
-    pairs.set(id, pair)
-    return pair
+    return parentLink(task, shown(parent))
   }
 
   /* Whether `task`, a task of scope project `p`, may be picked, by the
@@ -983,7 +969,7 @@ async function batchOf(
     scope,
     at,
     async (task, p) => {
-      read.add(task.id)
+      read.set(task.id, task)
       if (task.parent_id !== undefined) parents.add(task.parent_id)
       if ((typedTaken && task.num === typed) || !matches(`${issueKey(task.num)}\n${task.title}`))
         return 'out'

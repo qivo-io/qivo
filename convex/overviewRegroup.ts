@@ -1,16 +1,15 @@
 /* After a project archive, restore, move to Deleted items or reveal by a
- * restore from there, the overview counts of its tasks and of the parents
- * they stop or start making groups (model/overviewCounts.ts).
+ * restore from there, the overview counts of its tasks and of their
+ * parents (model/overviewCounts.ts).
  *
  * A task counts only in a project of its organization that exists, and is
- * stored a group while it has an active subtask in a live project
- * (model/overviewCounts.ts hasLiveSubtask, lib/liveTasks.ts countsAsSubtask's
- * rule for a task in a live project). So a project that comes or goes, or
- * stops or starts being live, changes what its tasks add and which of
- * their parents are groups, in the same sub-project (model/issues.ts
- * parentChainCheck keeps a subtask in its parent's sub-project) or, for a
- * subtask older code stored elsewhere, in a sibling sub-project or another
- * top-level project, without a task write. The archive, the restore, the
+ * stored a group while it has an active subtask (model/overviewCounts.ts
+ * hasLiveSubtask, lib/liveTasks.ts countsAsSubtask). So a project that
+ * comes or goes changes what its tasks add without a task write. An archive
+ * or a restore changes nothing they add, as the readers give an archived
+ * sub-project no figure, and a subtask shares its parent's sub-project, so
+ * which tasks are groups stays as it was; reading them again mends a row an
+ * earlier release's group rule wrote there. The archive, the restore, the
  * move and the reveal (model/projects.ts archiveProjectCore and
  * unarchiveProjectCore, model/deletedItems.ts moveProjectToTrash and
  * revealProjects) call model/overviewCounts.ts startRegroup in their
@@ -20,11 +19,9 @@
  * (issues by_project_archived) and reconciles each task and its parent with
  * what the counts hold for them (reconcileTask), reading their subtasks
  * again. While the row exists, the counts of every top-level project of
- * the organization answer `counting` (countsReady), because a parent that
- * older code left in another top-level project than its subtask's is
- * reconciled by these steps too. A task written meanwhile reconciles
- * itself and its parents; either may come first, and the second finds
- * nothing to move.
+ * the organization answer `counting` (countsReady). A task written
+ * meanwhile reconciles itself and its parents; either may come first, and
+ * the second finds nothing to move.
  *
  * Convex drops the calls a failed mutation scheduled, so a step that fails
  * leaves the row in place. `recover` runs every ten minutes (crons.ts) and
@@ -44,7 +41,6 @@ import {
   overviewRegroupOf,
   reconcileTask,
 } from './model/overviewCounts'
-import { finishedBefore, positionAfter } from './regroup'
 
 /** Sizes of one step: the tasks and bytes of tasks one page reads, the
  * count rows of a project gone to Deleted items one step reads to delete
@@ -52,12 +48,39 @@ import { finishedBefore, positionAfter } from './regroup'
  * the next step while a step deletes any), and the share of any of Convex's
  * limits for one transaction past which a step stops before its next task
  * and leaves the rest of the page to the next step. A task's check reads
- * its subtasks until one is in a live project, so its cost has no fixed
- * bound. Tests lower these. */
+ * one range and its first active subtask. Tests lower these. */
 export const OVERVIEW_REGROUP = { tasks: 200, bytes: 4 * MIB, rows: 2000, room: 0.5 }
 
 /** A row whose last step committed longer ago than this is restarted. */
 export const STALLED_MS = 5 * 60_000
+
+/** Where a step stopped in a page, as the creation time of the last task it
+ * finished and the ids of every finished task with that time. Tasks can
+ * share a creation time, so the ids tell those apart. */
+type Position = { time: number; ids: string[] }
+
+/** Whether an earlier step finished this page task, by where it stopped. */
+export function finishedBefore(
+  task: Pick<Doc<'issues'>, '_creationTime' | 'id'>,
+  after: Position | undefined,
+): boolean {
+  if (after === undefined) return false
+  return (
+    task._creationTime < after.time ||
+    (task._creationTime === after.time && after.ids.includes(task.id))
+  )
+}
+
+/** Where a step stands once it has finished `task`, the next page task
+ * after `at`. */
+export function positionAfter(
+  at: Position | undefined,
+  task: Pick<Doc<'issues'>, '_creationTime' | 'id'>,
+): Position {
+  return at?.time === task._creationTime
+    ? { time: at.time, ids: [...at.ids, task.id] }
+    : { time: task._creationTime, ids: [task.id] }
+}
 
 const RECOVER_BATCH = 32
 /* The most stalled rows one recovery looks at, oldest progress first. Rows
@@ -65,8 +88,8 @@ const RECOVER_BATCH = 32
  * as in labelRemovals.ts. */
 const RECOVER_SCAN = 512
 
-/* This module's step, referenced by name, as regroup.ts references its
- * own. */
+/* This module's step, referenced by name for the scheduler, as
+ * model/overviewCounts.ts startRegroup references it. */
 const stepRef = makeFunctionReference<'mutation', { family_id: string }, null>(
   'overviewRegroup:step',
 )

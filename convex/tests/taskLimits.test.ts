@@ -42,7 +42,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantHiddenSibling,
   plantIssue,
   plantMessage,
   plantProject,
@@ -303,6 +302,47 @@ describe('one level of subtasks', () => {
     }
     expect(await row(fx.t, lone.id)).toEqual(lone)
   })
+
+  it('saves an update that sends a subtask its parent again under a full parent, and still refuses a new subtask there', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Full' })
+    const kid = await task(fx, { parent_id: parent.id })
+    await task(fx, { parent_id: parent.id })
+    const lone = await task(fx)
+    const max = LIMITS.subtasks.max
+    // the parent holds the most active subtasks, here lowered to 2
+    Object.assign(LIMITS.subtasks, { max: 2 })
+    try {
+      // the unchanged parent is no attach, so the hours alone save and
+      // the history tells them alone
+      await as(fx.t, fx.admin).mutation(api.issues.update, {
+        org_id: fx.org.id,
+        id: kid.id,
+        patch: { parent_id: parent.id, remaining_hours: 3 },
+      })
+      expect(await row(fx.t, kid.id)).toMatchObject({ parent_id: parent.id, remaining_hours: 3 })
+      const told = await fx.t.run((ctx) =>
+        ctx.db
+          .query('activity_events')
+          .filter((q) => q.eq(q.field('target_id'), kid.id))
+          .collect(),
+      )
+      expect(
+        told.map(({ verb, detail, field_prints }) => ({ verb, detail, field_prints })),
+      ).toEqual([
+        {
+          verb: 'set the remaining time on',
+          detail: 'to 3 h',
+          field_prints: { remaining_hours: expect.any(String) },
+        },
+      ])
+      // a task that is not its subtask yet is refused
+      await refused(reparents(fx, lone, parent).app(), 'rule', LIMITS.subtasks.refusal)
+      expect(await row(fx.t, lone.id)).toEqual(lone)
+    } finally {
+      Object.assign(LIMITS.subtasks, { max })
+    }
+  })
 })
 
 /* Plants `n` subtasks of `parent` in TBED's first sub-project. */
@@ -421,23 +461,6 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
       LIMITS.subtasks.refusal,
     )
     expect(await row(fx.t, named.old.id)).toEqual(named.old)
-  })
-
-  it('checks the people of a machine restore without the parent it leaves', async () => {
-    const fx = await setup()
-    // the parent sits in a sub-project the guest cannot see
-    const hidden = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const parent = await task(fx, { project_id: hidden.id, title: 'Full elsewhere' })
-    await plantSubtasks(fx, parent, LIMITS.subtasks.max, { project_id: hidden.id })
-    const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
-    const restored = await fx.t.mutation(internal.machine.rest.updateIssue, {
-      callerId: fx.agent.id,
-      access: 'write',
-      keyName: 'limits',
-      ref: key(old),
-      body: JSON.stringify({ archived: false, assignee_id: fx.guest.id }),
-    })
-    expect(restored).toMatchObject({ archived: false, parent_id: null, assignee_id: fx.guest.id })
   })
 
   it('leaves a parent that is in Deleted items, and the steps after its delete detach the rest', async () => {

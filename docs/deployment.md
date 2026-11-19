@@ -292,7 +292,12 @@ while the sub-project it shares with its subtask is archived. Its
 that a subtask in a sibling sub-project, or in another project, is refused
 over REST and MCP, and so is a move of the subtask that keeps its parent.
 Against a backend from before the release after v0.1.168, which accepts a
-subtask in a sibling sub-project, those steps fail. After it archives and restores a
+subtask in a sibling sub-project, those steps fail. `subtask-rule/parent-read`
+reads that subtask over REST and MCP, finds its parent by id with
+`has_hidden_parent` false, and sends the parent back as `expected.parent_id`
+alone. Against a backend from before the release after v0.1.170, which
+refuses `expected.parent_id` without `has_hidden_parent`, that step fails.
+After it archives and restores a
 sub-project it waits, for up to 30 seconds, until the family's completion
 stops saying `counting`, and it checks that the restore's own answer says
 `counting`, as a regroup of the counts starts in that change. Its
@@ -2565,6 +2570,45 @@ before, because it shows each refusal as the server sends it. The release
 changes no table, field, index, public function, argument or answer field,
 and has no backfill and no release step. Returning the backend to v0.1.170
 brings the checks back and is safe.
+
+The same release asks no one's sight of a task's parent or subtasks, as a
+subtask is always in its parent's own sub-project. `has_hidden_parent` is
+always false in REST, MCP and the app's rows, and a later release removes
+it. `has_hidden_subtasks` is false too, except in `taskWindow.task`, where
+it says the subtask list is incomplete. Archiving, restoring and moving a
+task no longer check Edit on each subtask or parent they change, as those
+share the sub-project the write checks, so no write sends `archiving this
+task would change a subtask in a project you cannot edit; …`, `restoring
+this task would change a parent task in a project you cannot edit; …`,
+`moving this task would move a subtask in a project you cannot edit; …`,
+`a subtask of this task is being moved to Deleted items; …` or `a parent
+of this task is being moved to Deleted items; …` any more. The field check
+takes `expected.parent_id` without `has_hidden_parent`, so a client should
+stop sending `has_hidden_parent`, and `has_hidden_parent: true` matches
+nothing. A project restore no longer schedules `regroup.restoredStep`,
+which now does nothing, so a chain an earlier backend scheduled ends at
+its next step; a later release removes it. An earlier app against this
+backend, such as a tab left open, works as before.
+
+The Overview's counts take an active task with an active subtask as a
+group in an archived sub-project too. An earlier backend counted such a
+task there as a leaf, because its subtask was in an archived project. No
+figure shows those rows, as the counts' readers give an archived
+sub-project none, and a restore of the sub-project, a move of the task
+out of it, or another write that reads the task's subtasks again counts
+the task as a group. Until then a dry run of
+`internal/overviewCountsBackfill` that compares the organization's rows
+reports the sub-project's row, and the row there of the task's owner if
+it has one, as differing: the stored row holds the task as a leaf, and
+the count does not. A run with `"recount": true` mends them,
+but none is needed. The release changes no table, field, index or public
+function, and needs no backfill and no release step. Returning the
+backend to v0.1.170 is safe; v0.1.170 refuses `expected.parent_id`
+without `has_hidden_parent` again, and its dry run reports as differing
+the rows of an archived sub-project for each such task that this release
+stored as a group: one in a sub-project archived under this release, one
+whose subtasks a write of this release read again, and every one after a
+run with `"recount": true`.
 
 ## Node.js version
 
