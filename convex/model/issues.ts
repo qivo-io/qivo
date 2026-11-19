@@ -90,6 +90,7 @@ import { countsAsSubtask, liveLink } from '../lib/liveTasks'
 import { tooManyMentions } from '../lib/mentions'
 import { reviewStamp } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { parentLink } from '../lib/workingSet'
 import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import { recheckParent } from './archiveRechecks'
@@ -300,15 +301,22 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
       expected.parent_id != null && expected.has_hidden_parent === true
         ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
         : undefined,
-    // A parent seen by id matches while it is stored, and none while none
-    // is. A parent is in its subtask's sub-project, which the editor sees,
-    // so no read shows a hidden parent any more and one seen hidden
-    // matches nothing.
-    compare: async ({ row, expected, next }) => {
-      const stored = idForm(row.parent_id)
+    // The parent compares as a read shows it (lib/workingSet.ts
+    // parentLink): the stored id while that task's row is in the task's own
+    // sub-project, else none, as for a deleted parent whose archived
+    // subtask keeps its id until a background step detaches it
+    // (model/deletedItems.ts startArchivedDetach). No write reads the
+    // stored parent before this check, so it reads it here, one range. A
+    // parent is in its subtask's sub-project, which the editor sees, so no
+    // read shows a hidden parent any more and one seen hidden matches
+    // nothing.
+    compare: async ({ row, read, expected, next }) => {
+      const parent =
+        row.parent_id === undefined ? null : await byId(read.ctx, 'issues', row.parent_id)
+      const shown = idForm(parentLink(row, parent).parent_id)
       const seen =
-        expected.has_hidden_parent === true ? false : idForm(expected.parent_id) === stored
-      return { seen, next: idForm(next.parent_id) === stored }
+        expected.has_hidden_parent === true ? false : idForm(expected.parent_id) === shown
+      return { seen, next: idForm(next.parent_id) === shown }
     },
   },
   has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },

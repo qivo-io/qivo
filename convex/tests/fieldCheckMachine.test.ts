@@ -6,7 +6,7 @@
  * with the fixture agent's key. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
@@ -205,6 +205,83 @@ describe('REST task edits', () => {
     })
     expect(res.status).toBe(200)
     expect((await task(fx, group.id))?.remaining_hours).toBeUndefined()
+  })
+
+  it('reads a deleted parent as none before its archived subtask is detached, over REST, MCP and the app', async () => {
+    // the delete's detach step waits on the fake clock
+    vi.useFakeTimers()
+    try {
+      const fx = await setup()
+      const org_id = fx.org.id
+      const gone = await plantIssue(fx.t, { org_id, project_id: fx.sub.id })
+      const kids: Doc<'issues'>[] = []
+      for (let n = 0; n < 3; n++)
+        kids.push(
+          await plantIssue(fx.t, {
+            org_id,
+            project_id: fx.sub.id,
+            parent_id: gone.id,
+            archived_at: NOW,
+          }),
+        )
+      const [viaRest, viaMcp, viaApp] = kids
+      const other = await plantIssue(fx.t, { org_id, project_id: fx.sub.id })
+      await as(fx.t, fx.user).mutation(api.issues.deleteDeep, { org_id, id: gone.id })
+      // each subtask still stores the id, and a read shows no parent
+      for (const kid of kids) expect((await task(fx, kid.id))?.parent_id).toBe(gone.id)
+      const read = await send(fx, 'GET', `/v1/tasks/${key(viaRest)}`)
+      expect(JSON.parse(read.text)).toMatchObject({ parent_id: null, has_hidden_parent: false })
+      const changed = (kid: Doc<'issues'>) =>
+        `parent of ${key(kid)} changed since you read it, so nothing was saved; read ${key(kid)} again and resend your change`
+
+      // a read from before the delete is stale on every surface
+      expect(
+        await send(fx, 'PATCH', `/v1/tasks/${key(viaRest)}`, {
+          parent: other.id,
+          expected: { parent_id: gone.id },
+        }),
+      ).toEqual({ status: 409, text: JSON.stringify({ error: changed(viaRest) }) })
+      expect(
+        await tool(fx, 'update_task', {
+          ref: key(viaMcp),
+          parent: other.id,
+          expected: { parent_id: gone.id },
+        }),
+      ).toMatchObject(toolError(changed(viaMcp)))
+      await expectRefusal(
+        as(fx.t, fx.user).mutation(api.issues.update, {
+          org_id,
+          id: viaApp.id,
+          patch: { parent_id: other.id },
+          expected: { parent_id: gone.id },
+        }),
+        'conflict',
+      )
+      for (const kid of kids) expect((await task(fx, kid.id))?.parent_id).toBe(gone.id)
+
+      // one that saw no parent saves
+      const rest = await send(fx, 'PATCH', `/v1/tasks/${key(viaRest)}`, {
+        parent: other.id,
+        expected: { parent_id: null },
+      })
+      expect(rest.status).toBe(200)
+      const mcpSaved = await tool(fx, 'update_task', {
+        ref: key(viaMcp),
+        parent: other.id,
+        expected: { parent_id: null },
+      })
+      expect(mcpSaved.isError).toBeUndefined()
+      await as(fx.t, fx.user).mutation(api.issues.update, {
+        org_id,
+        id: viaApp.id,
+        patch: { parent_id: other.id },
+        expected: { parent_id: null },
+      })
+      for (const kid of kids) expect((await task(fx, kid.id))?.parent_id).toBe(other.id)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('refuses a move whose project the agent read is stale, over REST and MCP', async () => {
