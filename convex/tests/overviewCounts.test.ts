@@ -29,8 +29,10 @@ import {
   overviewCountRun,
   overviewRegroupOf,
   ownerRows,
+  slotOf,
   stampOverview,
   subProjectCounts,
+  taskRecord,
 } from '../model/overviewCounts'
 import { removeProjectGrantCore } from '../model/projectAccess'
 import { OVERVIEW_REGROUP, STALLED_MS } from '../overviewRegroup'
@@ -763,6 +765,34 @@ describe('overview counts', () => {
     await expectCountsExact(t, org_id, 'restored between two steps')
   })
 
+  it('a group the earlier rule stored as a leaf in an archived sub-project counts as a group once it moves out with its subtask', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const parent = await earlierLeafInArchive(t, f)
+    await writers(t, f).move(parent.id, f.sub.id)
+    await expectCountsExact(t, org_id, 'moved out with its subtask')
+    expect((await countsNow(t, f.sub.id))?.leaves).toMatchObject({ progress: 0, todo: 1 })
+  })
+
+  it('a group the earlier rule stored as a leaf in an archived sub-project counts as a group once the sub-project is restored', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    await earlierLeafInArchive(t, f)
+    // a dry run lists the archived sub-project's row and its owner's row,
+    // which no reader shows while the sub-project is archived
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 2 })
+    expect(await countsNow(t, f.sub2.id)).toBeNull()
+    await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.sub2.id })
+    await runSteps(t)
+    await expectCountsExact(t, org_id, 'restored')
+    expect((await countsNow(t, f.sub2.id))?.leaves).toMatchObject({ progress: 0, todo: 1 })
+    expect((await backfill(t, { dry_run: true })).differing).toBe(0)
+  })
+
   it('a replayed continuation and one a recount overtook count the organization from its start', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -895,6 +925,49 @@ describe('overview counts', () => {
     expect(await t.run((ctx) => countsReady(ctx.db, f.org.id))).toBe(true)
   })
 })
+
+/** A parent in progress with a subtask to do, both the user's and in the
+ * fixture's second sub-project, which is then archived, with the parent's
+ * counts as the group rule before this release stored them there: a leaf
+ * with its slot in the sub-project's and its owner's rows, as that rule
+ * counted only an active subtask in a live project. */
+async function earlierLeafInArchive(t: T, f: OrgFixture): Promise<Doc<'issues'>> {
+  const org_id = f.org.id
+  const w = writers(t, f)
+  const parent = await w.create({
+    project_id: f.sub2.id,
+    status: 'progress',
+    assignee_id: f.user.id,
+    remaining_hours: 2,
+  })
+  await w.create({
+    project_id: f.sub2.id,
+    parent_id: parent.id,
+    status: 'todo',
+    assignee_id: f.user.id,
+  })
+  await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+  await runSteps(t)
+  await expectCountsExact(t, org_id, 'archived')
+  return await t.run(async (ctx) => {
+    const task = (await byId(ctx, 'issues', parent.id)) as Doc<'issues'>
+    const slot = slotOf(task, await byId(ctx, 'projects', task.project_id), false)
+    const record = await taskRecord(ctx.db, task.id)
+    if (slot === undefined || record === null || !record.group) throw new Error('no group')
+    const moves = new CountMoves()
+    moves.add(org_id, slot, 1)
+    await moves.apply(ctx.db)
+    await ctx.db.patch(record._id, { group: false, slot })
+    return task
+  })
+}
+
+/** The leaf counts of sub-project `projectId` as it is stored now
+ * (subProjectCounts). */
+const countsNow = (t: T, projectId: string) =>
+  t.run(async (ctx) =>
+    subProjectCounts(ctx.db, (await byId(ctx, 'projects', projectId)) as Doc<'projects'>),
+  )
 
 const backfill = (t: T, args: Omit<RunArgs, never>) =>
   t.action(internal.internal.overviewCountsBackfill.run, args)

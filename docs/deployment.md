@@ -2588,10 +2588,23 @@ stop sending `has_hidden_parent`, and `has_hidden_parent: true` matches
 nothing. A project restore no longer schedules `regroup.restoredStep`,
 which now does nothing, so a chain an earlier backend scheduled ends at
 its next step; a later release removes it. An earlier app against this
-backend, such as a tab left open, works as before. The release changes no
-table, field, index or public function, and has no backfill and no release
-step. Returning the backend to v0.1.170 is safe; v0.1.170
-refuses `expected.parent_id` without `has_hidden_parent` again.
+backend, such as a tab left open, works as before.
+
+The Overview's counts take an active task with an active subtask as a
+group in an archived sub-project too. An earlier backend counted such a
+task there as a leaf, because its subtask was in an archived project. No
+figure shows those rows, as the counts' readers give an archived
+sub-project none, and a restore of the sub-project, or a move of the task
+out of it, counts the task as a group. Until then a dry run of
+`internal/overviewCountsBackfill` lists the sub-project's row, and the
+task owner's row there, in `differ`: the stored row holds the task as a
+leaf, and the count does not. A run with `"recount": true` mends them,
+but none is needed. The release changes no table, field, index or public
+function, and needs no backfill and no release step. Returning the
+backend to v0.1.170 is safe; v0.1.170 refuses `expected.parent_id`
+without `has_hidden_parent` again, and its dry run lists in `differ` the
+rows of a sub-project archived under this release that holds such a task,
+which this release stored as a group.
 
 ## Node.js version
 

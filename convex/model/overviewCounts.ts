@@ -12,7 +12,12 @@
  * lib/liveTasks.ts countsAsSubtask's rule for an active task), whoever
  * reads it, as the app's P.isGroup decides, and a leaf's owner is
  * lib/review.ts taskOwnerId's. The readers give an archived sub-project no
- * figure (subProjectCounts).
+ * figure (subProjectCounts). The group rule of an earlier release counted
+ * only an active subtask in a live project, so a row it wrote in an
+ * archived sub-project can hold a group as a leaf until a restore's
+ * regroup or a move out of the sub-project reads the task again
+ * (tallyOverview), and until then a dry run of the backfill lists that
+ * sub-project's rows as differing.
  * overview_tasks holds, for each active task, what the counts hold for it:
  * whether a group, and the leaf it adds to its rows (its slot). Each write
  * reconciles a task with that row (reconcileTask), moving the rows by the
@@ -426,8 +431,13 @@ const parentMade = (task: Doc<'issues'> | null): string | undefined =>
  * task written back or made active again), then each parent the task
  * stopped or started making a group, whose subtasks it reads, such as the
  * parent an active subtask leaves by a delete, an archive or a new parent.
- * `fresh` says `after` is a task just created with a new id, which
- * has no subtask yet. The caller asked countsKept for the organization.
+ * A move writes a task before the subtasks it carries, so the moved task
+ * keeps what its row holds, and each active subtask that lands with it
+ * reads the task's row (one range) and reconciles the task when that row
+ * holds it a leaf, as a row an earlier release wrote in an archived
+ * sub-project can (see the header). `fresh` says `after` is a task just
+ * created with a new id, which has no subtask yet. The caller asked
+ * countsKept for the organization.
  */
 export async function tallyOverview(
   db: Writer,
@@ -453,7 +463,14 @@ export async function tallyOverview(
     const was = parentMade(before)
     const now = parentMade(after)
     const parents = new Set<string>()
-    if (was !== now) for (const id of [was, now]) if (id !== undefined) parents.add(id)
+    if (was !== now) {
+      for (const id of [was, now]) if (id !== undefined) parents.add(id)
+    } else if (now !== undefined && before?.project_id !== after?.project_id) {
+      // an active subtask that lands in its parent's new sub-project, which
+      // makes a parent its row holds a leaf a group
+      const record = await taskRecord(db, now)
+      if (record === null || !record.group) parents.add(now)
+    }
     for (const parentId of parents) {
       const parent = await byId({ db }, 'issues', parentId)
       if (parent !== null && parent.org_id === task.org_id)
