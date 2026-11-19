@@ -302,6 +302,47 @@ describe('one level of subtasks', () => {
     }
     expect(await row(fx.t, lone.id)).toEqual(lone)
   })
+
+  it('saves an update that sends a subtask its parent again under a full parent, and still refuses a new subtask there', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Full' })
+    const kid = await task(fx, { parent_id: parent.id })
+    await task(fx, { parent_id: parent.id })
+    const lone = await task(fx)
+    const max = LIMITS.subtasks.max
+    // the parent holds the most active subtasks, here lowered to 2
+    Object.assign(LIMITS.subtasks, { max: 2 })
+    try {
+      // the unchanged parent is no attach, so the hours alone save and
+      // the history tells them alone
+      await as(fx.t, fx.admin).mutation(api.issues.update, {
+        org_id: fx.org.id,
+        id: kid.id,
+        patch: { parent_id: parent.id, remaining_hours: 3 },
+      })
+      expect(await row(fx.t, kid.id)).toMatchObject({ parent_id: parent.id, remaining_hours: 3 })
+      const told = await fx.t.run((ctx) =>
+        ctx.db
+          .query('activity_events')
+          .filter((q) => q.eq(q.field('target_id'), kid.id))
+          .collect(),
+      )
+      expect(
+        told.map(({ verb, detail, field_prints }) => ({ verb, detail, field_prints })),
+      ).toEqual([
+        {
+          verb: 'set the remaining time on',
+          detail: 'to 3 h',
+          field_prints: { remaining_hours: expect.any(String) },
+        },
+      ])
+      // a task that is not its subtask yet is refused
+      await refused(reparents(fx, lone, parent).app(), 'rule', LIMITS.subtasks.refusal)
+      expect(await row(fx.t, lone.id)).toEqual(lone)
+    } finally {
+      Object.assign(LIMITS.subtasks, { max })
+    }
+  })
 })
 
 /* Plants `n` subtasks of `parent` in TBED's first sub-project. */
