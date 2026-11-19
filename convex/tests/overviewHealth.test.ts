@@ -1015,9 +1015,9 @@ describe('owner reads', () => {
 
 // ---------------------------------------------------------------- hidden data
 
-/** withOrg as a member who sees FW only, with an overdue group of theirs
- * in FW whose subtask is in PCB, which they cannot see, holding `title`,
- * and a task of theirs in PCB of that title. */
+/** withOrg as a member who sees FW only, with an overdue task of theirs in
+ * FW, which tracks delay, and in PCB, which they cannot see, a Done task
+ * holding `title` and a task of theirs of that title. */
 async function hiddenCase(title: string) {
   const t = newT()
   const f = await withReadingAdmin(t)
@@ -1034,10 +1034,10 @@ async function hiddenCase(title: string) {
     })
     await ctx.db.patch(f.sub._id, { track_delay: true })
   })
-  const group = await plantIssue(t, {
+  await plantIssue(t, {
     org_id: f.org.id,
     project_id: f.sub.id,
-    title: 'Overdue group',
+    title: 'Overdue',
     due_date: shift(DAY, -3),
     assignee_id: me.id,
   })
@@ -1045,7 +1045,6 @@ async function hiddenCase(title: string) {
     org_id: f.org.id,
     project_id: f.sub2.id,
     title,
-    parent_id: group.id,
     status: 'done',
     done_at: NOW,
   })
@@ -1064,7 +1063,7 @@ const shapeOf = (answer: unknown): unknown =>
   )
 
 describe('hidden data', () => {
-  it("answers alike whatever a hidden subtask's or own task's title, and keeps a group with a hidden Done subtask delayed", async () => {
+  it('answers alike whatever the title of a task the member cannot see, theirs or not', async () => {
     const short = await hiddenCase('x')
     const long = await hiddenCase('漢'.repeat(255))
     for (const sort of ['late', 'name', 'lead'] as const)
@@ -1073,7 +1072,7 @@ describe('hidden data', () => {
         const b = await health(long.t, long.me, pick(long), { sort })
         expect(shapeOf(b), sort).toEqual(shapeOf(a))
       }
-    // the group's hidden subtask keeps it not done, so it stays delayed
+    // the overdue task in FW is late, so the rows compared hold a delay
     expect(
       rowOf(await health(short.t, short.me, scopeOf(short.me, short.f.meta)), 'Firmware').delays,
     ).toEqual({ state: 'ok', late: 1, behind: 0 })

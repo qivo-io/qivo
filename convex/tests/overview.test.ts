@@ -827,9 +827,9 @@ describe('verdicts', () => {
 
 // --------------------------------------------------------------- hidden data
 
-/** withOrg as a member who sees FW only, with an overdue group in FW whose
- * subtask is in PCB, which they cannot see, holding `title`, and a task of
- * theirs in PCB of that title. */
+/** withOrg as a member who sees FW only, with an overdue task of theirs in
+ * FW, and in PCB, which they cannot see, a task holding `title` and a
+ * paused task of theirs of that title. */
 async function hiddenCase(title: string) {
   const t = newT()
   const f = await withReadingAdmin(t)
@@ -841,14 +841,14 @@ async function hiddenCase(title: string) {
   await t.run((ctx) =>
     ctx.db.insert('project_access', { project_id: f.sub.id, profile_id: me.id, level: 'user' }),
   )
-  const group = await plantIssue(t, {
+  await plantIssue(t, {
     org_id: f.org.id,
     project_id: f.sub.id,
-    title: 'Overdue group',
+    title: 'Overdue',
     due_date: shift(DAY, -3),
     assignee_id: me.id,
   })
-  await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, title, parent_id: group.id })
+  await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, title })
   await plantIssue(t, {
     org_id: f.org.id,
     project_id: f.sub2.id,
@@ -897,7 +897,7 @@ const shapeOf = (answer: unknown): unknown =>
   )
 
 describe('hidden data', () => {
-  it("answers alike whatever a hidden subtask's or own task's title, also at a budget the visible reads just fit", async () => {
+  it('answers alike whatever the title of a task the member cannot see, theirs or not, also at a budget the visible reads just fit', async () => {
     const short = await hiddenCase('x')
     const long = await hiddenCase('漢'.repeat(255))
     for (const scopeKind of ['meta', 'mine'] as const) {

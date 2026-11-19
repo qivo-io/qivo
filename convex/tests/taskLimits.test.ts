@@ -42,7 +42,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantHiddenSibling,
   plantIssue,
   plantMessage,
   plantProject,
@@ -421,23 +420,6 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
       LIMITS.subtasks.refusal,
     )
     expect(await row(fx.t, named.old.id)).toEqual(named.old)
-  })
-
-  it('checks the people of a machine restore without the parent it leaves', async () => {
-    const fx = await setup()
-    // the parent sits in a sub-project the guest cannot see
-    const hidden = await plantHiddenSibling(fx.t, fx, fx.guest)
-    const parent = await task(fx, { project_id: hidden.id, title: 'Full elsewhere' })
-    await plantSubtasks(fx, parent, LIMITS.subtasks.max, { project_id: hidden.id })
-    const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
-    const restored = await fx.t.mutation(internal.machine.rest.updateIssue, {
-      callerId: fx.agent.id,
-      access: 'write',
-      keyName: 'limits',
-      ref: key(old),
-      body: JSON.stringify({ archived: false, assignee_id: fx.guest.id }),
-    })
-    expect(restored).toMatchObject({ archived: false, parent_id: null, assignee_id: fx.guest.id })
   })
 
   it('leaves a parent that is in Deleted items, and the steps after its delete detach the rest', async () => {

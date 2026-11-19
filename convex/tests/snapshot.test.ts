@@ -818,7 +818,7 @@ describe('navigation-only parents', () => {
   })
 })
 
-describe('hidden parents', () => {
+describe('parents and hidden tasks in the task window', () => {
   it("the task window's row names its parent", async () => {
     const near = await plantIssue(t, {
       org_id: f.org.id,
@@ -839,20 +839,19 @@ describe('hidden parents', () => {
   })
 
   it("no task id outside a person's working set leaves the task window's reads", async () => {
+    // a task the guest sees, linked to one they cannot see, which they
+    // follow and hold a message about; the guard on parent links has its
+    // own test (convex/tests/liveTasks.test.ts)
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: hiddenTask.id,
-    })
+    const shown = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       await ctx.db.insert('issue_links', {
         id: uuid(),
         org_id: f.org.id,
-        source_id: child.id,
+        source_id: shown.id,
         target_id: hiddenTask.id,
         type: 'blocks',
-        pair_key: [child.id, hiddenTask.id].sort().join(':'),
+        pair_key: [shown.id, hiddenTask.id].sort().join(':'),
         created_at: NOW,
       })
       await ctx.db.insert('issue_subscriptions', {
@@ -871,14 +870,14 @@ describe('hidden parents', () => {
         created_at: NOW,
       })
     })
-    // the guest's window of the child, its links and attachments, as the
+    // the guest's window of the shown task, its links and attachments, as the
     // app reads them, and the hidden task's own window
     const reads = [
-      await windowOf(f.guest, child.id),
-      await as(t, f.guest).query(api.taskWindow.links, { org_id: f.org.id, issue_id: child.id }),
+      await windowOf(f.guest, shown.id),
+      await as(t, f.guest).query(api.taskWindow.links, { org_id: f.org.id, issue_id: shown.id }),
       await as(t, f.guest).query(api.taskWindow.attachments, {
         org_id: f.org.id,
-        issue_id: child.id,
+        issue_id: shown.id,
       }),
     ]
     expect(reads.map((answer) => answer.state)).toEqual(['ok', 'ok', 'ok'])
