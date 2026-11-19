@@ -234,6 +234,15 @@ describe('the guard on parent links', () => {
     expect(window.parent).toBeNull()
     expect(window.task.has_hidden_parent).toBe(false)
     expect('parent_id' in window.task).toBe(false)
+    // the task window of the active group, whose only subtask is in AWAY
+    const groupWindow = await as(fx.t, fx.guest).query(api.taskWindow.task, {
+      org_id: fx.org.id,
+      ref: group.id,
+    })
+    if (groupWindow.state !== 'ok') throw new Error(groupWindow.state)
+    expect(groupWindow.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
+    expect(groupWindow.subtasks).toEqual({ rows: [], complete: true })
+    expect(JSON.stringify(groupWindow)).not.toContain(kid.id)
     // a view read, the Board of FW
     const board = await boardFor(fx.t, fx.guest, projectScope(fx.guest, fx.sub.id), NO_FILTERS)
     if (board.state !== 'ok') throw new Error(board.state)
