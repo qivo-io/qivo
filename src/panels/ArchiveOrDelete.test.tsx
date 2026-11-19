@@ -66,7 +66,9 @@ let windowFail: ((error: unknown) => void) | null
 let earlierBackend = false
 
 /* `mixed`'s window answer from an earlier backend (earlierBackend), over
-   the stand-in's answer for `args`. */
+   the stand-in's answer for `args`. Such a backend set has_hidden_subtasks
+   beside a complete list only when it counted a subtask, so the task then
+   has subtasks even when the list shows none. */
 function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
   const answer = taskWindowStandIn(whole, 'taskWindow:task', args) as {
     state: string
@@ -74,7 +76,11 @@ function earlierWindow(whole: Snapshot, args: Record<string, unknown>) {
   }
   if (!earlierBackend || args.ref !== 'mixed' || answer.state !== 'ok') return answer
   const hidden = whole.issues.find((row) => row.id === 'mixed')?.has_hidden_subtasks === true
-  const task = { ...answer.task, has_hidden_subtasks: hidden }
+  const task = {
+    ...answer.task,
+    has_hidden_subtasks: hidden,
+    ...(hidden && { has_subtasks: true }),
+  }
   const kid = whole.issues.find((row) => row.id === 'read-only')
   if (kid === undefined) return { ...answer, task }
   const {

@@ -13146,10 +13146,11 @@ export const PLANNER = {
      with whether I can delete it (Edit access to its project). A subtask I
      cannot delete stays, keeping its own subtasks, so those are not listed.
      `hidden` is true when the task, or a subtask that would be deleted, has
-     subtasks the window's answer left out (hasHiddenSubtasks), as of an
-     incomplete list, or from an earlier backend, subtasks in projects I
-     cannot open; how many is not known here. The
-     task and its subtasks are those of `family` (P.familyOf). */
+     subtasks the window's answer left out (hasHiddenSubtasks). The task
+     and its subtasks are those of `family` (P.familyOf), which holds only
+     a complete list of leaf subtasks, so this backend's answer never sets
+     it. Only an earlier backend's answer does, beside a complete list, for
+     subtasks in projects I cannot open; how many is not known here. */
   deletePlan: (
     family: TaskFamily,
   ): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
