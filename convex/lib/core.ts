@@ -1597,12 +1597,14 @@ export async function issueOut(
  * list_task_related answer one page of one list (relatedPage), which reads
  * neither the task's text nor its other lists nor its subtree.
  *
- * Each names other tasks only through lib/workingSet.ts with the machine
- * Shown: a task of the caller's organization whose project the caller can
- * read (canSeeProject), archived projects included. Both ask that through
- * one lib/access.ts accessOf instance a call, project by project, so they
- * read only the projects the task, its subtree and its links name, never
- * the organization's projects or every grant and share of the caller. A
+ * Each names the task's parent and subtasks only inside its own
+ * sub-project (lib/liveTasks.ts liveLink), which the caller reads, and a
+ * link's other task only through lib/workingSet.ts with the machine Shown:
+ * a task of the caller's organization whose project the caller can read
+ * (canSeeProject), archived projects included. Both ask that through one
+ * lib/access.ts accessOf instance a call, project by project, so they read
+ * only the projects the task and its links name, never the organization's
+ * projects or every grant and share of the caller. A
  * check that a bound of that reader stopped refuses the whole call with its
  * sentence (accessUnchecked), never answering a hidden row or a short list
  * as whole.
@@ -2596,8 +2598,8 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  * in the same transaction, so an update_project or PATCH that restores a
  * sub-project answers it; one that archives a project answers null), or
  * where a row went below zero until a recount mends it. A regroup of
- * another top-level project counts too, because it can reconcile a parent
- * here whose subtask older code stored there (countsReady).
+ * another top-level project counts too, as every family waits for every
+ * regroup in the organization (countsReady).
  * UNAVAILABLE_COMPLETION where the request has no room for those reads
  * beside COMPLETION_RESERVE, where the sub-projects did not fit the guard,
  * or where a bound of lib/access.ts OWN_READS stopped a check of which of

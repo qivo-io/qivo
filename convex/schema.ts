@@ -1999,8 +1999,8 @@ export default defineSchema({
 
   // A top-level project with sub-projects archived, restored, moved to
   // Deleted items or back, whose overview counts background steps reconcile
-  // (overviewRegroup.ts): a project's liveness and presence decide whether
-  // its tasks count at all.
+  // (overviewRegroup.ts): a project's presence decides whether its tasks
+  // count at all, and the readers give an archived sub-project no figure.
   // `projects` holds the projects whose tasks, and their parents, a step
   // reconciles, read in order from `at`, a page at a time from `cursor`,
   // and within a page past `after`, the creation time of the last task a

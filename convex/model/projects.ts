@@ -866,8 +866,10 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
   await patchRows(ctx, reach, { live: false })
   if (a.budget === undefined) await settleFavorites(ctx, budget)
   await scheduleArchivedReads(ctx, { projects: archived })
-  // its tasks leave the Overview's counts; their groups stay as they are,
-  // as a subtask shares its parent's sub-project (model/overviewCounts.ts)
+  // the Overview gives its sub-projects no figure while they are archived;
+  // its tasks' counts and groups stay as they are, as a subtask shares its
+  // parent's sub-project, and the regroup reads them again
+  // (model/overviewCounts.ts)
   await startRegroup(ctx, parent ?? project, archived)
   await logActivity(ctx, {
     org_id: me.org_id,

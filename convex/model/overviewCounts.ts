@@ -35,13 +35,14 @@
  * each of them for the task it writes (tallyOverview), and for the parent
  * it stops or starts making a group, whose subtasks it reads again.
  *
- * A project archived, restored, moved to Deleted items or revealed again
- * by a restore changes whether its tasks count at all, without a task
- * write. Which of them are groups stays as it was, as a subtask shares its
- * parent's sub-project. It starts background steps (startRegroup,
- * overviewRegroup.ts) that reconcile its tasks and their parents, and
- * every top-level project's counts in the organization answer `counting`
- * until they end (countsReady).
+ * A project moved to Deleted items or revealed again by a restore changes
+ * whether its tasks count at all, without a task write. An archive or a
+ * restore changes no task's slot, as the readers skip an archived
+ * sub-project, and which tasks are groups stays as it was, as a subtask
+ * shares its parent's sub-project. Each of the four starts background
+ * steps (startRegroup, overviewRegroup.ts) that reconcile the project's
+ * tasks and their parents, and every top-level project's counts in the
+ * organization answer `counting` until they end (countsReady).
  *
  * An organization is counted from its org_ready overview_counts_at: from
  * its creation (model/orgs.ts insertOrgRows), from a Northstar seed's last

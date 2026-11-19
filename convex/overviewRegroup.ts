@@ -5,9 +5,11 @@
  * A task counts only in a project of its organization that exists, and is
  * stored a group while it has an active subtask (model/overviewCounts.ts
  * hasLiveSubtask, lib/liveTasks.ts countsAsSubtask). So a project that
- * comes or goes, or stops or starts being live, changes what its tasks add
- * without a task write. A subtask shares its parent's sub-project, so which
- * tasks are groups stays as it was. The archive, the restore, the
+ * comes or goes changes what its tasks add without a task write. An archive
+ * or a restore changes nothing they add, as the readers give an archived
+ * sub-project no figure, and a subtask shares its parent's sub-project, so
+ * which tasks are groups stays as it was; reading them again mends a row an
+ * earlier release's group rule wrote there. The archive, the restore, the
  * move and the reveal (model/projects.ts archiveProjectCore and
  * unarchiveProjectCore, model/deletedItems.ts moveProjectToTrash and
  * revealProjects) call model/overviewCounts.ts startRegroup in their

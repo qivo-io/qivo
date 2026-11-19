@@ -8,11 +8,11 @@
  *
  * The active task list (lib/activeTaskPage.ts) reads through them.
  * subtreeReads answers from the catalogue's flags, which it reads nothing
- * for, so the single-task read (lib/core.ts taskOut), which asks the
- * caller's access project by project through lib/access.ts accessOf, keeps
- * its own walk (lib/core.ts subtreeIndex) and uses readTally for its first
- * pages, an archived task's subtask page among them (lib/core.ts
- * subtasksByNumber). Project completion reads the stored counts instead
+ * for. The single-task read (lib/core.ts taskOut) reads no catalogue and
+ * asks lib/access.ts accessOf only about its links' other tasks and the
+ * owner's load, so it keeps its own walk (lib/core.ts subtreeIndex) and
+ * uses readTally for its first pages, an archived task's subtask page
+ * among them (lib/core.ts subtasksByNumber). Project completion reads the stored counts instead
  * (lib/core.ts projectCompletion).
  *
  * - readTally counts what a read makes against its own budget, every

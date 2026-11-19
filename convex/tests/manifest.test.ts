@@ -1241,9 +1241,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     viewOwners: 'orgQuery',
   },
   // Removing a person's or team's access stays open to org admins during a
-  // billing pause; giving or changing access does not. A restore schedules
-  // regroup:restoredStep (internal), which clears the own hours of parents
-  // the restored tasks make groups again.
+  // billing pause; giving or changing access does not. A restore no longer
+  // schedules regroup:restoredStep (internal), which does nothing, so a
+  // chain scheduled before ends.
   projects: {
     create: 'orgMutation',
     update: 'orgMutation',
