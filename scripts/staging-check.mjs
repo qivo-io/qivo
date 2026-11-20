@@ -335,7 +335,7 @@
  * failed-ui-org-export.png, and a step that timed out waiting for an
  * element names that element in its FAIL line.
  *
- *   staging, from the application checkout (see docs/deployment.md):
+ *   staging, from the application checkout (qivo-internal docs/deployment.md):
  *     "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
  *       node scripts/staging-check.mjs --staging
  *     ... node scripts/staging-check.mjs --staging --cleanup
@@ -12904,7 +12904,7 @@ async function pauseBilling() {
   say(
     'NOTE',
     'billing-pause',
-    `billing is on in the local backend until this run lifts it. If the run is killed first, --cleanup with QIVO_LOCAL_ADMIN_KEY lifts it (docs/deployment.md)`,
+    `billing is on in the local backend until this run lifts it. If the run is killed first, --cleanup with QIVO_LOCAL_ADMIN_KEY lifts it (qivo-internal docs/deployment.md)`,
   )
   expect(await until(paused, 30_000), 'the organization did not become read-only')
 }
@@ -12930,7 +12930,7 @@ function billingPauseHint(problems) {
   say(
     'NOTE',
     'billing-pause',
-    `the local organization is read-only, likely from a billing pause a killed run left. Run --cleanup with QIVO_LOCAL_ADMIN_KEY, which lifts it (docs/deployment.md)`,
+    `the local organization is read-only, likely from a billing pause a killed run left. Run --cleanup with QIVO_LOCAL_ADMIN_KEY, which lifts it (qivo-internal docs/deployment.md)`,
   )
 }
 

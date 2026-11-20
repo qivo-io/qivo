@@ -1305,11 +1305,10 @@ describe('at the design size', () => {
 /* The organization's 10,000 open tasks held by the people of the pages,
  * 50 people with 200 each, whose heaviest page the normal suite measures
  * with 15 of them ("at the design size"). It runs outside the normal
- * suite because seeding the whole figure takes about 40 s on a large Boat
- * sandbox beside the other tests, near vitest's 60 s on a slower runner.
- * Run on demand with QIVO_WORKLOAD_ORG_OPEN=1. On 4 November 2026 it took
- * 6 pages of 9 or 10 people, the heaviest 1,999 ranges, 2,119 documents
- * and 1.2 MB. */
+ * suite because seeding the whole figure beside the other tests can come
+ * near vitest's 60 s timeout. Run on demand with QIVO_WORKLOAD_ORG_OPEN=1.
+ * It pages at limit 50 over 52 weeks and checks that the list takes more
+ * than one page. */
 describe.runIf(process.env.QIVO_WORKLOAD_ORG_OPEN === '1')(
   "the organization's open tasks, on demand",
   () => {

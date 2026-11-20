@@ -167,7 +167,8 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
      * customTokenResponseFields and the grant's stored resource
      * (oauthConnections.ts claimIssuance, oauthAccess.ts lookupAccess). A
      * second resource needs every client linked only to what it may use, and
-     * those single-resource checks replaced (docs/better-auth-upgrade.md). */
+     * those single-resource checks replaced
+     * (qivo-internal docs/better-auth-upgrade.md). */
     resources: seeded,
     clientRegistrationDefaultResources: seeded,
     enforcePerClientResources: true,

@@ -1236,7 +1236,7 @@ describe('archived task lists page one project with a cursor', () => {
     const reader = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Reader', org_role: 'guest' })
     await grant(fx.t, fx.sub.id, reader.id)
     await grant(fx.t, oldSub.id, reader.id)
-    // the project lists read the reach rows every deployment holds
+    // the project lists read the reach rows
     await withReach(fx.t)
 
     /* The two steps the docs describe. Page projects with and without the

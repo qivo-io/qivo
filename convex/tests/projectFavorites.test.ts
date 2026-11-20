@@ -76,8 +76,8 @@ afterEach(() => {
 
 type Favorite = Doc<'project_favorites'>
 
-/** withOrg with its reach rows written, as on every deployment, and Pia, a
- * standard user with no access, who can sign in. */
+/** withOrg with its reach rows written, and Pia, a standard user with no
+ * access, who can sign in. */
 async function ready(t: T) {
   const f = await withOrg(t)
   const pia = await plantLogin(

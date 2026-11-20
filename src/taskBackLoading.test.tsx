@@ -152,8 +152,9 @@ afterEach(async () => {
 })
 
 /** Waits for `find` to answer, through lazy modules that can take seconds
-    to load on a busy worker. The budget is 20 s, because CI's runner under
-    the full suite once took over 10 s to settle a chooser after a close. */
+    to load on a busy worker. The budget is 20 s, because a CI runner under
+    the full suite can take several times as long to settle a chooser after
+    a close. */
 function waitFor<T>(find: () => T | null | undefined, what: string) {
   return vi.waitFor(
     () => {

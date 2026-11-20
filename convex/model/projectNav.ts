@@ -532,9 +532,9 @@ export const TREE_TOO_LARGE =
  * What the tree changes of one mutation may still spend: `entries`, the
  * sub-projects they write and the reach rows they read, each of which a
  * write may change and Convex reads by id first, within
- * LIMITS.projectTreeChange.max, which keeps them to about half of the
- * 4,096 index ranges one transaction may read, as model/labels.ts
- * LABEL_REMOVAL measured; `favorites`, the favorites rows they read,
+ * LIMITS.projectTreeChange.max, which keeps them well below the 4,096
+ * index ranges one transaction may read, as model/labels.ts LABEL_REMOVAL
+ * does; `favorites`, the favorites rows they read,
  * within TREE_FAVORITES.max; `bytes`, what all those rows hold, within
  * TREE_READ.bytes; and `queries`, the ranges their reads take. `starred`
  * holds the favorites rows read so far by top-level project, for

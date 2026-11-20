@@ -72,7 +72,7 @@ function changes(from, to, note = '') {
 }
 
 /**
- * What the owner does with the draft. It goes to the Actions run summary and the dry-run
+ * What to do with the draft. It goes to the Actions run summary and the dry-run
  * log, never into the release body, because publishing keeps the body and these steps
  * stop being true once the release is published.
  */
@@ -114,9 +114,9 @@ export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, pro
  * created, because each targets an older commit and publishing it later would deploy that
  * commit. They are kept if the new draft cannot be created. With `summaryFile` (the Actions
  * run summary), it appends the draft link, DRAFT_STEPS, any warnings and the header there as
- * soon as the draft exists, so the owner gets the steps even if removing an older draft then
- * fails. A draft of the commit production already serves gets a warning, not a refusal,
- * because publishing it is a legitimate redeploy, for example of a lagging demo.
+ * soon as the draft exists, so the summary holds the steps even if removing an older draft
+ * then fails. A draft of the commit production already serves gets a warning, not a
+ * refusal, because publishing it is a legitimate redeploy, for example of a lagging demo.
  */
 export async function prepareRelease({
   github,

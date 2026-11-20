@@ -5,8 +5,8 @@
  * access checks (lib/access.ts accessOf, grantOn and teamGrantOn) and the
  * name-ordered grant lists (lib/namedPages.ts readBatch, which refuses a
  * position that does not move), so a project with such rows cannot be read
- * or updated over REST and MCP until they are repaired. The closing review
- * runs this once on each hosted deployment, and not before a release.
+ * or updated over REST and MCP until they are repaired. It is run once on
+ * each hosted deployment, and not before a release.
  *
  * `count` walks one table's holder index (by_project_profile or
  * by_project_team) in pages of `page_size` rows, never through the access

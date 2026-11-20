@@ -57,9 +57,9 @@
  * checks the link and then, on every request, the admin's authority, the
  * job and the organization (deliveryOf), takes a lease (leaseDelivery, at
  * most DELIVERY.streams a job) and streams the stored parts as one ZIP
- * without the function holding the archive. On a local backend the
- * runtime read that body as fast as storage allowed, whatever the client
- * took (http.ts archiveStream), so the lease and the checks before every
+ * without the function holding the archive. No pull of that body waits
+ * for the client, so the runtime may read ahead as far as the whole
+ * archive (http.ts archiveStream), so the lease and the checks before every
  * part (canDeliver) and of every part's size cover the backend's read of
  * the archive, not the client's transfer. An archive the backend read
  * whole sets only the job's first served_at (recordDelivery), so a
@@ -492,9 +492,9 @@ async function deliverableParts(
  * and `missing` when the archive is damaged, which failDelivery then ends.
  * It reads what the finish read, a handful of ranges and one more a data
  * part for its file's lookup. At EXPORT_LIMITS.parts data parts that stays
- * just under Convex's 4,096 ranges, as a run with the cap's parts planted
- * found on 6 November 2026; convex/tests/orgExportDelivery.test.ts checks
- * the growth a part at a lowered cap. deliveryOf runs it for the route. */
+ * just under Convex's 4,096 ranges; convex/tests/orgExportDelivery.test.ts
+ * checks the growth a part at a lowered cap. deliveryOf runs it for
+ * the route. */
 export async function readDelivery(
   ctx: QueryCtx,
   { export_id, minter, exp }: { export_id: string; minter: string; exp: number },

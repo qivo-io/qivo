@@ -970,9 +970,7 @@ provider refuses a client that is not linked to it. Qivo also
 checks resource parameters and stores an immutable resource binding on each
 grant; regression tests cover foreign and repeated resource indicators and
 the canonical default when omitted. Do not add another resource without
-revisiting these checks. [Better Auth and the Convex
-adapter](better-auth-upgrade.md) describes the release Qivo runs and how to
-move to a later one.
+revisiting these checks.
 
 ## Protocol revision
 

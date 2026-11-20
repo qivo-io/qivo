@@ -4,8 +4,8 @@
  * and only a task without a row reads issues.description
  * (model/descriptions.ts). In the third, writers leave issues.description
  * unset and internal/descriptionsBackfill's clear unsets the copies earlier
- * releases wrote. Every deployment has run it, so only a rollback to the
- * second release writes a copy again. These cases clear issues.description
+ * releases wrote. After the clear, only a rollback to the second release
+ * writes a copy again. These cases clear issues.description
  * as the backfill does, plant copies that differ from the rows, leave a
  * task without a row and give one a second row, and check what each reader
  * answers and what each writer narrates, notifies and sends. The real-limit

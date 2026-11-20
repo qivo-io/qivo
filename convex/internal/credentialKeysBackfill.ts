@@ -26,10 +26,10 @@
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/credentialKeysBackfill:remaining '{"table": "agent_keys"}'
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). Read the dry run, which writes nothing, then give
- * the keys and check again:
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
+ * (qivo-internal docs/deployment.md). Read the dry run, which writes
+ * nothing, then give the keys and check again:
  *   "$H" staging npx convex run internal/credentialKeysBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/credentialKeysBackfill:run '{"dry_run": false}'
  * A call stops between two steps once RUN.ms has passed, well inside

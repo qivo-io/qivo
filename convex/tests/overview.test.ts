@@ -929,7 +929,7 @@ describe('hidden data', () => {
 
 // --------------------------------------------------------------- real limits
 
-/* What one Overview read took, logged for the stage's report. */
+/* What one Overview read took, logged. */
 const record = (label: string, took: unknown, answer: unknown) =>
   console.log(
     `overview reads, ${label}: ${JSON.stringify(took)} ${JSON.stringify(answer).slice(0, 200)}`,

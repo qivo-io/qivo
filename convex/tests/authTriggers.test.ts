@@ -1,8 +1,8 @@
 /* The Better Auth component's row triggers (authTriggers.ts) run once for
  * each row a bulk delete removes, in that delete's transaction, and every
- * call loads its module's imports again. A trigger whose module loaded
- * Better Auth cost about 30 ms a session on a local backend, and a ban of
- * 200 sessions then failed on Convex's time limit for one transaction. A
+ * call loads its module's imports again. A trigger whose module loads
+ * Better Auth pays for that load for each session, so a ban of 200
+ * sessions can fail on Convex's time limit for one transaction. A
  * demo start calls demo.ts once for each of its calls, every app boot calls
  * identity.ts claimMySeats, and each makes the component lookup for the
  * caller's session (betterAuth/sessions.ts). Every REST and MCP call checks

@@ -257,7 +257,7 @@ describe('assignee project permission', () => {
           level: 'viewer',
         })
       })
-      // the list walks the roster in name order, which every deployment keys
+      // the list walks the roster in name order, by each profile's name key
       await keyOrg(t, f.org.id)
       const rows: { id: string; assignable: boolean }[] =
         surface === 'REST'

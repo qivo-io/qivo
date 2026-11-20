@@ -7,8 +7,8 @@
  * the task writes still decide. The per-profile walk over the whole
  * roster, in the pages' order, is the reference (projectDetails.setup.ts).
  * Every fixture keys its organization's names (nameKeys.setup.ts keyOrg)
- * after its last planted profile, team, membership or grant, as every
- * deployment holds them; a profile planted after it would make the walk
+ * after its last planted profile, team, membership or grant, as the
+ * name-ordered lists need; a profile planted after it would make the walk
  * throw on a profile without a key.
  *
  * The removal window's Reassign picker reads the same levels with a

@@ -86,9 +86,7 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * membership with its copy of a name key, in ordinary text. Its cases are a
  * project at its design size, under Focus too, My view over two seats, the
  * largest My view the ceiling allows and a search over a project's 800 open
- * tasks, and each reads inside these budgets. On 31 October 2026 a real
- * backend, with rows the app's own writers made, read the bytes the tests
- * of that day measured, at ordinary text and at the text caps.
+ * tasks, and each reads inside these budgets.
  *
  * An organization admin's Board read costs the same as a standard user's
  * with the same rows.

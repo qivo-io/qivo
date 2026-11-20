@@ -1,5 +1,5 @@
-/* The closing review's read-only count of the Deleted items rows stored
- * before v0.1.122 (internal/olderDeletedTasks.ts): one organization with
+/* The read-only count of the Deleted items rows stored before v0.1.122
+ * (internal/olderDeletedTasks.ts): one organization with
  * an older row in a ready item and one in a stuck item beside a newer row
  * without an assignee, and one organization with none. The pages are
  * lowered through the call's own arguments, never by seeding more. */

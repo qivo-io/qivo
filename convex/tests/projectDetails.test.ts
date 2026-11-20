@@ -6,8 +6,8 @@
  * and list_project_users). The reads these lists made before they paged,
  * each list whole, are the oracle (projectDetails.setup.ts). Every fixture
  * keys its organization's names (nameKeys.setup.ts keyOrg) after its last
- * planted profile, team, membership, grant or share, as every deployment
- * holds them; a profile planted after it would make the user walk throw on
+ * planted profile, team, membership, grant or share, as the name-ordered
+ * lists need; a profile planted after it would make the user walk throw on
  * a profile without a key, and a grant planted after it turns the grant
  * lists not ready. The cases at the design size raise one figure, or the
  * sum one read covers, and print what each call read. */

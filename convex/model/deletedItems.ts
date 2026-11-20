@@ -196,12 +196,11 @@ export const TRASH_BUDGET = { rows: 300, bytes: 4 * 1024 * 1024, tasks: 100, ran
  * spends before steps take over. Convex ends a function whose database
  * calls wait 15 s in all ("too many system operations"), and a step that
  * does is retried at half its budget (recoverJobs), but a person's call is
- * not retried. On a local backend busy removing a person with 18,000
- * tokens, each call of a restore waited 3.8 to 7.6 ms, so a restore of four
- * 200-project items that made 1,977 calls failed, and so did deleting a
- * sub-project of 5,000 tasks. A quarter of the budget, about 700 calls with
- * the writes, stays near 5 s at that rate. A mutable object, so tests can
- * change it. */
+ * not retried. On a busy backend each call waits longer, so a person's call
+ * that spends the whole budget, such as a restore of four 200-project items
+ * or a deletion of a sub-project of 5,000 tasks, can pass that limit. A
+ * quarter of the budget, about 700 calls with the writes, leaves room for
+ * those waits. A mutable object, so tests can change it. */
 export const CALL = { scale: 1 / 4 }
 
 /** Adaptive retries: each restart halves budget_scale down to `floor`, and
@@ -1792,9 +1791,10 @@ const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
       : undefined
 
 /* Items deleted before this can hold grants and shares stored without a
- * grantee: the release that added deleted_rows.grantee reached every
- * hosted deployment on 22 October 2026. The expiry purges such items by 22
- * November 2026, after which no item is older than this. */
+ * grantee. Every item deleted from this time on stores the grantee of each
+ * of them. The nightly expiry (expireItems) purges only ready items whose
+ * TRASH_DAYS are over, so an older item that is not ready, such as a stuck
+ * one, can remain. */
 const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
 
 /** The most stored rows without a grantee one read takes for an item and
@@ -2939,9 +2939,9 @@ async function writeTask(
  * parent outside it once (outsideParent), reading nothing back after a
  * write. It reads none of the item's deleted_tasks rows, which hold each
  * task's searchable text, so it reads about what a reveal read before they
- * held it, which a timing on a local backend on 5 November 2026 found
- * inside Convex's limits for a task with LIMITS.subtasks.max subtasks whose
- * descriptions are at the cap in a three-byte script. */
+ * held it. convex/tests/deletedItemsRestore.test.ts restores a task with
+ * LIMITS.subtasks.max subtasks, each with a person of its own, under
+ * Convex's limits. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {
     const late = await run.ctx.db

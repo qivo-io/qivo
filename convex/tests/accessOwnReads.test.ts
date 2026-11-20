@@ -219,7 +219,7 @@ describe('projectLevelsOf own reads', () => {
     const legacy = await read()
     await stampNav(t, org.id)
     const reach = await read()
-    // reported in the stage's report: Northstar's people, every project
+    // logged: Northstar's people, every project
     console.info(
       `Northstar levels, legacy ${JSON.stringify(legacy)}, reach ${JSON.stringify(reach)}`,
     )
@@ -666,14 +666,13 @@ describe('projectLevelsOf past the team shares it reads on one project', () => {
   })
 })
 
-/* The finding of Astra's review of t3/limits-project-access-reads, at the
- * design size: a person in 3 teams, each shared on the same 48 sub-projects
- * under 16 metas (144 shares, past the OWN_READS.rows and navRows these
- * tests lower to FINDING_ROWS, as the review's 32,000 shares passed the
- * real ones, and with manyTeams lowered so that their 3 teams count as
- * many, as the review's 20 did), who holds no source on the metas, so each
- * shows them only for navigation; and a meta with a few sub-projects they
- * hold no source under. The reach rows planReach writes are inserted
+/* The finding these tests plant, at the design size: a person in 3 teams,
+ * each shared on the same 48 sub-projects under 16 metas (144 shares, past
+ * the OWN_READS.rows and navRows these tests lower to FINDING_ROWS, as
+ * 32,000 shares pass the real ones, and with manyTeams lowered so that their
+ * 3 teams count as many, as 20 teams do), who holds no source on the metas,
+ * so each shows them only for navigation; and a meta with a few sub-projects
+ * they hold no source under. The reach rows planReach writes are inserted
  * directly, and a sample is checked against planReach. A legacy task
  * stored on the first meta, with a message to the person, makes the task
  * window, Search and the inbox ask about the meta with navigation. */

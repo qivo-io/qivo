@@ -8,7 +8,7 @@ name: WebKit check on macOS
 # The app is a production build, and its backend is a disposable local Convex
 # backend on the runner. The run holds no secrets and reaches no hosted
 # deployment. The backend's keys and the Northstar fixture logins are made on
-# the runner and go with it. See docs/deployment.md.
+# the runner and go with it. See qivo-internal docs/deployment.md.
 on:
   workflow_dispatch:
 

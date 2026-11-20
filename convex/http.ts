@@ -520,23 +520,22 @@ type Delivery = {
  * and releases the lease. A body that errors and a reader that cancels
  * stop the reads, record nothing and release the lease.
  *
- * The reader is the Convex runtime, not the client. On a local backend
- * (precompiled-2026-10-22, 6 November 2026) it pulled a body of several
- * megabytes as fast as storage gave it, whatever the client took: a
- * download curl stopped early was recorded within a second of its start,
- * its lease ended then, and a file erased a few seconds into a download no
- * longer stopped it. So the record says that the backend read the whole
- * archive into the response, not that the client received it, and it leaves
+ * The reader is the Convex runtime, not the client, and no pull waits for
+ * the client, so the runtime may read the body ahead of the client's
+ * transfer, as far as the whole archive. A delivery can then be recorded,
+ * and its lease end, before the client has received the archive, and a
+ * file erased after the backend has read it no longer stops the client's
+ * transfer. So the record says that the backend read the whole archive
+ * into the response, not that the client received it, and it leaves
  * organizations.last_export_confirmed_at, which the deletion reminder
  * reads, alone.
  * The app records a saved download itself once the desktop app or the
  * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's
- * transfer. Convex documents at most 30 minutes for an action; whether a
- * slow client's transfer counts toward it was not measured. The app's
- * record of a saved download counts only within DELIVERY.streamMs after
- * the archive ends (model/orgExports.ts recordable), so a download that
- * starts shortly before the end must finish within that window to count.
+ * transfer. The app's record of a saved download counts only within
+ * DELIVERY.streamMs after the archive ends (model/orgExports.ts
+ * recordable), so a download that starts shortly before the end must
+ * finish within that window to count.
  */
 function archiveStream(
   ctx: ActionCtx,

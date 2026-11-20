@@ -4,9 +4,8 @@
  * its working set (lib/access.ts accessOf holds), unread rows newest first
  * and read rows most recently read first, grouped by task. The parity
  * cases of the unread summary (inboxReads.test.ts) and the Inbox pages
- * (inboxPage.test.ts) compare with it, and t3/limits-machine-inbox's
- * parity takes it next. It reads every message of the seat, so it serves
- * only fixtures of everyday size, such as Northstar.
+ * (inboxPage.test.ts) compare with it. It reads every message of the seat,
+ * so it serves only fixtures of everyday size, such as Northstar.
  *
  * Named *.setup.ts, as two dots in the basename is the Convex CLI's skip
  * rule (see helpers.setup.ts). */

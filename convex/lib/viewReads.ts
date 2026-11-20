@@ -56,8 +56,7 @@
  *   a legacy writer stored a task on are not, and their real size counts;
  * - in an organization whose reach rows are not complete yet (org_ready
  *   nav_at), the sub-projects the access reads of such a top-level project
- *   on the legacy path, which every deployment left behind with
- *   internal/navBackfill;
+ *   on the legacy path, which internal/navBackfill leaves behind;
  * - and a view's own reads that follow the organization or a task's links,
  *   as the filter row's search through a label's assignments
  *   (lib/viewFilters.ts filterSearch) and the Roadmap's dependency read
@@ -1044,8 +1043,8 @@ export const noSubtasks = (): Subtasks => ({
 })
 
 /** The release from which every backend that can run keeps one level of
- * subtasks: v0.1.98, the backend's rollback floor, released everywhere on
- * this instant. The rule itself shipped in v0.1.17: the parent fence
+ * subtasks: v0.1.98, the backend's rollback floor, released at this
+ * instant. The rule itself shipped in v0.1.17: the parent fence
  * (model/issues.ts parentChainCheck) refuses a parent that has a parent of
  * its own and a parent for a task that has subtasks, on the app, REST and
  * MCP, and a Deleted items restore drops such a parent (model/deletedItems.ts

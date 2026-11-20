@@ -27,11 +27,11 @@
  * arguments and `"cursor"` set to it until `done` is true. Each call reports
  * the organizations it went through.
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). On the demo, whose stored key cannot run internal
- * functions, the private with-temp-deploy-key helper runs each command with a
- * short-lived key; `run`, an internal action, needs
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
+ * (qivo-internal docs/deployment.md). On the demo, whose stored key cannot
+ * run internal functions, the private with-temp-deploy-key helper runs each
+ * command with a short-lived key; `run`, an internal action, needs
  * deployment:functions:runInternalActions.
  *
  * A run counts the organizations not counted yet and leaves the others as

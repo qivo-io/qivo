@@ -195,9 +195,8 @@ export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 
  * One pass, rather than a page at a time from the start of the range, keeps
  * a step to one read of the range: each read from the start passes again
  * every row the transaction already cleared there, and the local backend
- * reads a whole index range for each query whatever its limit. Clearing 256
- * of 20,000 rows took 10.3 s read four at a time and 0.5 s in one pass.
- * Convex charges a pass only for the documents it reaches. */
+ * reads a whole index range for each query whatever its limit. Convex
+ * charges a pass only for the documents it reaches. */
 export async function sweep<Row>(
   budget: RemovalBudget,
   rows: AsyncIterable<Row>,

@@ -115,7 +115,7 @@ async function fixture() {
       level: 'user',
     })
   })
-  // the project list the calls read pages the reach rows every deployment holds
+  // the project list the calls read pages the reach rows
   await withReach(t)
   const loginId = f.admin.auth_user_id!
 

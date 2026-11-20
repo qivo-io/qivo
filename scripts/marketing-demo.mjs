@@ -777,9 +777,9 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
   }
   const resumeSeed = ' Re-run seed with the same anchor to continue from the step that failed.'
   if (options.command === 'reset') {
-    // A wipe, then a seed, each in calls of their own: together in one call
-    // they came too close to Convex's 1 s mutation limit. Repeating the reset
-    // is always safe.
+    // A wipe, then a seed, each in calls of their own, so that no call does
+    // the whole reset against Convex's 1 s mutation limit. Repeating the
+    // reset is always safe.
     await wipe()
     await seed('').catch((error) => {
       throw new DemoCliError(

@@ -19,16 +19,11 @@
  * and counts every index range a function reads, where a deployment counts a
  * range it already read once, so these counts are an upper bound.
  *
- * LIMITS.reassign.max comes from the `crowded` fixture below. When it was
- * set, the largest count that fixture reassigned inside the limits was 196 tasks, at
- * about 16 index ranges per task after about 900 for the first sight check of
- * each follower, back when the removal told every follower itself. Index
- * ranges ran out first. A local Convex backend now reassigns 120 tasks with
- * 100 followers each, which once was refused. With the Overview's counts
- * kept (model/overviewCounts.ts), as the fixture is counted, it reassigned
- * 260 tasks inside the limits and was refused at 320 for filling the
- * transaction (REASSIGN_ROOM), where it reassigned 400 and was refused at
- * 500 without them (convex-test, 1 November 2026). */
+ * LIMITS.reassign.max comes from the `crowded` fixture below, an
+ * organization of 100 people where each of Emil's tasks has three of the
+ * crowd as followers beside him. The tests below hand over
+ * LIMITS.reassign.max of those tasks inside the limits and refuse one more
+ * for its number. */
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

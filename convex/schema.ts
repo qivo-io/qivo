@@ -122,11 +122,11 @@ const projectsTable = defineTable({
   created_at: v.string(),
   // Server-owned, set once when the project is stored (lib/db.ts
   // newWindowKey). It placed the project in the app's project windows,
-  // which no read uses since the workspace's projects part went
-  // (t3/limits-projects-part), and the window keys' data stage recorded in
-  // later-work removes it with by_org_window. Never sent to clients, REST,
-  // MCP, webhooks or the export. internal/windowKeysBackfill still gives
-  // one to a project stored before it.
+  // which no read uses since the workspace's projects part went, and the
+  // window keys' data stage recorded in later-work removes it with
+  // by_org_window. Never sent to clients, REST, MCP, webhooks or the export.
+  // internal/windowKeysBackfill still gives one to a project stored
+  // before it.
   window_key: v.optional(v.string()),
   // The name as name-ordered lists sort and search it (lib/nameKey.ts),
   // server-owned and written with the name. Never sent to clients, REST,
@@ -666,10 +666,10 @@ export default defineSchema({
   account_appearance: defineTable({
     auth_user_id: v.string(),
     // 'image' is the retired Canvas theme (deviation #302) and 'blue' the
-    // retired Blue theme. Demo visitor or production rows written before they
-    // retired may still hold them, so the schema accepts them for deploys;
-    // appearanceSettings reads both as 'dark' and every save writes a current
-    // mode. Drop them once no deployment holds one.
+    // retired Blue theme. Rows written before they retired may still hold
+    // them, so the schema accepts them for deploys; appearanceSettings reads
+    // both as 'dark' and every save writes a current mode. Drop them once no
+    // stored row holds one.
     mode: v.union(vAppearanceMode, v.literal('blue'), v.literal('image')),
     image_source: vImageSource,
     custom_image_id: v.optional(v.string()),
@@ -1362,9 +1362,10 @@ export default defineSchema({
   // backend first read it whole into a download's response. Neither
   // preparing nor serving an archive sets
   // organizations.last_export_confirmed_at, the record of exports an admin's
-  // app confirmed as saved, which the deletion reminder reads. Code from before the release of served_at, streams and the
-  // step's Deleted items state does not accept a row that holds one
-  // (docs/deployment.md).
+  // app confirmed as saved, which the deletion reminder reads. Code from
+  // before the release of served_at, streams and the step's Deleted items
+  // state does not accept a row that holds one
+  // (qivo-internal docs/deployment.md).
   org_exports: defineTable({
     id: v.string(), // a server uuid
     org_id: v.string(),
@@ -1813,7 +1814,7 @@ export default defineSchema({
    * the task's one row holds the same text. The second release is the
    * third's rollback floor, because it reads the rows; a release before it
    * reads only issues.description and shows no text for a task the third
-   * wrote, edited or cleared (docs/deployment.md).
+   * wrote, edited or cleared (qivo-internal docs/deployment.md).
    *
    * The project and archived copies came after the table, in the same
    * release or a later one. A row holds them once project_id is present
@@ -1821,16 +1822,19 @@ export default defineSchema({
    * older backup, holds none, and a release from before the table, which
    * still deploys, leaves rows with stale ones when it moves or archives
    * tasks. The same backfill reports and mends both (`differ`). Main Search
-   * (search.ts, lib/mainSearch.ts) reads search_description, and the
-   * release whose Search palette first calls it ships only once a dry run
-   * from the third release on every deployment reports zero `missing`,
-   * `differ`, `duplicates` and `orphans` (docs/deployment.md). */
+   * (search.ts, lib/mainSearch.ts) reads search_description and trusts these
+   * copies, so it relies on a dry run of the backfill from the third
+   * release on that reports zero `missing`, `differ`, `duplicates` and
+   * `orphans` on each deployment that serves it (qivo-internal
+   * docs/deployment.md). A dry run of a release before the third, from the
+   * second on, skips a task without issues.description before it looks for
+   * a second row, so it can report zero `duplicates` for a task with two. */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
     description: v.string(),
     // the task's; absent only on a row not yet stamped (above). Optional
-    // until the backfill has stamped every deployment's rows.
+    // until the backfill has stamped every row.
     project_id: v.optional(v.string()),
     archived_at: v.optional(v.string()), // the task's, absent while it is active
   })
@@ -2993,8 +2997,12 @@ export default defineSchema({
   // answers that a profile is not ready while its inbox_state is not
   // built. The app's Inbox badge, its Mark all as read and Remove all read
   // and its task window read the summary and the item, and its Inbox list
-  // reads the pages. REST and MCP read the messages until a later release
-  // switches them, once every deployment has run internal/inboxItemsBackfill.
+  // reads the pages. REST GET /v1/inbox and MCP list_inbox page the rows
+  // through the same walk, with each item's messages (machine/discussion.ts
+  // inboxPage), and refuse with INBOX_NOT_READY a recipient whose rows are
+  // not complete (model/inboxItems.ts seatReady), one whose inbox_state is
+  // not built or who holds messages and no inbox_state, until
+  // internal/inboxItemsBackfill builds it.
   inbox_items: defineTable({
     recipient_id: v.string(),
     issue_id: v.string(),

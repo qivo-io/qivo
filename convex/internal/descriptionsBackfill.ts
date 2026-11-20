@@ -18,7 +18,8 @@
  * is the rollback floor. It reads the rows, and its writers write copies
  * equal to the rows again, which a clear after the roll forward unsets. A
  * release before it reads only issues.description, so it shows no text for
- * a task this release wrote, edited or cleared (docs/deployment.md).
+ * a task this release wrote, edited or cleared
+ * (qivo-internal docs/deployment.md).
  *
  * A call walks two phases in creation order, each page its own
  * transaction. `tasks` reads every live task and its first two description
@@ -43,8 +44,8 @@
  * state, which grows with every create and description edit. A deployment
  * is clean when `missing`, `differ`, `duplicates` and `orphans` are zero,
  * and `waiting` only while a teardown runs, and it is cleared once `held` is
- * zero too. Main Search's palette ships only once a dry run on every
- * deployment reports it clean (search.ts). The backfill of the releases
+ * zero too. Main Search's palette relies on a clean dry run on each
+ * deployment that serves it (search.ts). The backfill of the releases
  * from v0.1.98 up to this one skips a task without a copy before it looks
  * for a second row, so after a rollback to one of them only this release's
  * dry run counts such duplicates.
@@ -80,10 +81,10 @@
  * project and archived copies hold none, as do rows restored from an older
  * backup, and differ until a repair stamps them. Code that lists the table
  * without the copies deploys only while no row holds them
- * (docs/deployment.md). A release from before the table still deploys, and
- * writes tasks without rows and changes descriptions and moves and
- * archives tasks without them. A repair after the roll forward mends what
- * either leaves, and since this release shows a row such a release left
+ * (qivo-internal docs/deployment.md). A release from before the table still
+ * deploys, and writes tasks without rows and changes descriptions and moves
+ * and archives tasks without them. A repair after the roll forward mends
+ * what either leaves, and since this release shows a row such a release left
  * stale, run a dry run and that repair before anyone relies on the text.
  * No call writes a waiting row, which its step or teardown deletes.
  *
@@ -99,14 +100,14 @@
  * once, without updated_at, an event or activity, so readers show the same
  * text, and every open tab's task parts run again as their rows change.
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md); the clear is the step a rollback past this release
- * cannot undo for the tasks it clears. On the demo, whose stored key cannot
- * run internal functions, the private with-temp-deploy-key helper runs each
- * command with a short-lived key. `run`, an internal action, needs
- * deployment:functions:runInternalActions, and its dry run's queries
- * deployment:functions:runInternalQueries as well.
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
+ * (qivo-internal docs/deployment.md); the clear is the step a rollback past
+ * this release cannot undo for the tasks it clears. On the demo, whose
+ * stored key cannot run internal functions, the private with-temp-deploy-key
+ * helper runs each command with a short-lived key. `run`, an internal
+ * action, needs deployment:functions:runInternalActions, and its dry run's
+ * queries deployment:functions:runInternalQueries as well.
  *
  * Every call that is not a dry run adds one platform_audit_log row (action
  * 'descriptions_backfill', actor 'system') with the counts of the pages it

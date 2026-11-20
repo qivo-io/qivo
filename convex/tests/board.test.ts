@@ -839,8 +839,7 @@ async function hiddenOrg(wide: boolean) {
         label_id: labelId,
       })
   })
-  // navigation reads reach rows, as on every deployment since v0.1.97,
-  // not a parent's sub-projects
+  // navigation reads reach rows, not a parent's sub-projects
   await withReach(t)
   return { t, f }
 }
@@ -1106,8 +1105,8 @@ describe('a reached budget', () => {
 
 /* ------------------------------------------------------------- real limits */
 
-/** The reads of each real-limit case, printed for the report and the
- * figures in BOARD's docstring. */
+/** The reads of each real-limit case, printed for the figures in
+ * BOARD's docstring. */
 const FIGURES: Record<string, ReadFigures & { state: string }> = {}
 const record = (name: string, answer: BoardAnswer, read: ReadFigures) => {
   FIGURES[name] = { state: stateOf(answer).state, ...read }

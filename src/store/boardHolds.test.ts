@@ -243,7 +243,7 @@ describe("the Board's holders", { timeout: BOARD_TEST_TIMEOUT }, () => {
       rows: { 'board:desktop': ids.size },
       owners: ownersOf(board, ids),
     })
-    // as information for the closing review's measurement, not a bound
+    // as information for a measurement, not a bound
     const value = board.P.boardRead('board:desktop').value
     console.log(
       "The Board's holders at a project's design size:",

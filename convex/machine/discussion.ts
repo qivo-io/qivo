@@ -239,7 +239,7 @@ async function inboxItemOf(
  * convex/tests/machineInbox.test.ts ("reads at the design size") logs what one
  * page reads at the design size, one figure raised at a time beside an everyday
  * reader, and the hint skips the items of a project the reader no longer sees
- * without reading their tasks. The closing review's report in qivo-internal
+ * without reading their tasks. A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Machine
  * Inbox") holds the figures.
  */
@@ -398,8 +398,8 @@ type InboxChangeJson = {
  * With `all`, one call changes at most one batch of INBOX_BATCH messages, and a
  * reader of everyday reach reads the same in an organization of the design
  * size's live top-level projects as in an everyday one
- * (convex/tests/machineInbox.test.ts, "reads at the design size"). The closing
- * review's report in qivo-internal
+ * (convex/tests/machineInbox.test.ts, "reads at the design size"). A report
+ * in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Machine
  * Inbox") holds the figures.
  */

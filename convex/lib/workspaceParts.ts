@@ -153,8 +153,8 @@ async function ownTeamsOf(ctx: QueryCtx, me: Doc<'profiles'>) {
  * refusal, which the app shows as the workspace's failure (ownTeamsOf).
  *
  * It reads the same in an organization at the design size's people as at
- * everyday values, and more only with a seat's teams and seats. The
- * closing review's report in qivo-internal
+ * everyday values, and more only with a seat's teams and seats. A report
+ * in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Task
  * windows retirement" and "Projects part removal") holds its timed
  * figures, before and after the parts went. */

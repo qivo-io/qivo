@@ -1124,8 +1124,7 @@ describe("the replayed leader, the app's own alert client", () => {
   })
 
   it("moves the floor to the beat's time when another session of the person claimed last", async () => {
-    // a new browser session of a person whose other session moved the
-    // checkpoint, as the closing review's tabs after the record part
+    // a new browser session of a person whose other session moved the checkpoint
     const run = standIn({ summarizeFirst: true })
     await vi.advanceTimersByTimeAsync(0)
     run.live()[0].answer({ events: [], through: T0 - ALERT_WINDOW_MS, more: false })

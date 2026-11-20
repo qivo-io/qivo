@@ -458,8 +458,9 @@ const RESERVED = [
 ]
 
 /** The uuids one part of the reserved-id check reads. Each reads at most
- * three index ranges, so a part reads at most 240: the whole check, about
- * 920 ranges, took up to 2 s in one call on a loaded machine. */
+ * three index ranges, so a part reads at most 240 of the whole check's
+ * about 920 ranges, which in one call could pass Convex's 1 s limit on a
+ * loaded machine. */
 export const RESERVED_PART = 80
 
 /** How many parts the reserved-id check has (checkReserved). */
@@ -764,15 +765,19 @@ export const checkReserved = internalQuery({
  * demo's. */
 const RESET_TO_CHANGE = 'marketing demo: use reset to change dates or dataset version'
 
-/** How much one wipe call deletes: half a deletion step's REMOVAL_BUDGET, so
- * a call stays far inside Convex's 1 s mutation limit on a loaded machine. */
+/** How much one wipe call deletes, half a deletion step's REMOVAL_BUDGET,
+ * to keep each call small against Convex's 1 s mutation limit. A call
+ * stops once it has spent that many rows or bytes, which its last row can
+ * pass. Every deleted row counts, and the used-id phase also counts each
+ * id it keeps and each index range it reads for one (model/usedIds.ts).
+ * It counts rows and bytes, not time. */
 export const WIPE_BUDGET = { rows: 128, bytes: 2 * 1024 * 1024 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is
- * deliberately no single-call reset, and no single-call seed: the whole
- * Northstar work in one transaction came close to Convex's 1 s mutation
- * limit on a loaded machine. Callers reset by running 'wipe' and then 'seed'
- * (scripts/marketing-demo.mjs, the explicit fixture CLI).
+ * deliberately no single-call reset, and no single-call seed, so that no
+ * call does the whole Northstar work against Convex's 1 s mutation limit.
+ * Callers reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
+ * the explicit fixture CLI).
  *
  * A wipe call deletes one bounded batch (WIPE_BUDGET), marks the demo empty
  * and answers `wipe_done`, and the CLI calls it again until that is true.

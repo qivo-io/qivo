@@ -57,7 +57,8 @@ export type T = TestConvex<typeof schema>
  * created in a beforeAll is shared by several tests, so its suite settles it
  * after each of them.
  *
- * Every instance has the Better Auth component, as every deployment has it.
+ * Every instance has the Better Auth component, as convex.config.ts installs
+ * it.
  * Personal token lookup and webhook ownership read the owner's login and
  * refuse one that is banned or that Better Auth no longer has, so withOrg
  * gives each of its people a real Better Auth user (plantLogins). A suite
@@ -1004,8 +1005,8 @@ export const taskWithText = (t: T, id: string): Promise<TaskWithText | null> =>
 /** Gives each live task of organization `orgId`, or only those of `ids`
  * among them, the copy of its text in issues.description, equal to its
  * first description row's text, reading and patching ten tasks a
- * transaction in creation order. Every deployment has run
- * internal/descriptionsBackfill's clear, so only a rollback to the second
+ * transaction in creation order. After
+ * internal/descriptionsBackfill's clear, only a rollback to the second
  * release of the description move writes that copy, on each task it
  * creates or whose description it edits, until the next clear. A test that
  * measures that state or needs the copy plants it here, and a copy on every

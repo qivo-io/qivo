@@ -24,8 +24,8 @@ import { ALERT_WINDOW_MS } from '../lib/limits'
  * one and one record range a new event, and writes a record a grant and the
  * account row. Every call reads only the caller's login's rows, so a beat and a
  * claim read the same beside other people's sessions and records as without
- * them (tests/notifications.test.ts, "inside Convex's limits"). The closing
- * review's report in qivo-internal
+ * them (tests/notifications.test.ts, "inside Convex's limits"). A report
+ * in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Inbox feed
  * and notification calls") holds the figures. */
 export const NOTIFY = {

@@ -3,7 +3,7 @@
  * all of Better Auth through auth.ts's options, so this module imports
  * neither (see ../authTriggers.ts and ../lib/authUser.ts). Better Auth
  * upgrades re-check it against the release's session rules
- * (docs/better-auth-upgrade.md). */
+ * (qivo-internal docs/better-auth-upgrade.md). */
 
 import { v } from 'convex/values'
 import { query } from './_generated/server'

@@ -37,10 +37,10 @@
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/usedIdsBackfill:remaining '{"source": "issues"}'
  *
- * Run it only after the deployment serves this release, and only with the
- * owner's approval. On production, take and verify a backup first
- * (docs/deployment.md). Read the dry run, which writes nothing, then record
- * the ids and check again:
+ * Run it only after the deployment serves this release, and only with
+ * approval. On production, take and verify a backup first
+ * (qivo-internal docs/deployment.md). Read the dry run, which writes
+ * nothing, then record the ids and check again:
  *   "$H" staging npx convex run internal/usedIdsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/usedIdsBackfill:run '{"dry_run": false}'
  * A call stops between two steps once RUN.ms has passed, well inside
@@ -69,11 +69,12 @@
  * steps refuse before it writes anything; running reset again lets it go.
  *
  * Earlier releases guarded each table keyed by a task id against a new task
- * that takes a freed id. Once a dry run on every deployment reports zero in
- * every source, and no such table holds a row whose task is gone (for
- * descriptions, internal/descriptionsBackfill reports no orphans), these
- * guards only cover ids nothing can take any more, and a later change may
- * remove them: putDescription resetting the organization of a row it finds
+ * that takes a freed id. Once a dry run on a deployment reports zero in
+ * every source, and no such table there holds a row whose task is gone
+ * (for descriptions, internal/descriptionsBackfill reports no orphans),
+ * these guards only cover ids nothing can take any more there, and a
+ * change may remove them once that holds on each deployment it reaches:
+ * putDescription resetting the organization of a row it finds
  * (model/descriptions.ts); the live-task and organization checks of
  * dropDescriptions, holdsDescription and clearDescriptions (ownDescription)
  * and idTaken before purgeHistory (model/deletedItems.ts); the bound of

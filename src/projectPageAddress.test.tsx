@@ -91,8 +91,9 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
 }
 /** Waits for `find` to answer, through lazy modules that can take seconds
-    to load on a busy worker. The budget is 20 s, because CI's runner under
-    the full suite once took over 10 s to settle a boot's address. */
+    to load on a busy worker. The budget is 20 s, because a CI runner under
+    the full suite can take several times as long to settle a boot's
+    address. */
 function waitFor<T>(find: () => T | null | undefined, what: string) {
   return vi.waitFor(
     () => {

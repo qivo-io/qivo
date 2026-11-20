@@ -46,12 +46,12 @@
  * that meets the fence reruns and stops at its run check. The job does
  * nothing on the demo deployment, and a branch preview registers no cron.
  *
- * The cost reading on staging, a hosted read that needs the owner's
- * approval, with the private helper:
+ * The cost reading on staging, a hosted read that needs approval, with the
+ * private helper:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     staging npx convex run storageSamples:costReport '{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}'
- * docs/deployment.md says how its sums become calls, reads, writes and
- * retained rows per organization and day. */
+ * qivo-internal docs/deployment.md says how its sums become calls, reads,
+ * writes and retained rows per organization and day. */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, v } from 'convex/values'

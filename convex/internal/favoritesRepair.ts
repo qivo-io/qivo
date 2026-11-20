@@ -1,12 +1,12 @@
 /* Check and repair, dry run first, of what a rollback past the favorites
- * release leaves in project_favorites (schema.ts; docs/deployment.md, the
- * favorites paragraph). A release before that one knows no favorites, so
- * while it serves, a rename, an archive or a restore leaves a row's copies
- * stale, and a profile removal, a Deleted items purge or an organization's
- * deletion leaves the rows of what it deleted. The readers skip such rows
- * (model/projectFavorites.ts favoriteShows), so a person sees nothing
- * wrong, but a seat later created with a removed seat's id, or a project
- * that takes a purged id back, would list them.
+ * release leaves in project_favorites (schema.ts; qivo-internal
+ * docs/deployment.md, the favorites paragraph). A release before that one
+ * knows no favorites, so while it serves, a rename, an archive or a restore
+ * leaves a row's copies stale, and a profile removal, a Deleted items purge
+ * or an organization's deletion leaves the rows of what it deleted. The
+ * readers skip such rows (model/projectFavorites.ts favoriteShows), so a
+ * person sees nothing wrong, but a seat later created with a removed seat's
+ * id, or a project that takes a purged id back, would list them.
  *
  * Each row falls into the first of these classes that fits, in this order:
  *   org_gone          no organizations row for its org_id. Deleted.
@@ -58,14 +58,14 @@
  * timed.
  *
  * Run it after rolling forward past a rollback before the favorites
- * release (v0.1.106), each hosted run with the owner's approval, the dry
- * run first, and on production a repair only after a verified backup:
+ * release (v0.1.106), each hosted run with approval, the dry run first, and
+ * on production a repair only after a verified backup:
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/favoritesRepair:run '{"dry_run": true}'
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/favoritesRepair:run '{"dry_run": false}'
  * Pass `"cursor"` from an answer to go on where it stopped. On the demo,
  * whose stored key cannot run internal functions, the private
  * with-temp-deploy-key helper runs it with a short-lived key, a key
- * permission change that needs the owner's approval:
+ * permission change that needs approval:
  *   ~/projects/qivo-internal/scripts/with-temp-deploy-key demo --allow deployment:functions:runInternalActions,deployment:functions:runInternalMutations -- npx convex run internal/favoritesRepair:run '{"dry_run": true}'
  */
 import { makeFunctionReference } from 'convex/server'

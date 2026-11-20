@@ -70,7 +70,7 @@ function fastest(read: () => void): number {
 
 describe('description image references in hostile text', () => {
   // Text that made the parser scan ahead to the end at every character,
-  // so reading 20,000 of it took about half a second and failed a save.
+  // so reading 20,000 of it took long enough to fail a save.
   const IMAGE = `![shot](att:${ID})`
   const PATTERNS = ['[', '![', '@[', '*[', '**[', '[](', `*${'['.repeat(99)}`]
   const hostile = (pattern: string, length: number) =>
@@ -92,8 +92,9 @@ describe('description image references in hostile text', () => {
     }
     // Linear work reads the whole text in about the time of its eight
     // eighths, and quadratic work takes about eight times as long. The
-    // quadratic parser took over 6 s for these texts and the linear one tens
-    // of milliseconds, so both bounds hold on a loaded machine.
+    // second bound sits far above the linear parser's time for these texts
+    // and far below the quadratic one's, so both bounds hold on a loaded
+    // machine.
     expect(whole).toBeLessThan(3 * eighths + 25)
     expect(whole).toBeLessThan(1000)
   })

@@ -323,13 +323,13 @@ export const REASSIGN_ROOM = 0.95
  * LIMITS.reassign's sentence, which suggests keeping the people as Viewers,
  * only when the removal would accept that choice (`canKeep`).
  *
- * Where the cap sits: each task's reassignment runs every rule of a task
- * update inside the removal's one transaction, so a larger handover would
- * pass Convex's limits for one transaction. It is about 60% of the largest
- * count that passed the measurement behind tests/bulkReassign.test.ts (196
- * tasks with four followers each, in an organization of 100 people), taken
- * when the removal still told each follower itself. Background steps tell
- * them now (model/messages.ts NotifyPreload.deferFollowers). */
+ * Each task's reassignment runs every rule of a task update inside the
+ * removal's one transaction, so LIMITS.reassign.max bounds the handover to
+ * keep it inside Convex's limits for one transaction.
+ * tests/bulkReassign.test.ts hands over that many tasks with four followers
+ * each, in an organization of 100 people, under those limits, and refuses
+ * one more. Background steps tell the followers (model/messages.ts
+ * NotifyPreload.deferFollowers). */
 export const reassignTooLarge = (canKeep: boolean): string =>
   canKeep
     ? LIMITS.reassign.refusal

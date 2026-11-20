@@ -81,11 +81,10 @@ let lastBoardWidth: number | null = null
 
 /* The cards in one block of a cell (DeferredList). A block is what the
    browser lays out when it comes into view, unless the mount scheduler
-   laid it out while the page was idle: scrolling a 5,000-task Board for
-   the first time, a frame took up to 380ms with blocks of 64 at 4x CPU
-   and 100 to 130ms with blocks of 16, about what the Board took before it
-   mounted in slices. Blocks of 8 made every frame of a later scroll
-   longer, as the browser checks each block on every frame. */
+   laid it out while the page was idle. Blocks of 64 make the frames of a
+   large Board's first scroll longer than blocks of 16 do, and blocks of 8
+   make every frame of a later scroll longer, as the browser checks each
+   block on every frame. */
 const BOARD_BLOCK_SIZE = 16
 
 /* The first screen a Board mounts at once reaches this far below the

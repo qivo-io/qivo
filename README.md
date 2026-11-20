@@ -178,8 +178,9 @@ the same commit, and refuses any release older than the newest version tag.
 Draft releases and prereleases do not deploy production. Vercel production
 projects reject Git and deploy-hook deployment requests.
 
-See [deployment and release operations](docs/deployment.md) for setup,
-validation, failure handling and rollback. Never expose server secrets as `VITE_*`.
+Setup, validation, failure handling and rollback are described in
+`docs/deployment.md` of the private qivo-internal repository. Never expose
+server secrets as `VITE_*`.
 
 Desktop packaging is described in [desktop/README.md](desktop/README.md).
 Desktop installers are not published yet. The manual **Desktop test build**

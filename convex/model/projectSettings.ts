@@ -223,7 +223,7 @@ async function treeOf(
  *
  * The gate reads the same for an organization admin and a standard user
  * with the same rows, and projectSettings.get by number reads what it reads
- * by id, call for call. The closing review's report in qivo-internal
+ * by id, call for call. A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md, "Projects
  * part removal") holds the timed figures.
  */
@@ -417,8 +417,7 @@ const wholeNumber = (n: number | undefined): n is number =>
  *
  * The `{ org_id, num }` form reads what the `{ id }` form reads, call for
  * call, and a free number reads the sign-in's reads and one by_org_num
- * range and answers unavailable. The closing review's report in
- * qivo-internal
+ * range and answers unavailable. A report in qivo-internal
  * (evaluations/limits/closing-review-2026-11-09/closing-report.md,
  * "Projects part removal") holds the timed figures.
  */

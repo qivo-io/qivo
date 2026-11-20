@@ -1727,14 +1727,13 @@ describe('reads at the design size', () => {
 })
 
 /* Case 5 of the reads at the design size, the 200 sub-projects one person
- * can read with 30 groups each. It plants its 6,000 groups in under a
- * second (plantRaw) but takes 68 to 102 s on a large Boat sandbox, nearly
- * all of it the 12 pages of the search that matches nothing, each about
- * 2,000 index ranges, which convex-test serves by scanning every stored
- * document. So it runs on demand with QIVO_INBOX_PERSON_READS=1, outside
- * the normal suite (AGENTS.md), with a timeout of its own above vitest's
- * 60 s, an exception to the test rule. Its figures are in
- * model/inboxPage.ts INBOX_PAGE. */
+ * can read with 30 groups each. It plants its 6,000 groups quickly
+ * (plantRaw) but runs longer than vitest's 60 s, nearly all of it the 12
+ * pages of the search that matches nothing, each about 2,000 index ranges,
+ * which convex-test serves by scanning every stored document. So it runs
+ * on demand with QIVO_INBOX_PERSON_READS=1, outside the normal suite
+ * (AGENTS.md), with a timeout of its own above vitest's 60 s, an exception
+ * to the test rule. Its figures are in model/inboxPage.ts INBOX_PAGE. */
 describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
   'reads at the design size, on demand',
   () => {

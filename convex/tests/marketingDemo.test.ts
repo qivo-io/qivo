@@ -1988,18 +1988,12 @@ describe('marketing demo Deleted items', () => {
 })
 
 describe('marketing demo seed steps', () => {
-  // The whole seed in one transaction wrote about 1,400 documents and read
-  // about 2,500 index ranges, and the reserved-id check alone took up to 2 s
-  // on a loaded machine. Every call of a seed, a check or a wipe now does a
-  // small, bounded part of that.
+  // Every call of a seed, a check or a wipe does a small, bounded part of
+  // the seed, under the caps this test sets.
   // The Overview's counts of every task, made and stamped in one call at
   // the end (model/overviewCounts.ts countWhole), write a group row for each
-  // of the 90 tasks and their count rows, and the call moves its receipt on:
-  // 196 documents, measured. That call alone may write COUNTS_WRITES.
-  // Since the admin access split a notice's check of whether Nora, the
-  // organization admin, sees its task reads her own grants and team
-  // shares, as anyone's, which took the costliest step from under 300 index
-  // ranges to between 311 and 330, measured.
+  // of the 90 tasks and their count rows, and the call moves its receipt on,
+  // so that call alone may write COUNTS_WRITES.
   it('seeds, checks and wipes in calls of at most 340 index ranges, 350 documents read and 150 written', async () => {
     // convex-test reads these at the start of each call, so the counts
     // call can get its own cap

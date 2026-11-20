@@ -52,7 +52,7 @@ function post(
   return fetch(`${BASE}/mcp`, { method: 'POST', headers: h, body })
 }
 
-/* The legacy leg answers in SSE framing (headline finding 1) — one
+/* The legacy leg answers in SSE framing — one
  * `event: message\ndata: <one-line JSON>\n\n` frame. verify-mcp's unwrap,
  * ported: assert the framing bytes, hand back the data line. */
 const SSE_PREFIX = 'event: message\ndata: '

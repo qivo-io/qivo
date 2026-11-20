@@ -333,14 +333,14 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * hard budget counts this read too; past that it asks team by team.
  * `orgTeamsMost` teams are about 12.4 MB at the largest team row the name
  * cap allows (about 3.1 KB) and about 16.4 MB at lib/limits.ts
- * TEAM_ROW_MAX_BYTES. 512 KiB holds about 1,700 teams of the largest row a
- * deployment held on 2026-10-29 (273 bytes, about 307 JSON characters).
- * JSON counts characters where Convex counts UTF-8 bytes, so at the name
- * caps the read can take up to about 2.3 times `bytes` (U+3307, whose name
- * key is six katakana, stores 1,905 bytes for 819 JSON characters), about
- * 1.2 MiB, which the margins that count it hold: lib/mainSearch.ts
- * SEARCH_RESERVE's extra 2 MiB and the shared reads in lib/taskWindow.ts
- * TASK_WINDOW. Past any other bound the question refuses.
+ * TEAM_ROW_MAX_BYTES. The 512 KiB of `bytes` allows for about 1,700 teams
+ * of 273 bytes each (about 307 JSON characters). JSON counts characters
+ * where Convex counts UTF-8 bytes, so at the name caps the read can take up
+ * to about 2.3 times `bytes` (U+3307, whose name key is six katakana, stores
+ * 1,905 bytes for 819 JSON characters), about 1.2 MiB, which the margins
+ * that count it hold: lib/mainSearch.ts SEARCH_RESERVE's extra 2 MiB and the
+ * shared reads in lib/taskWindow.ts TASK_WINDOW. Past any other bound the
+ * question refuses.
  *
  * What one instance reads, at these values, in index ranges and documents
  * as Convex counts them. Rows of the person's own (grants, memberships,
@@ -384,10 +384,10 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * past the organization-teams read's bounds (more than 16 for each of those
  * teams, or 512 KiB as JSON), the 256 reads of their teams make 1,098
  * ranges, which a batch reaches only when that read comes after the
- * budget's last look. The person of the review's
- * finding (20 teams of 1,600 shares) reads 24 ranges and 362 documents in
- * `shared`. lib/mainSearch.ts searchReads lowers these for main Search,
- * whose one check and its shared reads stay inside SEARCH_RESERVE. */
+ * budget's last look. A person in 20 teams of 1,600 shares reads 24 ranges
+ * and 362 documents in `shared`. lib/mainSearch.ts searchReads lowers these
+ * for main Search, whose one check and its shared reads stay
+ * inside SEARCH_RESERVE. */
 export const OWN_READS = {
   steps: [32, 128, 512],
   lookups: 64,

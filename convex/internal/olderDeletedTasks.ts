@@ -27,7 +27,7 @@
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/olderDeletedTasks:count '{}'
  *   ~/projects/qivo-internal/scripts/with-deployment staging npx convex run internal/olderDeletedTasks:count '{"cursor": "<next>"}'
  * On the demo, whose stored key cannot run internal functions, only with
- * the owner's approval of the one short-lived key command:
+ * approval of the one short-lived key command:
  *   ~/projects/qivo-internal/scripts/with-temp-deploy-key demo --allow deployment:functions:runInternalQueries -- npx convex run internal/olderDeletedTasks:count '{}'
  */
 import { v } from 'convex/values'

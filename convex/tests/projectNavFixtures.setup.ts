@@ -1,7 +1,7 @@
 /* The fixtures and helpers of the project navigation suites
  * (projectNav.test.ts and projectNavSearch.test.ts): seats as the readers
  * take them, calls of the readers under test, the planting of projects,
- * grants, shares, teams and stars, the readiness every deployment holds,
+ * grants, shares, teams and stars, the readiness the readers require,
  * and the measuring of what one call reads. The rule the readers are held
  * to is worked out apart from them, in projectNav.setup.ts. Two dots in
  * the basename keep the Convex CLI from deploying this module, as
@@ -177,9 +177,9 @@ export const person = (t: T, orgId: string, name: string, extra: Partial<Doc<'pr
 export const names = (prefix: string, n: number) =>
   Array.from({ length: n }, (_, i) => `${prefix}${String(i).padStart(3, '0')}`)
 
-/** The name keys, archive states and reach rows of every organization, as
- * on every deployment. Call after the last project, grant or share a case
- * plants raw. */
+/** The name keys, archive states and reach rows of every organization,
+ * which the readers require. Call after the last project, grant or share a
+ * case plants raw. */
 export async function ready(t: T, f: Pick<OrgFixture, 'org' | 'otherOrg'>): Promise<void> {
   await keyOrg(t, f.org.id)
   await keyOrg(t, f.otherOrg.id)
