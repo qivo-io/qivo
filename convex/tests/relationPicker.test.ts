@@ -22,7 +22,7 @@ import {
   type RelationKind,
 } from '../lib/relationPicker'
 import { issueKey } from '../lib/taskRefs'
-import { ONE_LEVEL_SINCE, PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
+import { PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
 import { NO_WRITE_ACCESS } from '../model/issues'
 import { SHAPES } from './accessShapes.setup'
 import { plantTasks } from './board.setup'
@@ -614,7 +614,7 @@ describe('the Subtasks picker', () => {
     const plain = await task(t, f, f.sub, { title: 'Plain' })
     const shownParent = await task(t, f, f.sub, { title: 'Shown parent' })
     const inPcb = await task(t, f, f.sub2, { title: 'In PCB' })
-    // created under the rule of one level, so it reads no subtask
+    // a subtask, so it reads no subtask
     const recent = await task(t, f, f.sub, {
       title: 'Recent',
       parent_id: shownParent.id,
@@ -672,13 +672,10 @@ describe('the Subtasks picker', () => {
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     // the candidates come before their parents in the scan, so each
-    // parent is read by id, in the candidates' own sub-project; created
-    // under the rule of one level, they read no subtask, so the parent
-    // reads alone decide where a batch stops
-    const candidates = await plantTasks(t, f.sub, 6, (i) => ({
-      title: `Board ${i}`,
-      created_at: ONE_LEVEL_SINCE,
-    }))
+    // parent is read by id, in the candidates' own sub-project; as
+    // subtasks, they read no subtask, so the parent reads alone decide
+    // where a batch stops
+    const candidates = await plantTasks(t, f.sub, 6, (i) => ({ title: `Board ${i}` }))
     const parents = await plantTasks(t, f.sub, candidates.length, (i) => ({ title: `Parent ${i}` }))
     await t.run(async (ctx) => {
       for (const [i, c] of candidates.entries())

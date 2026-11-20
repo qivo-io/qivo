@@ -224,9 +224,7 @@ describe('the single-task read names only tasks the caller can read', () => {
     const a = await task(fx, { parent_id: parent.id, title: 'A', remaining_hours: 3 })
     await task(fx, { parent_id: parent.id, title: 'B', status: 'done', remaining_hours: 5 })
     await task(fx, { parent_id: parent.id, archived_at: NOW, remaining_hours: 4 })
-    // a group stored before the rule of one level
-    const e = await task(fx, { parent_id: parent.id, title: 'E', remaining_hours: 8 })
-    await task(fx, { parent_id: e.id, remaining_hours: 2.5 })
+    const e = await task(fx, { parent_id: parent.id, title: 'E', remaining_hours: 2.5 })
     const blocked = await task(fx, { title: 'Blocked' })
     const blocker = await task(fx, { title: 'Blocker' })
     const related = await task(fx, { title: 'Related' })
@@ -249,8 +247,7 @@ describe('the single-task read names only tasks the caller can read', () => {
       status: t.status,
     })
     const expected = {
-      // A 3 + E's leaf 2.5; not the Done one nor the archived one; E's own
-      // hours are dormant
+      // A 3 + E 2.5; not the Done one nor the archived one
       group_remaining_hours: 5.5,
       labels: [
         { id: bug, name: 'Bug', color: '#FF0000' },
@@ -406,18 +403,9 @@ describe('a single-task read walks only the subtasks that can count', () => {
       archived_at: NOW,
       ...scheduled('2025-11-03', '2025-11-03', 4),
     })
-    await task(fx, {
-      parent_id: shelved.id,
-      archived_at: NOW,
-      ...scheduled('2025-10-06', '2025-10-06', 1),
-    })
-    // a group stored before the rule of one level
-    const nested = await task(fx, { parent_id: root.id })
-    await task(fx, { parent_id: nested.id, ...scheduled('2026-05-04', '2026-06-01', 6) })
-    await task(fx, {
-      parent_id: nested.id,
-      archived_at: NOW,
-      ...scheduled('2027-01-04', '2027-01-04', 5),
+    const later = await task(fx, {
+      parent_id: root.id,
+      ...scheduled('2026-05-04', '2026-06-01', 6),
     })
     await task(fx, {
       parent_id: root.id,
@@ -434,7 +422,7 @@ describe('a single-task read walks only the subtasks that can count', () => {
       })
     }
     for (const me of [fx.agent, fx.admin]) {
-      for (const issue of [root, leaf, shelved, nested, gone]) {
+      for (const issue of [root, leaf, shelved, later, gone]) {
         for (const surface of ['rest', 'mcp'] as const) {
           const { out, whole } = await readBoth(fx, issue, me, surface)
           expect(out, `${me.name} ${issue.title} ${surface}`).toEqual(whole)
@@ -456,16 +444,17 @@ describe('a single-task read walks only the subtasks that can count', () => {
     })
   })
 
-  it('does not read an archived branch under an active task, however large', async () => {
+  it('does not read the archived subtasks of an active task, however many', async () => {
     const fx = await setup()
     const root = await task(fx, { title: 'Root' })
     const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-02', 3) })
-    const shelved = await task(fx, { parent_id: root.id, archived_at: NOW })
+    await plantMany(fx, 1500, 200000, { parent_id: root.id, archived_at: NOW })
+    const shelved = await task(fx, { archived_at: NOW, title: 'Shelved' })
     await plantMany(fx, 1500, 100000, { parent_id: shelved.id, archived_at: NOW })
     const { out, whole, metrics } = await readBoth(fx, root, fx.agent, 'rest')
     expect(out).toEqual(whole)
     expect(out).toMatchObject({ start_week: leaf.start_week, subtasks: [taskRefOf(leaf)] })
-    // the root's two subtasks and the leaf's none, not the 1,500 below
+    // the root's active subtask, not the 1,500 archived ones
     expect(metrics.documentsRead.used).toBeLessThan(100)
     // an archived root reads them all, as it counts them
     const archived = await readBoth(fx, shelved, fx.agent, 'rest')

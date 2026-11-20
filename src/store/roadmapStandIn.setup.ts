@@ -294,30 +294,20 @@ export function roadmapStandIn(
   const rows = selected.filter((t) => (passes(t) || kept(t)) && visible(t)).sort(byNumber)
   if (rows.length > ceiling) return { state: 'over_ceiling', ceiling, ...projects }
 
-  // the shown ancestors of rows that are not rows themselves
+  // the shown parents of rows that are not rows themselves
   const rowIds = new Set(rows.map((t) => t.id))
   const parents = new Map<string, Task>()
   for (const t of rows) {
-    const visited = new Set([t.id])
-    for (let p = t.parent_id && tasks.byId.get(t.parent_id); p && !visited.has(p.id); ) {
-      visited.add(p.id)
-      if (!rowIds.has(p.id)) parents.set(p.id, p)
-      p = p.parent_id ? tasks.byId.get(p.parent_id) : undefined
-    }
+    const p = t.parent_id ? tasks.byId.get(t.parent_id) : undefined
+    if (p && !rowIds.has(p.id)) parents.set(p.id, p)
   }
-  // every shown descendant of a group row, at any depth through nested
-  // groups, that is neither a row nor a parent
+  // every shown subtask of a group row that is not a row
   const subtasks: Task[] = []
-  const visited = new Set<string>()
-  const stack = rows.filter((t) => tasks.isGroup(t)).flatMap((t) => tasks.children.get(t.id) ?? [])
-  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
-    if (visited.has(id)) continue
-    visited.add(id)
-    const kid = tasks.byId.get(id)
-    if (!kid) continue
-    if (!rowIds.has(id) && !parents.has(id)) subtasks.push(kid)
-    if (tasks.isGroup(kid)) stack.push(...(tasks.children.get(id) ?? []))
-  }
+  for (const group of rows.filter((t) => tasks.isGroup(t)))
+    for (const id of tasks.children.get(group.id) ?? []) {
+      const kid = tasks.byId.get(id)
+      if (kid && !rowIds.has(id)) subtasks.push(kid)
+    }
   const shownIds = new Set([...rowIds, ...parents.keys(), ...subtasks.map((t) => t.id)])
   const shown = (id: string) => shownIds.has(id)
 

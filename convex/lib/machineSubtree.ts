@@ -38,7 +38,7 @@ import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { TASK_ROW_MAX_BYTES } from './limits'
 import { countsAsSubtask } from './liveTasks'
-import { ONE_LEVEL_SINCE, withoutSubtasks } from './viewReads'
+import { withoutSubtasks } from './viewReads'
 
 /* How many reads a tally counts itself before it looks at the request's
  * totals again, so what it cannot see, such as a read inside a helper,
@@ -144,8 +144,8 @@ export type SubtreeReads = ReturnType<typeof subtreeReads>
  * A task is a group when it has an active subtask (lib/liveTasks.ts
  * countsAsSubtask). Its check reads its active subtasks whole (issues
  * by_parent_archived), at most LIMITS.subtasks.max, so the group's facts
- * need no other read of them, and reads nothing for a subtask created under
- * the rule of one level (lib/viewReads.ts withoutSubtasks).
+ * need no other read of them, and reads nothing for a subtask, which has
+ * no subtasks of its own (lib/viewReads.ts withoutSubtasks).
  */
 export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally) {
   const kids = new Map<string, Doc<'issues'>[]>()
@@ -186,43 +186,14 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
     /** Whether `task`, whose subtasks are read, is a group. */
     isGroup,
     /**
-     * Reads, within `ceiling`, the subtree group `root`'s facts walk
-     * (lib/core.ts groupFacts over groupCounter):
-     * the active subtasks of each task under it that counts, a level at a
-     * time, the seen set stopping a corrupt cycle. A subtask created under
-     * the rule of one level, or one of a group created then, has no
-     * subtasks and reads nothing (lib/viewReads.ts ONE_LEVEL_SINCE), so
-     * only groups stored before it read deeper than one level. False when
-     * `ceiling` stopped the walk, so the row's facts are those of a subtree
-     * too large to read.
+     * Reads, within `ceiling`, what group `root`'s facts read (lib/core.ts
+     * groupFacts over groupCounter): its active subtasks, each a leaf with
+     * no subtasks of its own. False when `ceiling` stopped the read, so the
+     * row's facts are those of a subtree too large to read.
      */
     walk: async (root: Doc<'issues'>, ceiling: ReadTotals): Promise<boolean> => {
       if (!(await readKids(root, ceiling))) return false
-      // groupCounter's rule for an active group, which reads nothing
-      const counts = (task: Doc<'issues'>) =>
-        task.org_id === root.org_id &&
-        task.project_id === root.project_id &&
-        task.archived_at === undefined
-      const seen = new Set([root.id])
-      let frontier = [root]
-      while (frontier.length > 0) {
-        const next: Doc<'issues'>[] = []
-        for (const task of frontier) {
-          if (task !== root) {
-            if (root.created_at >= ONE_LEVEL_SINCE && !kids.has(task.id)) kids.set(task.id, [])
-            if (!(await readKids(task, ceiling))) return false
-            // a leaf, which the facts count and enter no further
-            if (!isGroup(task)) continue
-          }
-          for (const kid of kids.get(task.id) ?? []) {
-            if (!countsAsSubtask(task, kid)) continue
-            if (seen.has(kid.id) || !counts(kid)) continue
-            seen.add(kid.id)
-            next.push(kid)
-          }
-        }
-        frontier = next
-      }
+      for (const kid of kids.get(root.id) ?? []) if (!kids.has(kid.id)) kids.set(kid.id, [])
       return true
     },
     /** Reads the parent of `task` by id unless the list holds it, counted

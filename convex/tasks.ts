@@ -19,11 +19,10 @@
  *   view and My tasks the person's own tasks instead
  *   (by_assignee_archived_status, by_reviewer_archived_status). Then the
  *   active subtasks (by_parent_archived) of each task it checks for being a
- *   group: each task the other filters keep, matched or not, each one a
- *   search reads a status name for, and each shown subtask of a group it
- *   shows, created before the rule of one level (lib/viewReads.ts
- *   ONE_LEVEL_SINCE); the parents it shows by id and their projects; and for
- *   a search the assignees by id, the texts (issue_descriptions by_issue or
+ *   group: each task the other filters keep, matched or not, but a subtask,
+ *   which has none, and each one a search reads a status name for; the
+ *   parents it shows by id and their projects; and for a search the
+ *   assignees by id, the texts (issue_descriptions by_issue or
  *   by_project_archived), the organization's labels (labels by_org), and
  *   the label rows of tasks a label could still make match (issue_labels
  *   by_issue_label or by_issue, or past lib/board.ts BOARD.labelTasks such

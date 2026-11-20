@@ -184,16 +184,12 @@ export function boardStandIn(
   if (rows.filter((t) => !isGroup(t)).length > BOARD_TASKS)
     return { state: 'over_ceiling', ceiling: BOARD_TASKS, ...projects }
 
-  // the shown ancestors of rows that are not rows themselves
+  // the shown parents of rows that are not rows themselves
   const rowIds = new Set(rows.map((t) => t.id))
   const parents = new Map<string, Task>()
   for (const t of rows) {
-    const visited = new Set([t.id])
-    for (let p = t.parent_id && byId.get(t.parent_id); p && !visited.has(p.id); ) {
-      visited.add(p.id)
-      if (!rowIds.has(p.id)) parents.set(p.id, p)
-      p = p.parent_id ? byId.get(p.parent_id) : undefined
-    }
+    const p = t.parent_id ? byId.get(t.parent_id) : undefined
+    if (p && !rowIds.has(p.id)) parents.set(p.id, p)
   }
 
   // the lanes the Board keeps (lib/board.ts heldLanes)

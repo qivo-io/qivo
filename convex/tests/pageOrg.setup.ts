@@ -475,8 +475,8 @@ function assertDesignSize(o: PageOrgSizes, family: number): void {
  * An organization at `o`'s sizes: the live top-level projects and their
  * sub-projects, the archived ones, `member` in teams that share top-level
  * projects, the people, and the tasks spread over the live sub-projects,
- * every fiftieth of them the parent of a group of five subtasks stored
- * before the rule of one level, which adds a tenth to the count, planned
+ * every fiftieth of them the parent of a group of five subtasks, which
+ * adds a tenth to the count, planned
  * and owned by `owners` people in projects that track delay, with archived
  * tasks beside them. No project_reach rows: a
  * list takes the caller's access from their grants and team shares

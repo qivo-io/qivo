@@ -623,7 +623,7 @@ describe('marketing demo rebuild ownership', () => {
         ).toBeGreaterThan(projectTasks.length / 2)
       }
       // The planned end the app shows. A group's is the latest end of its
-      // scheduled, unarchived leaves at any depth, never a stored date.
+      // scheduled, unarchived subtasks, never a stored date.
       const endOf = (task: Doc<'issues'>): string | undefined => {
         const kids = tasks.filter((c) => c.parent_id === task.id && c.archived_at === undefined)
         if (!kids.length) return task.end_week ?? task.start_week

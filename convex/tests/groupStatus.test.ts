@@ -1,18 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
-import type { McpIssueOut } from '../lib/core'
 import {
   appLoadRows,
   as,
   expectRefusal,
   newT,
   plantIssue,
-  restTasks,
   TODAY,
   uuid,
   wholeOf,
   withReadingAdmin,
-  workingSetOf,
 } from './helpers.setup'
 
 describe('parent task status', () => {
@@ -78,64 +75,6 @@ describe('parent task status', () => {
       }
     },
   )
-
-  it('status filters and writes use leaves across nested groups on REST and MCP', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const base = { org_id: f.org.id, project_id: f.sub.id, status: 'review' as const }
-    const root = await plantIssue(t, base)
-    const middle = await plantIssue(t, { ...base, parent_id: root.id })
-    const leaf = await plantIssue(t, { ...base, parent_id: middle.id })
-    const rest = await restTasks(t, {
-      callerId: f.admin.id,
-      access: 'read',
-      status: 'review',
-    })
-    const mcp = JSON.parse(
-      await t.query(internal.machine.mcp.listIssues, {
-        today: TODAY,
-        callerId: f.admin.id,
-        access: 'read',
-        status: 'review',
-      }),
-    ) as { next_cursor: string | null; tasks: McpIssueOut[] }
-    expect(rest.map((i) => i.id)).toEqual([leaf.id])
-    expect(mcp.tasks.map((i) => i.id)).toEqual([leaf.id])
-    expect(mcp.next_cursor).toBeNull()
-    expect(
-      JSON.parse(
-        await t.query(internal.machine.mcp.getIssue, {
-          today: TODAY,
-          callerId: f.admin.id,
-          access: 'read',
-          ref: root.id,
-        }),
-      ),
-    ).toMatchObject({ is_group: true, status: 'review' })
-    await expectRefusal(
-      t.mutation(internal.machine.rest.updateIssue, {
-        callerId: f.admin.id,
-        access: 'write',
-        keyName: 'test',
-        ref: root.id,
-        body: JSON.stringify({ status: 'done', archived: true }),
-      }),
-      'rule',
-      /status cannot be set/,
-    )
-    await expectRefusal(
-      t.mutation(internal.machine.mcp.updateIssue, {
-        callerId: f.admin.id,
-        access: 'write',
-        ref: middle.id,
-        status: 'todo',
-      }),
-      'rule',
-      /status cannot be set/,
-    )
-    const snapshot = await workingSetOf(as(t, f.admin))
-    expect(snapshot?.issues.map((i) => i.id).sort()).toEqual([root.id, middle.id, leaf.id].sort())
-  })
 
   it('groups contribute no independent planning load regardless of stored status', async () => {
     const t = newT()

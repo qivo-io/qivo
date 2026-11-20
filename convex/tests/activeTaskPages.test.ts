@@ -18,7 +18,6 @@ import {
 import type { Refusal } from '../lib/functions'
 import { listCursorText } from '../lib/listCursor'
 import { namedCursor } from '../lib/namedPages'
-import { ONE_LEVEL_SINCE } from '../lib/viewReads'
 import {
   expectRefusal,
   NOW,
@@ -495,12 +494,11 @@ describe('visibility', () => {
   })
 })
 
-describe('groups created under the rule of one level', () => {
+describe('groups', () => {
   it("answers their rows' group facts without a check of their subtasks", async () => {
     const fx = await setup()
-    // created after ONE_LEVEL_SINCE, as every task a release from v0.1.98 on
-    // writes, so its subtasks hold no subtasks of their own
-    const later = (i: number) => new Date(Date.parse(ONE_LEVEL_SINCE) + i * 60_000).toISOString()
+    // a subtask holds no subtasks of its own
+    const later = (i: number) => new Date(Date.parse(NOW) + i * 60_000).toISOString()
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,

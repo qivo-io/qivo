@@ -107,8 +107,7 @@ import {
  * for what one step reads past the guard's last look.
  * tests/roadmapRead.test.ts ("real limits") logs what each case reads under
  * convex-test's transaction limits with rows as the app writes them, in
- * ordinary text and data from before the rule of one level, each case one
- * figure at its design size, or the figures one read takes together at
+ * ordinary text, each case one figure at its design size, or the figures one read takes together at
  * their sum, such as a project's open and Done tasks. The largest My view
  * the ceiling allows raises the person's own tasks, a figure without a
  * design size, to the ceiling that bounds them, and one more answers
@@ -236,16 +235,15 @@ export type RoadmapAnswer =
        * reader's working set and kept by isRoadmapTaskVisible, and it
        * counts toward the ceiling like any other row */
       rows: ViewRow[]
-      /** the shown ancestors of rows that are not rows themselves, as the
+      /** the shown parents of rows that are not rows themselves, as the
        * Board's parents */
       parents: ViewRow[]
-      /** every shown descendant of a group row, at any depth, that is
-       * neither a row nor a parent, such as Backlog subtasks, Done ones outside
-       * the window and filtered-out ones. With
-       * the rows and parents they hold every shown descendant of a group
-       * row, so a group's bar during a drag (src/lib/issueGroups.ts
-       * groupSpan) and its stale fade (the newest activity of its shown
-       * descendants) need nothing else; a view row carries no `newest`. */
+      /** every shown subtask of a group row that is not a row, such as
+       * Backlog subtasks, Done ones outside the window and filtered-out
+       * ones. With the rows they hold every shown subtask of a group row, so
+       * a group's bar during a drag (src/lib/issueGroups.ts groupSpan) and
+       * its stale fade (the newest activity of its shown subtasks) need
+       * nothing else; a view row carries no `newest`. */
       subtasks: ViewRow[]
       /** In My view only, the sub-projects, by id, that hold an active task
        * the person owns by the Reviewer rule, whatever its status, its
@@ -705,25 +703,14 @@ async function roadmapAnswer(
   const { rows, isGroup, subtasks: known } = got
   const parents = await shownParents(ctx, guard, rows, got.read, ROADMAP.context)
   const rowIds = new Set(rows.map((t) => t.id))
-  const parentIds = new Set(parents.map((t) => t.id))
-  // every shown descendant of a group row, through nested groups stored
-  // before the rule of one level, cycle-safe, that is neither a row nor a
-  // parent; groupFacts read each group row's subtree already
-  const shownKids = (id: string) =>
-    (known.kids.get(id) ?? []).filter((kid) => known.shown.get(kid.id) === true)
+  // every shown subtask of a group row that is not a row; groupFacts read
+  // each group row's subtasks already
   const groupRows = rows.filter((t) => isGroup(t) === true)
-  const visited = new Set<string>()
-  const stack = groupRows.flatMap((g) => shownKids(g.id))
-  const subtasks: Doc<'issues'>[] = []
-  for (let kid = stack.pop(); kid !== undefined; kid = stack.pop()) {
-    if (visited.has(kid.id)) continue
-    visited.add(kid.id)
-    if (!rowIds.has(kid.id) && !parentIds.has(kid.id)) subtasks.push(kid)
-    if (isGroupIn(known, kid.id) === true) stack.push(...shownKids(kid.id))
-  }
+  const subtasks = groupRows
+    .flatMap((g) => known.kids.get(g.id) ?? [])
+    .filter((kid) => known.shown.get(kid.id) === true && !rowIds.has(kid.id))
   if (parents.length + subtasks.length > ROADMAP.context) throw new OverBudget()
-  const nested = subtasks.filter((t) => isGroupIn(known, t.id) === true)
-  await got.factsOf([...groupRows, ...parents, ...nested])
+  await got.factsOf([...groupRows, ...parents])
   const shown = new Map([...rows, ...parents, ...subtasks].map((t) => [t.id, t]))
   const out = (t: Doc<'issues'>) =>
     viewRow(t, shown, isGroupIn(known, t.id) === true ? (got.facts.get(t.id) ?? null) : null)

@@ -435,24 +435,29 @@ async function shownByIds(
 
 /** Whether each of `tasks`, which the caller is shown, is a group: whether
  * it has an active subtask (lib/liveTasks.ts countsAsSubtask). Undefined
- * where `budget` ran out first. It reads each task's first active subtask:
- * one index range and no body for a task without any, as most subtasks
- * are, and one body for a group. Each step reads as many tasks as `budget`
- * holds bodies for, one while some of every count is left ('last'); past
- * that every task left stays undecided. It asks no access, as a subtask is
- * in its task's sub-project. */
+ * where `budget` ran out first. A subtask has no subtasks of its own, so
+ * it is no group and reads nothing. For
+ * each other task it reads the first active subtask: one index range and
+ * no body for a task without any, and one body for a group. Each step
+ * reads as many tasks as `budget` holds bodies for, one while some of every
+ * count is left ('last'); past that every task left stays undecided. It
+ * asks no access, as a subtask is in its task's sub-project. */
 async function groupsOf(
   ctx: QueryCtx,
   budget: Budget,
   tasks: readonly Doc<'issues'>[],
 ): Promise<(boolean | undefined)[]> {
-  const groups: (boolean | undefined)[] = tasks.map(() => undefined)
-  for (let at = 0; at < tasks.length; ) {
+  const groups: (boolean | undefined)[] = tasks.map((task) =>
+    task.parent_id !== undefined ? false : undefined,
+  )
+  const todo = tasks.flatMap((_, i) => (groups[i] === undefined ? [i] : []))
+  for (let at = 0; at < todo.length; ) {
     const n = await budget.fits(BODY, 'last')
     if (n === 0) break
-    const step = tasks.slice(at, at + n)
-    const firsts = await Promise.all(step.map((task) => activeKids(ctx, task.id).first()))
-    for (const [i, kid] of firsts.entries()) groups[at + i] = kid !== null && liveLink(step[i], kid)
+    const step = todo.slice(at, at + n)
+    const firsts = await Promise.all(step.map((i) => activeKids(ctx, tasks[i].id).first()))
+    for (const [j, kid] of firsts.entries())
+      groups[step[j]] = kid !== null && liveLink(tasks[step[j]], kid)
     at += step.length
   }
   return groups
@@ -540,11 +545,8 @@ async function shownParent(ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'iss
  * depend on whether the task is a group. Past TASK_WINDOW, or at a subtask
  * whose level a bound stopped, the subtasks answer `complete: false` with
  * the rows read before it, so the window can say its completion is
- * unknown, and has_subtasks says whether one read counts. A subtask whose
- * own has_subtasks is true is a group stored before the rule of one level,
- * and the answer holds none of its subtasks, so the app must treat a
- * remaining total or progress that needs its leaves as unknown
- * (src/store/planner.ts remainingOf and progressOf walk every descendant).
+ * unknown, and has_subtasks says whether one read counts. A subtask has
+ * no subtasks of its own, so each row of the list is a leaf.
  *
  * The labels, of an active or archived task, stop at TASK_WINDOW.rows. An
  * archived answer reads one description and those label rows besides the

@@ -2163,12 +2163,11 @@ app's **Copy link** gives. `parent_id` is the parent's uuid, or `null` for
 a task without a parent. A parent is in its subtask's own sub-project, so
 if you can read a subtask you can read its parent. Tasks no longer have
 `has_hidden_parent`, which was always `false`, so a client that reads it
-must stop. A group's `start_week` and `end_week` come from its subtasks,
-at any depth.
+must stop. A group's `start_week` and `end_week` come from its subtasks.
 
 `progress` is `null` for a task without subtasks. For a group it is the
-**Progress** of the app's task window, `done` of `total` tasks without
-subtasks under it, at any depth, for example `{"done": 2, "total": 3,
+**Progress** of the app's task window, `done` of `total` of its subtasks,
+for example `{"done": 2, "total": 3,
 "percent": 67, "partial": true}`. It counts the same subtasks as the
 group's dates, scheduled or not, and `done` counts those that are Done.
 `percent` is rounded, and `0` when `total` is `0`. `partial` is `true` when
@@ -2307,17 +2306,15 @@ are the
 task's links whose other task you can read, `kind` as seen from this task.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
 is the remaining time the app shows, which is the sum over its unfinished
-subtasks at any depth, or `null` when none has hours. Like the group's
+subtasks, or `null` when none has hours. Like the group's
 dates, it counts only active subtasks of an active group.
 
-An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks. So can an active group stored before the rule
-of one level of subtasks, whose subtasks have subtasks of their own.
-`get_task` then still lists the first page of its direct `subtasks`, but
-`start_week` and `end_week` are `null`, `progress` is `0` of `0` with
-`partial: true` and `group_remaining_hours` is `null`. The dates, `progress`
-and `group_remaining_hours` always come from the group's whole subtree,
-never from the first page of `subtasks`. An archived group's subtasks page
+An archived group can have more subtasks than one request can read, such
+as thousands. `get_task` then still lists the first page of its
+`subtasks`, but `start_week` and `end_week` are `null`, `progress` is `0`
+of `0` with `partial: true` and `group_remaining_hours` is `null`. The
+dates, `progress` and `group_remaining_hours` always come from all of the
+group's subtasks, never from the first page of `subtasks`. An archived group's subtasks page
 in number order through `list_task_related` to the end, however many there
 are.
 
@@ -2344,10 +2341,9 @@ and its `last_comment_at` the task's newest comment, and a row whose parent
 is not on the page reads that parent. A row whose reads do not fit
 in the rest of a page ends the page before it, and the next page starts
 with it. The first task a page looks at always answers, so paging moves on.
-If it is an active group stored before the rule of one level of subtasks,
-with more tasks under it than the page can read, its row has `start_week`
-and `end_week` set to `null` and a `progress` of `0` of `0` with `partial:
-true`, as on `get_task` above.
+If it is a group with more subtasks than the page can read, its row has
+`start_week` and `end_week` set to `null` and a `progress` of `0` of `0`
+with `partial: true`, as on `get_task` above.
 
 A `search` holds at most 200 characters, on active and archived lists
 alike, and a longer one is refused with `a search must be at most 200

@@ -1149,175 +1149,98 @@ export function taskUrl(orgSlug: string, num: number): string | null {
   return `${site}/app/${orgSlug}/tasks/${encodeURIComponent(issueKey(num).toLowerCase())}`
 }
 
-/* How many tasks a single-task read of an active task walks, one
- * by_parent_archived read at a time, asking no access (groupCounter),
- * before it goes on from what it read under a ceiling, within what the
- * request has left less TASK_READ_RESERVE, as an archived task's walk does
- * (taskSubtree). The read walks the subtree once (subtreeIndex) and every
- * group total uses that one index. Index ranges stay far below 4,096, and
- * only a group stored before the rule of one level with more tasks that
- * count under it than this goes on under a ceiling. Tests lower `reads`. */
-export const SUBTREE_WALK = { reads: 1000 }
-
 /** What a single-task read keeps back from the request's limits for the
- * reads after a subtree walk under a ceiling, an archived task's or an
- * active one's past SUBTREE_WALK, which stops short of them, and what the
- * first pages of its details keep back (TASK_DETAILS). Each document can
- * come close to Convex's document size limit: the document the walk read
- * last, which may pass its ceiling, the first subtask when the walk read
- * none, the task's parent and its newest comment, and the task's people
- * besides. The walk and the parent ask no access, as both stay in the
- * task's sub-project (lib/liveTasks.ts liveLink), so the ranges and
- * documents held back are room for the reads of the caller's own grants,
- * memberships and team shares that the delay's load can start
- * (lib/archivedTasks.ts LEVEL_STEP_READS), sized as when the walk also
- * asked about projects, which leaves room to spare. What has no fixed
- * count is read before the walk, within TASK_DETAILS: the first pages of
- * the followers, the links, the attachments and an archived task's
- * subtasks. So are the task's labels, the caller's follow and the task's
- * text (model/descriptions.ts descriptionOf). Tests lower these. */
+ * reads after an archived task's read of its subtasks under a ceiling,
+ * which stops short of them, and what the first pages of its details keep
+ * back (TASK_DETAILS). Each document can come close to Convex's document
+ * size limit: the document the read took last, which may pass its ceiling,
+ * the first subtask when the read took none, the task's parent and its
+ * newest comment, and the task's people besides. The subtasks and the
+ * parent ask no access, as both stay in the task's sub-project
+ * (lib/liveTasks.ts liveLink), so the ranges and documents held back are
+ * room for the reads of the caller's own grants, memberships and team
+ * shares that the delay's load can start (lib/archivedTasks.ts
+ * LEVEL_STEP_READS), sized as when the read also asked about projects,
+ * which leaves room to spare. What has no fixed count is read before the
+ * subtasks, within TASK_DETAILS: the first pages of the followers, the
+ * links, the attachments and an archived task's subtask list. So are the
+ * task's labels, the caller's follow and the task's text
+ * (model/descriptions.ts descriptionOf). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
   bytes: 6 * DOCUMENT_MAX_BYTES,
 }
 
-/* A subtree index, whether the walk read all of it, and whether it read
- * all of the root's own subtasks (`rootWhole`). A walk that a ceiling
- * stopped holds the subtasks of each task whose read it finished, the
- * root's first, or the root's subtasks it read before it stopped. */
-type Walk = { children: ChildIndex; whole: boolean; rootWhole: boolean }
-
-/* The subtasks a single-task read of `root` uses, indexed by parent. They
- * are the root's own and those of every task under it that counts toward
- * its totals (`counts`, groupCounter). is_group and the subtask list need
- * only the root's subtasks, and the totals' walks enter only tasks that
- * count and need each one's subtasks to tell a leaf from a group, so a
- * branch that cannot count is never read below its top. It reads one level
- * at a time, and the seen set stops a corrupt cycle. Each task a level
- * enters takes one read. An active root's walk reads only active subtasks
- * (by_parent_archived), because an active group counts nothing else and
- * lists nothing else, so each read holds at most LIMITS.subtasks.max tasks however
- * many archived subtasks have gathered. An active root's walk without a
- * `ceiling` stops, as not whole, once a level shows it would pass
- * SUBTREE_WALK reads, so its caller can go on under one (taskSubtree).
- * `known` is the index such a walk read: a task it holds takes its subtasks
- * from there, with no read, since a walk stops only between levels and so
- * holds each task's subtasks whole.
+/* The subtasks a read of `root` uses, indexed by parent, and whether it
+ * read them all (`whole`). They are the root's own. A subtask has no
+ * subtasks of its own, so each that counts toward the root's totals
+ * (`counts`, groupCounter) is indexed as a leaf without a read. An active
+ * root reads only its active subtasks (by_parent_archived), because an
+ * active group counts nothing else and lists nothing else, so the read
+ * holds at most LIMITS.subtasks.max tasks however many archived subtasks
+ * have gathered, and it needs no ceiling.
  *
- * An archived root's walk needs a `ceiling`, because it can enter the
- * task's whole history, and no walk reads the organization's tasks. It
- * keeps the request's reads under the ceiling before each by_parent read
+ * An archived root's read needs a `ceiling`, because it reads every
+ * subtask the task has, and it never reads the organization's tasks. It
+ * keeps the request's reads under the ceiling before the by_parent read
  * and after each task, since one read can hold many large tasks
  * (lib/archivedTasks.ts ceilingGuard). The counter asks no access, as a
  * task that counts is in the root's sub-project. Once the reads reach the
- * ceiling, or a level holds more
- * tasks than the ceiling leaves ranges for, it stops, with the subtasks of
- * each task whose read it finished, or the root's subtasks it read so far
- * when it stops in the root's own read. */
+ * ceiling it stops, with the root's subtasks it read so far. */
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
   ceiling?: ReadCeiling,
-  known?: ChildIndex,
-): Promise<Walk> {
+): Promise<{ children: ChildIndex; whole: boolean }> {
   if (ceiling === undefined && root.archived_at !== undefined) {
-    throw new Error('an archived task walks its subtree under a ceiling')
+    throw new Error('an archived task reads its subtasks under a ceiling')
   }
   const index = new Map<string, readonly Doc<'issues'>[]>()
-  // a walk that stops has read the root's own subtasks whole once their
-  // range is in the index, unless it stopped inside that range
-  const stopped = (): Walk => ({ children: index, whole: false, rootWhole: index.has(root.id) })
+  const stopped = { children: index, whole: false }
   const guard = ceiling === undefined ? null : ceilingGuard(ctx, ceiling)
-  const seen = new Set<string>([root.id])
-  let frontier = [root.id]
-  let reads = 0
-  while (frontier.length > 0) {
-    // a level that cannot be read whole ends the walk before its first read;
-    // the subtasks an earlier walk read whole (`known`) take no read
-    const unread = frontier.filter((id) => known?.has(id) !== true).length
-    reads += unread
-    if (ceiling !== undefined) {
-      if (unread > (await rangesLeft(ctx, ceiling))) return stopped()
-    } else if (reads > SUBTREE_WALK.reads) {
-      // the root's own subtasks are read first, so they are in the index
-      return stopped()
+  if (ceiling !== undefined && (await rangesLeft(ctx, ceiling)) < 1) return stopped
+  if (guard !== null && !(await guard.range())) return stopped
+  const kids: Doc<'issues'>[] = []
+  const read =
+    root.archived_at === undefined
+      ? ctx.db
+          .query('issues')
+          .withIndex('by_parent_archived', (q) =>
+            q.eq('parent_id', root.id).eq('archived_at', undefined),
+          )
+      : ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', root.id))
+  for await (const kid of read) {
+    kids.push(kid)
+    if (guard !== null && !(await guard.document())) {
+      index.set(root.id, kids)
+      return stopped
     }
-    const next: string[] = []
-    for (const id of frontier) {
-      const earlier = known?.get(id)
-      if (earlier !== undefined) {
-        index.set(id, earlier)
-        for (const kid of earlier) {
-          if (seen.has(kid.id) || !counts(kid)) continue
-          seen.add(kid.id)
-          next.push(kid.id)
-        }
-        continue
-      }
-      if (guard !== null && !(await guard.range())) return stopped()
-      const kids: Doc<'issues'>[] = []
-      const read =
-        root.archived_at === undefined
-          ? ctx.db
-              .query('issues')
-              .withIndex('by_parent_archived', (q) =>
-                q.eq('parent_id', id).eq('archived_at', undefined),
-              )
-          : ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
-      for await (const kid of read) {
-        kids.push(kid)
-        if (guard !== null && !(await guard.document())) {
-          if (id !== root.id) return stopped()
-          index.set(id, kids)
-          return { children: index, whole: false, rootWhole: false }
-        }
-      }
-      index.set(id, kids)
-      for (const kid of kids) {
-        if (seen.has(kid.id) || !counts(kid)) continue
-        seen.add(kid.id)
-        next.push(kid.id)
-      }
-    }
-    frontier = next
   }
-  return { children: index, whole: true, rootWhole: true }
+  index.set(root.id, kids)
+  for (const kid of kids) if (counts(kid)) index.set(kid.id, [])
+  return { children: index, whole: true }
 }
 
-/* The subtree index of a single-task read of `root` (subtreeIndex), and
+/* The subtask index of a single-task read of `root` (subtreeIndex), and
  * whether the group's facts went unread (Subtree.partial). An active task
- * walks first without a ceiling, up to SUBTREE_WALK reads, which reads its
- * own active subtasks whole first, at most LIMITS.subtasks.max. Past them,
- * and for an archived task at once, the walk takes what the request has
- * left less TASK_READ_RESERVE, looking at the request's reads before each
- * range and after each document (lib/archivedTasks.ts ceilingGuard), so no
- * read of it, a write's answer included, passes Convex's limits however
- * large the subtree, an
- * active task's walk going on from the first walk's index (subtreeIndex
- * `known`). When that stops the walk, the index keeps only the root's own
- * subtasks: an active root's from its first walk, all of them, and an
- * archived root's as many as fit, which it reads first. When not even one
- * of those fit, it reads the first, within the reserve, so the read still
- * tells a group from a leaf. An archived task's subtask list comes from its
- * own page (subtasksByNumber), not from this index. */
+ * reads its active subtasks whole. An archived task reads within what the
+ * request has left less TASK_READ_RESERVE, looking at the request's reads
+ * before the range and after each document (lib/archivedTasks.ts
+ * ceilingGuard), so no read of it, a write's answer included, passes
+ * Convex's limits however many subtasks it has. When that stops the read,
+ * the index keeps the root's subtasks it read, and when not even one fit,
+ * the first, read within the reserve, so the read still tells a group from
+ * a leaf. An archived task's subtask list comes from its own page
+ * (subtasksByNumber), not from this index. */
 async function taskSubtree(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
 ): Promise<{ children: ChildIndex; partial: boolean }> {
-  if (root.archived_at === undefined) {
-    const first = await subtreeIndex(ctx, root, counts)
-    if (first.whole) return { children: first.children, partial: false }
-    const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
-    // the first walk's index holds each task it read whole, so this one
-    // goes on from there rather than read them again
-    const walk = await subtreeIndex(ctx, root, counts, room, first.children)
-    if (walk.whole) return { children: walk.children, partial: false }
-    const kids = first.children.get(root.id) ?? []
-    return { children: new Map([[root.id, kids]]), partial: true }
-  }
+  if (root.archived_at === undefined)
+    return { children: (await subtreeIndex(ctx, root, counts)).children, partial: false }
   const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
   const walk = await subtreeIndex(ctx, root, counts, room)
   if (walk.whole) return { children: walk.children, partial: false }
@@ -1339,10 +1262,8 @@ type GroupCounter = (task: Doc<'issues'>) => boolean
  * group's own sub-project (lib/liveTasks.ts liveLink), where its subtasks
  * are, so the caller, who reads the group, reads it, and no access is
  * asked. Like is_group, an active group counts only active subtasks and
- * an archived one its whole subtree. The totals' walks never enter a task
- * that does not count, so nothing under it counts either, and they also
- * enter only subtasks that make the task above them a group
- * (lib/liveTasks.ts countsAsSubtask).
+ * an archived one all of them, and only subtasks that make it a group
+ * count (lib/liveTasks.ts countsAsSubtask).
  */
 function groupCounter(group: Doc<'issues'>): GroupCounter {
   const allArchived = group.archived_at !== undefined
@@ -1352,11 +1273,10 @@ function groupCounter(group: Doc<'issues'>): GroupCounter {
     (allArchived || task.archived_at === undefined)
 }
 
-/** What a group's subtree says about it to one reader, over the tasks
+/** What a group's subtasks say about it to one reader, over the tasks
  * groupCounter counts. It holds the calculated plan weeks (the app's
  * groupSpan) and how many of its leaves are done (the app's groupProgress).
- * `partial` is the app's "Completion unknown". It is set when the walk
- * meets a task twice (a cycle). */
+ * `partial` is the app's "Completion unknown". */
 export type GroupFacts = {
   start_week: string | null
   end_week: string | null
@@ -1375,51 +1295,34 @@ const UNREAD_SUBTREE: GroupFacts = {
 }
 
 /* On REST and MCP a group's plan weeks run from the earliest start to the
- * latest end of the scheduled leaves under it that count (groupCounter), at
- * any depth, and its progress counts those leaves, scheduled or not, and the
- * Done ones among them. A nested group counts only through its own leaves;
- * its stored dates and status are dormant. A leaf without an end counts as
- * its start week. Done leaves count. Both weeks are null when no such leaf
- * is scheduled. `children` holds the group's subtree by parent. An active
- * list passes the subtrees its page read (lib/machineSubtree.ts
- * subtreeReads), and an archived list and a single-task read pass the
- * row's subtreeIndex. Each visited task's children decide whether it is a
- * group (hasSubtasks' rule) and what the walk enters next. */
+ * latest end of its scheduled subtasks that count (groupCounter), and its
+ * progress counts those subtasks, scheduled or not, and the Done ones among
+ * them. A subtask has no subtasks of its own, so each is a leaf. A leaf
+ * without an end counts as its start week. Done leaves count. Both weeks
+ * are null when no such leaf is scheduled. `children` holds the group's
+ * subtasks by parent. An active list passes the subtasks its page read
+ * (lib/machineSubtree.ts subtreeReads), and an archived list and a
+ * single-task read pass the row's subtreeIndex. The subtasks that make the
+ * group one (hasSubtasks' rule) are the ones read. */
 function groupFacts(group: Doc<'issues'>, children: ChildIndex, counts: GroupCounter): GroupFacts {
   let start: string | undefined
   let end: string | undefined
   let done = 0
   let total = 0
   let partial = false
-  const seen = new Set<string>([group.id])
-  let frontier: Doc<'issues'>[] = [group]
-  // one level of subtasks, so the walk ends a level below the group; the
-  // seen set stops a corrupt cycle
-  while (frontier.length > 0) {
-    const next: Doc<'issues'>[] = []
-    for (const task of frontier) {
-      if (task !== group && !isGroupIn(children, task)) {
-        total++
-        if (task.status === 'done') done++
-        if (task.start_week === undefined) continue
-        const leafEnd = task.end_week ?? task.start_week
-        if (start === undefined || task.start_week < start) start = task.start_week
-        if (end === undefined || leafEnd > end) end = leafEnd
-        continue
-      }
-      // a group, the root included, counts only through the subtasks that
-      // make it one. One that is not entered leaves part of it unknown
-      for (const c of children.get(task.id) ?? []) {
-        if (!countsAsSubtask(task, c)) continue
-        if (seen.has(c.id) || !counts(c)) {
-          partial = true
-          continue
-        }
-        seen.add(c.id)
-        next.push(c)
-      }
+  for (const c of children.get(group.id) ?? []) {
+    if (!countsAsSubtask(group, c)) continue
+    // one that does not count leaves part of the group unknown
+    if (!counts(c)) {
+      partial = true
+      continue
     }
-    frontier = next
+    total++
+    if (c.status === 'done') done++
+    if (c.start_week === undefined) continue
+    const leafEnd = c.end_week ?? c.start_week
+    if (start === undefined || c.start_week < start) start = c.start_week
+    if (end === undefined || leafEnd > end) end = leafEnd
   }
   return { start_week: start ?? null, end_week: end ?? null, done, total, partial }
 }

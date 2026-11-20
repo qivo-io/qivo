@@ -1542,11 +1542,10 @@ reads the task's description and its `last_comment_at` the task's newest
 comment, and a row whose parent is not on the page reads that parent. A
 row whose reads do not fit in the rest of a page ends the page
 before it, and the next page starts with it. The first task a page looks at
-always answers, so paging moves on. If it is an active group stored before
-the rule of one level of subtasks, with more tasks under it than the page
-can read, its row has `start_week` and `end_week` set to `null` and a
-`progress` of `0` of `0` with `partial: true`, as a single task's read
-describes below.
+always answers, so paging moves on. If it is a group with more subtasks
+than the page can read, its row has `start_week` and `end_week` set to
+`null` and a `progress` of `0` of `0` with `partial: true`, as a single
+task's read describes below.
 
 A cursor works only for the organization, caller, project, filters and
 search it came from, whether you name the project by uuid, number or key. A
@@ -1873,11 +1872,10 @@ or restoring a project changes no task's group. Archived parents retain
 `is_group: true` while they have attached subtasks.
 
 **Group dates.** A group's `start_week` and `end_week` are calculated from
-its subtasks, at any depth. `start_week` is the earliest start and
-`end_week` the latest end of the scheduled ones, including `done` subtasks.
-Both are `null` when none is scheduled. A nested group counts only through
-its own subtasks. Like `is_group`, an active group counts only active
-subtasks, while an archived group counts its whole subtree. The group's own
+its subtasks. `start_week` is the earliest start and `end_week` the latest
+end of the scheduled ones, including `done` subtasks. Both are `null` when
+none is scheduled. Like `is_group`, an active group counts only active
+subtasks, while an archived group counts all of them. The group's own
 stored dates are not
 used while it is a group, and subtask changes never write them. They apply
 again when its last active subtask is detached, deleted or archived. A PATCH
@@ -1892,7 +1890,7 @@ sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks, because it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
 subtasks, and clients show the parent's value as the sum over its unfinished
-subtasks at any depth. Such tasks return `remaining_hours: null` and
+subtasks. Such tasks return `remaining_hours: null` and
 `remaining_set_at: null` in the shape below, also while they still store
 hours of their own from before their subtasks counted, and
 the single-task read adds that sum as `group_remaining_hours`. Attaching a
@@ -2112,12 +2110,12 @@ whose other task it can read, with `kind` as seen from this task (`blocks`,
 `blocked_by` or `relates`). `labels` are ordered by name.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
 is the remaining time the app shows, which is the sum over the unfinished
-subtasks at any depth, or `null` when none has hours. Like the group's
+subtasks, or `null` when none has hours. Like the group's
 dates, it counts only active subtasks of an active group.
 
 `progress` is `null` for a task without subtasks. For a group it is the
-**Progress** of the app's task window, `done` of `total` tasks without
-subtasks under it, at any depth:
+**Progress** of the app's task window, `done` of `total` of its
+subtasks:
 
 ```json
 { "progress": { "done": 2, "total": 3, "percent": 67, "partial": true } }
@@ -2129,14 +2127,12 @@ It counts the same subtasks as the group's dates, scheduled or not, and
 group, as below, so the true completion is unknown. The app then says
 "Completion unknown".
 
-An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks. So can an active group stored before the rule
-of one level of subtasks, whose subtasks have subtasks of their own. Its
-single-task shape then still lists the first page of its direct `subtasks`,
-but `start_week` and `end_week` are `null`, `progress` is `0` of `0` with
-`partial: true` and `group_remaining_hours` is `null`. The dates,
-`progress` and `group_remaining_hours` always come from the group's whole
-subtree, never from the first page of `subtasks`. An archived group's
+An archived group can have more subtasks than one request can read, such
+as thousands. Its single-task shape then still lists the first page of its
+`subtasks`, but `start_week` and `end_week` are `null`, `progress` is `0`
+of `0` with `partial: true` and `group_remaining_hours` is `null`. The
+dates, `progress` and `group_remaining_hours` always come from all of the
+group's subtasks, never from the first page of `subtasks`. An archived group's
 subtasks page in number order on `GET /v1/tasks/{ref}/subtasks` to the
 end, however many there are. The answer of a `PATCH`, such as one that
 archives such a group, takes the same shape.

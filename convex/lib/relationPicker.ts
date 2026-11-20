@@ -905,7 +905,7 @@ async function batchOf(
     } else if (kind === 'subtask') {
       if (task.parent_id === open.id || parents.has(task.id)) return 'out'
       // model/issues.ts hasAnySubtask, archived ones included; a subtask
-      // created under the rule of one level has none (withoutSubtasks)
+      // has none (withoutSubtasks)
       if (!withoutSubtasks(task)) {
         if (!count.fits(HIDDEN_BY_ID)) return 'stop'
         count.take(HIDDEN_BY_ID)

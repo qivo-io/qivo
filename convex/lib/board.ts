@@ -92,13 +92,9 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * with the same rows.
  *
  * Each task the filters keep costs about one range, its group check, and a
- * group one more for its subtasks. The subtasks of a shown group that the
- * filters drop cost nothing more where the group or the subtask was created
- * under the rule of one level (lib/viewReads.ts ONE_LEVEL_SINCE); data
- * stored before it gets a check of each such subtask, which a legacy nested
- * group may be, a range each, and the largest My view, whose fixture data
- * predates the rule, comes closest to `reads.ranges`, and at its ranges a
- * card the ceiling stops such a Board before its ranges run out.
+ * group one more for its subtasks. A subtask needs no group check, as it
+ * has no subtasks of its own (lib/viewReads.ts withoutSubtasks), so the
+ * subtasks of a shown group that the filters drop cost nothing more.
  *
  * Bytes stop a selection whose tasks a filter must read whole: the search,
  * the people filter, Priority and Stale read every task of the selection's
@@ -170,7 +166,7 @@ export type BoardAnswer =
        * status and has_subtasks, from which lib/review.ts taskOwnerId gives
        * its owner for planning.ownerLoads, an organization at a time. */
       rows: ViewRow[]
-      /** the shown ancestors of rows that are not rows themselves, in that
+      /** the shown parents of rows that are not rows themselves, in that
        * order */
       parents: ViewRow[]
       /** the projects whose lanes stay on the Board without cards (heldLanes) */

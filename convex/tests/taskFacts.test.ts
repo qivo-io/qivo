@@ -73,20 +73,19 @@ async function setup(t: T = newT()): Promise<Fx> {
 const task = (fx: Fx, over: Partial<Doc<'issues'>> = {}) =>
   plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, ...over })
 
-/* The tree of groups the progress and completion cases read. Leaves are
- * named l*, groups g*, and the archived group ga. Each family is in one
- * sub-project. */
+/* The groups the progress and completion cases read. Leaves are named l*,
+ * groups g*, and the archived group ga. Each family is in one sub-project,
+ * one level deep. */
 async function tree(fx: Fx) {
   const pcb = fx.sub2.id
   const sib = fx.hiddenSib.id
   const g1 = await task(fx, { title: 'G1' })
   const l1 = await task(fx, { parent_id: g1.id, status: 'todo' })
   const l2 = await task(fx, { parent_id: g1.id, status: 'done' })
-  const g2 = await task(fx, { parent_id: g1.id, title: 'G2' })
-  const l3 = await task(fx, { parent_id: g2.id, status: 'done' })
+  const l3 = await task(fx, { parent_id: g1.id, status: 'done' })
+  const l4 = await task(fx, { parent_id: g1.id, status: 'progress' })
   // and an archived subtask nobody counts
-  const l4 = await task(fx, { parent_id: g2.id, status: 'progress' })
-  await task(fx, { parent_id: g2.id, status: 'done', archived_at: NOW })
+  await task(fx, { parent_id: g1.id, status: 'done', archived_at: NOW })
   // a family the guest cannot see
   const g3 = await task(fx, { project_id: sib, title: 'G3' })
   await task(fx, { parent_id: g3.id, project_id: sib, status: 'todo' })
@@ -96,8 +95,7 @@ async function tree(fx: Fx) {
   await task(fx, { parent_id: g5.id, status: 'done' })
   await task(fx, { parent_id: g5.id, status: 'done' })
   const g6 = await task(fx, { title: 'G6' })
-  const g7 = await task(fx, { parent_id: g6.id, title: 'G7' })
-  await task(fx, { parent_id: g7.id, status: 'done' })
+  await task(fx, { parent_id: g6.id, status: 'done' })
   await task(fx, { parent_id: g6.id, status: 'backlog' })
   const l13 = await task(fx, { title: 'Leaf' })
   // an archived group counts its whole subtree
@@ -105,7 +103,7 @@ async function tree(fx: Fx) {
   await task(fx, { parent_id: ga.id, status: 'done', archived_at: NOW })
   await task(fx, { parent_id: ga.id, status: 'todo', archived_at: NOW })
   await task(fx, { status: 'done', archived_at: NOW })
-  return { g1, g2, g3, g4, g5, g6, g7, ga, l1, l2, l3, l4, l13 }
+  return { g1, g3, g4, g5, g6, ga, l1, l2, l3, l4, l13 }
 }
 
 /* What `person` is shown: the rows of their working set in the fixture
@@ -183,7 +181,7 @@ describe('a group’s progress is the app task window’s Progress', () => {
 
   it('reads the same on list rows and the single read, on both surfaces', async () => {
     const fx = await setup()
-    const { g1, g2, g3, g4, g5, g6, g7, ga, l13 } = await tree(fx)
+    const { g1, g3, g4, g5, g6, ga, l13 } = await tree(fx)
     const p = (done: number, total: number, percent: number, partial: boolean) => ({
       done,
       total,
@@ -194,11 +192,9 @@ describe('a group’s progress is the app task window’s Progress', () => {
     const expected = {
       guest: [
         [g1, p(2, 4, 50, false)],
-        [g2, p(1, 2, 50, false)],
         [g4, p(1, 1, 100, false)],
         [g5, p(2, 2, 100, false)],
         [g6, p(1, 2, 50, false)],
-        [g7, p(1, 1, 100, false)],
         [ga, p(1, 2, 50, false)],
         [l13, null],
       ],
@@ -233,23 +229,6 @@ describe('a group’s progress is the app task window’s Progress', () => {
       project: 'FW',
     })
     expect(page.tasks.find((r) => r.id === ga.id)?.progress).toEqual(p(1, 2, 50, false))
-  })
-
-  /* Valid writes keep one level of subtasks (assertParentChain). The walk
-   * still stops on a cycle, which only broken data can hold, and says the
-   * progress is partial. */
-  it('is partial on a parent cycle', async () => {
-    const fx = await setup()
-    // two tasks parented to each other, so each is the other's group
-    const aId = uuid()
-    const b = await task(fx, { parent_id: aId, title: 'Cycle B' })
-    const a = await task(fx, { id: aId, parent_id: b.id, title: 'Cycle A' })
-    const progress = { done: 0, total: 0, percent: 0, partial: true }
-    expect((await restGet(fx, a.id, fx.admin.id)).progress).toEqual(progress)
-    const viaMcp = await mcpRead<Row>(fx, internal.machine.mcp.getIssue, fx.admin.id, {
-      ref: a.id,
-    })
-    expect(viaMcp.progress).toEqual(progress)
   })
 })
 
