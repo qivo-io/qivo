@@ -767,8 +767,10 @@ const RESET_TO_CHANGE = 'marketing demo: use reset to change dates or dataset ve
 
 /** How much one wipe call deletes, half a deletion step's REMOVAL_BUDGET,
  * to keep each call small against Convex's 1 s mutation limit. A call
- * stops once it has deleted that many rows or bytes, which its last row
- * can pass. It counts rows and bytes, not time. */
+ * stops once it has spent that many rows or bytes, which its last row can
+ * pass. Every deleted row counts, and the used-id phase also counts each
+ * id it keeps and each index range it reads for one (model/usedIds.ts).
+ * It counts rows and bytes, not time. */
 export const WIPE_BUDGET = { rows: 128, bytes: 2 * 1024 * 1024 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is

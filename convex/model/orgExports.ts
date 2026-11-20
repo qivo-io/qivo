@@ -98,10 +98,10 @@ export const EXPORT_LIMITS = {
  *   smallest plan, shared with sign-in, REST, MCP, the file gateway and the
  *   export steps), so the lease bounds how many reads of one archive the
  *   backend runs at once. Two let an admin start again beside a download
- *   that has not ended. The runtime reads the body without waiting for the
- *   client (http.ts archiveStream), so a lease lasts while the backend
- *   reads the archive, not while a slow client downloads it, and need not
- *   bound the downloads clients run at once.
+ *   that has not ended. No pull of the body waits for the client, so the
+ *   runtime may read ahead of it (http.ts archiveStream). A lease lasts
+ *   while the backend reads the archive, not while a slow client downloads
+ *   it, and need not bound the downloads clients run at once.
  * - demoStreams: the downloads that may run at once on the whole public
  *   demo deployment, where every visitor is the admin of an organization of
  *   their own; a quarter of the smallest plan's actions.
