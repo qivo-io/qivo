@@ -16,9 +16,9 @@
    (lib/issueGroups.ts groupSpan and isIssueDone) over the answer's subtask
    rows, so a group reads the same before and after it arrives. They are
    unknown only where the answer lacks their inputs: a subtask list that is
-   not complete (`subtasks.complete`), or a subtask that is itself a group,
-   whose leaves the answer does not hold, and an archived group, whose
-   answer holds no subtasks. A task whose list is not complete counts as a
+   not complete (`subtasks.complete`), and an archived group, whose answer
+   holds no subtasks. A subtask has no subtasks of its own, so each row of
+   the list is a leaf. A task whose list is not complete counts as a
    group even when the list holds no row, as the subtasks it leaves out may
    make it one. The answer of an archived task holds no parent, subtasks,
    links or files. */
@@ -194,7 +194,7 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
     }),
   )
   // the subtasks as the group rules read them: each a leaf with its own
-  // dates, or a group whose leaves the answer does not hold
+  // dates
   const byId: Record<string, DatedGroupIssue> = { [view.id]: view }
   for (const kid of kids) {
     const start = weekOf(kid.start_week)
@@ -202,13 +202,12 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
     byId[handleOf(kid)] = {
       id: handleOf(kid),
       status: kid.status,
-      isGroup: kid.has_subtasks,
       start,
       end: end === null ? null : Math.max(start ?? end, end),
     }
   }
   const group = isIssueGroup(view)
-  const datesKnown = !group || (whole && !answer.subtasks.rows.some((kid) => kid.has_subtasks))
+  const datesKnown = !group || whole
   const span = groupSpan(view, byId)
   if (span) {
     view.start = datesKnown ? span.start : null
@@ -264,8 +263,8 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
 /** Short row `row` of the answer as a view model (shapeIssue), handle
     `handle`, under `parent` when given. A short row holds no text, labels
     or files, and no parent of its own, so the task's parent shaped here
-    names none, and a subtask stored before the rule of one level, with
-    has_subtasks, is a group whose subtasks the answer does not hold. */
+    names none, and a row with has_subtasks, such as that parent, is a group
+    whose subtasks the answer does not hold. */
 export function shapeShortTask(
   row: ShortRow,
   handle: string,
@@ -292,15 +291,15 @@ export function shapeShortTask(
 
 /** The subtasks of the task `view` an ok answer shows (okView), each a
     view model under it by handle (shapeShortTask), when the answer holds
-    the whole list and every subtask in it is a leaf; else null, because
-    what a move, an archive or a delete takes along is then unknown. */
+    the whole list; else null, because what a move, an archive or a delete
+    takes along is then unknown. */
 export function answerFamily(
   answer: TaskOk,
   view: IssueVM,
   handleNow: DetailInputs['handleNow'],
 ): Record<string, IssueVM> | null {
   const kids = answer.subtasks
-  if (!kids.complete || kids.rows.some((kid) => kid.has_subtasks)) return null
+  if (!kids.complete) return null
   const parent = { uuid: view.uuid, handle: view.id }
   const out: Record<string, IssueVM> = {}
   for (const kid of kids.rows) {

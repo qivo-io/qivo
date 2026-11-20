@@ -368,17 +368,6 @@ function BoardCardView({
       <StaticControlsContext.Provider value={controls.value}>
         {group.parent ? (
           <>
-            {group.ancestors.map((ancestor) => (
-              <TaskRow
-                key={ancestor.uuid}
-                it={ancestor}
-                parentHeader
-                actualIssue={false}
-                place={place(ancestor)}
-                statics={controls.value}
-                {...actions}
-              />
-            ))}
             <TaskRow
               it={group.parent}
               parentHeader
@@ -429,7 +418,6 @@ function BoardCardView({
 
 /** The tasks a card shows, from its top heading down. */
 const members = (group: BoardCellGroup<IssueVM>) => [
-  ...group.ancestors,
   ...(group.parent ? [group.parent] : []),
   ...group.issues,
 ]

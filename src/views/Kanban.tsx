@@ -99,8 +99,7 @@ const pendingLabel = (n: number) => `Loading ${n} more ${n === 1 ? 'card' : 'car
 type BoardCellCards = { key: string; items: IssueVM[]; groups: CardGroup[] }
 
 /** The owners of the parent headings `cells` draw above their cards
-    (ParentHeading), each heading's ancestors first, as usePeople names
-    them. The same array while every cell keeps its groups, which
+    (ParentHeading), as usePeople names them. The same array while every cell keeps its groups, which
     createCellGrouper hands back unchanged until a card or its heading
     changes, so the Board's list of named people keeps its identity. */
 function useHeadingOwners(cells: BoardCellCards[]): NamedPerson[] {
@@ -111,9 +110,7 @@ function useHeadingOwners(cells: BoardCellCards[]): NamedPerson[] {
     return was.owners
   const owners = groups.flatMap((list) =>
     list.flatMap((group) =>
-      group.parent
-        ? [...group.ancestors, group.parent].map((it) => ({ org: it.org, id: it.owner ?? '' }))
-        : [],
+      group.parent ? [{ org: group.parent.org, id: group.parent.owner ?? '' }] : [],
     ),
   )
   last.current = { groups, owners }
@@ -125,10 +122,7 @@ function useHeadingOwners(cells: BoardCellCards[]): NamedPerson[] {
 function holdingCards(cells: BoardCellCards[], taskId: string) {
   return cells.flatMap((cell) => {
     const group = cell.groups.find(
-      (it) =>
-        it.issues.some((task) => task.id === taskId) ||
-        it.parent?.id === taskId ||
-        it.ancestors.some((task) => task.id === taskId),
+      (it) => it.issues.some((task) => task.id === taskId) || it.parent?.id === taskId,
     )
     return group ? [{ cell: cell.key, group: group.key }] : []
   })

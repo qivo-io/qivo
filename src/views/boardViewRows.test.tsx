@@ -156,7 +156,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     if (!model) throw new Error('no model')
     const { createEstimateCache } = await booted()
     const estimate = createEstimateCache()
-    const group = (it: typeof model) => ({ key: 'g', parent: null, ancestors: [], issues: [it] })
+    const group = (it: typeof model) => ({ key: 'g', parent: null, issues: [it] })
     const before = estimate(group(model), () => null, 280, 'pooled', 'todo')
     // the owner's load turns unavailable
     board.server.unavailable = [board.snapshot.profiles[0].id]

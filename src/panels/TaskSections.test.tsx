@@ -508,10 +508,9 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(section('subtasks').querySelector('[data-related-task="QN-39"]')).toBeNull()
   })
 
-  it('draws a short group without a status, and a short task in review with its reviewer', async () => {
+  it('draws a short task in review with its reviewer', async () => {
     await load()
     await openTask()
-    const group = short(task('far-group', 38, { title: 'Old epic' }), true)
     const review = short(
       task('far-review', 39, {
         title: 'Check the wiring',
@@ -520,18 +519,10 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
         reviewer_id: 'leo',
       }),
     )
-    await answer('taskWindow:task', taskAnswer([group, review]))
-    const groupRow = section('subtasks').querySelector('[data-related-task="QN-38"]')
-    expect(groupRow?.querySelector('[role="img"][aria-label]:not([data-avatar])')).toBeNull()
+    await answer('taskWindow:task', taskAnswer([review]))
     const reviewRow = section('subtasks').querySelector('[data-related-task="QN-39"]')
     expect(reviewRow?.querySelector('[data-avatar="leo"]')).not.toBeNull()
     expect(reviewRow?.querySelector('[data-avatar="mira"]')).toBeNull()
-    // a group row leaves the open hours unknown
-    expect(rollup()).toEqual(['unknown', 'Unknown'])
-    expect(progress()).toEqual([
-      '0 of 1 visible tasks done. Completion unknown.',
-      'Additional work is outside this view.',
-    ])
   })
 
   it('removes a link the links answer holds with the kind it shows', async () => {

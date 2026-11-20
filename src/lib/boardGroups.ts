@@ -12,7 +12,6 @@ export type BoardCellIssue = {
 export type BoardCellGroup<T extends BoardCellIssue> = {
   key: string
   parent: T | null
-  ancestors: T[]
   issues: T[]
 }
 
@@ -110,13 +109,12 @@ const parentsOf = new WeakMap<object, Set<string>>()
  * or filter; children are never pulled in from outside the supplied issues.
  *
  * Only leaf tasks occupy status cells. Parents are grouping headings wherever
- * their visible leaves appear; their stored status never places a card. Nested
- * groups include accessible ancestors as headings above the immediate parent.
+ * their visible subtasks appear; their stored status never places a card. A
+ * parent has no parent of its own, so it is the card's one heading.
  *
  * Group order follows the first visible member, and child rows retain their
  * relative input order. Keys use immutable UUIDs. Inputs are never mutated.
- * Parent traversal is cycle-safe; self-parent links are ignored. Duplicate input
- * UUIDs are represented once.
+ * Self-parent links are ignored. Duplicate input UUIDs are represented once.
  */
 export function groupBoardCell<T extends BoardCellIssue>(
   visibleCellIssues: readonly T[],
@@ -144,15 +142,7 @@ export function groupBoardCell<T extends BoardCellIssue>(
     const key = `parent:${parent.uuid}`
     let group = groups.get(key)
     if (!group) {
-      const ancestors: T[] = []
-      const visited = new Set([parent.uuid])
-      let ancestor = accessibleParent(parent)
-      while (ancestor && !visited.has(ancestor.uuid)) {
-        visited.add(ancestor.uuid)
-        ancestors.unshift(ancestor)
-        ancestor = accessibleParent(ancestor)
-      }
-      group = { key, parent, ancestors, issues: [] }
+      group = { key, parent, issues: [] }
       groups.set(key, group)
     }
     return group
@@ -173,7 +163,7 @@ export function groupBoardCell<T extends BoardCellIssue>(
       family(parent).issues.push(issue)
     } else {
       const key = `issue:${issue.uuid}`
-      groups.set(key, { key, parent: null, ancestors: [], issues: [issue] })
+      groups.set(key, { key, parent: null, issues: [issue] })
     }
   }
 
@@ -195,11 +185,7 @@ export function createCellGrouper<T extends BoardCellIssue>() {
       entry &&
       entry.items.length === items.length &&
       entry.items.every((it, i) => it === items[i]) &&
-      entry.groups.every(
-        (group) =>
-          (!group.parent || issueById[group.parent.id] === group.parent) &&
-          group.ancestors.every((it) => issueById[it.id] === it),
-      )
+      entry.groups.every((group) => !group.parent || issueById[group.parent.id] === group.parent)
         ? entry.groups
         : groupBoardCell(items, issueById)
     known.set(key, { items, groups })
@@ -348,7 +334,6 @@ export function estimateCardHeight<T extends BoardCellIssue & { title: string }>
     TITLE_LINE * titleLines(issue.title, cardWidth - chrome) +
     metaHeight(meta(issue), Math.max(1, cardWidth - chrome))
   let height = CARD_BORDER
-  for (const ancestor of group.ancestors) height += heading(ancestor)
   if (group.parent) {
     height += heading(group.parent)
     // the children's bottom padding and the rule between two children

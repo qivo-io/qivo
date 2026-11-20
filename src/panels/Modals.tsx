@@ -1888,9 +1888,6 @@ function ReassignChoiceList({
    reason typed under them survives a switch. What either choice takes along
    (subtasks, sub-projects) is listed above the cards. */
 
-// one step per level of subtasks, as literal classes for Tailwind
-const INDENT = ['', 'ml-4', 'ml-8', 'ml-12', 'ml-16']
-
 type Fate = 'archive' | 'delete'
 
 /** One of the window's two radio cards. `extra` sits below the card's label,
@@ -2096,24 +2093,15 @@ const plural = (n: number, noun: string) =>
 
 /** A subtask the window lists for an archive. `editable` is whether I can
     change it, which the archive needs for every subtask it takes along. */
-type ArchiveRow = { task: IssueVM; depth: number; editable: boolean }
+type ArchiveRow = { task: IssueVM; editable: boolean }
 
-/* What archiving a task takes along: its whole subtree in tree order from
-   its family (P.familyOf). */
+/* What archiving a task takes along: its subtasks, in order, from its
+   family (P.familyOf). */
 function archivePlan(family: TaskFamily): { rows: ArchiveRow[] } {
-  const root = family.root
-  const rows: ArchiveRow[] = []
-  const seen = new Set([root.id])
-  const walk = (it: IssueVM, depth: number) => {
-    for (const key of it.children) {
-      const child = family.byId[key]
-      if (!child || seen.has(key)) continue
-      seen.add(key)
-      rows.push({ task: child, depth, editable: P.canWrite(child.project) })
-      walk(child, depth + 1)
-    }
-  }
-  walk(root, 0)
+  const rows = family.root.children.flatMap((key) => {
+    const child = family.byId[key]
+    return child ? [{ task: child, editable: P.canWrite(child.project) }] : []
+  })
   return { rows }
 }
 
@@ -2129,12 +2117,8 @@ const readPlans = (family: TaskFamily | null): TaskPlans =>
 /* What a choice depends on, to tell whether it changed since the person read it. */
 const planKey = (plans: TaskPlans, fate: Fate) =>
   fate === 'archive'
-    ? plans.archive.rows
-        .map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.editable}`)
-        .join()
-    : plans.delete.rows
-        .map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`)
-        .join()
+    ? plans.archive.rows.map((r) => `${r.task.id}:${r.task.project}:${r.editable}`).join()
+    : plans.delete.rows.map((r) => `${r.task.id}:${r.task.project}:${r.deletable}`).join()
 
 /* ---------- Archive or delete a task ----------
    Opened from the task menu by people who can edit the task, for every task.
@@ -2276,9 +2260,9 @@ function ArchiveOrDeleteTaskModal({
     : withSubtasks
       ? `Also deletes ${plural(n, 'subtask')}:`
       : `Keeps ${plural(plan.rows.length, 'subtask')}:`
-  const listRows: { task: IssueVM; depth: number; editable: boolean }[] = archiving
+  const listRows: ArchiveRow[] = archiving
     ? rows
-    : plan.rows.map((r) => ({ task: r.task, depth: r.depth, editable: r.deletable }))
+    : plan.rows.map((r) => ({ task: r.task, editable: r.deletable }))
   return (
     <ModalShell
       icon="inbox"
@@ -2346,14 +2330,7 @@ function ArchiveOrDeleteTaskModal({
               const going = withSubtasks && r.editable
               return (
                 <div key={r.task.id} data-fate-subtask={r.task.key} className={fateRow}>
-                  <span
-                    className={cn(
-                      'shrink-0 font-semibold text-text-3',
-                      INDENT[Math.min(r.depth, INDENT.length - 1)],
-                    )}
-                  >
-                    {r.task.key}
-                  </span>
+                  <span className="shrink-0 font-semibold text-text-3">{r.task.key}</span>
                   <span className="min-w-0 flex-1 truncate text-text-1">{task.title}</span>
                   {!r.editable ? (
                     <span className="shrink-0 font-medium text-text-1">View only</span>

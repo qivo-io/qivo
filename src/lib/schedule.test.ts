@@ -116,15 +116,6 @@ describe('autoMoves', () => {
     expect(moves.map((m) => m.id)).not.toContain('g')
   })
 
-  it('pushes through a nested group to its leaves', () => {
-    const blocker = task('blocker', 0, 4)
-    const outer = task('outer', 3, 6, { children: ['inner'] })
-    const inner = task('inner', 3, 6, { children: ['leaf'] })
-    const leaf = task('leaf', 3, 6)
-    blocks(blocker, outer)
-    expect(solve([blocker, outer, inner, leaf])).toEqual([{ id: 'leaf', start: 5, end: 8 }])
-  })
-
   it('waits for the latest leaf end of a group blocker', () => {
     // the blocker group's own row could say anything; its leaves end at week 8
     const g = task('g', 1, 8, { children: ['early', 'late'] })

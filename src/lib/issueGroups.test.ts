@@ -9,16 +9,14 @@ import {
 } from './issueGroups'
 
 describe('group task completion', () => {
-  it('counts only leaves through nested groups, regardless of group statuses', () => {
+  it('counts only its subtasks, regardless of the group status', () => {
     const rows: Record<string, GroupIssue> = {
-      root: { id: 'root', status: 'done', children: ['nested', 'open'] },
-      nested: { id: 'nested', status: 'backlog', children: ['finished'] },
+      root: { id: 'root', status: 'done', children: ['finished', 'open'] },
       open: { id: 'open', status: 'todo' },
       finished: { id: 'finished', status: 'done' },
     }
     expect(groupProgress(rows.root, rows)).toEqual({ total: 2, done: 1, pct: 50, unknown: false })
     expect(isIssueDone(rows.root, rows)).toBe(false)
-    expect(isIssueDone(rows.nested, rows)).toBe(true)
     rows.open.status = 'done'
     rows.root.status = 'backlog'
     expect(isIssueDone(rows.root, rows)).toBe(true)
@@ -34,11 +32,9 @@ describe('group task completion', () => {
     expect(isIssueDone(parent, rows)).toBe(true)
   })
 
-  it('does not treat missing branches, empty groups or cycles as completed work', () => {
+  it('does not treat missing subtasks or empty groups as completed work', () => {
     const parent: GroupIssue = { id: 'parent', status: 'done', children: ['missing'] }
     const rows = { parent, child: { id: 'child', status: 'done' } }
-    expect(isIssueDone(parent, rows)).toBe(false)
-    parent.children = ['parent']
     expect(isIssueDone(parent, rows)).toBe(false)
     expect(groupProgress(parent, rows)).toEqual({ total: 0, done: 0, pct: 0, unknown: true })
     // a group named without the subtasks under it
@@ -55,18 +51,22 @@ describe('group task completion', () => {
 
 describe('group calculated dates', () => {
   const tree = (): Record<string, DatedGroupIssue> => ({
-    root: { id: 'root', status: 'todo', start: 40, end: 50, children: ['nested', 'early'] },
-    nested: { id: 'nested', status: 'todo', start: 0, end: 99, children: ['late', 'unplanned'] },
+    root: {
+      id: 'root',
+      status: 'todo',
+      start: 40,
+      end: 50,
+      children: ['early', 'late', 'unplanned'],
+    },
     early: { id: 'early', status: 'done', start: 3, end: 4 },
     late: { id: 'late', status: 'progress', start: 6, end: 9 },
     unplanned: { id: 'unplanned', status: 'todo', start: null, end: null },
   })
 
-  it('spans the scheduled leaves and ignores stored group dates at any depth', () => {
+  it('spans the scheduled subtasks and ignores the stored group dates', () => {
     const rows = tree()
-    // Done leaves count; the unplanned leaf and both stored group spans do not
+    // Done subtasks count; the unplanned one and the stored group span do not
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: false })
-    expect(groupSpan(rows.nested, rows)).toEqual({ start: 6, end: 9, partial: false })
     rows.late.start = 5
     rows.late.end = 5
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 5, partial: false })
@@ -88,12 +88,9 @@ describe('group calculated dates', () => {
     expect(groupSpan(rows.root, rows)).toEqual({ start: null, end: null, partial: false })
   })
 
-  it('is partial when subtasks are missing, unlisted or cyclic, without widening', () => {
+  it('is partial when subtasks are missing or unlisted, without widening', () => {
     const rows = tree()
-    rows.root.children = ['nested', 'early', 'missing']
-    expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: true })
-    rows.root.children = ['nested', 'early']
-    rows.nested.children = ['late', 'root']
+    rows.root.children = ['early', 'late', 'unplanned', 'missing']
     expect(groupSpan(rows.root, rows)).toEqual({ start: 3, end: 9, partial: true })
     // a group named without its subtasks has nothing to show
     const lone: DatedGroupIssue = { id: 'lone', status: 'todo', start: 1, end: 2, isGroup: true }

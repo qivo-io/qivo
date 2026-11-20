@@ -8543,26 +8543,6 @@ const emailRefusal = (v: unknown): string => {
    and its dates unknown. */
 const NO_SUBTASKS: Readonly<Record<string, IssueVM>> = {}
 
-/* Every task under `it` that `byId` holds, once each, at any depth. The
-   seen set keeps a corrupt parent cycle from hanging the client. */
-function eachDescendant(
-  it: IssueVM,
-  visit: (child: IssueVM) => void,
-  byId: Readonly<Record<string, IssueVM>>,
-) {
-  const seen = new Set([it.id])
-  const stack = [...it.children]
-  while (stack.length) {
-    const id = stack.pop() as string
-    if (seen.has(id)) continue
-    seen.add(id)
-    const child = byId[id]
-    if (!child) continue
-    visit(child)
-    stack.push(...child.children)
-  }
-}
-
 /* --- issue field mapping (app patch -> DB patch) ------------------------------ */
 // A title as the server stores it, trimmed. One over LIMITS.title is refused
 // before it gets here (refuseOver), never cut.
@@ -9032,7 +9012,7 @@ export function andMore(words: string[], more: number, others: (n: number) => st
 }
 
 /** A subtask the Archive or delete window lists for a delete (P.deletePlan). */
-export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
+export type DeleteRow = { task: IssueVM; deletable: boolean }
 /** What Move and Archive or delete take along with a task (P.familyOf):
     `root` is the task as they read it, whose `children` are the family's,
     `byId` holds it, its parent when known and every subtask under it by
@@ -11241,16 +11221,13 @@ export const PLANNER = {
      the dialogs' people pickers. `user` names one of those seats. */
   /* What moving `it` to `projectId` does to its family, as the server does
      it. A subtask stays in its parent's own sub-project, so a subtask that
-     moves leaves its parent (`leavesParent`) unless it lands in the
-     parent's sub-project, which only a family stored before that rule can.
-     A parent the family does not hold counts as being in the task's own
-     sub-project, where every subtask's parent is. Every move carries the
-     subtasks outside the destination along, which `carried` lists and
+     moves to another sub-project leaves its parent (`leavesParent`), and
+     a task that moves carries its subtasks along, which `carried` lists and
      `carriesSubtasks` says. Archived subtasks are not in the view, so the
      Move window asks the server too (moveCarriesSubtasks). The answer
      compares project ids alone, so it needs no facts of the projects. With
-     `family` (P.familyOf) the task, its parent and its subtasks are the
-     family's, as for a task the window shows from its own answer. */
+     `family` (P.familyOf) the task and its subtasks are the family's, as
+     for a task the window shows from its own answer. */
   moveFamily: (
     it: IssueVM,
     projectId: string,
@@ -11260,18 +11237,8 @@ export const PLANNER = {
     const byId = family?.byId ?? NO_SUBTASKS
     if (root.project === projectId)
       return { leavesParent: false, carriesSubtasks: false, carried: [] }
-    const parent = root.parent ? byId[root.parent] : undefined
-    const parentProject = parent ? parent.project : root.project
-    const leavesParent = !!root.parent && parentProject !== projectId
-    const carried: IssueVM[] = []
-    eachDescendant(
-      root,
-      (child) => {
-        if (child.project !== projectId) carried.push(child)
-      },
-      byId,
-    )
-    return { leavesParent, carriesSubtasks: carried.length > 0, carried }
+    const carried = root.children.flatMap((id) => (byId[id] ? [byId[id]] : []))
+    return { leavesParent: !!root.parent, carriesSubtasks: carried.length > 0, carried }
   },
   /** The server's preview of `change` for the removal window
       (accessRemovals.preview), read once and never subscribed to, because
@@ -11813,7 +11780,7 @@ export const PLANNER = {
      a display/filter notion (0044): nothing is stored on the issue, and done
      issues never count, since finished work isn't stale, it's finished. A
      group's own row is not touched when its subtasks change, so it counts the
-     newest activity among itself and its visible descendants. */
+     newest activity among itself and its visible subtasks. */
   /* "owned by me" (the assignee, or the reviewer while the task waits In
      Review; #314) — the ONE membership rule, shared by the My tasks filter,
      the "My view" scope (deviation #49) and the router. It spans every
@@ -11991,10 +11958,10 @@ export const PLANNER = {
     return true
   },
   /** What Move and Archive or delete take along with task `it` (TaskFamily):
-      the whole list of leaf subtasks the watched task's own answer holds,
-      neither failed nor running again. Null while it does not know them, a
-      list that is not whole or holds a subtask stored before the rule of
-      one level, so both windows say they cannot read every subtask. Null
+      the whole list of subtasks the watched task's own answer holds,
+      neither failed nor running again. Null while it does not know them or
+      the list is not whole, so both windows say they cannot read every
+      subtask. Null
       too while the window shows the person's new task from its creating
       answer (P.taskDetail saving), whose lists the server has not read. */
   familyOf: (it: IssueVM): TaskFamily | null => {
@@ -13071,28 +13038,16 @@ export const PLANNER = {
     return shown ? moveAnswerTask(shown, projectId, onSaved) : null
   },
 
-  /* What the Archive or delete window lists for deleting a task: each
-     subtask under it, and under every subtask that would be deleted with it,
-     with whether I can delete it (Edit access to its project). A subtask I
-     cannot delete stays, keeping its own subtasks, so those are not listed.
-     The task and its subtasks are those of `family` (P.familyOf), which
-     holds only a complete list of leaf subtasks. */
+  /* What the Archive or delete window lists for deleting a task: each of
+     its subtasks, with whether I can delete it (Edit access to its
+     project). The task and its subtasks are those of `family`
+     (P.familyOf), which holds only a complete list of subtasks. */
   deletePlan: (family: TaskFamily): { rows: DeleteRow[]; deletable: IssueVM[] } => {
     const { byId, root } = family
-    const rows: DeleteRow[] = []
-    const seen = new Set([root.id])
-    const walk = (it: IssueVM, depth: number) => {
-      for (const key of it.children) {
-        const child = byId[key]
-        if (!child || seen.has(key)) continue
-        seen.add(key)
-        const deletable = PLANNER.canWrite(child.project)
-        rows.push({ task: child, depth, deletable })
-        if (!deletable) continue
-        walk(child, depth + 1)
-      }
-    }
-    walk(root, 0)
+    const rows: DeleteRow[] = root.children.flatMap((key) => {
+      const child = byId[key]
+      return child ? [{ task: child, deletable: PLANNER.canWrite(child.project) }] : []
+    })
     return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task) }
   },
 

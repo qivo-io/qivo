@@ -408,24 +408,18 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(whole?.view && P.familyOf(whole.view)).not.toBeNull()
     })
 
-    it('says a group has unknown dates for an incomplete list or a subtask that is a group', () => {
+    it('says a group has unknown dates for an incomplete list', () => {
       const { P } = store
       P.watchComments('far-1', org)
       const leaf = short('kid-1', 43, { start_week: '2026-03-01', end_week: '2026-04-01' })
-      for (const answer of [
+      one('taskWindow:task').deliver(
         okAnswer('far-1', 40, {
           task: { has_subtasks: true },
           subtasks: { rows: [leaf], complete: false },
         }),
-        okAnswer('far-1', 40, {
-          task: { has_subtasks: true },
-          subtasks: { rows: [leaf, short('kid-2', 44, {}, true)], complete: true },
-        }),
-      ]) {
-        one('taskWindow:task').deliver(answer)
-        expect(detail('far-1')).toMatchObject({ datesKnown: false, done: false })
-        expect(detail('far-1')?.view).toMatchObject({ start: null, end: null, isGroup: true })
-      }
+      )
+      expect(detail('far-1')).toMatchObject({ datesKnown: false, done: false })
+      expect(detail('far-1')?.view).toMatchObject({ start: null, end: null, isGroup: true })
       // a leaf's dates are its own
       one('taskWindow:task').deliver(
         okAnswer('far-1', 40, { task: { start_week: '2026-03-01', end_week: '2026-03-01' } }),

@@ -994,24 +994,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     }
   })
 
-  it('says it cannot read every subtask where a whole list holds a group stored before the rule of one level', async () => {
-    await load()
-    await openWindow(await noteTask(far()))
-    await answer(
-      'taskWindow:task',
-      okAnswer(far(), {
-        task: { ...far(), has_subtasks: true },
-        subtasks: { rows: [short(task(FAR_KID, 42, { parent_id: FAR }), true)], complete: true },
-      }),
-    )
-    const item = await taskActions()
-    for (const text of ['Move to sub-project…', 'Archive or delete…']) {
-      const control = item(text)
-      expect(control instanceof HTMLButtonElement && control.disabled, text).toBe(true)
-      expect(await hintOf(control), text).toBe(FAMILY_UNKNOWN)
-    }
-  })
-
   it('shows a task in a project the person views without a composer, saying it is read-only', async () => {
     await load()
     const row = task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' })
@@ -1434,50 +1416,6 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
       }),
     )
     expect(delayChip()?.dataset.delayChip).toBe('late')
-  })
-
-  it("follows the Board card's span of a group whose subtask has subtasks, as a subtask under it moves", async () => {
-    await load()
-    // the Board reads the far group, whose span the server works out from
-    // the subtasks under its subtasks
-    P.watchBoard('board:desktop', '{"board":1}')
-    const { description: _text, ...fields } = far()
-    const card = (end: string) => ({
-      state: 'ok',
-      rows: [
-        {
-          ...fields,
-          has_subtasks: true,
-          group_done: false,
-          span: { start_week: day(0), end_week: end, partial: false },
-        },
-      ],
-      parents: [],
-      held_projects: ['work'],
-    })
-    await answer('tasks:board', card(day(7)))
-    await openWindow(await noteTask(far()))
-    // the window reads the group, whose one subtask has subtasks of its own
-    const kid = short(task(FAR_KID, 42, { parent_id: FAR }), true)
-    await answer(
-      'taskWindow:task',
-      okAnswer(far(), {
-        task: { ...far(), has_subtasks: true },
-        subtasks: { rows: [kid], complete: true },
-      }),
-    )
-    // the span ends before the due date, on track as the card is
-    const verdict = () => P.delayOf(P.viewTask('board:desktop', FAR) ?? '')?.status
-    expect(verdict()).toBe('ok')
-    expect(delayChip()).toBeNull()
-    // a subtask under its subtask now ends after the due date, which only
-    // the Board's answer says, and the window follows the card
-    await answer('tasks:board', card(day(28)))
-    expect(verdict()).toBe('late')
-    expect(delayChip()?.dataset.delayChip).toBe('late')
-    // the Board hides and stops reading, so its kept card lends nothing
-    await act(async () => P.watchBoard('board:desktop', null))
-    expect(delayChip()?.dataset.delayChip).toBe('unknown')
   })
 
   it('says Delayed for a passed due date, as for a task the workspace holds, and nothing for a Done task or one without a due date or plan', async () => {
