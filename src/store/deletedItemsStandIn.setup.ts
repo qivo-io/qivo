@@ -31,7 +31,7 @@
      and of a search past LIMITS.search, as the rule.
    Its cursors are plain JSON of the arguments and the position, refused
    with bad_request for other arguments. It reads no read budget, so
-   too_wide, both `missing` notes, a stopped page, hidden rows, people
+   too_wide, `missing: 'reads'`, a stopped page, hidden rows, people
    stopped, a failing read, slow, refused and paused restore calls and
    deferred items answer only when `force` asks for them. It imports
    nothing the benchmark's worker cannot load. */
