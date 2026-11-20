@@ -525,6 +525,32 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(reviewRow?.querySelector('[data-avatar="mira"]')).toBeNull()
   })
 
+  it('draws a parent and a linked task that are groups without a status', async () => {
+    await load()
+    await openTask('kid-1')
+    await answer('taskWindow:task', {
+      ...taskAnswer([], true, 'kid-1'),
+      parent: short(row('fam'), true),
+    })
+    await answer(
+      'taskWindow:links',
+      linksAnswer(
+        [link('link-2', 'kid-1', 'other'), link('link-3', 'kid-1', 'manual')],
+        [short(row('other'), true), short(row('manual'))],
+      ),
+    )
+    const rowOf = (handle: string) => document.querySelector(`[data-related-task="${handle}"]`)
+    const dotOf = (handle: string) =>
+      rowOf(handle)?.querySelector('[role="img"][aria-label]:not([data-avatar])')
+    // the parent and a linked group
+    for (const handle of ['QN-27', 'QN-31']) {
+      expect(rowOf(handle), handle).not.toBeNull()
+      expect(dotOf(handle), handle).toBeNull()
+    }
+    // a linked task without subtasks keeps its status
+    expect(dotOf('QN-32')?.getAttribute('aria-label')).toBe('To Do')
+  })
+
   it('removes a link the links answer holds with the kind it shows', async () => {
     await load()
     await openTask()

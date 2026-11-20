@@ -2492,6 +2492,39 @@ describe('restoring a project item', () => {
     await assertNoDanglingRefs(t, 'after a restore that was sent back')
   })
 
+  it('finishes a restore whose item lists a stored task that is gone', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    const tasks = [
+      await plantIssue(t, { org_id, project_id: f.sub2.id }),
+      await plantIssue(t, { org_id, project_id: f.sub2.id }),
+    ]
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub2.id)
+    // a deleted_tasks row whose stored task has no deleted_rows row
+    await t.run((ctx) =>
+      ctx.db.insert('deleted_tasks', {
+        org_id,
+        item_id: item.id,
+        task_id: uuid(),
+        num: 90_000,
+        title: 'Gone',
+        project_id: f.sub2.id,
+        archived: false,
+      }),
+    )
+    expect(await storedTasks(t, item.id)).toHaveLength(3)
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    await stepThrough(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await jobFor(t, item.id)).toBeNull()
+    expect(await storedTasks(t, item.id)).toEqual([])
+    for (const task of tasks) expect(await liveTask(t, task.id)).not.toBeNull()
+    await assertNoDanglingRefs(t, 'after a restore whose item listed a task that is gone')
+  })
+
   it.each(['restore_attach', 'restore_detach'] as const)(
     'ends a project restore an earlier release left in %s, keeping its families',
     async (phase) => {

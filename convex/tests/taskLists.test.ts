@@ -1300,12 +1300,15 @@ describe('a single-task read of an archived group', () => {
       archived_at: day(9),
       title: 'Group',
     })
-    // 450 subtasks, more documents than the request has left, and 60
-    // followers, each one more profile read, more than the reserve holds
+    // 450 unfinished subtasks with hours, more documents than the request
+    // has left, and 60 followers, each one more profile read, more than the
+    // reserve holds
     const kids = await plantMany(fx, 450, {
       project_id: fx.sub.id,
       archived_at: day(9),
       parent_id: group.id,
+      status: 'todo',
+      remaining_hours: 2,
     })
     const followers = await fx.t.run(async (ctx) => {
       const ids: string[] = []
@@ -1333,11 +1336,14 @@ describe('a single-task read of an archived group', () => {
       return ids
     })
     const { rest, mcp } = await reads(fx, group.id)
+    // the subtasks it read are not all of them, so it sums none of their hours
     expect(rest).toMatchObject({
       is_group: true,
       progress: { done: 0, total: 0, percent: 0, partial: true },
+      group_remaining_hours: null,
       has_more_subtasks: true,
     })
+    expect(mcp).toMatchObject({ is_group: true, group_remaining_hours: null })
     // first pages, read before the walk, each with its cursor
     expect(rest.subtasks.map((t) => t.id)).toEqual(kids.slice(0, 50))
     expect(rest.followers.map((p) => p.id)).toEqual(followers.slice(0, 50))
