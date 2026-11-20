@@ -2129,7 +2129,11 @@ describe("a group's dates on REST", () => {
     })
     expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
   })
+})
 
+/* ----------------------------------------------------------- delete issue */
+
+describe('DELETE /v1/tasks/{ref}', () => {
   it('moves the task to Deleted items with the key, detaches children with notify, narrates deleted with provenance', async () => {
     // the detach notice reaches followers from a background step
     vi.useFakeTimers()
