@@ -1142,7 +1142,7 @@ describe('stops', () => {
     const first = await page(t, f.user, args)
     expect(first.entries.map((e) => e.task?.key)).toEqual(keys.slice(0, 2))
     // the next page reads the item's last task, then cannot open its sources
-    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 4 } })
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 1 } })
     const second = await page(t, f.user, { ...args, cursor: first.next_cursor ?? '' })
     expect(second.entries).toEqual([
       { item_id: item, task: expect.objectContaining({ key: keys[2] }) },
