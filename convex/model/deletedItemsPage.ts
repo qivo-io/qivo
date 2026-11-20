@@ -75,9 +75,7 @@
  * a seat's sources, or the page went past an entry whose row its budget
  * could not build, and `matches` on every search page, an admin's
  * included, never computed from a stop, since every seat's search sources
- * hold tasks hidden from it (as main Search). Rows stored before
- * v0.1.122, the first release that wrote the page's fields, hold none of
- * them, so only their number finds them; `legacy` says so (olderRows). */
+ * hold tasks hidden from it (as main Search). */
 
 import type { IndexRange } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -179,12 +177,11 @@ type Profile = Doc<'profiles'>
  * convex-test at the design size with ordinary text, one figure raised a
  * case, with the page's ranges as it counts them, `call` and `build`
  * together, each search result a range, and its documents and bytes as
- * convex-test counts them. Every case answered whole. No search source
- * reads rows stored before v0.1.122, so each search query's allowance is
- * its own. The rows of each page's entries (`build`) read one range and no
- * document, as judging the items had read what the rows show. An admin's
- * search over a project item they read none of answers `matches` with no
- * entry, and a search past `searches` reads the organization in one query.
+ * convex-test counts them. Every case answered whole. The rows of each
+ * page's entries (`build`) read one range and no document, as judging the
+ * items had read what the rows show. An admin's search over a project item
+ * they read none of answers `matches` with no entry, and a search past
+ * `searches` reads the organization in one query.
  *
  * An organization admin's page, which judges task items by the admin's own
  * levels, costs about what a standard user's with the same rows costs, plus
@@ -252,10 +249,6 @@ export type DeletedPage = {
   /** entries that sort before the last one may be missing, `reads` after
    * a budget stop and `matches` on every search page */
   missing?: 'matches' | 'reads'
-  /** the search or the assignee filter may miss tasks deleted before
-   * v0.1.122, the first release that wrote the page's fields, which only a
-   * search for their key finds (olderRows) */
-  legacy?: true
 }
 
 /** What the page is asked (deletedItems.page). `someone` keeps the deletes
@@ -428,9 +421,9 @@ const keyOf = (a: Asked): Promise<string> =>
 /** One seat the page reads, with its sight of its organization. `admin`
  * decides the management parts, since an organization admin keeps every
  * item, which are the organization's ranges, heldFor, the admin's assignee
- * index, olderRows' probe and a project entry's names in a search
- * (projectEntry). Which tasks the seat reads is its view of each item
- * (model/deletedItems.ts viewOf), an admin's included. */
+ * index and a project entry's names in a search (projectEntry). Which
+ * tasks the seat reads is its view of each item (model/deletedItems.ts
+ * viewOf), an admin's included. */
 type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
@@ -1209,11 +1202,9 @@ async function assignedOf(reader: QueryCtx, view: ItemView, item: Item, person: 
 
 /** A task's number, title and readable description, as the search reads
  * them from its row: search_text holds the title, a newline and the
- * description (model/descriptions.ts deletedSearchText). A row stored
- * before the page's release has its title only. */
+ * description (model/descriptions.ts deletedSearchText). */
 function fieldsOf(task: Task): SearchFields {
-  const text = task.search_text
-  if (text === undefined) return { num: task.num, title: task.title, description: '' }
+  const text = task.search_text ?? ''
   const head = `${task.title}\n`
   return {
     num: task.num,
@@ -1310,10 +1301,8 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
  * viewOf, is not purging and meets the scope and filters, its project is
  * one the seat may read in its view of the item (ItemView readable), and
  * its number, title and readable description hold every term
- * (matchesTerms). A row stored before v0.1.122 holds no search_text, so
- * only its number finds it (olderRows). A stop of the gathering adds
- * nothing to `missing`, since every search page says `matches` whatever it
- * read.
+ * (matchesTerms). A stop of the gathering adds nothing to `missing`, since
+ * every search page says `matches` whatever it read.
  */
 async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: At | null) {
   const { a } = run
@@ -1431,33 +1420,6 @@ async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: 
 /** Ends the gathering early. */
 class Stop extends Error {}
 
-/* --------------------------------------------------------- older rows */
-
-/**
- * Whether the page says that its search or assignee filter may miss tasks
- * stored before v0.1.122, the first release that wrote the page's fields
- * (`legacy`). Such rows hold none of them, so only their number finds
- * them, and no backfill writes the fields. Items expire in 30 days, but a
- * stuck item never does, so no date stands in for a look: an admin's page
- * asks the organization once whether it holds such a row (by_org_assignee
- * with neither field), and anyone else's always says so, as the look also
- * sees rows hidden from them. This probe, `legacy` and the read-only count
- * (internal/olderDeletedTasks.ts count) go together once a run of the
- * count finds no such row on any deployment, the demo included, after the
- * last ready item's purge_after has passed (the later-work entry on
- * olderRows of 9 November 2026 in qivo-internal).
- */
-async function olderRows(run: Run, seat: Seat): Promise<boolean> {
-  if (!seat.admin) return true
-  const row = await spending(run.ctx, run.call)
-    .db.query('deleted_tasks')
-    .withIndex('by_org_assignee', (q) =>
-      q.eq('org_id', seat.me.org_id).eq('assignee_id', undefined).eq('deleted_at', undefined),
-    )
-    .first()
-  return row !== null
-}
-
 /* ------------------------------------------------------------- the page */
 
 /**
@@ -1504,7 +1466,7 @@ export async function pageFor(
   try {
     if (scopeMe === null) await unscoped(run, [...seats.values()], cursor, head)
     else {
-      const answer = await scoped(run, scopeMe, cursor, head)
+      const answer = await scoped(run, scopeMe, cursor)
       if (answer !== null) return answer
     }
     return await answerOf(run, key, head)
@@ -1573,12 +1535,7 @@ async function unscoped(
 
 /** The page of one scope in the seat `me`. Answers a whole answer of its
  * own (an empty page or too_wide), or null when the page is in `run`. */
-async function scoped(
-  run: Run,
-  me: Profile,
-  cursor: Cursor | null,
-  head: Partial<DeletedPage>,
-): Promise<DeletedPage | null> {
+async function scoped(run: Run, me: Profile, cursor: Cursor | null): Promise<DeletedPage | null> {
   const { a } = run
   const seat = await seatOf(run, me)
   const scope = scopedOf(seat, a.scope?.ids ?? null)
@@ -1595,10 +1552,6 @@ async function scoped(
   const scan =
     tasks && !search && !viaIndex ? taskPlan(run, seat, scope, a.assignee !== undefined) : null
   if (project === 'too_wide' || scan === 'too_wide') return { ...EMPTY, too_wide: true }
-  // whether the search and the assignee filter may miss older rows: the
-  // probe's answer for an admin, always for anyone else
-  const legacy = tasks && (search || a.assignee !== undefined) && (await olderRows(run, seat))
-  if (legacy) head.legacy = true
   // matches may be missing from every search page
   if (search) run.matches = true
   const first = project !== null && (from === null || from.part === 0)
@@ -1677,7 +1630,6 @@ async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Prom
   if (head.scope_needed === true) page.scope_needed = true
   if (run.reads) page.missing = 'reads'
   else if (run.matches) page.missing = 'matches'
-  if (head.legacy === true) page.legacy = true
   return page
 }
 

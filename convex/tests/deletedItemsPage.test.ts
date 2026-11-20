@@ -1,9 +1,8 @@
 /* The Deleted items page (deletedItems.page, model/deletedItemsPage.ts):
  * its arguments and cursor, who sees what, the order and continuation, the
- * parts and scopes, the search, its stops, the assignee and deleter
- * filters, and the rows stored before the page's fields. Fake timers keep
- * steps from running until a test releases them, and DELETED_PAGE is
- * lowered where a test needs a stop. */
+ * parts and scopes, the search, its stops, and the assignee and deleter
+ * filters. Fake timers keep steps from running until a test releases them,
+ * and DELETED_PAGE is lowered where a test needs a stop. */
 /// <reference types="vite/client" />
 
 import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
@@ -1539,77 +1538,5 @@ describe('deleted by', () => {
       if (row !== null) await ctx.db.patch(row._id, { created_at: iso(Date.now()) })
     })
     expect(await ids(f.admin, {})).toEqual([])
-  })
-})
-
-describe('rows stored before the page', () => {
-  it('finds them by their key alone, never by title, description or assignee, and says so while they last', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    const task = await plantIssue(t, {
-      org_id,
-      project_id: f.sub.id,
-      title: 'Thermal camera',
-      description: 'Borrowed from the lab',
-      assignee_id: f.guest.id,
-    })
-    await deleteTask(t, f.guest, task.id)
-    const item = (await itemFor(t, task.id)).id
-    const scope = { org_id, all: true as const }
-    const find = (who: Doc<'profiles'>, extra: Partial<PageArgs>) =>
-      page(t, who, { scope, ...extra })
-    const scopes = [scope, { org_id, project_ids: [f.sub.id] }]
-    // stored by this release: found by every field, and no older row
-    expect((await find(f.admin, { search: 'borrowed' })).entries).toEqual([{ item_id: item }])
-    for (const s of scopes) {
-      expect((await page(t, f.admin, { scope: s, search: 'thermal' })).legacy).toBeUndefined()
-      expect((await page(t, f.admin, { scope: s, assignee: f.guest.id })).legacy).toBeUndefined()
-      expect((await page(t, f.guest, { scope: s, search: 'thermal' })).legacy).toBe(true)
-    }
-    // as the release before stored it, but for an empty search text: Convex
-    // leaves a row without the field out of the search index, while
-    // convex-test reads the field of every row and fails on one without it
-    await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query('deleted_tasks')
-        .withIndex('by_task', (q) => q.eq('task_id', task.id))
-        .unique()
-      if (row === null) throw new Error('no stored row')
-      await ctx.db.patch(row._id, {
-        search_text: '',
-        assignee_id: undefined,
-        deleted_at: undefined,
-        deleted_by: undefined,
-        item_project_id: undefined,
-        item_parent_id: undefined,
-      })
-    })
-    // the admin, the guest who deleted it, and the user, who leads Testbed
-    for (const who of [f.admin, f.guest, f.user])
-      for (const s of scopes) {
-        const label = `${who.name} in ${'all' in s ? 'All projects' : 'Firmware'}`
-        for (const search of [`QN-${task.num}`, String(task.num)]) {
-          const found = await page(t, who, { scope: s, search })
-          expect(found.entries, `${label} ${search}`).toEqual([{ item_id: item }])
-          expect(found.legacy, label).toBe(true)
-        }
-        // no title source finds it any more
-        for (const search of ['thermal', 'camera', 'borrowed']) {
-          const found = await page(t, who, { scope: s, search })
-          expect(found.entries, `${label} ${search}`).toEqual([])
-          expect(found).toMatchObject({ legacy: true, missing: 'matches' })
-        }
-        const assignee = await page(t, who, { scope: s, assignee: f.guest.id })
-        expect(assignee, label).toMatchObject({ entries: [], legacy: true })
-      }
-    // browsing needs no note
-    expect((await find(f.admin, {})).legacy).toBeUndefined()
-    // once the row is gone, only the admin's note goes
-    await t.run(async (ctx) => {
-      for (const row of await ctx.db.query('deleted_tasks').collect()) await ctx.db.delete(row._id)
-    })
-    expect((await find(f.admin, { search: 'thermal' })).legacy).toBeUndefined()
-    expect((await find(f.guest, { search: 'thermal' })).legacy).toBe(true)
   })
 })

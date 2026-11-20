@@ -26,17 +26,15 @@
    - `kind`, `deleted_by` with `via`, `someone`, `assignee` and the search
      (convex/lib/searchTerms.ts, whole words, the last also as a prefix,
      accents exact) apply before the page is cut, which `limit` sets;
-   - `missing: 'matches'` on every search page, `legacy` on the scoped
-     search and assignee pages of a seat that is not an admin's, and an
-     admin's while the fixture holds older rows;
+   - `missing: 'matches'` on every search page;
    - the refusals of an argument the page does not take, as bad_request,
      and of a search past LIMITS.search, as the rule.
    Its cursors are plain JSON of the arguments and the position, refused
    with bad_request for other arguments. It reads no read budget, so
-   too_wide, both `missing` notes, `legacy`, a stopped page, hidden rows,
-   people stopped, a failing read, slow, refused and paused
-   restore calls and deferred items answer only when `force` asks for
-   them. It imports nothing the benchmark's worker cannot load. */
+   too_wide, both `missing` notes, a stopped page, hidden rows, people
+   stopped, a failing read, slow, refused and paused restore calls and
+   deferred items answer only when `force` asks for them. It imports
+   nothing the benchmark's worker cannot load. */
 
 import { ConvexError } from 'convex/values'
 import { LIMITS, overText } from '../../convex/lib/limits'
@@ -119,9 +117,6 @@ export type DeletedFixture = {
   items: DeletedFixtureItem[]
   projects: { id: string; org_id: string; parent_id?: string }[]
   people: (DeletedPerson & { org_id: string })[]
-  /** an admin's organization holds rows stored before v0.1.122, the first
-      release that wrote the page's fields */
-  older?: boolean
 }
 
 /** States the stand-in answers whatever the fixture says, as the perf
@@ -129,7 +124,6 @@ export type DeletedFixture = {
 export type ForcedDeleted = {
   tooWide?: boolean
   missing?: 'reads' | 'matches'
-  legacy?: boolean
   /** each page stops after this many entries, with a cursor */
   stopped?: number
   /** an admin's task rows show hidden */
@@ -348,15 +342,6 @@ export function deletedPageOf(
   const searchNote = terms.length > 0 ? 'matches' : undefined
   const missing = force.missing ?? searchNote
   if (missing !== undefined) page.missing = missing
-  const legacy =
-    force.legacy === true ||
-    (scope !== undefined &&
-      tasks &&
-      (terms.length > 0 || args.assignee !== undefined) &&
-      // anyone but an admin always, an admin while the organization holds
-      // older rows (convex/model/deletedItemsPage.ts olderRows)
-      seats.some((s) => s.role !== 'admin' || fx.older === true))
-  if (legacy) page.legacy = true
   return page
 }
 

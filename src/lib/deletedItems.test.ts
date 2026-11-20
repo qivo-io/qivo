@@ -262,12 +262,8 @@ describe('what the page says from the server’s answers', () => {
     expect(notesOf({ entries: [], scope_needed: true }, false)).toEqual([])
     expect(notesOf({ entries: [], scope_needed: true }, true)).toHaveLength(1)
     expect(notesOf({ ...page, missing: 'reads' }, false).map((n) => n.key)).toEqual(['reads'])
-    expect(notesOf({ ...page, missing: 'matches', legacy: true }, true)).toEqual([
+    expect(notesOf({ ...page, missing: 'matches' }, true)).toEqual([
       { key: 'matches', text: 'Some matching tasks might not be listed.' },
-      {
-        key: 'legacy',
-        text: 'Tasks deleted on or before 5 November 2026 are found by their key only, and Assigned to may miss them.',
-      },
     ])
     expect(notesOf(page, true)).toEqual([])
   })

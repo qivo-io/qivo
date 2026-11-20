@@ -245,7 +245,7 @@ describe('the Deleted items stand-in against the real reads', () => {
             entries: real.reduce((n, p) => n + p.entries.length, 0),
             hits: real.flatMap((p) => p.entries.flatMap((e) => (e.task ? [e.task.title] : []))),
             notes: real.flatMap((p) =>
-              (['scope_needed', 'missing', 'legacy'] as const).filter((k) => k in p),
+              (['scope_needed', 'missing'] as const).filter((k) => k in p),
             ),
           })
       }

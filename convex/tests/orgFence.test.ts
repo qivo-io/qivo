@@ -234,7 +234,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         title: 'Elsewhere ledger',
         project_id: f.otherProject.id,
         archived: false,
-        // the page's fields, as every delete since v0.1.122 writes them
+        // the page's fields, as every delete writes them
         search_text: 'Elsewhere ledger\n',
         deleted_at: NOW,
         deleted_by: f.otherAdmin.id,
