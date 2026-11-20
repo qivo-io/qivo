@@ -2753,6 +2753,47 @@ describe('a guarded press', () => {
     expect(target.page.presses).toBe(2)
     expect(lines).toEqual([])
   })
+  it('gives a press after the first only the time that is left, and fails when it lands past it', async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+    // the first press is lost, and the row takes 1.5 s to be pressable again
+    const timeouts = []
+    let chosen = false
+    const target = {
+      click: async ({ timeout }) => {
+        timeouts.push(timeout)
+        if (timeouts.length === 1) return
+        await wait(Math.min(timeout, 1500))
+        if (timeout < 1500)
+          throw Object.assign(new Error('locator.click: Timeout exceeded'), {
+            name: 'TimeoutError',
+          })
+        chosen = true
+      },
+    }
+    const started = Date.now()
+    await expect(
+      pressFor(target, async () => chosen, 'Leo is not chosen', { again: 0, ms: 1000 }),
+    ).rejects.toThrow(/^Leo is not chosen, and press 2 found nothing to press in the time left$/)
+    expect(timeouts[0]).toBe(30_000)
+    expect(timeouts[1]).toBeLessThanOrEqual(1000)
+    expect(chosen).toBe(false)
+    expect(Date.now() - started).toBeLessThan(1400)
+  })
+  it('fails a sign that answers only once its time is up', async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+    const target = { click: async () => {} }
+    await expect(
+      pressFor(
+        target,
+        async () => {
+          await wait(1200)
+          return true
+        },
+        'M stays a favorite',
+        { ms: 1000, again: 5_000 },
+      ),
+    ).rejects.toThrow(/^M stays a favorite$/)
+  })
   it('guards the presses that follow a search or a redraw, each on its own sign', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     for (const what of [

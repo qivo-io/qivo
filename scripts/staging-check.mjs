@@ -2157,32 +2157,54 @@ export const PRESS_AGAIN_MS = 5_000
 /** The most presses one guarded press makes (pressFor). */
 export const PRESS_TRIES = 3
 
-/** Presses `target` and waits until `done` answers true, within `ms` of
+/** `n` presses in words. */
+const pressCount = (n) => `${n} ${n === 1 ? 'press' : 'presses'}`
+
+/** Presses `target` and waits until `done` answers true within `ms` of
  *  the first press, else fails the step with `what`, a line that says what
- *  is still missing. A press can be lost on a page that redraws under it,
- *  as a list does when a search's answer replaces its rows
- *  (searchAnswered), and a lost press leaves nothing to wait for. When
- *  `done` has not come `again` ms after a press and `lost` answers true, it
- *  presses again, at most PRESS_TRIES presses in all, and says so in a
- *  NOTE (SEARCH_LOST). `lost` must answer true only while the page shows
- *  no sign that the press reached it, so a press that took is never
- *  repeated and a toggle it set is never set back. Without `lost`, `done`
- *  must be that sign, shown as soon as a press takes, and a press counts
- *  as lost while `done` does not answer. Fails also when a press finds no
- *  `target` within 30 s. */
+ *  is still missing. The first press waits up to 30 s for `target` and
+ *  fails the step when it finds none. A press can be lost on a page that
+ *  redraws under it, as a list does when a search's answer replaces its
+ *  rows (searchAnswered), and a lost press leaves nothing to wait for.
+ *  When `done` has not come `again` ms after a press and `lost` answers
+ *  true, it presses again, at most PRESS_TRIES presses in all, and says so
+ *  in a NOTE (SEARCH_LOST). Such a press waits for `target` only for what
+ *  is left of `ms`, and a `done` that answers once `ms` is up fails the
+ *  step too. `lost` must answer true only while the page shows no sign
+ *  that the press reached it, so a press that took is never repeated and
+ *  a toggle it set is never set back. Without `lost`, `done` must be that
+ *  sign, shown as soon as a press takes, and a press counts as lost while
+ *  `done` does not answer. `before`, when given, runs before each press
+ *  and fails the step when the page is not in the state a press expects,
+ *  such as a toggle that already shows what the press would set. */
 export async function pressFor(
   target,
   done,
   what,
-  { lost = null, ms = 30_000, again = PRESS_AGAIN_MS } = {},
+  { lost = null, before = null, ms = 30_000, again = PRESS_AGAIN_MS } = {},
 ) {
-  const end = Date.now() + ms
+  let end = 0
   for (let presses = 1; ; presses++) {
-    await target.click({ timeout: 30_000 })
+    if (before !== null) await before()
+    if (presses === 1) {
+      await target.click({ timeout: 30_000 })
+      end = Date.now() + ms
+    } else {
+      const left = end - Date.now()
+      expect(left > 0, `${what}, after ${pressCount(presses - 1)}`)
+      try {
+        await target.click({ timeout: left })
+      } catch (error) {
+        if (error?.name !== 'TimeoutError') throw error
+        fail(`${what}, and press ${presses} found nothing to press in the time left`)
+      }
+    }
     const next = Date.now() + again
     for (;;) {
-      if (await done()) return
-      expect(Date.now() < end, presses > 1 ? `${what}, after ${presses} presses` : what)
+      const shown = await done()
+      // a sign that answers past the limit fails, as one that never answers
+      expect(Date.now() < end, presses > 1 ? `${what}, after ${pressCount(presses)}` : what)
+      if (shown) return
       if (presses < PRESS_TRIES && Date.now() >= next && (lost === null || (await lost()))) break
       await sleep(500)
     }
