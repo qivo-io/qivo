@@ -1456,11 +1456,21 @@ describe('purging', () => {
     // the activity keeps the trashed project's id until the purge: the
     // early task's delete, the item's own task and the task that moved out
     expect(await filedUnder()).toHaveLength(1 + 3 + 2)
+    // a row an earlier release's restore left naming the item, for a task
+    // it wrote back without its parent; the purge deletes it with the item
+    await t.run((ctx) =>
+      ctx.db.insert('deleted_item_parents', {
+        item_id: item.id,
+        task_id: own.id,
+        parent_id: early.id,
+      }),
+    )
     await assertNoDanglingRefs(t, 'while a project is in Deleted items')
 
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
+    expect(await t.run((ctx) => ctx.db.query('deleted_item_parents').collect())).toEqual([])
     // the task item whose project was in it, and the sub-project item whose
     // parent was, could never come back
     expect(await itemById(t, earlyItem.id)).toBeNull()
@@ -2184,6 +2194,15 @@ describe("an organization's deletion", () => {
     const f = await withReadingAdmin(t)
     const { files, elsewhere, items, draining } = await trashInFlight(t, f)
     const [readyFile, ...trashOnly] = files
+    // a row an earlier release's restore left naming the moving project
+    // item; it names no organization, so the teardown finds it by item
+    await t.run((ctx) =>
+      ctx.db.insert('deleted_item_parents', {
+        item_id: items[2].id,
+        task_id: uuid(),
+        parent_id: uuid(),
+      }),
+    )
     // a live attachment in the other organization names the ready item's
     // stored bytes, which the fence must keep
     const keeper = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })

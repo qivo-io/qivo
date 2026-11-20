@@ -2428,11 +2428,15 @@ export default defineSchema({
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),
 
-  /* Nothing writes or reads it any more. An earlier release kept here the
-   * parent outside a restoring project item that each of its tasks waited
-   * for, and gave it back after the reveal. A subtask is in its parent's
-   * sub-project, so such a parent is never live, and the restore writes the
-   * task back without it (model/deletedItems.ts restoreTasks). */
+  /* Nothing writes it any more. An earlier release kept here the parent
+   * outside a restoring project item that each of its tasks waited for, and
+   * gave it back after the reveal. A subtask is in its parent's sub-project,
+   * so the restore now writes such a task back without that parent
+   * (model/deletedItems.ts restoreTasks). The rows an earlier release left
+   * are only read to be deleted, by item (by_item_task): when a project
+   * item's restore ends or its purge finishes (dropWaitingParents), and
+   * with the item when its organization's Deleted items are cleared
+   * (clearOrgTrash). by_task is no longer read. */
   deleted_item_parents: defineTable({
     item_id: v.string(),
     task_id: v.string(), // the task written back without its parent

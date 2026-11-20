@@ -190,7 +190,8 @@ const EXCLUDED_TABLES = [
   'overview_count_runs',
   'overview_regroups',
   // Deleted items' own bookkeeping: the state of a move's, restore's or
-  // purge's steps, and the parents a restore waits for.
+  // purge's steps, and the rows an earlier release's restore left for
+  // parents it waited for, which are only deleted now.
   'deleted_item_jobs',
   'deleted_item_parents',
   // One light row per stored task for search and counts: copies of the
@@ -260,7 +261,7 @@ const DELETED_TASKS_FIELDS: Record<string, string> = {
   deleted_by: 'a copy of the item in deleted/items',
   item_project_id: 'a copy of the item in deleted/items',
   item_parent_id: 'a copy of the item in deleted/items',
-  cross_project_id: "a lead's search shortcut",
+  cross_project_id: "an earlier release's search shortcut, no longer written or read",
   search_text: 'a search copy, like a name key',
 }
 

@@ -339,8 +339,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'deleted_tasks.item_parent_id',
   'deleted_item_jobs.scheduled_id',
   // a task an earlier release's restore wrote back without its parent, and
-  // that parent, in a table nothing reads any more; either may be gone or
-  // moved by then
+  // that parent, in rows now only deleted with their item; either may be
+  // gone or moved by then
   'deleted_item_parents.task_id',
   'deleted_item_parents.parent_id',
   // Stored-byte totals name the project and task their files count in while

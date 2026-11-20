@@ -2500,6 +2500,15 @@ describe('restoring a project item', () => {
       const org_id = f.org.id
       const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
       const kid = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
+      // tasks an earlier release wrote back without their parent, which had
+      // gone to Deleted items on its own and stays there
+      const away = await plantIssue(t, { org_id, project_id: f.sub2.id })
+      const waiting = [
+        await plantIssue(t, { org_id, project_id: f.sub2.id }),
+        await plantIssue(t, { org_id, project_id: f.sub2.id }),
+      ]
+      await deleteTask(t, f, away.id)
+      const awayItem = await itemFor(t, away.id)
       await grantsOnSub2(t, f)
       await deleteProject(t, f, f.sub2.id)
       await runSteps(t)
@@ -2520,12 +2529,28 @@ describe('restoring a project item', () => {
           .withIndex('by_item_owner', (q) => q.eq('item_id', item.id))
         for await (const row of stored) await ctx.db.delete(row._id)
         await ctx.db.patch(job._id, { phase, cursor: undefined })
+        for (const task of waiting)
+          await ctx.db.insert('deleted_item_parents', {
+            item_id: item.id,
+            task_id: task.id,
+            parent_id: away.id,
+          })
       })
+      const parentRows = () => t.run((ctx) => ctx.db.query('deleted_item_parents').collect())
+      // a row a step: the item stays until its rows are gone
       await step(t, item.id)
+      expect(await itemById(t, item.id)).not.toBeNull()
+      expect(await parentRows()).toHaveLength(1)
+      await runSteps(t)
       expect(await itemById(t, item.id)).toBeNull()
       expect(await jobFor(t, item.id)).toBeNull()
+      expect(await parentRows()).toEqual([])
       expect((await liveTask(t, kid.id))?.parent_id).toBe(parent.id)
       expect((await liveTask(t, parent.id))?.parent_id).toBeUndefined()
+      // the rows attach nothing, and the parent stays in Deleted items
+      for (const task of waiting) expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
+      expect(await liveTask(t, away.id)).toBeNull()
+      expect((await itemById(t, awayItem.id))?.state).toBe('ready')
       await assertNoDanglingRefs(t, `after a restore an earlier release left in ${phase}`)
     },
   )

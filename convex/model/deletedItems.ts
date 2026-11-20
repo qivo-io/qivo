@@ -2715,7 +2715,8 @@ async function writeTask(
  * (clearTaskRows). A project item has none left, as restore_tasks deletes
  * each with its task and the check above sends one that came later back
  * there; it goes on to restore_grants, which deletes its stored grants
- * (restoreGrants), and then restore_attach, which deletes the item.
+ * (restoreGrants), and then restore_attach, which deletes the item and
+ * the deleted_item_parents rows an earlier release left for it.
  *
  * So a project item's reveal reads none of its tasks, however many it has.
  * A task item holds no more tasks than its delete handled in one
@@ -3601,6 +3602,21 @@ const PHASES: Record<
   purge_projects: { run: (run) => purgeStored(run, 'projects'), next: () => 'purge_finish' },
 }
 
+/** Deletes the deleted_item_parents rows that name `run`'s item, within its
+ * budget, and is true once none is left. Only an earlier release wrote
+ * them, for the tasks a project item's restore wrote back without a parent
+ * outside the item, and nothing gives that parent back any more. A project
+ * item's restore that ends (restore_attach, restore_detach) and a purge
+ * (purge_finish) delete them before the item, so none outlasts it. */
+const dropWaitingParents = (run: Run): Promise<boolean> =>
+  drain(
+    run.budget,
+    run.ctx.db
+      .query('deleted_item_parents')
+      .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id)),
+    (row) => run.ctx.db.delete(row._id),
+  )
+
 /** Who acts in `item`'s phase: nobody for a purge; the deleter for a move,
  * unless their id was reused; the restorer for a restore, while their seat
  * in the item's organization is active. */
@@ -3693,6 +3709,7 @@ async function work(
         console.warn('A deleted item purge starts again', { item_id: item.id })
         return { ...run.state, phase: 'purge_live', cursor: undefined }
       }
+      if (!(await dropWaitingParents(run))) return run.state
       await ctx.db.delete(item._id)
       return null
     }
@@ -3715,8 +3732,9 @@ async function work(
     // a project item's restore ends here. An earlier release gave the tasks
     // whose parent was outside the item their parent in these phases, which
     // a family in one sub-project never needs, so a job saved in either
-    // ends at once.
+    // only deletes the rows that release left for it, then the item.
     if (phase === 'restore_attach' || phase === 'restore_detach') {
+      if (!(await dropWaitingParents(run))) return run.state
       await ctx.db.delete(item._id)
       return null
     }
@@ -3798,7 +3816,8 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * reveal does (sendBack): the move takes back what it wrote, and the item
  * is ready again for whoever could restore it, rather than stuck. After the
  * reveal its projects and tasks are live, so neither applies.
- * restore_attach and restore_detach only delete the item, restore_grants
+ * restore_attach and restore_detach only delete the item and the
+ * deleted_item_parents rows an earlier release left for it, restore_grants
  * deletes the small stored grant rows (writing back the missing ones only
  * for a job the release before left), and restore_clear deletes a task
  * item's deleted_tasks rows, at least one a step, so each is retried until
@@ -4138,6 +4157,19 @@ export async function clearOrgTrash(
     budget,
     ctx.db.query('deleted_items').withIndex('by_org_deleted', (q) => q.eq('org_id', orgId)),
     async (item) => {
+      // the rows an earlier release left for the item's tasks, which name
+      // no organization, so they go with the item (dropWaitingParents)
+      const waiting = await clearPages(
+        budget,
+        ctx.db
+          .query('deleted_item_parents')
+          .withIndex('by_item_task', (q) => q.eq('item_id', item.id)),
+        async (row) => {
+          await ctx.db.delete(row._id)
+          return true
+        },
+      )
+      if (!waiting) return false
       const job = await jobOf(ctx, item.id)
       if (job !== null) await ctx.db.delete(job._id)
       await ctx.db.delete(item._id)
