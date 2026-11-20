@@ -2,8 +2,7 @@
  * through its subtasks, which share its sub-project, on every surface,
  * whether that project is archived or not; the lists never read the tasks
  * of an archived project, and the workload reads no task its people do not
- * own. A project restore changes no task's group, and the restore's old
- * regroup step ends doing nothing. */
+ * own. A project restore changes no task's group. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'

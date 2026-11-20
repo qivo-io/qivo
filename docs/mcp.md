@@ -406,6 +406,19 @@ page can now hold fewer than `limit` items, or none, while `next_cursor` is
 set. Such code must follow `next_cursor` until it is `null`, and its model
 learns the new argument only after the client refreshes its tool list.
 
+Later in November 2026 `list_tasks` and `get_task` results lost
+`has_hidden_parent`, which was always `false`, and the `expected` of
+`update_task` stopped taking it (see [Task results](#task-results) and
+[Refusing a change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). The
+`update_task` description had asked clients to stop sending it. A client
+holding the older catalogue still finds the key in the schema of
+`expected`, and a call that sends it, alone or beside `parent_id`, is
+refused with `unknown field "expected.has_hidden_parent"; expected takes
+…` and changes nothing. Such a client must send `parent_id` alone and stop
+reading the field, and its model learns that only after the client
+refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
