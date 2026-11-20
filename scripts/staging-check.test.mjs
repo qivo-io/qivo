@@ -165,6 +165,7 @@ import {
   purgeAnswerOf,
   querySetChanges,
   RATE_BUDGET,
+  REASSIGN_PEOPLE_QUERY,
   REGROUP_WAIT,
   RELATION_EXPECTED,
   RELATION_STEP,
@@ -3090,10 +3091,15 @@ describe("a search's read on the sync socket", () => {
     expect(script).toContain(
       'searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0',
     )
-    for (const query of ['query: MENTION_PEOPLE_QUERY,', 'query: DIRECTORY_SEARCH_QUERY,'])
+    for (const query of [
+      'query: MENTION_PEOPLE_QUERY,',
+      'query: DIRECTORY_SEARCH_QUERY,',
+      'query: REASSIGN_PEOPLE_QUERY,',
+    ])
       expect(script, query).toContain(query)
     expect(MENTION_PEOPLE_QUERY).toBe('pickers:syncRecipients')
     expect(DIRECTORY_SEARCH_QUERY).toBe('projectNav:search')
+    expect(REASSIGN_PEOPLE_QUERY).toBe('accessRemovals:reassignChoices')
   })
 })
 

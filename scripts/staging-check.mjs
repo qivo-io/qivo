@@ -9742,14 +9742,21 @@ export const REMOVAL_EXPECTED = {
   chosen: (name) => `New assignee: ${name}`,
 }
 
+/** The read of the removal window's Reassign picker
+ *  (convex/accessRemovals.ts reassignChoices), whose answer for a search
+ *  the step waits for. */
+export const REASSIGN_PEOPLE_QUERY = 'accessRemovals:reassignChoices'
+
 /** The removal window on the deployment's answers (accessRemovals.preview
  *  and reassignChoices): the run makes `<tag> Removal` under its second
  *  project N over REST, gives the Standard agent a User grant there and a
  *  To Do task, then in the app presses the agent's Remove in that
  *  sub-project's access editor. The window must list the task's key and
  *  title from the preview; the step chooses Reassign, searches the picker
- *  for Nora's name, chooses her and presses REMOVAL_EXPECTED.submit, which
- *  must close the window. Over REST the task must then be Nora's and the
+ *  for Nora's name, waits for the deployment's answer to that search
+ *  (REASSIGN_PEOPLE_QUERY), whose rows must all name her, since she can be
+ *  the only person the picker opens with, chooses her and presses
+ *  REMOVAL_EXPECTED.submit, which must close the window. Over REST the task must then be Nora's and the
  *  sub-project must hold no grant for the agent. Not under M, where the
  *  agent's Viewer grant keeps its sight of every sub-project, so the
  *  removal would take no task out of sight and open no window. Without an
@@ -9799,12 +9806,19 @@ async function removalWindowCheck() {
     await dialog.locator('[data-access-removal-reassign] input[type="radio"]').check()
     const picker = dialog.locator('[data-reassign-to]')
     await picker.click()
+    // the picker opens on the people who could take the task, who can be
+    // Nora alone, so it waits for the server's answer to her name
     await pressSearched(
       app.locator('[data-reassign-search]'),
       run.nora.name,
       // the people; the row that names no one stays whatever the search
       app.locator('[data-reassign-choice]:not([data-reassign-choice=""])'),
       app.locator(`[data-reassign-choice="${run.nora.id}"]`),
+      {
+        query: REASSIGN_PEOPLE_QUERY,
+        // the picker's Loading people and held lines
+        busy: app.locator('[data-reassign-people] [role="status"]'),
+      },
     )
     expect(
       await until(
