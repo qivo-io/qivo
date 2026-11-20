@@ -302,7 +302,7 @@ describe('the single-task read names only tasks the caller can read', () => {
     expect((await restGet(fx, a.id)).group_remaining_hours).toBeNull()
   })
 
-  it('a parent reads by id, with has_hidden_parent false; owner and link on rows', async () => {
+  it('a parent reads by id, without has_hidden_parent; owner and link on rows', async () => {
     const fx = await setup()
     const visibleParent = await task(fx)
     const leaf = await task(fx, { assignee_id: fx.user.id })
@@ -313,22 +313,21 @@ describe('the single-task read names only tasks the caller can read', () => {
       reviewer_id: fx.guest.id,
     })
     const one = await restGet(fx, leaf.id)
-    expect(one).toMatchObject({ parent_id: null, has_hidden_parent: false, owner_id: fx.user.id })
+    expect(one).toMatchObject({ parent_id: null, owner_id: fx.user.id })
+    expect(one).not.toHaveProperty('has_hidden_parent')
     expect(one.url).toBe(`http://localhost:5199/app/testbed/tasks/qn-${leaf.num}`)
     const rows = await restList(fx, {})
     expect(rows.find((r) => r.id === underVisible.id)).toMatchObject({
       parent_id: visibleParent.id,
-      has_hidden_parent: false,
       owner_id: fx.guest.id, // the reviewer owns it while in review
     })
     expect('subtasks' in rows[0]).toBe(false) // list rows stay lean
     const mcpRows = (
       await mcp<{ tasks: Record<string, unknown>[] }>(fx, internal.machine.mcp.listIssues, {})
     ).tasks
-    expect(mcpRows.find((r) => r.id === underVisible.id)).toMatchObject({
-      parent_id: visibleParent.id,
-      has_hidden_parent: false,
-    })
+    const mcpRow = mcpRows.find((r) => r.id === underVisible.id)
+    expect(mcpRow).toMatchObject({ parent_id: visibleParent.id })
+    expect(mcpRow).not.toHaveProperty('has_hidden_parent')
   })
 })
 
@@ -723,7 +722,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     const parent = await task(fx, { title: 'Parent', remaining_hours: 4 })
     const child = await task(fx, { title: 'Child' })
     const out = await restPatch(fx, child.id, { parent: `qn-${parent.num}` })
-    expect(out).toMatchObject({ parent_id: parent.id, has_hidden_parent: false })
+    expect(out).toMatchObject({ parent_id: parent.id })
     // the parent became a group and lost its own hours, as in the app
     expect((await row(fx.t, parent.id)).remaining_hours).toBeUndefined()
     const events = await activityFor(fx.t, fx.org.id)

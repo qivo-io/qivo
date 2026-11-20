@@ -77,8 +77,6 @@ function row(id: string, num: number, over: Partial<AgendaRow> = {}): AgendaRow 
     created_at: AT,
     updated_at: AT,
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     blocked_by: [],
     delay: null,
     ...over,

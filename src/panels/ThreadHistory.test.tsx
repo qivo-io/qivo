@@ -87,8 +87,6 @@ async function load(
     paused: false,
     created_at: at(0),
     updated_at: at(0),
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   snap.issues.push({ ...snap.issues[0], id: 'task-b', num: 28, title: 'Write the report' })
   for (const [i, m] of unread.entries())

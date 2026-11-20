@@ -191,23 +191,15 @@ export function fixture(): Snapshot {
     access: [{ project_id: 'plan', profile_id: PAT, level: 'user' }],
     teamAccess: [],
     issues: [
-      {
-        ...task('task-a', 1, { assignee_id: PAT }),
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
-      },
-      {
-        ...task('task-b', 2, {
-          status: 'review',
-          reviewer_id: ME,
-          review_at: '2026-10-02T08:00:00.000Z',
-          remaining_hours: 2,
-          remaining_set_at: '2026-10-02T08:00:00.000Z',
-        }),
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
-      },
-      { ...task('task-c', 3), has_hidden_subtasks: false, has_hidden_parent: false },
+      task('task-a', 1, { assignee_id: PAT }),
+      task('task-b', 2, {
+        status: 'review',
+        reviewer_id: ME,
+        review_at: '2026-10-02T08:00:00.000Z',
+        remaining_hours: 2,
+        remaining_set_at: '2026-10-02T08:00:00.000Z',
+      }),
+      task('task-c', 3),
     ],
     links: [
       {
@@ -328,8 +320,6 @@ const created = (snap: Snapshot, id: string, num: number, over: Partial<Row<'iss
     status_at: SERVER,
     created_at: SERVER,
     updated_at: SERVER,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...over,
   })
 }
@@ -340,12 +330,7 @@ const created = (snap: Snapshot, id: string, num: number, over: Partial<Row<'iss
 const stored = (id: string, num: number, over: Partial<Row<'issues'>>) => {
   const snap = fixture()
   created(snap, id, num, over)
-  const {
-    description: _text,
-    has_hidden_subtasks: _h,
-    has_hidden_parent: _p,
-    ...row
-  } = snap.issues.at(-1) as Snapshot['issues'][number]
+  const { description: _text, ...row } = snap.issues.at(-1) as Snapshot['issues'][number]
   return row
 }
 
@@ -366,8 +351,6 @@ function viewTask(over: Partial<ViewRow> = {}): ViewRow {
   return {
     ...fields,
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...over,
   }
 }
@@ -377,8 +360,6 @@ function windowTask(over: Partial<Extract<TaskAnswer, { state: 'ok' }>['task']> 
   return {
     ...task(WINDOW_TASK, 80),
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...over,
   }
 }
@@ -417,7 +398,7 @@ const pickerRow = (id: string, num: number): RelationCandidate => {
 /** Picker row `row` as the window's answer lists it once a pick made it
     a subtask (`has_subtasks` false) or the parent (true). */
 const shortOf = (row: RelationCandidate, has_subtasks: boolean) => {
-  const { parent_id: _parent, has_hidden_parent: _hidden, exact: _exact, ...fields } = row
+  const { parent_id: _parent, exact: _exact, ...fields } = row
   return { ...fields, has_subtasks }
 }
 
@@ -566,7 +547,6 @@ export const recipes: Recipe[] = [
         windowAnswer(
           {
             has_subtasks: true,
-            has_hidden_subtasks: true,
             ...(args ? { priority: 'high' as const, updated_at: SERVER } : {}),
           },
           { subtasks: { rows: [windowKid()], complete: false } },

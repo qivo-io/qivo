@@ -161,8 +161,6 @@ async function open(
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   archive = []
   readLevel = role === 'admin' ? 'lead' : (level ?? null)
@@ -982,8 +980,6 @@ async function openFound({
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   }
   archive = inArchive && !active ? [{ ...row, archived_at: archivedAt }] : []
   readLevel = role === 'admin' ? 'lead' : (level ?? null)

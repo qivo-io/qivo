@@ -100,19 +100,11 @@ const task = (id: string, num: number, extra: Partial<Task> = {}): Task => ({
   paused: false,
   created_at: AT,
   updated_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...extra,
 })
 /* Task `row` as the short row an answer sends (convex/lib/taskWindow.ts). */
 const short = (row: Task, has_subtasks = false) => {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_subtasks: _hidden,
-    has_hidden_parent: _hiddenParent,
-    ...rest
-  } = row
+  const { description: _text, parent_id: _parent, ...rest } = row
   return { ...rest, has_subtasks, level: row.project_id === 'manuals' ? 'viewer' : 'lead' }
 }
 /* The far task QN-40, owned by Mira, with 400 hours left and due in two
@@ -140,13 +132,7 @@ const okAnswer = (row: Task, extra: Record<string, unknown> = {}) => ({
 })
 /* The archived answer of `row`, with its text, at `level`. */
 const archivedAnswer = (row: Task, level = 'lead', is_group = false) => {
-  const {
-    description,
-    parent_id: _parent,
-    has_hidden_subtasks: _hidden,
-    has_hidden_parent: _hiddenParent,
-    ...page
-  } = row
+  const { description, parent_id: _parent, ...page } = row
   return {
     state: 'archived',
     task: { ...page, archived_at: '2026-09-14T09:00:00.000Z', is_group },
@@ -989,7 +975,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await answer(
       'taskWindow:task',
       okAnswer(far(), {
-        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        task: { ...far(), has_subtasks: true },
         subtasks: { rows: [kid], complete: false },
       }),
     )
@@ -1107,7 +1093,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await answer(
       'taskWindow:task',
       okAnswer(far(), {
-        task: { ...group, has_hidden_subtasks: true },
+        task: group,
         subtasks: { rows: kids.slice(0, 1), complete: false },
       }),
     )
@@ -1434,7 +1420,7 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     await answer(
       'taskWindow:task',
       okAnswer(far(), {
-        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        task: { ...far(), has_subtasks: true },
         subtasks: { rows: [late], complete: false },
       }),
     )

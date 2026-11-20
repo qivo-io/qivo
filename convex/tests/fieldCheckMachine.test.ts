@@ -235,7 +235,7 @@ describe('REST task edits', () => {
       // each subtask still stores the id, and a read shows no parent
       for (const kid of kids) expect((await task(fx, kid.id))?.parent_id).toBe(gone.id)
       const read = await send(fx, 'GET', `/v1/tasks/${key(viaRest)}`)
-      expect(JSON.parse(read.text)).toMatchObject({ parent_id: null, has_hidden_parent: false })
+      expect(JSON.parse(read.text)).toMatchObject({ parent_id: null })
       const changed = (kid: Doc<'issues'>) =>
         `parent of ${key(kid)} changed since you read it, so nothing was saved; read ${key(kid)} again and resend your change`
 
@@ -322,7 +322,7 @@ describe('malformed expected', () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
     const TASK_KEYS =
-      'title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, parent_id, has_hidden_parent, project_id'
+      'title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, parent_id, project_id'
     const NOT_OBJECT = 'expected must be an object of the fields as you last read them'
     const cases: [Record<string, unknown>, string][] = [
       [{ title: 'X', expected: null }, NOT_OBJECT],
@@ -346,14 +346,14 @@ describe('malformed expected', () => {
         { status: 'done', expected: { title: 'One' } },
         'expected.title applies only when the request sends title',
       ],
-      // expected.parent_id may come alone, and has_hidden_parent never does
+      // has_hidden_parent is no key, alone or beside parent_id
       [
-        { parent: null, expected: { has_hidden_parent: false } },
-        'expected.parent_id and expected.has_hidden_parent go together',
+        { title: 'X', parent: null, expected: { has_hidden_parent: false } },
+        `unknown field "expected.has_hidden_parent"; expected takes ${TASK_KEYS}`,
       ],
       [
-        { parent: null, expected: { parent_id: uuid(), has_hidden_parent: true } },
-        'expected.has_hidden_parent must be false when expected.parent_id names a task',
+        { title: 'X', parent: null, expected: { parent_id: null, has_hidden_parent: false } },
+        `unknown field "expected.has_hidden_parent"; expected takes ${TASK_KEYS}`,
       ],
     ]
     for (const [body, error] of cases) {
@@ -438,7 +438,7 @@ describe('typed values in expected', () => {
         'expected.reviewer_id must be a profile uuid or null',
       ],
       [
-        { parent: null, expected: { parent_id: 'Task-First', has_hidden_parent: false } },
+        { parent: null, expected: { parent_id: 'Task-First' } },
         'expected.parent_id must be a task uuid or null',
       ],
       [

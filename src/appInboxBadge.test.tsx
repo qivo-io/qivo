@@ -100,8 +100,6 @@ function fixture(unread: number) {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     messages.push({
       id: `message-${n}`,

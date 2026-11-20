@@ -56,8 +56,6 @@ describe('view model identity across repaints', () => {
       created_at: AT,
       updated_at: AT,
       paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
       ...(parent ? { parent_id: parent } : {}),
     })
   }

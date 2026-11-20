@@ -130,8 +130,6 @@ async function bootAt(
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   shape?.(snap)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -181,7 +179,7 @@ function answerOf(snap: Snapshot, archived = false, level = 'lead') {
   const row = snap.issues.find((it) => it.id === SOAK)
   if (!row) throw new Error('no soak test')
   if (archived) {
-    const { description, has_hidden_subtasks: _h, has_hidden_parent: _p, ...page } = row
+    const { description, ...page } = row
     return {
       state: 'archived',
       task: { ...page, archived_at: '2026-09-14T09:00:00.000Z', is_group: false },

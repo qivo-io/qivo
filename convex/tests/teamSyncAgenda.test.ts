@@ -1016,8 +1016,8 @@ async function hiddenOrg(wide: boolean) {
  * of two organizations compare. */
 const shape = (answer: AgendaAnswer) => {
   if (answer.state !== 'ok') return answer
-  const one = (r: { title: string; has_subtasks: boolean; has_hidden_parent: boolean }) =>
-    [r.title, r.has_subtasks, r.has_hidden_parent] as const
+  const one = (r: { title: string; has_subtasks: boolean; parent_id?: string }) =>
+    [r.title, r.has_subtasks, r.parent_id !== undefined] as const
   return {
     rows: answer.rows.map((r) => [...one(r), r.blocked_by.length, r.delay] as const).sort(),
     parents: answer.parents.map(one).sort(),

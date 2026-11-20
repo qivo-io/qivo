@@ -1125,7 +1125,6 @@ describe('POST /v1/tasks', () => {
       reporter_id: f.agent.id,
       reporter_name: 'Relay',
       parent_id: null,
-      has_hidden_parent: false,
       start_week: null,
       end_week: null,
       due_date: null,

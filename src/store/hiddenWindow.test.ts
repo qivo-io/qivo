@@ -139,8 +139,6 @@ describe('the task window while the page is hidden', () => {
       paused: false,
       created_at: new Date(START).toISOString(),
       updated_at: new Date(START).toISOString(),
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     threads = []
     histories = []

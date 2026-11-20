@@ -75,8 +75,6 @@ async function openInbox(
       paused: false,
       created_at: new Date(AT).toISOString(),
       updated_at: new Date(AT).toISOString(),
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     snap.messages.push({
       id: `message-${n}`,

@@ -40,8 +40,6 @@ function workspace(names: string[], roles: Record<string, string> = {}): Snapsho
     paused: false,
     created_at: me.created_at,
     updated_at: me.created_at,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   return snap
 }

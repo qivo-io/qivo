@@ -56,8 +56,6 @@ describe('planner refresh boundaries', () => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation(

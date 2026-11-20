@@ -67,8 +67,6 @@ async function open({ embedded = false, title = 'Run the soak test', comment = f
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)

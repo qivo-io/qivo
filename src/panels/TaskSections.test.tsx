@@ -67,20 +67,12 @@ const task = (id: string, num: number, extra: Partial<Task> = {}): Task => ({
   paused: false,
   created_at: AT,
   updated_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...extra,
 })
 /* Task `row` as the short row an answer sends (convex/lib/taskWindow.ts
    ShortRow). */
 const short = (row: Task, has_subtasks = false) => {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_subtasks: _hidden,
-    has_hidden_parent: _hiddenParent,
-    ...rest
-  } = row
+  const { description: _text, parent_id: _parent, ...rest } = row
   return { ...rest, has_subtasks, level: row.project_id === 'manuals' ? 'viewer' : 'lead' }
 }
 const row = (id: string) => {
@@ -90,7 +82,7 @@ const row = (id: string) => {
 }
 const taskAnswer = (kids: unknown[], complete = true, id = 'fam') => ({
   state: 'ok',
-  task: { ...row(id), has_subtasks: kids.length > 0, has_hidden_subtasks: !complete },
+  task: { ...row(id), has_subtasks: kids.length > 0 },
   level: 'lead',
   labels: [],
   follow: null,

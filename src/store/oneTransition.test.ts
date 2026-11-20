@@ -52,8 +52,6 @@ describe('one transition', () => {
       created_at: AT,
       updated_at: AT,
       paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
@@ -127,7 +125,7 @@ describe('one transition', () => {
     store.P.showSections({}, true)
     await new Promise((resolve) => setTimeout(resolve, 0))
     const short = (row: Snapshot['issues'][number]) => {
-      const { description: _text, has_hidden_subtasks: _h, has_hidden_parent: _p, ...rest } = row
+      const { description: _text, ...rest } = row
       return { ...rest, has_subtasks: false, level: 'lead' }
     }
     const task = (title: string) => ({

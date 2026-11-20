@@ -141,8 +141,6 @@ function world({ planLevel }: { planLevel: 'user' | 'viewer' | null }): Snapshot
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   snap.milestones.push({
     id: 'm-plan',

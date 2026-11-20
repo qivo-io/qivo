@@ -12,7 +12,8 @@ import {
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
-import { moveSubtreeHolderRule } from '../convex/model/issues'
+import { parseExpected } from '../convex/model/expected'
+import { moveSubtreeHolderRule, TASK_FIELDS } from '../convex/model/issues'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import { endText } from '../src/lib/deletedItems'
 import { LABEL_COLORS } from '../src/lib/labelColors'
@@ -61,6 +62,7 @@ import {
   failedShot,
   freeMilestoneWeek,
   freePastMilestoneWeek,
+  HIDDEN_PARENT_REFUSED,
   HIDDEN_TASK_WINDOW_STEP,
   HIDDEN_WINDOW_READS,
   hasTag,
@@ -567,25 +569,37 @@ describe('staging check REST contract', () => {
     for (const mark of ["'data-target-search'", 'data-target-picker', 'data-target={row.id}'])
       expect(picker, mark).toContain(mark)
   })
-  it("finds a subtask's parent by id with has_hidden_parent false, and nothing else", () => {
+  it("finds a subtask's parent by id in an answer without has_hidden_parent, and nothing else", () => {
     expect(PARENT_READ_STEP).toBe('subtask-rule/parent-read')
     const parentId = randomUUID()
-    expect(parentReadFaults({ parent_id: parentId, has_hidden_parent: false }, parentId)).toEqual(
-      [],
-    )
-    // must fail: a hidden parent as an earlier backend read it, another
-    // parent, no parent, and an answer without the flag
-    expect(parentReadFaults({ parent_id: null, has_hidden_parent: true }, parentId)).toHaveLength(2)
-    expect(
-      parentReadFaults({ parent_id: randomUUID(), has_hidden_parent: false }, parentId),
-    ).toEqual([expect.stringContaining("not the parent's id")])
-    expect(parentReadFaults({ parent_id: null, has_hidden_parent: false }, parentId)).toHaveLength(
-      1,
-    )
-    expect(parentReadFaults({ parent_id: parentId }, parentId)).toEqual([
-      expect.stringContaining('not false'),
+    expect(parentReadFaults({ parent_id: parentId }, parentId)).toEqual([])
+    // must fail: the flag an earlier backend sent, another parent, no
+    // parent, and no answer
+    expect(parentReadFaults({ parent_id: parentId, has_hidden_parent: false }, parentId)).toEqual([
+      expect.stringContaining('still in the answer'),
     ])
-    expect(parentReadFaults(null, parentId)).toHaveLength(2)
+    expect(parentReadFaults({ parent_id: randomUUID() }, parentId)).toEqual([
+      expect.stringContaining("not the parent's id"),
+    ])
+    expect(parentReadFaults({ parent_id: null }, parentId)).toHaveLength(1)
+    expect(parentReadFaults(null, parentId)).toHaveLength(1)
+  })
+  it('expects the refusal the server sends for expected.has_hidden_parent', () => {
+    const refusalOf = (expected) => {
+      try {
+        parseExpected(TASK_FIELDS, expected, ['parent_id', 'title'])
+        return null
+      } catch (error) {
+        return error.data?.message
+      }
+    }
+    for (const expected of [
+      { has_hidden_parent: false },
+      { parent_id: randomUUID(), has_hidden_parent: false },
+    ])
+      expect(refusalOf(expected)).toBe(HIDDEN_PARENT_REFUSED)
+    // must fail: parent_id alone is taken
+    expect(refusalOf({ parent_id: randomUUID() })).toBeNull()
   })
   it("checks a project's Settings page on the page's own selectors, after the removal window", () => {
     const page = readFileSync(

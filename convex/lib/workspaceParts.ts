@@ -74,15 +74,11 @@ const orgRowFor = (
 
 /** A task as the app receives it. The parent id goes out only where the
  * read shows the parent (lib/workingSet.ts parentLink), and the text comes
- * from the task's description row (model/descriptions.ts descriptionOf).
- * has_hidden_parent is always false and has_hidden_subtasks says only that
- * a list is incomplete (lib/taskWindow.ts); a later release removes both. */
+ * from the task's description row (model/descriptions.ts descriptionOf). */
 export type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
   parent_id?: string
   /** always sent; absent reads as false, as in rows the app makes */
   has_subtasks?: boolean
-  has_hidden_subtasks: boolean
-  has_hidden_parent: boolean
 }
 
 /** The fields of task `task` that every app row of it carries: its stored

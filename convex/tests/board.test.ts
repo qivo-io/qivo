@@ -103,8 +103,6 @@ const shape = (answer: BoardAnswer) => {
   const one = (row: ViewRow) => ({
     title: row.title,
     group: row.has_subtasks,
-    hiddenSubtasks: row.has_hidden_subtasks,
-    hiddenParent: row.has_hidden_parent,
     parent: row.parent_id !== undefined,
     done: row.group_done,
     span: row.span,
@@ -265,7 +263,8 @@ describe('rows', () => {
       const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), filters)
       if (answer.state !== 'ok') throw new Error(answer.state)
       const byId = new Map([...answer.rows, ...answer.parents].map((row) => [row.id, row]))
-      expect(byId.get(under.id)).toMatchObject({ parent_id: shown.id, has_hidden_parent: false })
+      expect(byId.get(under.id)).toMatchObject({ parent_id: shown.id })
+      expect(byId.get(under.id)).not.toHaveProperty('has_hidden_parent')
       expect(byId.get(shown.id)?.has_subtasks).toBe(true)
       expect(answer.parents.map((row) => row.id)).toEqual(filters.priority ? [shown.id] : [])
     }
@@ -289,10 +288,10 @@ describe('rows', () => {
     expect(byTitle.get('Archived kid')).toMatchObject({ has_subtasks: false })
     expect(byTitle.get('Active kid')).toMatchObject({
       has_subtasks: true,
-      has_hidden_subtasks: false,
       group_done: false,
       span: { partial: false },
     })
+    expect(byTitle.get('Active kid')).not.toHaveProperty('has_hidden_subtasks')
   })
 })
 

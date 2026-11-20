@@ -116,7 +116,7 @@
  * candidate they make full and a Subtasks candidate that has any, so
  * excluding a candidate for its hidden or archived subtasks tells no more
  * than the write's refusal of that pick does. A subtask row names its
- * active parent (lib/workingSet.ts parentLink) and says of no hidden one.
+ * active parent (lib/workingSet.ts parentLink).
  *
  * RELATION_PICKER names the budgets and the reads measured at the design
  * size. */
@@ -221,10 +221,8 @@ export type RelationBlock = 'has_subtasks' | 'is_subtask' | 'full'
 export type RelationCandidate = Omit<ShortRow, 'has_subtasks'> & {
   /** In the Subtasks picker only, the task's parent as a read states it
    * (lib/workingSet.ts parentLink), whose id a pick sends as its expected
-   * value; has_hidden_parent is always false, and a later release removes
-   * it. The other pickers leave both out. */
+   * value. The other pickers leave it out. */
   parent_id?: string
-  has_hidden_parent?: boolean
   /** the task a search of exactly its task ID names, found by its number
    * whatever the list's end, which Enter may pick */
   exact?: true
@@ -747,7 +745,7 @@ const projectTasks = (ctx: QueryCtx, id: string, from: number | null) =>
 type Verdict = { row: RelationCandidate } | 'out' | 'stop'
 
 /* A task's parent as a row states it (lib/workingSet.ts parentLink). */
-type Pair = { parent_id?: string; has_hidden_parent: boolean }
+type Parent = { parent_id?: string }
 
 /**
  * The task window's relation picker of kind `args.kind` for the task with
@@ -869,9 +867,9 @@ async function batchOf(
   /* The parent of `task` as a row states it, or 'stop': its id where the
    * parent is active in the task's own sub-project (lib/liveTasks.ts
    * liveLink), which the reader is shown, so no access is asked. */
-  const pairOf = async (task: Doc<'issues'>): Promise<Pair | 'stop'> => {
+  const parentOf = async (task: Doc<'issues'>): Promise<Parent | 'stop'> => {
     const id = task.parent_id
-    if (id === undefined) return { has_hidden_parent: false }
+    if (id === undefined) return {}
     const shown = (parent: Doc<'issues'> | null | undefined) =>
       parent != null && parent.archived_at === undefined ? parent : null
     const scanned = read.get(id)
@@ -894,7 +892,7 @@ async function batchOf(
    * write's rules, and its row. */
   const decide = async (task: Doc<'issues'>, p: ScopeProject): Promise<Verdict> => {
     if (task.id === open.id) return 'out'
-    let pair: Pair | null = null
+    let parent: Parent | null = null
     if (kind === 'parent') {
       if (task.parent_id !== undefined || task.id === open.parent_id) return 'out'
       // model/issues.ts subtaskCount, active subtasks in any project
@@ -921,11 +919,11 @@ async function batchOf(
           return 'out'
         }
       }
-      const got = await pairOf(task)
+      const got = await parentOf(task)
       if (got === 'stop') return 'stop'
-      pair = got
+      parent = got
     } else if (linked.has(task.id)) return 'out'
-    return { row: { ...taskFields(task), level: p.level, ...pair } }
+    return { row: { ...taskFields(task), level: p.level, ...parent } }
   }
 
   const rows: RelationCandidate[] = []

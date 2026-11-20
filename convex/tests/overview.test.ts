@@ -670,9 +670,7 @@ describe('lists', () => {
       const row = (title: string) => got.rows.find((r) => r.title === title)
       expect(row('Under a shown parent'), scope.kind).toMatchObject({
         parent_id: shown.id,
-        has_hidden_parent: false,
         has_subtasks: false,
-        has_hidden_subtasks: false,
       })
     }
   })

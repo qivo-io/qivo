@@ -16,13 +16,12 @@
      whose project the caller reaches answers `ok` with its row, the
      caller's level on its project, its label rows, the caller's follow,
      its parent as a short row when the caller is shown the parent, and its
-     subtasks as short rows by number and then id, the list complete,
-     has_hidden_parent false and has_hidden_subtasks false; the parent and
-     subtasks only inside the task's own sub-project (convex/lib/liveTasks.ts
-     liveLink), as the server's are. An archived task whose project the
-     caller sees answers `archived` with the Archived tasks page's row, its
-     text, labels, level and whether its project is archived. Everything
-     else answers `unavailable`, alike.
+     subtasks as short rows by number and then id, the list complete; the
+     parent and subtasks only inside the task's own sub-project
+     (convex/lib/liveTasks.ts liveLink), as the server's are. An archived
+     task whose project the caller sees answers `archived` with the
+     Archived tasks page's row, its text, labels, level and whether its
+     project is archived. Everything else answers `unavailable`, alike.
    - links: the opened task's links, as source and as target, whose other
      end the whole holds, by creation and then id, with each other end
      once as a short row.
@@ -59,7 +58,7 @@ export const isTaskWindowRead = (name: string): name is TaskWindowRead =>
 /** States a read answers whatever the whole says: `loading` never
     answers, `failed` fails, `unavailable` answers that the caller may not
     open the task, and `incomplete` answers a list that says it is not
-    whole (half the subtasks, has_hidden_subtasks set). */
+    whole (half the subtasks, `complete` false). */
 export type ForcedTaskWindow = 'loading' | 'failed' | 'unavailable' | 'incomplete'
 
 /** What a read that never answers holds back. */
@@ -141,13 +140,7 @@ export function taskWindowStandIn(
   /* a task the whole holds as a list row of the window, with its group
      fact and the caller's level on its project */
   const short = (row: Task) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_parent: _hiddenParent,
-      has_hidden_subtasks: _hidden,
-      ...rest
-    } = row
+    const { description: _text, parent_id: _parent, ...rest } = row
     return {
       ...rest,
       has_subtasks: row.has_subtasks === true || parents.has(row.id),
@@ -174,14 +167,7 @@ export function taskWindowStandIn(
       const parent = project?.parent_id ? projects.get(project.parent_id) : undefined
       const at = level(task.project_id)
       if (project === undefined || at === null) return UNAVAILABLE
-      const {
-        description,
-        parent_id: _parent,
-        has_hidden_parent: _hiddenParent,
-        has_hidden_subtasks: _hidden,
-        has_subtasks,
-        ...page
-      } = task
+      const { description, parent_id: _parent, has_subtasks, ...page } = task
       return {
         state: 'archived',
         task: { ...page, archived_at: task.archived_at, is_group: has_subtasks === true },
@@ -203,20 +189,15 @@ export function taskWindowStandIn(
     const parent = shownParent !== undefined && sameHome(shownParent) ? shownParent : undefined
     const me = new Set(whole.myProfileIds)
     // the parent's id goes out only for a parent in the task's own
-    // sub-project that the caller is shown, and has_hidden_parent is always
-    // false, whatever the whole's row says (convex/lib/workingSet.ts
-    // parentLink)
+    // sub-project that the caller is shown, whatever the whole's row says
+    // (convex/lib/workingSet.ts parentLink)
     const { parent_id: _parentId, ...own } = task
     return {
       state: 'ok',
       task: {
         ...own,
         ...(parent === undefined ? {} : { parent_id: parent.id }),
-        has_hidden_parent: false,
         has_subtasks: task.has_subtasks === true || counting.length > 0,
-        // says only that the list is incomplete, as the server's does,
-        // whatever the whole's row says
-        has_hidden_subtasks: incomplete,
       },
       level: level(task.project_id),
       labels,

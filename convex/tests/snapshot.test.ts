@@ -833,7 +833,7 @@ describe('parents and hidden tasks in the task window', () => {
     }
     for (const p of [f.guest, f.admin])
       expect(await row(p, near.id), p.name).toMatchObject({
-        task: { parent_id: issueVis.id, has_hidden_parent: false },
+        task: { parent_id: issueVis.id },
         parent: issueVis.id,
       })
   })

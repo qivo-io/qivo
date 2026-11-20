@@ -270,11 +270,9 @@ export const update = orgMutation({
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
-    // the parent pair goes with parent_id
-    const next = 'parent_id' in patch ? { ...patch, has_hidden_parent: null } : patch
     // the text, read once for the check and the write when the edit writes it
     const text = 'description' in patch ? await descriptionOf(ctx.db, issue) : undefined
-    await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next, text })
+    await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next: patch, text })
     const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now, text })
     return await pubFor(ctx, after)
   },
@@ -304,7 +302,7 @@ export const createParent = orgMutation({
       issue,
       view: 'app',
       expected,
-      next: { parent_id, has_hidden_parent: null },
+      next: { parent_id },
     })
     const parent = await createIssueCore(ctx, {
       me: ctx.me,
@@ -378,7 +376,7 @@ export const move = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     if (project_id !== issue.project_id) await assertWritable(ctx, project_id)
-    const detach = detach_parent === true ? { parent_id: null, has_hidden_parent: null } : {}
+    const detach = detach_parent === true ? { parent_id: null } : {}
     await assertTaskExpected(ctx, {
       me: ctx.me,
       issue,

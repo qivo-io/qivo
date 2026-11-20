@@ -59,24 +59,6 @@ export type Field<Row> = {
   stored?: (row: Row, read: Read) => unknown
   /** The app sends the print of the compare form instead of the value. */
   printed?: true
-  /** The other key of a pair that must come together and compare as one
-   * value (a task's parent_id and has_hidden_parent). The first key of the
-   * pair carries `compare`. */
-  pair?: string
-  /** This key may come without its pair, though the pair's other key may
-   * not come without this one. */
-  alone?: true
-  /** A rule of the request's shape across keys: a refusal sentence, or
-   * undefined when `expected` keeps it. */
-  shape?: (expected: Readonly<Record<string, unknown>>) => string | undefined
-  /** A comparison of its own, for a pair: whether the seen value matches the
-   * stored one, and whether the value the edit stores does. */
-  compare?: (a: {
-    row: Row
-    read: Read
-    expected: Readonly<Record<string, unknown>>
-    next: Readonly<Record<string, unknown>>
-  }) => Promise<{ seen: boolean; next: boolean }>
 }
 
 /** A record kind's keys, in the order the sentences list them. */
@@ -244,8 +226,8 @@ export const listed = (words: readonly string[]): string =>
     : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 
 /* The key rules every surface shares: at least one key, each a key of the
- * record and owned by a field the request sends, and a pair's keys
- * together. `sent` holds the keys whose fields the request sends. */
+ * record and owned by a field the request sends. `sent` holds the keys
+ * whose fields the request sends. */
 function checkKeys<Row>(
   fields: Fields<Row>,
   expected: Readonly<Record<string, unknown>>,
@@ -264,12 +246,6 @@ function checkKeys<Row>(
     if (!sent.has(key)) {
       throw badRequest(`expected.${key} applies only when the request sends ${field.sends}`)
     }
-    if (field.pair !== undefined && field.alone !== true && !Object.hasOwn(expected, field.pair)) {
-      const [first, second] = Object.keys(fields).filter((k) => k === key || k === field.pair)
-      throw badRequest(`expected.${first} and expected.${second} go together`)
-    }
-    const bad = field.shape?.(expected)
-    if (bad !== undefined) throw badRequest(bad)
   }
 }
 
@@ -309,9 +285,9 @@ export type Next = Readonly<Record<string, unknown>> | typeof DELETES
 /** The `next` of a delete (Next). */
 export const DELETES = 'delete'
 
-/** The keys of `expected` that conflict for `row` (the rule above), first
- * key of each pair only, in the table's order. `next` holds, for each key the
- * request sends, the value the core will store for it. */
+/** The keys of `expected` that conflict for `row` (the rule above), in the
+ * table's order. `next` holds, for each key the request sends, the value the
+ * core will store for it. */
 export async function conflictingFields<Row>(
   read: Read,
   fields: Fields<Row>,
@@ -322,25 +298,16 @@ export async function conflictingFields<Row>(
   const out: string[] = []
   for (const [key, field] of Object.entries(fields)) {
     if (!Object.hasOwn(expected, key)) continue
-    if (field.pair !== undefined && field.compare === undefined) continue
-    let matches: { seen: boolean; next: boolean }
-    if (field.compare !== undefined) {
-      matches = await field.compare({ row, read, expected, next: next === DELETES ? {} : next })
-      if (next === DELETES) matches.next = false
-    } else {
-      const stored = field.form(
-        field.stored ? await field.stored(row, read) : (row as Record<string, unknown>)[key],
-      )
-      const seen = expected[key]
-      matches = {
-        seen:
-          field.printed && read.view === 'app'
-            ? seen === printOf(stored)
-            : same(field.form(seen), stored),
-        next: next !== DELETES && same(field.form(next[key]), stored),
-      }
-    }
-    if (!matches.seen && !matches.next) out.push(key)
+    const stored = field.form(
+      field.stored ? await field.stored(row, read) : (row as Record<string, unknown>)[key],
+    )
+    const seen = expected[key]
+    const seenMatches =
+      field.printed && read.view === 'app'
+        ? seen === printOf(stored)
+        : same(field.form(seen), stored)
+    const nextMatches = next !== DELETES && same(field.form(next[key]), stored)
+    if (!seenMatches && !nextMatches) out.push(key)
   }
   return out
 }
@@ -417,7 +384,6 @@ export function changedPrints<Row>(
   const prints: Record<string, string> = {}
   const raw = (row: Row, key: string) => (row as Record<string, unknown>)[key]
   for (const [key, field] of Object.entries(fields)) {
-    if (field.pair !== undefined && field.compare === undefined) continue
     const a = field.form(raw(before, key))
     const b = field.form(raw(after, key))
     if (!same(a, b)) prints[key] = printOf(b)

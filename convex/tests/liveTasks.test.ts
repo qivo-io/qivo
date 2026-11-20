@@ -2,13 +2,12 @@
  * through its subtasks, which share its sub-project, on every surface,
  * whether that project is archived or not; the lists never read the tasks
  * of an archived project, and the workload reads no task its people do not
- * own. A project restore changes no task's group, and the restore's old
- * regroup step ends doing nothing. */
+ * own. A project restore changes no task's group. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx, QueryCtx } from '../_generated/server'
+import type { QueryCtx } from '../_generated/server'
 import { accessOf } from '../lib/access'
 import { ACTIVE_PAGE } from '../lib/activeTaskPage'
 import { COMPLETION_RESERVE } from '../lib/core'
@@ -20,7 +19,6 @@ import { getProject } from '../machine/rest'
 import { moveSubtreeHolderRule, REVIEWER_RULE } from '../model/issues'
 import { finishedBefore, positionAfter } from '../overviewRegroup'
 import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
-import { restoredStep } from '../regroup'
 import { boardFor, NO_FILTERS, projectScope } from './board.setup'
 import {
   as,
@@ -127,13 +125,6 @@ const getProjectHandler = (
   args: { callerId: string; access: 'read'; ref: string },
 ) => handlerOf<typeof args, { completion: unknown }>(getProject)(ctx, args)
 
-/* The old regroup step's handler, to run it inside a test's own mutation. */
-const stepHandler = (
-  restoredStep as unknown as {
-    _handler: (ctx: MutationCtx, args: { projects: string[]; restorer_id: string }) => Promise<null>
-  }
-)._handler
-
 describe('the group rule', () => {
   it('counts a subtask by both tasks', () => {
     const at = (id: string, over: Partial<Doc<'issues'>> = {}) => ({
@@ -232,7 +223,6 @@ describe('the guard on parent links', () => {
     })
     if (window.state !== 'ok') throw new Error(window.state)
     expect(window.parent).toBeNull()
-    expect(window.task.has_hidden_parent).toBe(false)
     expect('parent_id' in window.task).toBe(false)
     // the task window of the active group, whose only subtask is in AWAY
     const groupWindow = await as(fx.t, fx.guest).query(api.taskWindow.task, {
@@ -240,18 +230,18 @@ describe('the guard on parent links', () => {
       ref: group.id,
     })
     if (groupWindow.state !== 'ok') throw new Error(groupWindow.state)
-    expect(groupWindow.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
+    expect(groupWindow.task).toMatchObject({ has_subtasks: false })
     expect(groupWindow.subtasks).toEqual({ rows: [], complete: true })
     expect(JSON.stringify(groupWindow)).not.toContain(kid.id)
     // a view read, the Board of FW
     const board = await boardFor(fx.t, fx.guest, projectScope(fx.guest, fx.sub.id), NO_FILTERS)
     if (board.state !== 'ok') throw new Error(board.state)
     const row = board.rows.find((r) => r.id === child.id)
-    expect(row?.has_hidden_parent).toBe(false)
+    expect(row).toBeDefined()
     expect(row).not.toHaveProperty('parent_id')
     // the REST read
     const rest = await restGet(fx, child.id)
-    expect(rest).toMatchObject({ parent_id: null, has_hidden_parent: false })
+    expect(rest).toMatchObject({ parent_id: null })
     for (const answer of [window, board, rest])
       expect(JSON.stringify(answer)).not.toContain(parent.id)
   })
@@ -530,7 +520,7 @@ describe('project restores and moves', () => {
     vi.useRealTimers()
   })
 
-  it('restoring a sub-project changes no group and schedules no regroup step', async () => {
+  it('restoring a sub-project changes no group', async () => {
     const fx = await setup()
     const own = { remaining_hours: 5, remaining_set_at: NOW }
     // a group in SHELF through its subtask there, and a leaf with hours
@@ -542,26 +532,6 @@ describe('project restores and moves', () => {
     await fx.t.finishAllScheduledFunctions(() => vi.runAllTimers())
     expect(await row(fx, leaf.id)).toMatchObject(own)
     expect((await restGet(fx, inside.id, fx.admin.id)).is_group).toBe(true)
-    const steps = await fx.t.run(async (ctx) =>
-      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
-        (job) => job.name === 'regroup:restoredStep',
-      ),
-    )
-    expect(steps).toEqual([])
-  })
-
-  it('the regroup step a restore scheduled before this release ends, writing nothing', async () => {
-    const fx = await setup()
-    // a group of SHELF that still stores hours of its own
-    const parent = await task(fx, { project_id: fx.shelf.id, title: 'Parent', remaining_hours: 2 })
-    await task(fx, { project_id: fx.shelf.id, parent_id: parent.id })
-    const after = await fx.t.mutation(async (ctx) => {
-      await stepHandler(ctx, { projects: [fx.shelf.id], restorer_id: fx.user.id })
-      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
-      return jobs.filter((job) => job.state.kind === 'pending')
-    })
-    expect(after).toEqual([])
-    expect(await row(fx, parent.id)).toEqual(parent)
   })
 
   it('a stopped regroup step resumes at a task that shares the last creation time', () => {

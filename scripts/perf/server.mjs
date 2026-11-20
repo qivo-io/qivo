@@ -1591,13 +1591,10 @@ const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row
 let parents = parentsOf()
 /** Task `row` as the server's working set holds it (lib/workingSet.ts,
     convex/tests/tasksOracle.setup.ts), which the stand-ins answer from, and
-    as forMe sent it to baseline builds. has_hidden_parent and
-    has_hidden_subtasks are false, as the server sends them. */
+    as forMe sent it to baseline builds. */
 const wireTask = (row) => {
   const { parent_id: parent, ...rest } = row
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
-  out.has_hidden_parent = false
-  out.has_hidden_subtasks = false
   out.has_subtasks = parents.has(row.id)
   return out
 }

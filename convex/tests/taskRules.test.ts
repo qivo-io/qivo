@@ -293,12 +293,12 @@ describe('the working-set rules', () => {
       }
     })
     const link = new Map(rows.map((row) => [row.id, row.link]))
-    expect(link.get(r.parent.id)).toEqual({ has_hidden_parent: false })
-    expect(link.get(r.shownKid.id)).toEqual({ parent_id: r.parent.id, has_hidden_parent: false })
-    expect(link.get(r.loner.id)).toEqual({ has_hidden_parent: false })
+    expect(link.get(r.parent.id)).toEqual({})
+    expect(link.get(r.shownKid.id)).toEqual({ parent_id: r.parent.id })
+    expect(link.get(r.loner.id)).toEqual({})
     expect(links).toEqual([true, false, false])
     // a task that is not the one the link names is no parent
-    expect(parentLink(r.loner, r.parent)).toEqual({ has_hidden_parent: false })
+    expect(parentLink(r.loner, r.parent)).toEqual({})
   })
 
   it('keeps only rows about shown tasks', () => {

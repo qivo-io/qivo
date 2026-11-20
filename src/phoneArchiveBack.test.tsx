@@ -121,8 +121,6 @@ async function openArchive() {
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published

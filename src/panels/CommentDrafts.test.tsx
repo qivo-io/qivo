@@ -81,8 +81,6 @@ async function load(description = '') {
     paused: false,
     created_at: at(0),
     updated_at: at(0),
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   subscriptions = 0
   writes = []

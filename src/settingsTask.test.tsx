@@ -61,8 +61,6 @@ const archived = (num: number, title: string): Task => ({
   paused: false,
   created_at: AT,
   updated_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
 })
 
 /** What the window's read of task `ref` answers: the active task, the

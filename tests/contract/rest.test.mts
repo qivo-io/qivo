@@ -59,7 +59,6 @@ const ISSUE_KEYS = [
   'description',
   'due_date',
   'end_week',
-  'has_hidden_parent',
   'id',
   'is_group',
   'key',

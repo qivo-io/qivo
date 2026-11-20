@@ -428,8 +428,6 @@ export function teamSyncStandIn(
     const row = {
       ...rest,
       ...(parent !== undefined && shown.has(parent) ? { parent_id: parent } : {}),
-      has_hidden_parent: false,
-      has_hidden_subtasks: false,
     } as Omit<ViewRow, 'has_subtasks'>
     if (!isGroup(t)) return { ...row, has_subtasks: false }
     return {

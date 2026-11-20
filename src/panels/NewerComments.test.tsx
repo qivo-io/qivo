@@ -94,8 +94,6 @@ async function load({ unread }: { unread?: number } = {}) {
     paused: false,
     created_at: at(0),
     updated_at: at(0),
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   if (unread !== undefined)
     snap.messages.push({

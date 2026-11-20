@@ -112,8 +112,6 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   const { projectNavStandIn } = await import('../store/projectNavStandIn.setup')
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -215,13 +213,7 @@ function farAnswer(complete = true) {
   })
   return {
     state: 'ok',
-    task: {
-      ...row('far', 40),
-      description: '',
-      has_subtasks: true,
-      has_hidden_subtasks: !complete,
-      has_hidden_parent: false,
-    },
+    task: { ...row('far', 40), description: '', has_subtasks: true },
     level: 'lead',
     labels: [],
     follow: null,
@@ -251,8 +243,6 @@ function loneAnswer() {
       created_at: NOW,
       updated_at: NOW,
       has_subtasks: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     },
     level: 'lead',
     labels: [],
@@ -284,8 +274,6 @@ function subtaskAnswer() {
       parent_id: 'epic',
       description: '',
       has_subtasks: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     },
     level: 'lead',
     labels: [],

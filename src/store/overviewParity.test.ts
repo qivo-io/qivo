@@ -180,7 +180,6 @@ const batchFacts = (batches: (ListAnswer & { state: 'ok' })[]) =>
     rows: b.rows.map((row) => [
       row.id,
       row.has_subtasks,
-      row.has_hidden_subtasks,
       row.parent_id ?? null,
       row.group_done ?? null,
       row.span?.partial ?? null,

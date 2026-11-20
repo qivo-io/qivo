@@ -7,13 +7,11 @@
  * counts a task its reader is not shown. A parent and its subtasks share a
  * sub-project, and a read names one from the other only where they do
  * (lib/liveTasks.ts liveLink), so a reader shown either end is shown the
- * other, and no read says that a task it does not show exists:
- * has_hidden_parent and has_hidden_subtasks stay in the answers for one
- * release and say nothing (lib/taskWindow.ts keeps the latter for a list
- * it could not finish). The app's workspace parts (lib/workspaceParts.ts),
- * its task window (lib/taskWindow.ts), its Board (lib/board.ts) and its
- * Overview (lib/overview.ts), both through lib/viewReads.ts, apply them,
- * and machine outputs reuse them. */
+ * other, and no read says that a task it does not show exists. The app's
+ * workspace parts (lib/workspaceParts.ts), its task window
+ * (lib/taskWindow.ts), its Board (lib/board.ts) and its Overview
+ * (lib/overview.ts), both through lib/viewReads.ts, apply them, and machine
+ * outputs reuse them. */
 
 import type { Doc } from '../_generated/dataModel'
 import { countsAsSubtask, type LinkEnd, liveLink } from './liveTasks'
@@ -71,16 +69,13 @@ export function workingSetOf(
 /**
  * A task's parent as a read states it. `parent` is the task the read shows
  * as the parent, or none. Its id goes out only inside the task's own
- * sub-project (lib/liveTasks.ts liveLink). has_hidden_parent is always
- * false; a later release removes it.
+ * sub-project (lib/liveTasks.ts liveLink).
  */
 export function parentLink(
   task: Pick<Doc<'issues'>, 'parent_id' | 'org_id' | 'project_id'>,
   parent: LinkEnd | null | undefined,
-): { parent_id?: string; has_hidden_parent: false } {
-  return parent != null && liveLink(parent, task)
-    ? { parent_id: parent.id, has_hidden_parent: false }
-    : { has_hidden_parent: false }
+): { parent_id?: string } {
+  return parent != null && liveLink(parent, task) ? { parent_id: parent.id } : {}
 }
 
 /** Whether a read may send a link, which needs the reader shown both ends. */

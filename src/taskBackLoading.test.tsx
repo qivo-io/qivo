@@ -180,8 +180,6 @@ const task = (id: string, org: string, project: string, num: number, title: stri
   paused: false,
   created_at: AT,
   updated_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
 })
 
 /** Gives the login a guest seat in Partner Co at /app/partner, whose task

@@ -164,8 +164,6 @@ async function load({ viaTeam = false, ada = false, lead = true } = {}) {
     assignee_id: 'leo',
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.query.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)

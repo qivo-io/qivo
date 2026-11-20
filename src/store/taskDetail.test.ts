@@ -91,8 +91,6 @@ describe('a task the workspace does not hold, in the store', () => {
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...extra,
   })
   /* A short row of an answer (convex/lib/taskWindow.ts ShortRow). */
@@ -102,13 +100,7 @@ describe('a task the workspace does not hold, in the store', () => {
     extra: Record<string, unknown> = {},
     has_subtasks = false,
   ) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_subtasks: _hidden,
-      has_hidden_parent: _hiddenParent,
-      ...rest
-    } = task(id, num)
+    const { description: _text, parent_id: _parent, ...rest } = task(id, num)
     return { ...rest, has_subtasks, level: 'user', ...extra }
   }
   /* The task answer of task `id`, numbered `num`, as convex/lib/taskWindow.ts
@@ -136,13 +128,7 @@ describe('a task the workspace does not hold, in the store', () => {
   }
   /* The archived answer of task `id` (convex/lib/taskWindow.ts). */
   const archivedAnswer = (id: string, num: number, extra: Record<string, unknown> = {}) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_subtasks: _hidden,
-      has_hidden_parent: _hiddenParent,
-      ...row
-    } = task(id, num)
+    const { description: _text, parent_id: _parent, ...row } = task(id, num)
     return {
       state: 'archived',
       task: { ...row, archived_at: '2026-09-14T09:00:00.000Z', is_group: false },
@@ -397,14 +383,10 @@ describe('a task the workspace does not hold, in the store', () => {
       // read is Done, or it stopped before the first
       for (const answer of [
         okAnswer('far-1', 40, {
-          task: { has_subtasks: true, has_hidden_subtasks: true },
+          task: { has_subtasks: true },
           subtasks: { rows: [done], complete: false },
         }),
-        okAnswer('far-1', 40, {
-          task: { has_hidden_subtasks: true },
-          subtasks: { rows: [], complete: false },
-        }),
-        // the list's own answer decides, also without the task's flag
+        // the list's own answer decides
         okAnswer('far-1', 40, { subtasks: { rows: [], complete: false } }),
       ]) {
         one('taskWindow:task').deliver(answer)
@@ -432,7 +414,7 @@ describe('a task the workspace does not hold, in the store', () => {
       const leaf = short('kid-1', 43, { start_week: '2026-03-01', end_week: '2026-04-01' })
       for (const answer of [
         okAnswer('far-1', 40, {
-          task: { has_subtasks: true, has_hidden_subtasks: true },
+          task: { has_subtasks: true },
           subtasks: { rows: [leaf], complete: false },
         }),
         okAnswer('far-1', 40, {

@@ -71,8 +71,6 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     snap.messages = [
       {

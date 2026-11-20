@@ -64,8 +64,6 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
     created_at: AT,
     updated_at: AT,
     paused: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   }
 }
 

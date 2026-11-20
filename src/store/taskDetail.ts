@@ -358,25 +358,20 @@ export type CreatingInputs = {
 /** The task window's answer of the person's own new task before the server
     took its create (store/planner.ts PendingCreate), shaped as the server
     will answer it (convex/lib/taskWindow.ts readWindowTask): the row with
-    its text, has_hidden_parent and has_hidden_subtasks false, the person's
-    level, no labels, the parent's short row for a subtask, and a whole
-    subtask list, empty or the one subtask of a new parent. The person
-    follows the task where the server makes them (convex/model/messages.ts
-    notifyIssueInsert): as its assignee, or as the reviewer of a task born
-    In Review. A mention of themselves in the description, which the
-    server also follows, shows with the window's own first answer. */
+    its text, the person's level, no labels, the parent's short row for a
+    subtask, and a whole subtask list, empty or the one subtask of a new
+    parent. The person follows the task where the server makes them
+    (convex/model/messages.ts notifyIssueInsert): as its assignee, or as
+    the reviewer of a task born In Review. A mention of themselves in the
+    description, which the server also follows, shows with the window's
+    own first answer. */
 export function creatingAnswer(inputs: CreatingInputs): TaskOk {
   const { row, me } = inputs
   const reviewer = row.status === 'review' && row.reviewer_id !== undefined
   const follows = !!me && (row.assignee_id === me || (reviewer && row.reviewer_id === me))
   return {
     state: 'ok',
-    task: {
-      ...row,
-      has_subtasks: inputs.child !== null,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    },
+    task: { ...row, has_subtasks: inputs.child !== null },
     level: inputs.level,
     labels: [],
     follow: follows && me ? { issue_id: row.id, profile_id: me, created_at: row.created_at } : null,

@@ -73,8 +73,6 @@ describe('the task editor while its code waits for the connection', { timeout: 2
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     network.onUpdate.mockImplementation((ref, _args, next) => {
       const name = getFunctionName(ref)

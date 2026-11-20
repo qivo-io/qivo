@@ -116,8 +116,6 @@ describe('the task window keeps a bounded thread', () => {
         paused: false,
         created_at: new Date(START).toISOString(),
         updated_at: new Date(START).toISOString(),
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
       })
     asked = []
     writes = []

@@ -26,8 +26,7 @@
  * Every read follows the working-set rules (lib/workingSet.ts): a view
  * holds only active tasks in live projects the reader can see, names a
  * parent or a subtask only inside its task's own sub-project
- * (lib/liveTasks.ts liveLink), and says nothing of any other task
- * (has_hidden_subtasks and has_hidden_parent are always false). The reads
+ * (lib/liveTasks.ts liveLink), and says nothing of any other task. The reads
  * that can touch a task or project the reader is not shown are a task's
  * subtasks, a parent read by id, the projects of a person's own tasks, a
  * top-level project's sub-projects, and a person's own tasks in projects
@@ -1180,9 +1179,6 @@ export async function firstSubtaskCheck(
 
 /** What a view shows of a group's subtasks. */
 export type GroupFacts = {
-  /** always false: every subtask that counts is in the group's own
-   * sub-project, which the reader is shown; a later release removes it */
-  has_hidden_subtasks: false
   /** every leaf under the group is Done and it has at least one
    * (src/lib/issueGroups.ts isIssueDone) */
   done: boolean
@@ -1263,7 +1259,6 @@ export async function groupFacts(
       if (end === undefined || last > end) end = last
     }
     out.set(group.id, {
-      has_hidden_subtasks: false,
       done: !unknown && total > 0 && total === done,
       newest,
       span:
@@ -1460,7 +1455,7 @@ export function ownerRange(
  * follows), its parent's id only when the reader is shown the parent
  * (lib/workingSet.ts parentLink), and on a group its facts (GroupFacts). */
 export type ViewRow = ReturnType<typeof taskFields> &
-  Pick<TaskRow, 'parent_id' | 'has_hidden_subtasks' | 'has_hidden_parent'> & {
+  Pick<TaskRow, 'parent_id'> & {
     has_subtasks: boolean
     /** on groups only: GroupFacts done */
     group_done?: boolean
@@ -1477,11 +1472,10 @@ export function viewRow(task: Doc<'issues'>, shown: ShownTasks, facts: GroupFact
   const parent = task.parent_id === undefined ? undefined : shown.get(task.parent_id)
   const row = { ...taskFields(task), ...parentLink(task, parent) }
   return facts === null
-    ? { ...row, has_subtasks: false, has_hidden_subtasks: false }
+    ? { ...row, has_subtasks: false }
     : {
         ...row,
         has_subtasks: true,
-        has_hidden_subtasks: facts.has_hidden_subtasks,
         group_done: facts.done,
         span: facts.span,
       }

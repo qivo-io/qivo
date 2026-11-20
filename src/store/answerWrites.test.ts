@@ -100,8 +100,6 @@ const task = (id: string, num: number, over: Partial<Task> = {}): Task => ({
   created_at: AT,
   updated_at: AT,
   status_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...over,
 })
 /* QN-40 as the window's answer sends it (convex/lib/workspaceParts.ts
@@ -116,13 +114,7 @@ const far = (over: Partial<Task> = {}) =>
   })
 /* Task `row` as a short row of an answer (convex/lib/taskWindow.ts). */
 const short = (row: Task, level = 'lead') => {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_subtasks: _hidden,
-    has_hidden_parent: _hiddenParent,
-    ...rest
-  } = row
+  const { description: _text, parent_id: _parent, ...rest } = row
   return { ...rest, has_subtasks: false, level }
 }
 /* The window's answer for QN-40 (convex/lib/taskWindow.ts readWindowTask). */
@@ -588,7 +580,7 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
   it('treats a subtask list that is not whole as a group: no dates or hours, a status left to the server', async () => {
     await load(editsManuals)
     await openFar(
-      okAnswer(far({ has_hidden_subtasks: true }), {
+      okAnswer(far(), {
         subtasks: { rows: [short(task(FAR_KID, 42, { parent_id: FAR }))], complete: false },
       }),
     )

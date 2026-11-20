@@ -246,9 +246,8 @@ export function cleanDescription(raw: string | null | undefined): string {
 
 /* ------------------------------------------------------- the field check
  * A task edit's `expected` (model/expected.ts) takes these keys. The
- * parent compares as parent_id, which may come alone, or as the pair a read
- * shows with has_hidden_parent, which every read sends false. project_id
- * is a move's. */
+ * parent compares as parent_id, the parent a read shows. project_id is a
+ * move's. */
 
 const hoursForm = (value: unknown): unknown =>
   typeof value === 'number' ? roundTenths(value) : (value ?? null)
@@ -304,25 +303,9 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     sends: 'parent',
     type: uuidOf('task', true),
     form: idForm,
-    pair: 'has_hidden_parent',
-    // has_hidden_parent is always false and a later release removes it, so
-    // parent_id may come alone; has_hidden_parent still comes only with it
-    alone: true,
-    shape: (expected) =>
-      expected.parent_id != null && expected.has_hidden_parent === true
-        ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
-        : undefined,
-    // The parent compares as a read shows it (shownParent). A parent is in
-    // its subtask's sub-project, which the editor sees, so no read shows a
-    // hidden parent any more and one seen hidden matches nothing.
-    compare: async ({ row, read, expected, next }) => {
-      const shown = await shownParent(read.ctx, row)
-      const seen =
-        expected.has_hidden_parent === true ? false : idForm(expected.parent_id) === shown
-      return { seen, next: idForm(next.parent_id) === shown }
-    },
+    // the parent as a read shows it
+    stored: (issue, read) => shownParent(read.ctx, issue),
   },
-  has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },
   project_id: { sends: 'project', type: uuidOf('project', false), form: idForm },
 }
 
@@ -351,7 +334,6 @@ export const vTaskExpected = v.object({
   remaining_hours: v.optional(v.union(v.number(), v.null())),
   paused: v.optional(v.boolean()),
   parent_id: nullableText,
-  has_hidden_parent: v.optional(v.boolean()),
   project_id: v.optional(v.string()),
 })
 
@@ -445,7 +427,7 @@ export async function assertTaskExpected(
     expected: a.expected,
     next,
     writers: async (fields) => {
-      // the parent's writer wrote the value its compare used (shownParent);
+      // the parent's writer wrote the value the check compared (shownParent);
       // a stored parent with no live row compares as none, a change that
       // the parent's delete made and that names nobody
       const parent = fields.includes('parent_id') ? await shownParent(ctx, issue) : undefined

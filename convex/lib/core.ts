@@ -1005,8 +1005,6 @@ type IssueOutCommon = {
   project_num: number
   /** the parent's id, or null for a task without a parent */
   parent_id: string | null
-  /** always false; a later release removes it */
-  has_hidden_parent: false
   start_week: string | null
   end_week: string | null
   due_date: string | null
@@ -1126,23 +1124,21 @@ export async function machineShown(
   return (taskId) => ids.has(taskId)
 }
 
-/* The parent link on both surfaces (lib/workingSet.ts parentLink): the
+/* The parent's id on both surfaces (lib/workingSet.ts parentLink): the
  * parent's uuid, which is in the task's own sub-project, which the caller
- * reads (lib/liveTasks.ts liveLink), else null. has_hidden_parent is always
- * false; a later release removes it.
+ * reads (lib/liveTasks.ts liveLink), else null.
  * `o.tasks` holds the rows a list already read, which saves the parent's
  * read. */
 async function parentOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   o: Pick<IssueOutPre, 'tasks'>,
-): Promise<{ parent_id: string | null; has_hidden_parent: false }> {
+): Promise<string | null> {
   const parent =
     issue.parent_id === undefined
       ? null
       : (o.tasks?.get(issue.parent_id) ?? (await byId(ctx, 'issues', issue.parent_id)))
-  const link = parentLink(issue, parent)
-  return { parent_id: link.parent_id ?? null, has_hidden_parent: false }
+  return parentLink(issue, parent).parent_id ?? null
 }
 
 /** The app's Copy link address of a task (src/lib/router.ts issueLink), or
@@ -1503,7 +1499,7 @@ export async function issueOut(
       : { start_week: facts.start_week, end_week: facts.end_week }
   const progress = facts === null ? null : progressOf(facts)
   const delay = await opts.forecast(issue, project, facts)
-  const parent = await parentOut(ctx, issue, opts)
+  const parent_id = await parentOut(ctx, issue, opts)
   const owner_id = taskOwnerId(issue, is_group) ?? null
   const orgSlug = opts.orgSlug ?? (await byId(ctx, 'organizations', issue.org_id))?.slug ?? '~'
   const url = taskUrl(orgSlug, issue.num)
@@ -1531,8 +1527,7 @@ export async function issueOut(
       owner_id,
       reporter_id: issue.reporter_id ?? null,
       reporter_name,
-      parent_id: parent.parent_id,
-      has_hidden_parent: parent.has_hidden_parent,
+      parent_id,
       start_week: weeks.start_week,
       end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
@@ -1569,8 +1564,7 @@ export async function issueOut(
     project_key: project.key,
     project_num: project.num,
     project_name: project.name,
-    parent_id: parent.parent_id,
-    has_hidden_parent: parent.has_hidden_parent,
+    parent_id,
     start_week: weeks.start_week,
     end_week: weeks.end_week,
     due_date: issue.due_date ?? null,
@@ -2379,7 +2373,7 @@ export async function applyTaskUpdate(
     expected: a.expected,
     next: {
       ...a.patch,
-      ...(a.parent !== undefined ? { parent_id: a.parent, has_hidden_parent: null } : {}),
+      ...(a.parent !== undefined ? { parent_id: a.parent } : {}),
       ...(a.destination !== undefined ? { project_id: a.destination.id } : {}),
     },
     destination: a.destination,

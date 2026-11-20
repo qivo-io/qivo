@@ -880,10 +880,7 @@ describe('parents and subtasks', () => {
       'Done kid outside',
       'Low kid',
     ])
-    expect(answer.rows.find((r) => r.title === 'Under FW')).toMatchObject({
-      parent_id: parent.id,
-      has_hidden_parent: false,
-    })
+    expect(answer.rows.find((r) => r.title === 'Under FW')).toMatchObject({ parent_id: parent.id })
     for (const kid of answer.subtasks) expect(kid.parent_id).toBe(group.id)
     // past ROADMAP.context the answer is over_budget
     ROADMAP.context = 3

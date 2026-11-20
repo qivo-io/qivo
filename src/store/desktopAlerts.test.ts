@@ -95,8 +95,6 @@ describe('desktop alerts in the store', () => {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     paused: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
 
   /** An unread message to the signed-in person about task `issue`, made
