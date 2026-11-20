@@ -310,30 +310,27 @@ describe('the working-set rules', () => {
     expect(aboutShownTasks(rows, () => false)).toEqual([])
   })
 
-  it('a group total counts only the shown, unfinished leaves under it', async () => {
+  it('a group total counts only the shown, unfinished subtasks under it', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const task = (extra: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...extra })
     const group = await task({ title: 'Group' })
-    const nested = await task({ parent_id: group.id, remaining_hours: 40 })
-    await task({ parent_id: nested.id, remaining_hours: 1.25 })
-    await task({ parent_id: nested.id, remaining_hours: 3, status: 'done' })
+    await task({ parent_id: group.id, remaining_hours: 1.25 })
+    await task({ parent_id: group.id, remaining_hours: 3, status: 'done' })
     await task({ parent_id: group.id, remaining_hours: 2.1 })
     await task({ parent_id: group.id }) // no hours
-    const hidden = await task({ parent_id: group.id, remaining_hours: 100 })
-    await task({ parent_id: hidden.id, remaining_hours: 7 })
+    const hidden = await task({ parent_id: group.id, remaining_hours: 7 })
     await task({ parent_id: group.id, remaining_hours: 9, archived_at: NOW })
     const rows = await t.run((ctx) => ctx.db.query('issues').collect())
     const index = childIndexOf(rows)
     const childrenOf = (id: string) => index.get(id) ?? []
     const active = new Set(rows.filter((i) => i.archived_at === undefined).map((i) => i.id))
     const shown = (id: string) => active.has(id) && id !== hidden.id
-    // 1.25 + 2.1: the nested group's own 40 h, the done leaf, the hidden
-    // subtask with everything under it and the archived one never count
+    // 1.25 + 2.1: the done subtask, the hidden one and the archived one never count
     expect(groupRemainingHours(group, childrenOf, shown)).toBe(3.4)
     expect(groupRemainingHours(group, childrenOf, () => false)).toBeNull()
-    // with every active task shown, the hidden subtask is a group of one 7 h leaf
+    // with every active task shown, the hidden subtask's 7 h count too
     expect(groupRemainingHours(group, childrenOf, (id) => active.has(id))).toBe(10.4)
   })
 })

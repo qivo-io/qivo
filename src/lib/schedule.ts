@@ -12,8 +12,8 @@ import { type GroupIssue, isIssueGroup } from './issueGroups'
 export type DepPair = { blocker: string; blocked: string }
 
 /** Filter dep pairs to those the push-forward solver can satisfy.
-    `kids` maps a group to its DIRECT visible children that have a span (a
-    leaf's own dates or a nested group's calculated span); `scheduledIds`
+    `kids` maps a group to its visible subtasks that have a span (their own
+    dates); `scheduledIds`
     lists every task with a span. */
 export function solvablePairs(
   pairs: DepPair[],

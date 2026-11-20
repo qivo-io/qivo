@@ -508,10 +508,9 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(section('subtasks').querySelector('[data-related-task="QN-39"]')).toBeNull()
   })
 
-  it('draws a short group without a status, and a short task in review with its reviewer', async () => {
+  it('draws a short task in review with its reviewer', async () => {
     await load()
     await openTask()
-    const group = short(task('far-group', 38, { title: 'Old epic' }), true)
     const review = short(
       task('far-review', 39, {
         title: 'Check the wiring',
@@ -520,18 +519,36 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
         reviewer_id: 'leo',
       }),
     )
-    await answer('taskWindow:task', taskAnswer([group, review]))
-    const groupRow = section('subtasks').querySelector('[data-related-task="QN-38"]')
-    expect(groupRow?.querySelector('[role="img"][aria-label]:not([data-avatar])')).toBeNull()
+    await answer('taskWindow:task', taskAnswer([review]))
     const reviewRow = section('subtasks').querySelector('[data-related-task="QN-39"]')
     expect(reviewRow?.querySelector('[data-avatar="leo"]')).not.toBeNull()
     expect(reviewRow?.querySelector('[data-avatar="mira"]')).toBeNull()
-    // a group row leaves the open hours unknown
-    expect(rollup()).toEqual(['unknown', 'Unknown'])
-    expect(progress()).toEqual([
-      '0 of 1 visible tasks done. Completion unknown.',
-      'Additional work is outside this view.',
-    ])
+  })
+
+  it('draws a parent and a linked task that are groups without a status', async () => {
+    await load()
+    await openTask('kid-1')
+    await answer('taskWindow:task', {
+      ...taskAnswer([], true, 'kid-1'),
+      parent: short(row('fam'), true),
+    })
+    await answer(
+      'taskWindow:links',
+      linksAnswer(
+        [link('link-2', 'kid-1', 'other'), link('link-3', 'kid-1', 'manual')],
+        [short(row('other'), true), short(row('manual'))],
+      ),
+    )
+    const rowOf = (handle: string) => document.querySelector(`[data-related-task="${handle}"]`)
+    const dotOf = (handle: string) =>
+      rowOf(handle)?.querySelector('[role="img"][aria-label]:not([data-avatar])')
+    // the parent and a linked group
+    for (const handle of ['QN-27', 'QN-31']) {
+      expect(rowOf(handle), handle).not.toBeNull()
+      expect(dotOf(handle), handle).toBeNull()
+    }
+    // a linked task without subtasks keeps its status
+    expect(dotOf('QN-32')?.getAttribute('aria-label')).toBe('To Do')
   })
 
   it('removes a link the links answer holds with the kind it shows', async () => {

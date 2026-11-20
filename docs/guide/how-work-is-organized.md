@@ -50,11 +50,10 @@ Tasks have these fields:
   Qivo uses the time of the estimate, or the planned start if later, to
   project progress ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Empty means unestimated and displays “—”; **0**
   means no work remains. Gaining a first subtask clears the parent's own
-  estimate. The parent then shows the total of its unfinished subtasks at any
-  depth, marked **Σ**. Done subtasks and linked tasks do not count. The task
-  window says **Unknown** when it cannot total every subtask, for example a
-  subtask stored with subtasks of its own before a task could have only one
-  level of subtasks. After the last active subtask leaves, the field
+  estimate. The parent then shows the total of its unfinished subtasks,
+  marked **Σ**. Done subtasks and linked tasks do not count. The task window
+  says **Unknown** when it cannot read every subtask. After the last active
+  subtask leaves, the field
   becomes editable and starts empty. Entering **In Review** replaces
   Remaining with the project's review time, 2 h by default. A REST or MCP
   update that supplies remaining hours with that status change keeps the
@@ -230,11 +229,10 @@ Who sees an item:
 Except for organization admins, you see an item only while you can still open
 the project it was in. If you can now only view that project, your own delete
 shows without **Restore**, with a line such as **You can only view Luma
-Sensor now. Ask its lead, Mira Holm, to restore it.** A subtask deleted with
-a task in a project you cannot open shows only its key and title, without
-**Restore**. Without projects chosen, the deleted projects of every
-organization you belong to appear together, and each row names its
-organization when the page holds more than one.
+Sensor now. Ask its lead, Mira Holm, to restore it.** Without projects
+chosen, the deleted projects of every organization you belong to appear
+together, and each row names its organization when the page holds more than
+one.
 
 Each row shows who deleted the item and when, where it was, and the reason
 when one was given. A delete through the REST API or MCP also names the
@@ -306,9 +304,9 @@ messages removed by the delete do not come back
 
 You can restore what you see when you can still edit where it goes back:
 
-- A task needs edit access to its project and to the projects of the
-  subtasks deleted with it. If its project is archived, restore that project
-  from Archived projects first.
+- A task needs edit access to its project, which holds the subtasks deleted
+  with it too. If its project is archived, restore that project from
+  Archived projects first.
 - A project needs its lead or an organization admin. A sub-project also
   needs its project to be active.
 - A task or sub-project deleted before its project can only come back with

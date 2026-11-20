@@ -209,7 +209,12 @@ export type DeletedItemState = (typeof DELETED_ITEM_STATES)[number]
 
 /* The phases of a deleted item's background steps, in the order each kind of
  * work runs them (model/deletedItems.ts). Stored on deleted_item_jobs only,
- * never on the wire. */
+ * never on the wire. No step starts move_edges or restore_detach any more;
+ * they stay for jobs an earlier release saved. move_edges goes straight on
+ * to move_tasks. restore_attach, which follows restore_grants, and
+ * restore_detach both end a project item's restore. Each deletes the
+ * deleted_item_parents rows an earlier release left for the item, over
+ * several steps when there are many, and then the item. */
 export const TRASH_PHASES = [
   'move_edges',
   'move_tasks',

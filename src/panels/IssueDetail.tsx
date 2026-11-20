@@ -3943,7 +3943,7 @@ function IssueDetail({
                       className="task-details-scroll flex-1 min-h-0 overflow-y-auto px-5 pt-4 pb-5"
                     >
                       {/* Location and title live in the shared header; the Parent
-                          field links ancestors. Every field below respects project
+                          field links the parent. Every field below respects project
                           write access, while read-only users retain visible values. */}
                       {/* Keep the original field order and shared value edge. */}
                       <div className="task-properties">
@@ -4405,11 +4405,9 @@ function IssueDetail({
                                 ? null
                                 : prog.state === 'unknown'
                                   ? 'Completion unknown.'
-                                  : prog.state === 'visible'
-                                    ? `${prog.done} of ${prog.total} visible tasks done. Completion unknown.`
-                                    : prog.total > 0
-                                      ? `${prog.done} of ${prog.total} tasks done, ${prog.pct}%`
-                                      : 'no subtasks yet'}
+                                  : prog.total > 0
+                                    ? `${prog.done} of ${prog.total} tasks done, ${prog.pct}%`
+                                    : 'no subtasks yet'}
                             </span>
                           </div>
                           {prog.state === 'complete' ? (
@@ -4422,9 +4420,7 @@ function IssueDetail({
                             <span className="text-xs text-text-3">
                               {prog.state === 'loading'
                                 ? 'Subtasks are still loading.'
-                                : prog.state === 'unknown'
-                                  ? 'Not every subtask could be loaded.'
-                                  : 'Additional work is outside this view.'}
+                                : 'Not every subtask could be loaded.'}
                             </span>
                           )}
                         </div>

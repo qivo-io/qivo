@@ -14,8 +14,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { ACTIVE_PAGE } from '../lib/activeTaskPage'
-import { CALLER_GONE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
+import { CALLER_GONE } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import {
@@ -47,7 +46,7 @@ import {
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { withReach } from './projectReach.setup'
-import { lowered, restPage, restPages } from './taskPages.setup'
+import { restPage, restPages } from './taskPages.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 const KEY = 'drive'
@@ -1993,7 +1992,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
 describe("a group's dates on REST", () => {
   const span = (start_week: string, end_week: string) => ({ start_week, end_week })
 
-  it('GET calculates a group from its leaves, at any depth, and lists the same', async () => {
+  it('GET calculates a group from its subtasks, and lists the same', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
@@ -2004,15 +2003,9 @@ describe("a group's dates on REST", () => {
       ...span('2026-09-07', '2026-09-13'),
     })
     await plantIssue(t, { ...base, parent_id: group.id, ...span('2026-02-02', '2026-02-08') })
-    // a nested group counts only through its leaves; a leaf without an end
-    // counts as its start week
-    const nested = await plantIssue(t, {
-      ...base,
-      parent_id: group.id,
-      ...span('2025-01-06', '2027-12-27'),
-    })
-    await plantIssue(t, { ...base, parent_id: nested.id, ...span('2026-02-16', '2026-02-22') })
-    await plantIssue(t, { ...base, parent_id: nested.id, start_week: '2026-03-02' })
+    await plantIssue(t, { ...base, parent_id: group.id, ...span('2026-02-16', '2026-02-22') })
+    // a leaf without an end counts as its start week
+    await plantIssue(t, { ...base, parent_id: group.id, start_week: '2026-03-02' })
     // never counted: an archived leaf
     await plantIssue(t, {
       ...base,
@@ -2042,7 +2035,7 @@ describe("a group's dates on REST", () => {
         access: 'read',
       })
       const out = new Map<string, unknown>()
-      for (const row of [group, nested, empty]) {
+      for (const row of [group, empty]) {
         const one = await get(row.id)
         expect(one.is_group).toBe(true)
         expect(dates(listed.find((i) => i.id === row.id)), row.title).toEqual(dates(one))
@@ -2052,7 +2045,6 @@ describe("a group's dates on REST", () => {
     }
     const got = await read()
     expect(got.get(group.id)).toEqual(span('2026-02-02', '2026-03-02'))
-    expect(got.get(nested.id)).toEqual(span('2026-02-16', '2026-03-02'))
     expect(got.get(empty.id)).toEqual({ start_week: null, end_week: null })
   })
 
@@ -2136,112 +2128,6 @@ describe("a group's dates on REST", () => {
       ref: group.id,
     })
     expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
-  })
-
-  /* Convex lets a function read at most 4,096 index ranges. A group's facts
-   * walk its subtree one range per task, and this tree, stored before the
-   * rule of one level, needs 511. A list row walks within its page's budget
-   * and a single-task read within the request's room less
-   * TASK_READ_RESERVE, after a first walk of SUBTREE_WALK.reads. A group
-   * whose walk does not fit answers the facts of a subtree too large to
-   * read, so list, get and PATCH all stay within the limits however large
-   * the tree. The test checks that on a smaller tree with a lower limit, a
-   * lower page budget, a lower reserve and a shorter walk, so it builds
-   * fewer rows. */
-  it('a large tree stays within transaction limits on list, get and PATCH', async () => {
-    const t = newT({ transactionLimits: { databaseQueries: 256 } })
-    const walk = SUBTREE_WALK.reads
-    const reserve = { ...TASK_READ_RESERVE }
-    SUBTREE_WALK.reads = 100
-    // room for the second walk to read the epic's own subtasks in a request
-    // of 256 ranges, as the real reserve leaves in one of 4,096
-    TASK_READ_RESERVE.ranges = 64
-    const tooLarge = {
-      start_week: null,
-      end_week: null,
-      progress: { done: 0, total: 0, percent: 0, partial: true },
-    }
-    try {
-      const f = await machineOrg(t)
-      const base = { org_id: f.org.id, project_id: f.sub.id }
-      const epic = await plantIssue(t, { ...base, title: 'Epic' })
-      const { _id, _creationTime, ...row } = epic
-      // features number first, so the first list page holds every group
-      await t.run(async (ctx) => {
-        let num = 20_000
-        for (let g = 0; g < 10; g++) {
-          const feature = uuid()
-          await ctx.db.insert('issues', {
-            ...row,
-            id: feature,
-            num: 10_000 + g,
-            title: `Feature ${g}`,
-            parent_id: epic.id,
-          })
-          for (let k = 0; k < 50; k++) {
-            const week = `2026-0${1 + (k % 9)}-05`
-            await ctx.db.insert('issues', {
-              ...row,
-              id: uuid(),
-              num: num++,
-              title: `Leaf ${g}.${k}`,
-              parent_id: feature,
-              start_week: week,
-              end_week: week,
-            })
-          }
-        }
-      })
-      // a page budget of 160 ranges, which fits a request of 256
-      const budget = {
-        page: { ranges: 160, delays: { ...ACTIVE_PAGE.delays, ranges: 30 } },
-        reserve: { ranges: 16 },
-      }
-      const listed = await lowered(budget, () =>
-        restPages(t, { callerId: f.agent.id, access: 'read', limit: '100' }),
-      )
-      expect(listed.rows).toHaveLength(511)
-      expect(listed.sizes.length).toBeGreaterThan(1)
-      const groups = listed.rows.filter((i) => i.is_group)
-      expect(groups).toHaveLength(11)
-      // the epic's walk passes any page's budget, and a feature's fits
-      expect(groups[0]).toMatchObject({ id: epic.id, ...tooLarge })
-      for (const feature of groups.slice(1)) {
-        expect(feature).toMatchObject({
-          ...span('2026-01-05', '2026-09-05'),
-          progress: { total: 50, partial: false },
-        })
-      }
-      // the single read's walk passes the request's room too, and it still
-      // lists the epic's subtasks
-      const got = await t.query(internal.machine.rest.getIssue, {
-        today: TODAY,
-        callerId: f.agent.id,
-        access: 'read',
-        ref: epic.id,
-      })
-      expect(got).toMatchObject({ is_group: true, ...tooLarge, group_remaining_hours: null })
-      expect(got.subtasks.map((task) => task.id)).toEqual(groups.slice(1).map((task) => task.id))
-      const renamed = await t.mutation(internal.machine.rest.updateIssue, {
-        callerId: f.agent.id,
-        access: 'write',
-        keyName: KEY,
-        ref: epic.id,
-        body: JSON.stringify({ title: 'Renamed' }),
-      })
-      expect(renamed).toMatchObject({ title: 'Renamed', is_group: true, ...tooLarge })
-      // a feature's own read walks it whole
-      const feature = await t.query(internal.machine.rest.getIssue, {
-        today: TODAY,
-        callerId: f.agent.id,
-        access: 'read',
-        ref: groups[1].id,
-      })
-      expect(feature).toMatchObject(span('2026-01-05', '2026-09-05'))
-    } finally {
-      SUBTREE_WALK.reads = walk
-      Object.assign(TASK_READ_RESERVE, reserve)
-    }
   })
 })
 

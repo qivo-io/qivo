@@ -21,10 +21,6 @@ describe('solvablePairs (auto-move with calculated group spans)', () => {
     expect(solvablePairs([pair('c', 'P')], kids, ['P', 'c'])).toEqual([])
     // parent blocks child: pushing c stretches P's calculated end, same chase
     expect(solvablePairs([pair('P', 'c')], kids, ['P', 'c'])).toEqual([])
-    // grandchild through a SCHEDULED middle
-    const deep = { G: ['m'], m: ['g'] }
-    expect(solvablePairs([pair('g', 'G')], deep, ['G', 'm', 'g'])).toEqual([])
-    expect(solvablePairs([pair('G', 'g')], deep, ['G', 'm', 'g'])).toEqual([])
   })
 
   it('keeps opposite-direction deps between DIFFERENT children of two families', () => {
@@ -114,15 +110,6 @@ describe('autoMoves', () => {
       { id: 'g2', start: 11, end: 13 },
     ])
     expect(moves.map((m) => m.id)).not.toContain('g')
-  })
-
-  it('pushes through a nested group to its leaves', () => {
-    const blocker = task('blocker', 0, 4)
-    const outer = task('outer', 3, 6, { children: ['inner'] })
-    const inner = task('inner', 3, 6, { children: ['leaf'] })
-    const leaf = task('leaf', 3, 6)
-    blocks(blocker, outer)
-    expect(solve([blocker, outer, inner, leaf])).toEqual([{ id: 'leaf', start: 5, end: 8 }])
   })
 
   it('waits for the latest leaf end of a group blocker', () => {

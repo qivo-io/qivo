@@ -100,11 +100,10 @@ export function aboutShownTasks<Row extends { issue_id: string }>(
 
 /**
  * A group's remaining hours as the app shows them (src/store/planner.ts
- * remainingOf). It is the sum over the unfinished leaves of its subtree that
- * the reader is shown, to one decimal, or null when none has hours. A nested
- * group counts only through its subtasks. The walk enters only the subtasks
- * that make the task above them a group (lib/liveTasks.ts countsAsSubtask),
- * and never one the reader is not shown, so nothing under it counts either.
+ * remainingOf). It is the sum over its unfinished subtasks that the reader
+ * is shown, to one decimal, or null when none has hours. A subtask has no
+ * subtasks of its own, so each is a leaf. Only the subtasks that make the
+ * group one count (lib/liveTasks.ts countsAsSubtask).
  */
 export function groupRemainingHours(
   group: Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>,
@@ -113,19 +112,8 @@ export function groupRemainingHours(
 ): number | null {
   let sum = 0
   let counted = false
-  const seen = new Set<string>([group.id])
-  // the subtasks of `task` that make it a group
-  const counting = (task: Pick<Doc<'issues'>, 'id' | 'org_id' | 'archived_at' | 'project_id'>) =>
-    childrenOf(task.id).filter((kid) => countsAsSubtask(task, kid))
-  const stack = counting(group)
-  for (let task = stack.pop(); task !== undefined; task = stack.pop()) {
-    if (seen.has(task.id) || !shown(task.id)) continue
-    seen.add(task.id)
-    const kids = counting(task)
-    if (kids.length > 0) {
-      stack.push(...kids)
-      continue
-    }
+  for (const task of childrenOf(group.id)) {
+    if (!countsAsSubtask(group, task) || !shown(task.id)) continue
     if (task.status === 'done' || task.remaining_hours === undefined) continue
     sum += task.remaining_hours
     counted = true

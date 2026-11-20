@@ -164,7 +164,6 @@ describe('groupBoardCell', () => {
       {
         key: `parent:${parent.uuid}`,
         parent,
-        ancestors: [],
         issues: [first, second],
       },
     ])
@@ -196,9 +195,7 @@ describe('groupBoardCell', () => {
     const hidden = issue('hidden', { parent: parent.id })
 
     const groups = groupBoardCell([visible], index([parent, visible, hidden]))
-    expect(groups).toEqual([
-      { key: `parent:${parent.uuid}`, parent, ancestors: [], issues: [visible] },
-    ])
+    expect(groups).toEqual([{ key: `parent:${parent.uuid}`, parent, issues: [visible] }])
     expect(actualIssues(groups)).toEqual([visible])
   })
 
@@ -209,8 +206,8 @@ describe('groupBoardCell', () => {
     const all = [orphan, parent, child]
 
     expect(groupBoardCell(all, index(all))).toEqual([
-      { key: `issue:${orphan.uuid}`, parent: null, ancestors: [], issues: [orphan] },
-      { key: `parent:${parent.uuid}`, parent, ancestors: [], issues: [child] },
+      { key: `issue:${orphan.uuid}`, parent: null, issues: [orphan] },
+      { key: `parent:${parent.uuid}`, parent, issues: [child] },
     ])
   })
 
@@ -240,30 +237,13 @@ describe('groupBoardCell', () => {
     expect(groups[2].issues).toEqual([otherChild])
   })
 
-  it('retains nested parents and ancestors solely as headings for leaf work', () => {
-    const root = issue('root', { children: ['middle'] })
-    const middle = issue('middle', { parent: root.id, children: ['leaf'] })
-    const leaf = issue('leaf', { parent: middle.id })
-    const all = [leaf, middle, root]
-
-    const groups = groupBoardCell(all, index(all))
-    expect(groups).toEqual([
-      { key: `parent:${middle.uuid}`, parent: middle, ancestors: [root], issues: [leaf] },
-    ])
-    expect(
-      actualIssues(groups)
-        .map((item) => item.id)
-        .sort(),
-    ).toEqual(['leaf'])
-  })
-
   it('does not duplicate a visible parent when its children list is incomplete', () => {
     const parent = issue('parent')
     const child = issue('child', { parent: parent.id })
     const all = [parent, child]
 
     expect(groupBoardCell(all, index(all))).toEqual([
-      { key: `parent:${parent.uuid}`, parent, ancestors: [], issues: [child] },
+      { key: `parent:${parent.uuid}`, parent, issues: [child] },
     ])
   })
 
@@ -282,18 +262,14 @@ describe('groupBoardCell', () => {
     )
   })
 
-  it('handles malformed self links, cycles, and duplicate inputs without recursion', () => {
+  it('handles a malformed self link and duplicate inputs', () => {
     const self = issue('self', { parent: 'self', children: ['self'] })
-    const first = issue('first', { parent: 'second', children: ['second'] })
-    const second = issue('second', { parent: 'first', children: ['first'] })
-    const all = [self, first, second]
+    const parent = issue('parent', { children: ['leaf'] })
+    const leaf = issue('leaf', { parent: parent.id })
+    const all = [self, parent, leaf]
 
-    const groups = groupBoardCell([...all, first], index(all))
-    expect(actualIssues(groups)).toEqual([self])
-    const leaf = issue('leaf', { parent: first.id })
-    const nested = groupBoardCell([leaf, leaf], index([...all, leaf]))
-    expect(actualIssues(nested)).toEqual([leaf])
-    expect(nested[0].ancestors).toEqual([second])
+    const groups = groupBoardCell([self, leaf, leaf], index(all))
+    expect(actualIssues(groups)).toEqual([self, leaf])
   })
 
   it('keeps parents with inaccessible children out of status columns', () => {
@@ -308,7 +284,7 @@ describe('groupBoardCell', () => {
 
     const restored: Issue = { ...parent, children: [] }
     expect(groupBoardCell([restored], index([restored]))).toEqual([
-      { key: `issue:${parent.uuid}`, parent: null, ancestors: [], issues: [restored] },
+      { key: `issue:${parent.uuid}`, parent: null, issues: [restored] },
     ])
     expect(restored.status).toBe('review')
   })
@@ -361,20 +337,6 @@ describe('createCellGrouper', () => {
     expect(fourth).not.toBe(third)
     expect(fourth[1].parent).toBe(newParent)
   })
-
-  it('groups again when a heading above the parent changes', () => {
-    const root = issue('root', { children: ['middle'] })
-    const middle = issue('middle', { parent: root.id, children: ['leaf'] })
-    const leaf = issue('leaf', { parent: middle.id })
-    const group = createCellGrouper<Issue>()
-    const first = group('a:todo', [leaf], index([root, middle, leaf]))
-    expect(first[0].ancestors).toEqual([root])
-    // the grandparent got a new object while its subtasks kept theirs
-    const newRoot = { ...root, title: 'Renamed root' }
-    const second = group('a:todo', [leaf], index([newRoot, middle, leaf]))
-    expect(second).not.toBe(first)
-    expect(second[0].ancestors[0]).toBe(newRoot)
-  })
 })
 
 describe('estimateCardHeight', () => {
@@ -388,10 +350,9 @@ describe('estimateCardHeight', () => {
   const text = (width: number) => ({ width, height: 17.4 })
   const task = (id: string, title = 'Testbed signed firmware task 12', more: Partial<Task> = {}) =>
     ({ id, uuid: id, title, ...more }) as Task
-  const card = (issues: Task[], parent: Task | null = null, ancestors: Task[] = []) => ({
+  const card = (issues: Task[], parent: Task | null = null) => ({
     key: issues[0]?.id ?? parent?.id ?? 'card',
     parent,
-    ancestors,
     issues,
   })
   const shown = {
@@ -430,15 +391,14 @@ describe('estimateCardHeight', () => {
   })
 
   it('never falls for a longer title, a banner, a place, more rows or a narrower card', () => {
-    const base = card([task('a')], task('p'), [task('g')])
+    const base = card([task('a')], task('p'))
     const before = height(base)
     const grown = [
-      card([task('a', 'A long title '.repeat(6))], task('p'), [task('g')]),
-      card([task('a', undefined, { late: true })], task('p'), [task('g')]),
-      card([task('a', undefined, { meta: [icon, text(21), text(156)] })], task('p'), [task('g')]),
-      card([task('a')], task('p', undefined, { placed: true }), [task('g')]),
-      card([task('a'), task('b')], task('p'), [task('g')]),
-      card([task('a')], task('p'), [task('g'), task('h')]),
+      card([task('a', 'A long title '.repeat(6))], task('p')),
+      card([task('a', undefined, { late: true })], task('p')),
+      card([task('a', undefined, { meta: [icon, text(21), text(156)] })], task('p')),
+      card([task('a')], task('p', undefined, { placed: true })),
+      card([task('a'), task('b')], task('p')),
     ]
     for (const group of grown) expect(height(group)).toBeGreaterThan(before)
     expect(height(base, 150)).toBeGreaterThan(before)

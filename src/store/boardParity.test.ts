@@ -495,12 +495,9 @@ describe('Northstar', () => {
  * only subtask is in an archived sub-project, an archived task, and a
  * task a legacy writer stored on the TBED meta itself, assigned to the
  * subject. Beside those: a group stored In Backlog with a To do subtask and
- * one stored Done with a Done subtask; a legacy nested group (a subtask with
- * a shown leaf and a leaf in the sibling); a card whose parent is in FW and
- * whose grandparent is in PCB; two tasks each the other's parent; and a
- * group created under the rule of one level (lib/viewReads.ts
- * ONE_LEVEL_SINCE) whose subtasks are the subject's, `user`'s and one in the
- * sibling. The sibling is hidden from a subject who sees FW and PCB only. */
+ * one stored Done with a Done subtask, and a group whose subtasks are the
+ * subject's, `user`'s and one in the sibling. The sibling is hidden from a
+ * subject who sees FW and PCB only. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   const skunk = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
@@ -581,44 +578,16 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     assignee_id: subject.id,
   })
   await task(f.sub, { title: 'Its Done subtask', parent_id: done.id, status: 'done' })
-  // a legacy nested group: a subtask with subtasks of its own
-  const outer = await task(f.sub, { title: 'Outer group', assignee_id: f.user.id })
-  const nested = await task(f.sub, {
-    title: 'Nested group',
-    parent_id: outer.id,
-    assignee_id: f.user.id,
-  })
-  await task(f.sub, { title: 'Nested leaf', parent_id: nested.id, assignee_id: subject.id })
-  await task(sibling, { title: 'Nested hidden leaf', parent_id: nested.id, status: 'done' })
-  // a card under a parent in FW under a grandparent in PCB
-  const grandparent = await task(f.sub2, { title: 'Grandparent in PCB', assignee_id: f.user.id })
-  const middle = await task(f.sub, {
-    title: 'Parent in FW',
-    parent_id: grandparent.id,
-    assignee_id: f.user.id,
-  })
-  await task(f.sub, { title: 'Card under two', parent_id: middle.id, assignee_id: subject.id })
-  // two tasks each the other's parent, as only a raw write leaves them
-  const one = await task(f.sub, { title: 'Cycle one', assignee_id: subject.id })
-  const two = await task(f.sub, { title: 'Cycle two', parent_id: one.id })
-  await t.run((ctx) => ctx.db.patch(one._id, { parent_id: two.id }))
-  // a group created under the rule of one level, whose subtasks need no check
-  const created_at = '2026-10-31T09:00:00.000Z'
-  const recent = await task(f.sub, { title: 'Recent group', assignee_id: f.user.id, created_at })
-  await task(f.sub, {
-    title: 'Recent mine',
-    parent_id: recent.id,
-    assignee_id: subject.id,
-    created_at,
-  })
+  // a group whose subtasks need no check of their own
+  const recent = await task(f.sub, { title: 'Recent group', assignee_id: f.user.id })
+  await task(f.sub, { title: 'Recent mine', parent_id: recent.id, assignee_id: subject.id })
   await task(f.sub, {
     title: 'Recent theirs',
     parent_id: recent.id,
     assignee_id: f.user.id,
-    created_at,
     status: 'done',
   })
-  await task(sibling, { title: 'Recent hidden', parent_id: recent.id, created_at })
+  await task(sibling, { title: 'Recent hidden', parent_id: recent.id })
   return { skunk, sibling, tasks }
 }
 

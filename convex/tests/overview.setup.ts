@@ -19,9 +19,8 @@ import { NOW, plantProject, plantSeat, type T, uuid } from './helpers.setup'
 /** The day the fixtures' due dates are set around, a Monday. */
 export const DAY = '2026-11-02'
 
-/** An instant before the rule of one level (lib/viewReads.ts
- * ONE_LEVEL_SINCE): helpers.setup.ts NOW. */
-export const BEFORE_RULE = NOW
+/** When the fixtures' tasks and seats are planted: helpers.setup.ts NOW. */
+export const PLANTED_AT = NOW
 
 /** An ordinary title of about 80 characters. */
 export const TITLE =
@@ -131,7 +130,7 @@ export async function plantMix(
 export async function plantPeople(t: T, orgId: string, n: number): Promise<Doc<'profiles'>[]> {
   const out: Doc<'profiles'>[] = []
   for (let i = 0; i < n; i++)
-    out.push(await plantSeat(t, { org_id: orgId, name: `Owner ${i}`, accepted_at: BEFORE_RULE }))
+    out.push(await plantSeat(t, { org_id: orgId, name: `Owner ${i}`, accepted_at: PLANTED_AT }))
   return out
 }
 
@@ -182,7 +181,7 @@ export async function plantShared(
         org_id: orgId,
         ...named(team.name),
         track_delay_default: true,
-        created_at: BEFORE_RULE,
+        created_at: PLANTED_AT,
       })
       await ctx.db.insert('team_members', {
         team_id: team.id,

@@ -34,9 +34,9 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import {
-  BEFORE_RULE,
   DAY,
   measured,
+  PLANTED_AT,
   plantMix,
   plantPeople,
   plantShared,
@@ -769,7 +769,7 @@ describe('verdicts', () => {
 
   it("keeps a task whose owner's load no batch can read as unknown, and goes on past it", async () => {
     const { t, f, late } = await verdictCase()
-    const third = await plantSeat(t, { org_id: f.org.id, name: 'Third', accepted_at: BEFORE_RULE })
+    const third = await plantSeat(t, { org_id: f.org.id, name: 'Third', accepted_at: PLANTED_AT })
     // the user's load passes the bound below in every batch, with two open
     // tasks; the admin and the third owner hold one each
     await late('Theirs too', f.user, shift(DAY, 10))
@@ -945,7 +945,7 @@ describe('real limits', () => {
     const f: OrgFixture = await withReadingAdmin(t)
     const owners = await plantPeople(t, f.org.id, 20)
     // every dated task due before the day, Done ones and groups included
-    await plantMix(t, f.sub, 300, owners, BEFORE_RULE, true)
+    await plantMix(t, f.sub, 300, owners, PLANTED_AT, true)
     await countOrg(t, f.org.id)
     const profiles = new Map([[f.user.org_id, f.user]])
     const scope = scopeOf(f.user, f.sub)
@@ -982,11 +982,11 @@ describe('real limits', () => {
       org_id: f.org.id,
       org_role: 'user',
       auth_user_id: `auth_${uuid()}`,
-      accepted_at: BEFORE_RULE,
+      accepted_at: PLANTED_AT,
     })
     const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
     const { tops, subs } = await plantShared(t, f.org.id, f.user, me, { tops: 1, subs: 30 })
-    for (const sub of subs) await plantMix(t, sub, 20, owners, BEFORE_RULE)
+    for (const sub of subs) await plantMix(t, sub, 20, owners, PLANTED_AT)
     // the reach rows that let the member navigate to the shared sub-projects
     await withReach(t)
     await countOrg(t, f.org.id)
@@ -1006,7 +1006,7 @@ describe('real limits', () => {
       org_id: f.org.id,
       org_role: 'user',
       auth_user_id: `auth_${uuid()}`,
-      accepted_at: BEFORE_RULE,
+      accepted_at: PLANTED_AT,
     })
     // 100 projects of two sub-projects each, 33 or 34 shared with each of
     // the reader's three teams

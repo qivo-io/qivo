@@ -72,10 +72,11 @@ date.
   due date shows **Delayed**. A task with subtasks takes its delay from its
   subtasks' dates, not from anyone's other work, so it says **Delay
   unknown** only while some of those dates have not loaded. In the task
-  window, those include the dates of subtasks under its subtasks, which the
-  window takes from the task's card or row in an open view that shows it, and follows as they change. Without one, as when that
-  view is hidden behind another page, it says **Delay unknown**, or
-  **Overdue** once the due date has passed.
+  window, those are the dates of its subtasks, which the window reads with
+  the task. Where it cannot read them all, it takes the dates from the
+  task's card or row in an open view that shows it, and follows as they
+  change. Without one, as when that view is hidden behind another page, it
+  says **Delay unknown**, or **Overdue** once the due date has passed.
 - **Team sync** shows the same banner as a Board card on its rows, **Delay
   unknown** included, judged on the server with each owner's other work.
   Where Qivo could not read someone's other work, the team summary's

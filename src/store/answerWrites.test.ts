@@ -1047,19 +1047,11 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     await openFar(
       family({
         subtasks: {
-          rows: [
-            short(kid(FAR_KID, 42)),
-            short(kid(FAR_KID_2, 43, { project_id: 'manuals' }), 'viewer'),
-          ],
+          rows: [short(kid(FAR_KID, 42)), short(kid(FAR_KID_2, 43))],
           complete: true,
         },
       }),
     )
-    const tasks = P.familyOf(shown())
-    expect(tasks && P.deletePlan(tasks).rows.map((r) => [r.task.key, r.deletable])).toEqual([
-      ['QN-42', true],
-      ['QN-43', false],
-    ])
     const deleted = P.deleteIssue(H, ['QN-42', 'QN-43'], 'Done with it')
     expect(last('issues:deleteDeep').args).toEqual({
       org_id: ORG,

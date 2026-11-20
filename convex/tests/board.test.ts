@@ -716,49 +716,32 @@ describe('reads', () => {
   })
 
   it('answers a filter that keeps one subtask under each of 25 parents of ten, in a project and in My view, without a check of each sibling', async () => {
-    /* 25 parents in FW with ten subtasks each, 275 tasks, one subtask of
-     * each the guest's and urgent, created at `created_at` */
-    const plant = async (created_at: string) => {
-      const t = newT()
-      const f = await withOrg(t)
-      const parents = await plantTasks(t, f.sub, 25, (i) => ({ ...ordinary(i), created_at }))
-      await plantTasks(
-        t,
-        f.sub,
-        250,
-        (i) => ({
-          ...ordinary(i),
-          created_at,
-          parent_id: parents[Math.floor(i / 10)].id,
-          ...(i % 10 === 0 ? { priority: 'urgent', assignee_id: f.guest.id } : {}),
-        }),
-        250,
-      )
-      return { t, f, scope: projectScope(f.guest, f.sub.id) }
-    }
-    const recent = await plant('2026-10-31T09:00:00.000Z')
-    const urgent = await boardRead(recent.t, [recent.f.guest], recent.scope, { priority: 'urgent' })
-    const mine = await boardRead(recent.t, [recent.f.guest], { kind: 'mine' }, { mine: true })
+    // 25 parents in FW with ten subtasks each, 275 tasks, one subtask of
+    // each the guest's and urgent
+    const t = newT()
+    const f = await withOrg(t)
+    const parents = await plantTasks(t, f.sub, 25, (i) => ordinary(i))
+    await plantTasks(
+      t,
+      f.sub,
+      250,
+      (i) => ({
+        ...ordinary(i),
+        parent_id: parents[Math.floor(i / 10)].id,
+        ...(i % 10 === 0 ? { priority: 'urgent', assignee_id: f.guest.id } : {}),
+      }),
+      250,
+    )
+    const scope = projectScope(f.guest, f.sub.id)
+    const urgent = await boardRead(t, [f.guest], scope, { priority: 'urgent' })
+    const mine = await boardRead(t, [f.guest], { kind: 'mine' }, { mine: true })
     for (const { answer } of [urgent, mine]) {
       expect(stateOf(answer)).toEqual({ state: 'ok', rows: 25 })
       if (answer.state === 'ok') expect(answer.parents).toHaveLength(25)
     }
-    // data stored before the rule of one level checks each of the 225
-    // siblings the filter drops, which a legacy nested group may be, a
-    // range each
-    const legacy = await plant(NOW)
-    const old = await boardRead(legacy.t, [legacy.f.guest], legacy.scope, { priority: 'urgent' })
-    expect(stateOf(old.answer)).toEqual({ state: 'ok', rows: 25 })
-    expect(old.read.ranges - urgent.read.ranges).toBeGreaterThanOrEqual(225)
-    // so a budget that holds the reads of the data created under the rule,
-    // with 100 ranges to spare, stops the read of the older data
-    BOARD.reads.ranges = urgent.read.ranges + 100
-    const again = await boardRead(recent.t, [recent.f.guest], recent.scope, { priority: 'urgent' })
-    expect(stateOf(again.answer)).toEqual({ state: 'ok', rows: 25 })
-    expect(
-      (await boardRead(legacy.t, [legacy.f.guest], legacy.scope, { priority: 'urgent' })).answer
-        .state,
-    ).toBe('over_budget')
+    // a subtask has no subtasks of its own, so the 225 siblings the filter
+    // drops take no check: the read stays far below a range for each
+    expect(urgent.read.ranges).toBeLessThan(225)
   })
 })
 

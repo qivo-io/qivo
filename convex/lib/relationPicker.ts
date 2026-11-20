@@ -28,9 +28,9 @@
  * and else the projects they can edit (model/issues.ts linkAccess).
  * Levels are the writes' levels of the reader (lib/access.ts
  * projectLevel), an organization admin's from their own rows like
- * anyone's. The family's come from
- * viewAccess.levels and the rest of the organization's from
- * projectLevelsForOrg, which the tests compare with projectLevel.
+ * anyone's. The opened task's sub-project's and, for Linked tasks, the
+ * family's come from viewAccess.levels and the rest of the organization's
+ * from projectLevelsForOrg, which the tests compare with projectLevel.
  *
  * Within each project the batch reads its active tasks by creation (issues
  * by_project_archived), one project after another, so a batch ends at one
@@ -87,10 +87,11 @@
  *
  * - before the batch, the opened task by id and its access, its own block
  *   (a by_parent row, its active subtasks up to the limit, or its links up
- *   to the limit), the family's sub-projects, live and archived, and the
- *   reader's access to the live ones (lib/viewReads.ts viewAccess), and for
- *   Search all your projects the organization's projects and the reader's
- *   own grants and team shares (projectLevelsForOrg). These run within
+ *   to the limit), for Linked tasks the family's sub-projects, live and
+ *   archived, and the reader's access to the live ones (lib/viewReads.ts
+ *   viewAccess), and for Search all your projects the organization's
+ *   projects and the reader's own grants and team shares
+ *   (projectLevelsForOrg). These run within
  *   RELATION_PICKER.whole, each document the reader may not be shown
  *   counted at its fixed size (viewBudget charge). Their cost never moves
  *   where a batch stops, because a batch counts from its own start, and a
@@ -658,20 +659,17 @@ async function familyOf(
 const byCreation = (a: Doc<'projects'>, b: Doc<'projects'>) =>
   a._creationTime - b._creationTime || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
-/** The family's projects of the scope in their order (see the header),
- * those whose level `fits`: only the opened task's own sub-project with
- * `ownOnly`, as for the Parent and Subtasks pickers. */
+/** The family's projects of the Linked tasks picker's scope in their order
+ * (see the header), those whose level `fits`. */
 function familyScope(
   family: Family,
   own: Doc<'projects'>,
   fits: (level: AccessLevel | null) => level is AccessLevel,
-  ownOnly: boolean,
 ): ScopeProject[] {
   const scope: ScopeProject[] = []
   const at = (id: string) => family.projects.get(id)
   const ownLevel = at(own.id)?.level ?? null
   if (fits(ownLevel)) scope.push({ place: [0], project: own, level: ownLevel })
-  if (ownOnly) return scope
   const subs = [...family.projects.values()]
     .filter((p) => p.live && p.project.id !== family.top.id && p.project.id !== own.id)
     .map((p) => p.project)
@@ -757,9 +755,8 @@ type Parent = { parent_id?: string }
  *   set, alike for every reason, a check of its access a bound of the
  *   reader's own reads stopped included;
  * - `{ state: 'unavailable', reason: 'access_unchecked', message }` where
- *   such a bound stopped a check of the family's projects, or of the
- *   project of a parent a row names, so the picker says Qivo could not
- *   check them;
+ *   such a bound stopped the Linked tasks picker's check of the family's
+ *   projects (familyOf), so the picker says Qivo could not check them;
  * - `{ state: 'refused', message }` for the Parent or Subtasks picker of a
  *   reader without Edit on the task's project, which the write refuses
  *   with the same sentence (model/issues.ts NO_WRITE_ACCESS);
@@ -838,15 +835,22 @@ async function batchOf(
   // count holds links to tasks they may not see
   if (blocked !== null && (kind !== 'link' || editsOpen)) return blockedBatch(blocked)
 
-  const family = await familyOf(ctx, guard, seat, opened.top)
   // Edit for Parent and Subtasks, and for Linked tasks unless the reader
   // edits the opened task, when any project they see will do
   const fits = (level: AccessLevel | null): level is AccessLevel =>
     kind === 'link' && editsOpen ? level !== null : levelRank(level) >= levelRank('user')
+  // Parent and Subtasks read only the opened task's own sub-project, whose
+  // level openedTask read; Linked tasks read the family
+  const ownScope = (): ScopeProject[] =>
+    fits(opened.level) ? [{ place: [0], project: opened.project, level: opened.level }] : []
+  const family = kind === 'link' ? await familyOf(ctx, guard, seat, opened.top) : null
   const others = at !== null && comparePlaces(at.place, OTHERS) >= 0
-  const scope = others
-    ? await otherScope(ctx, me, family, fits)
-    : familyScope(family, opened.project, fits, kind !== 'link')
+  const scope =
+    family === null
+      ? ownScope()
+      : others
+        ? await otherScope(ctx, me, family, fits)
+        : familyScope(family, opened.project, fits)
   if (blocked !== null && scope.length > 0) return blockedBatch(blocked)
   // the batch's whole budget, after every read before it, the catalogue's
   // included, which the guard sees at its next look
@@ -905,7 +909,7 @@ async function batchOf(
     } else if (kind === 'subtask') {
       if (task.parent_id === open.id || parents.has(task.id)) return 'out'
       // model/issues.ts hasAnySubtask, archived ones included; a subtask
-      // created under the rule of one level has none (withoutSubtasks)
+      // has none (withoutSubtasks)
       if (!withoutSubtasks(task)) {
         if (!count.fits(HIDDEN_BY_ID)) return 'stop'
         count.take(HIDDEN_BY_ID)
@@ -941,7 +945,7 @@ async function batchOf(
     const home =
       found === null || found.archived_at !== undefined
         ? undefined
-        : await typedHome(seat, scope, family, found, kind, fits)
+        : await typedHome(seat, scope, family, found, fits)
     if (found !== null && home !== undefined) {
       guard.refund(found, TASK_ROW_MAX_BYTES)
       const verdict = await decide(found, home)
@@ -1162,22 +1166,21 @@ function after(p: Position, place: Place, task: Doc<'issues'>): Position {
 /**
  * The scope project in which a typed task ID's task `task`, active and
  * read by its number, is a candidate. That is its project of the scope, or
- * for Linked tasks any live project of the organization outside the family
- * whose level `fits`, asked within the lookup's cost (TYPED). A check a
+ * for Linked tasks, the only picker that reads the `family`, any live
+ * project of the organization outside it whose level `fits`, asked within the lookup's cost (TYPED). A check a
  * bound stopped leaves it without one, as for a task the reader cannot
  * see. Undefined when there is none.
  */
 async function typedHome(
   seat: ViewAccess,
   scope: readonly ScopeProject[],
-  family: Family,
+  family: Family | null,
   task: Doc<'issues'>,
-  kind: RelationKind,
   fits: (level: AccessLevel | null) => level is AccessLevel,
 ): Promise<ScopeProject | undefined> {
   if (task.org_id !== seat.me.org_id) return undefined
   const inScope = scope.find((p) => p.project.id === task.project_id)
-  if (inScope !== undefined || kind !== 'link' || family.projects.has(task.project_id))
+  if (inScope !== undefined || family === null || family.projects.has(task.project_id))
     return inScope
   try {
     const [live] = await seat.live([task.project_id])

@@ -22,7 +22,7 @@ import {
   type RelationKind,
 } from '../lib/relationPicker'
 import { issueKey } from '../lib/taskRefs'
-import { ONE_LEVEL_SINCE, PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
+import { PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
 import { NO_WRITE_ACCESS } from '../model/issues'
 import { SHAPES } from './accessShapes.setup'
 import { plantTasks } from './board.setup'
@@ -261,19 +261,23 @@ describe('access', () => {
       })
     })
     const open = await task(t, f, f.sub)
+    const onFw = await task(t, f, f.sub)
     const onPcb = await task(t, f, f.sub2)
     // the Linked tasks picker reads the family; the Parent and Subtasks
-    // pickers offer only FW's tasks, and read the family's levels too
+    // pickers offer only FW's tasks, whose level the opened task's check
+    // read, so they read no other project's level
     const usual = await allIds(t, me, open.id, 'link')
-    expect(usual).toEqual([onPcb.id])
-    expect(await allIds(t, me, open.id, 'parent')).toEqual([])
+    expect([...usual].sort()).toEqual([onFw.id, onPcb.id].sort())
+    for (const kind of ['parent', 'subtask'] as const)
+      expect(await allIds(t, me, open.id, kind), kind).toEqual([onFw.id])
     Object.assign(OWN_READS, UNCHECKED)
-    for (const kind of ['parent', 'subtask', 'link'] as const)
-      expect(await pick(t, me, open.id, kind)).toEqual({
-        state: 'unavailable',
-        reason: 'access_unchecked',
-        message: expect.stringContaining('could not finish checking'),
-      })
+    expect(await pick(t, me, open.id, 'link')).toEqual({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+      message: expect.stringContaining('could not finish checking'),
+    })
+    for (const kind of ['parent', 'subtask'] as const)
+      expect(await allIds(t, me, open.id, kind), kind).toEqual([onFw.id])
     // with the task in PCB opened, its own check stops
     expect(await pick(t, me, onPcb.id, 'link')).toEqual({ state: 'unavailable' })
     Object.assign(OWN_READS, ONE_UP)
@@ -614,7 +618,7 @@ describe('the Subtasks picker', () => {
     const plain = await task(t, f, f.sub, { title: 'Plain' })
     const shownParent = await task(t, f, f.sub, { title: 'Shown parent' })
     const inPcb = await task(t, f, f.sub2, { title: 'In PCB' })
-    // created under the rule of one level, so it reads no subtask
+    // a subtask, so it reads no subtask
     const recent = await task(t, f, f.sub, {
       title: 'Recent',
       parent_id: shownParent.id,
@@ -672,13 +676,10 @@ describe('the Subtasks picker', () => {
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     // the candidates come before their parents in the scan, so each
-    // parent is read by id, in the candidates' own sub-project; created
-    // under the rule of one level, they read no subtask, so the parent
-    // reads alone decide where a batch stops
-    const candidates = await plantTasks(t, f.sub, 6, (i) => ({
-      title: `Board ${i}`,
-      created_at: ONE_LEVEL_SINCE,
-    }))
+    // parent is read by id, in the candidates' own sub-project; as
+    // subtasks, they read no subtask, so the parent reads alone decide
+    // where a batch stops
+    const candidates = await plantTasks(t, f.sub, 6, (i) => ({ title: `Board ${i}` }))
     const parents = await plantTasks(t, f.sub, candidates.length, (i) => ({ title: `Parent ${i}` }))
     await t.run(async (ctx) => {
       for (const [i, c] of candidates.entries())

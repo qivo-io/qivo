@@ -411,13 +411,14 @@ age meets the threshold; a saved To Do task returns to To Do.
 **Manual archiving** uses **Archive or delete…** in the task's **…** menu,
 which needs edit access. **Archive** is selected first. For a task with
 subtasks, the window lists them, and a box such as **Also archive the 3
-subtasks**, selected first, archives the whole subtask tree. Qivo refuses
-the whole tree when the task and its subtasks are too large to change at
+subtasks**, selected first, archives its subtasks with it. Qivo refuses
+the whole archive when the task and its subtasks are too large to change at
 once, such as
 several subtasks with very long descriptions saved before Qivo limited
 descriptions to 20,000 characters. Clear the box to archive only the task.
-Its subtasks stay in their projects, those directly under it become top-level
-tasks, and restoring the task later does not bring them back under it.
+The subtasks the window lists stay in the task's sub-project as top-level
+tasks, and restoring the task later does not bring them back under it. A subtask
+archived earlier stays under the task.
 
 Archiving unfinished work requires a reason, which becomes a task comment.
 Because it is a comment, it follows the comment limits above. On a task with

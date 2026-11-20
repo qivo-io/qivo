@@ -88,7 +88,7 @@ export function createEstimateCache() {
     kind: string,
     cell: string,
   ) => {
-    const members = [...group.ancestors, ...(group.parent ? [group.parent] : []), ...group.issues]
+    const members = [...(group.parent ? [group.parent] : []), ...group.issues]
     const key = `${cell} ${group.key}`
     const entry = known.get(key)
     if (

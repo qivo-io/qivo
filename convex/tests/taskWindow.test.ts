@@ -248,10 +248,6 @@ async function plantWorld(t: T, f: OrgFixture) {
   })
   const hidden = await task(sibling, { title: 'Task the guest cannot see' })
   const inShelved = await task(shelved, { title: 'Task in an archived project' })
-  // a group whose subtask is a group too, stored before the rule of one level
-  const legacy = await task(f.sub, { title: 'Legacy group' })
-  const legacyKid = await task(f.sub, { title: 'Legacy subgroup', parent_id: legacy.id })
-  await task(f.sub, { title: 'Legacy leaf', parent_id: legacyKid.id })
   const secret = await task(f.hidden, { title: 'Secret' })
   // stored under the top-level project, as older code did
   const onMeta = await task(f.meta, { title: 'On the top-level project' })
@@ -346,8 +342,6 @@ async function plantWorld(t: T, f: OrgFixture) {
     other,
     hidden,
     inShelved,
-    legacy,
-    legacyKid,
     secret,
     onMeta,
     archived,
@@ -380,7 +374,7 @@ describe('parity with the tasks oracle', () => {
       }),
     )
     for (const person of [f.guest, f.viewer, f.user, f.admin, fwOnly])
-      expect(await expectParity(t, f.org.id, person), person.name).toBeGreaterThan(5)
+      expect(await expectParity(t, f.org.id, person), person.name).toBeGreaterThan(4)
     // an archived task follows archivedTaskCore's rule (canSeeProject),
     // which expectParity checks, as an active one follows the tasks part. A
     // seat that sees TBED only to reach a sub-project gets the task stored
@@ -729,20 +723,6 @@ describe('what a read reveals', () => {
       parent: { id: w.parent.id, has_subtasks: true, level: 'user' },
     })
     expect(kid.state === 'ok' && kid.task).not.toHaveProperty('has_hidden_parent')
-  })
-
-  it('tells a subtask stored as a group before the rule of one level', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const w = await plantWorld(t, f)
-    const answer = await as(t, f.guest).query(api.taskWindow.task, {
-      org_id: f.org.id,
-      ref: w.legacy.id,
-    })
-    expect(answer).toMatchObject({
-      state: 'ok',
-      subtasks: { rows: [{ id: w.legacyKid.id, has_subtasks: true }], complete: true },
-    })
   })
 })
 

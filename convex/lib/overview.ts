@@ -153,8 +153,7 @@ export { type Figure, type Missing, WEEK_STARTS } from './viewLoads'
  * guard's last look. tests/overview.test.ts ("real limits") logs what the
  * summary, the projection and the first At-risk and Paused batches read
  * under convex-test's transaction limits, with rows as the app writes them,
- * ordinary titles and names and data from before the rule of one level, one
- * figure at its design size a case. Overdue costs about one range for each
+ * ordinary titles and names, one figure at its design size a case. Overdue costs about one range for each
  * task due before the day, and with `reads.ranges` lowered it stops and
  * answers unavailable while the counts stay whole.
  *

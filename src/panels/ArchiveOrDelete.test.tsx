@@ -295,7 +295,7 @@ describe('Archive or delete a task', () => {
     await click(subtasks())
     expect(text('[data-fate-subtasks] > div')).toBe('Keeps 3 subtasks:')
     expect(text('[data-fate-card="archive"]')).toContain(
-      'They stay in their projects. Those directly under it become top-level tasks.',
+      'They stay in its sub-project as top-level tasks.',
     )
     // the checkbox sits outside the card's label, so it never switches cards
     expect(find<HTMLInputElement>('[data-fate-card="archive"] input').checked).toBe(true)
@@ -543,14 +543,14 @@ describe('Archive or delete a task', () => {
 })
 
 describe('Archive or delete a task the window shows from its own answer', () => {
-  /* QN-40 in Work, which the workspace does not hold, with subtasks in
-     Work (Done) and Manuals (In review), which Mira only views, as the
-     window's answer sends them, and the ones `more` adds. */
-  const answer = (more: { id: string; num: number }[] = []) => {
+  /* QN-40 in Work, which the workspace does not hold, or in `project`,
+     with a Done subtask and one In review, as the window's answer sends
+     them, and the ones `more` adds. */
+  const answer = (more: { id: string; num: number }[] = [], project = 'work') => {
     const row = (id: string, num: number, extra: Record<string, unknown> = {}) => ({
       id,
       org_id: snap.orgs[0].id,
-      project_id: 'work',
+      project_id: project,
       num,
       title: `Task ${id}`,
       status: 'todo',
@@ -563,7 +563,7 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     const kid = (id: string, num: number, extra: Record<string, unknown> = {}) => ({
       ...row(id, num, extra),
       has_subtasks: false,
-      level: extra.project_id === 'manuals' ? 'viewer' : 'lead',
+      level: 'lead',
     })
     return {
       state: 'ok',
@@ -579,7 +579,7 @@ describe('Archive or delete a task the window shows from its own answer', () => 
       subtasks: {
         rows: [
           kid('far-done', 41, { status: 'done' }),
-          kid('far-ro', 42, { project_id: 'manuals', status: 'review' }),
+          kid('far-review', 42, { status: 'review' }),
           ...more.map((m) => kid(m.id, m.num)),
         ],
         complete: true,
@@ -617,26 +617,24 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     await settle()
   }
 
-  it('lists the answer’s subtasks, blocks the archive over one in a read-only project, and deletes the others by uuid', async () => {
+  it('lists the answer’s subtasks with their statuses and deletes them by uuid', async () => {
     answers['issues:deleteDeep'] = () => Promise.resolve(null)
     await openFromAnswer()
     expect(text('[data-fate-lead]')).toContain('QN-40 has 2 subtasks, 1 of them unfinished.')
-    expect(text('[data-task-fate]')).toContain(
-      "At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects.",
-    )
-    expect(button('Archive').disabled).toBe(true)
+    // the archive takes both along once the unfinished work has a reason
+    await type('Done with it')
+    expect(button('Archive').disabled).toBe(false)
     await choose('delete')
     expect(
       [...document.querySelectorAll('[data-fate-subtask]')].map((r) => [
         r.getAttribute('data-fate-subtask'),
-        r.textContent?.includes('View only'),
+        r.textContent,
       ]),
     ).toEqual([
-      ['QN-41', false],
-      ['QN-42', true],
+      ['QN-41', 'QN-41Task far-doneDone'],
+      ['QN-42', 'QN-42Task far-reviewIn Review'],
     ])
-    await type('Done with it')
-    await click(button('Delete 2 tasks'))
+    await click(button('Delete 3 tasks'))
     await settle()
     expect(writes()).toEqual([
       {
@@ -644,11 +642,37 @@ describe('Archive or delete a task the window shows from its own answer', () => 
         args: {
           org_id: snap.orgs[0].id,
           id: 'far',
-          subtask_ids: ['far-done'],
+          subtask_ids: ['far-done', 'far-review'],
           reason: 'Done with it',
         },
       },
     ])
+  })
+
+  it('takes the subtasks along while the project cache has not answered their sub-project', async () => {
+    answers['issues:archive'] = () => Promise.resolve(null)
+    P.watchComments('far', snap.orgs[0].id)
+    await settle()
+    // a sub-project a row seeded and the cache has not answered, where the
+    // answer gives Edit
+    const org_id = snap.orgs[0].id
+    P.seedProjects([{ id: 'tools', org_id, name: 'Tools', num: 9, parent_id: 'plan' }])
+    await read(answer([], 'tools'))
+    await showFate()
+    expect(P.projectState('tools')).not.toBe('ok')
+    expect(P.canWrite('tools')).toBe(false)
+    expect(text('[data-fate-subtasks] > div')).toBe('Also archives 2 subtasks:')
+    expect(text('[data-task-fate]')).not.toContain('View only')
+    await type('Not needed')
+    await click(button('Archive'))
+    await settle()
+    expect(writes()).toEqual([
+      {
+        name: 'issues:archive',
+        args: expect.objectContaining({ id: 'far', reason: 'Not needed' }),
+      },
+    ])
+    expect(writes()[0].args).not.toHaveProperty('keep_subtasks')
   })
 
   it('asks again when the answer’s subtasks change before the click', async () => {
@@ -656,18 +680,18 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     await openFromAnswer()
     await choose('delete')
     await read(answer([{ id: 'far-late', num: 43 }]))
-    await click(button('Delete 2 tasks'))
+    await click(button('Delete 3 tasks'))
     expect(writes()).toEqual([])
     expect(text('[data-task-fate]')).toContain(
       'The subtasks changed while this window was open. Check them and choose again.',
     )
     vi.setSystemTime(Date.now() + 1000)
-    await click(button('Delete 3 tasks'))
+    await click(button('Delete 4 tasks'))
     await settle()
     expect(writes()).toEqual([
       {
         name: 'issues:deleteDeep',
-        args: expect.objectContaining({ subtask_ids: ['far-done', 'far-late'] }),
+        args: expect.objectContaining({ subtask_ids: ['far-done', 'far-review', 'far-late'] }),
       },
     ])
   })
@@ -688,7 +712,7 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     expect(text('[data-fate-family-unknown]')).toBe(
       'Available once Qivo can check this task for changes.',
     )
-    await click(button('Delete 2 tasks'))
+    await click(button('Delete 3 tasks'))
     await settle()
     expect(writes()).toEqual([])
   })

@@ -359,10 +359,10 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
         const where = { sub: fx.sub, sub2: fx.sub2, sib: fx.sib, away: fx.away, shelf: fx.shelf }
         const planted: Doc<'issues'>[] = []
         for (const s of tasks) {
+          // a subtask has no subtasks of its own, so a parent has no parent
+          const tops = planted.filter((t) => t.parent_id === undefined)
           const parent =
-            s.parent === null || planted.length === 0
-              ? undefined
-              : planted[s.parent % planted.length]
+            s.parent === null || tops.length === 0 ? undefined : tops[s.parent % tops.length]
           // a status write clears a pause, so a paused Backlog or Done task
           // is legacy data, planted here directly
           const over: Partial<Doc<'issues'>> = {

@@ -10,7 +10,7 @@
  * subtreeReads answers from the catalogue's flags, which it reads nothing
  * for. The single-task read (lib/core.ts taskOut) reads no catalogue and
  * asks lib/access.ts accessOf only about its links' other tasks and the
- * owner's load, so it keeps its own walk (lib/core.ts subtreeIndex) and
+ * owner's load, so it reads its own subtasks (lib/core.ts subtreeIndex) and
  * uses readTally for its first pages, an archived task's subtask page
  * among them (lib/core.ts subtasksByNumber). Project completion reads the stored counts instead
  * (lib/core.ts projectCompletion).
@@ -18,8 +18,8 @@
  * - readTally counts what a read makes against its own budget, every
  *   document at its size as Convex counts it (getDocumentSize), or at a
  *   fixed size for one the caller may not be shown;
- * - subtreeReads reads which tasks are groups, the subtrees a group's facts
- *   walk (lib/core.ts groupFacts) and rows' parents by id.
+ * - subtreeReads reads which tasks are groups, with the active subtasks a
+ *   group's facts count (lib/core.ts groupFacts), and rows' parents by id.
  *
  * A document the caller may not be shown counts at lib/limits.ts
  * TASK_ROW_MAX_BYTES in every budget decision, so a hidden title's length
@@ -38,7 +38,7 @@ import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { TASK_ROW_MAX_BYTES } from './limits'
 import { countsAsSubtask } from './liveTasks'
-import { ONE_LEVEL_SINCE, withoutSubtasks } from './viewReads'
+import { withoutSubtasks } from './viewReads'
 
 /* How many reads a tally counts itself before it looks at the request's
  * totals again, so what it cannot see, such as a read inside a helper,
@@ -144,8 +144,8 @@ export type SubtreeReads = ReturnType<typeof subtreeReads>
  * A task is a group when it has an active subtask (lib/liveTasks.ts
  * countsAsSubtask). Its check reads its active subtasks whole (issues
  * by_parent_archived), at most LIMITS.subtasks.max, so the group's facts
- * need no other read of them, and reads nothing for a subtask created under
- * the rule of one level (lib/viewReads.ts withoutSubtasks).
+ * need no other read of them, and reads nothing for a subtask, which has
+ * no subtasks of its own (lib/viewReads.ts withoutSubtasks).
  */
 export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally) {
   const kids = new Map<string, Doc<'issues'>[]>()
@@ -185,46 +185,6 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
       (await readKids(task, ceiling)) ? isGroup(task) : null,
     /** Whether `task`, whose subtasks are read, is a group. */
     isGroup,
-    /**
-     * Reads, within `ceiling`, the subtree group `root`'s facts walk
-     * (lib/core.ts groupFacts over groupCounter):
-     * the active subtasks of each task under it that counts, a level at a
-     * time, the seen set stopping a corrupt cycle. A subtask created under
-     * the rule of one level, or one of a group created then, has no
-     * subtasks and reads nothing (lib/viewReads.ts ONE_LEVEL_SINCE), so
-     * only groups stored before it read deeper than one level. False when
-     * `ceiling` stopped the walk, so the row's facts are those of a subtree
-     * too large to read.
-     */
-    walk: async (root: Doc<'issues'>, ceiling: ReadTotals): Promise<boolean> => {
-      if (!(await readKids(root, ceiling))) return false
-      // groupCounter's rule for an active group, which reads nothing
-      const counts = (task: Doc<'issues'>) =>
-        task.org_id === root.org_id &&
-        task.project_id === root.project_id &&
-        task.archived_at === undefined
-      const seen = new Set([root.id])
-      let frontier = [root]
-      while (frontier.length > 0) {
-        const next: Doc<'issues'>[] = []
-        for (const task of frontier) {
-          if (task !== root) {
-            if (root.created_at >= ONE_LEVEL_SINCE && !kids.has(task.id)) kids.set(task.id, [])
-            if (!(await readKids(task, ceiling))) return false
-            // a leaf, which the facts count and enter no further
-            if (!isGroup(task)) continue
-          }
-          for (const kid of kids.get(task.id) ?? []) {
-            if (!countsAsSubtask(task, kid)) continue
-            if (seen.has(kid.id) || !counts(kid)) continue
-            seen.add(kid.id)
-            next.push(kid)
-          }
-        }
-        frontier = next
-      }
-      return true
-    },
     /** Reads the parent of `task` by id unless the list holds it, counted
      * at the fixed size unless the caller can read it, and keeps it in
      * `tasks`, where issueOut finds it (lib/core.ts parentOut). A parent

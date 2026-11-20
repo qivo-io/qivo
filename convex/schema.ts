@@ -333,10 +333,9 @@ const issuesTable = defineTable({
   .index('by_parent_num', ['parent_id', 'num'])
   // The nightly leaf guard asks whether a parent has an unarchived child.
   .index('by_parent_archived', ['parent_id', 'archived_at'])
-  // A project's move to Deleted items reads a task's children outside the
-  // moving projects through ranges between their ids, so it never reads the
-  // children inside, however many there are (model/deletedItems.ts
-  // childrenOutside).
+  // Nothing reads it any more. An earlier release read a task's children
+  // outside a project moving to Deleted items through it, which a subtask in
+  // its parent's sub-project never is.
   .index('by_parent_project', ['parent_id', 'project_id'])
   // Profile refs for removeProfile's SET NULLs. The removal transaction
   // reads only open tasks (archived_at absent), the background steps the
@@ -2429,18 +2428,15 @@ export default defineSchema({
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),
 
-  /* The parent each task of a restoring project item waits for. A task
-   * whose parent is outside the item goes back to issues without it while
-   * the item fills, so that parent stays as it is until the reveal. After
-   * the reveal the restore gives the task its parent by the parent table
-   * (model/deletedItems.ts attachParents). It keeps one row per task rather
-   * than a field on deleted_item_jobs, because an item can hold any number
-   * of such tasks and every step rewrites its job. The rows outlive the
-   * reveal with the item and its job and go with the item. Any move of such
-   * a task to Deleted items, by this item or another, takes its row by task
-   * and stores the task with this parent while it still waits for it
-   * (takeParent). The row of a task whose project went to Deleted items
-   * again before its turn goes to the item that holds that project. */
+  /* Nothing writes it any more. An earlier release kept here the parent
+   * outside a restoring project item that each of its tasks waited for, and
+   * gave it back after the reveal. A subtask is in its parent's sub-project,
+   * so the restore now writes such a task back without that parent
+   * (model/deletedItems.ts restoreTasks). The rows an earlier release left
+   * are only read to be deleted, by item (by_item_task): when a project
+   * item's restore ends or its purge finishes (dropWaitingParents), and
+   * with the item when its organization's Deleted items are cleared
+   * (clearOrgTrash). by_task is no longer read. */
   deleted_item_parents: defineTable({
     item_id: v.string(),
     task_id: v.string(), // the task written back without its parent
@@ -2596,12 +2592,9 @@ export default defineSchema({
     title: v.string(),
     project_id: v.string(),
     archived: v.boolean(),
-    // a task item's subtask in another project than the item's root: that
-    // project, so its lead finds the item (model/deletedItemsPage.ts
-    // taskPlan). Only a family stored before the rule that a subtask stays
-    // in its parent's sub-project (model/issues.ts sameSubProject) has one:
-    // a sibling sub-project of the root's, or, from before the earlier rule
-    // of one top-level project, any other project.
+    // Nothing writes or reads it any more. An earlier release set it on a
+    // task item's subtask in another project than the item's root, which a
+    // subtask in its parent's sub-project never is.
     cross_project_id: v.optional(v.string()),
     // the title, a newline and the readable text of the description
     // (model/descriptions.ts deletedSearchText)
@@ -2620,6 +2613,7 @@ export default defineSchema({
     .index('by_task', ['task_id'])
     .index('by_item', ['item_id'])
     .index('by_org_num', ['org_id', 'num'])
+    // nothing reads it any more (cross_project_id)
     .index('by_org_cross_project', ['org_id', 'cross_project_id'])
     // an organization's tasks of one assignee, newest delete first, and
     // with neither field the rows stored before the page's release

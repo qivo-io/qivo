@@ -92,8 +92,8 @@ export type RoadmapState =
 /** A heading's Remaining: hours, or why there is no figure. */
 export type HeadRemaining = number | 'counting' | 'unknown'
 
-/** What the Roadmap reads of a group's family, its subtasks at any depth
-    as the answer brings them. */
+/** What the Roadmap reads of a group's family, its subtasks as the answer
+    brings them. */
 export type RoadmapFamily = {
   /** every task the shown answer brings, rows, parents and subtasks, by
       handle, as the Roadmap shows them */
@@ -196,37 +196,16 @@ const STALE_MS = 120 * 86_400_000
 
 /** The family lookups over `byId` (RoadmapFamily). */
 function familyOver(byId: Readonly<Record<string, IssueVM>>): RoadmapFamily {
-  /** Whether every subtask under `it`, at any depth, has a model. */
-  const whole = (it: IssueVM) => {
-    const seen = new Set([it.id])
-    const stack = [...(it.children ?? [])]
-    while (stack.length) {
-      const id = stack.pop() as string
-      if (seen.has(id)) continue
-      seen.add(id)
-      const kid = byId[id]
-      if (!kid) return false
-      stack.push(...(kid.children ?? []))
-    }
-    return true
-  }
+  /** Whether every subtask of `it` has a model. A subtask has no subtasks
+      of its own. */
+  const whole = (it: IssueVM) => (it.children ?? []).every((id) => !!byId[id])
   return {
     byId,
     span: (it, datesOf) => (whole(it) ? groupSpan(it, byId, datesOf) : null),
     stale: (it) => {
       if (P.isDone(it) || !it.updatedAt) return false
       let newest = it.updatedAt
-      const seen = new Set([it.id])
-      const stack = [...(it.children ?? [])]
-      while (stack.length) {
-        const id = stack.pop() as string
-        if (seen.has(id)) continue
-        seen.add(id)
-        const kid = byId[id]
-        if (!kid) continue
-        newest = Math.max(newest, kid.updatedAt || 0)
-        stack.push(...(kid.children ?? []))
-      }
+      for (const id of it.children ?? []) newest = Math.max(newest, byId[id]?.updatedAt || 0)
       return Date.now() - newest > STALE_MS
     },
     partial: (it) => {

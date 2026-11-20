@@ -529,7 +529,7 @@ describe('the delays of tasks only a view brings', () => {
     expect(P.delayOf(card ?? '')).toEqual(P.windowDelay(view))
   })
 
-  it("judges a group the window shows from its answer by the card's span, when a subtask has subtasks of its own", async () => {
+  it("judges a group the window shows from its answer by the card's span, when its subtask list is not whole", async () => {
     snapshot.projects[0].track_delay = true
     deliver(structuredClone(snapshot))
     await turn()
@@ -552,7 +552,7 @@ describe('the delays of tasks only a view brings', () => {
     const card = P.viewTask(SLOT, 'grp') ?? ''
     const verdict = P.delayOf(card)
     expect(verdict).not.toBeNull()
-    // the window reads the group, whose one subtask has subtasks of its own
+    // the window reads the group, the list of its subtasks not whole
     P.watchComments('grp', snapshot.orgs[0].id)
     P.showSections({}, true)
     const read = taskReads.get('grp')
@@ -569,7 +569,7 @@ describe('the delays of tasks only a view brings', () => {
       labels: [],
       follow: null,
       parent: null,
-      subtasks: { rows: [{ ...kid, has_subtasks: true, level: 'user' }], complete: true },
+      subtasks: { rows: [{ ...kid, has_subtasks: false, level: 'user' }], complete: false },
     })
     await turn()
     expect(P.taskDetail('grp')?.datesKnown).toBe(false)
@@ -598,7 +598,7 @@ describe('the delays of tasks only a view brings', () => {
     })
     answer = ok([group])
     await open()
-    // the window reads the group, whose one subtask has subtasks of its own
+    // the window reads the group, the list of its subtasks not whole
     P.watchComments('grp', snapshot.orgs[0].id)
     P.showSections({}, true)
     const read = taskReads.get('grp')
@@ -614,7 +614,7 @@ describe('the delays of tasks only a view brings', () => {
         labels: [],
         follow: null,
         parent: null,
-        subtasks: { rows: [{ ...kid, has_subtasks: true, level: 'user' }], complete: true },
+        subtasks: { rows: [{ ...kid, has_subtasks: false, level: 'user' }], complete: false },
       })
       await turn()
     }

@@ -46,8 +46,8 @@ const defaultCapacity = newOrgDefaults('2026-09-07T00:00:00.000Z').default_plann
 const ownerOf = (i: (typeof issues)[number]) =>
   taskOwnerId({ status: i.status, assignee_id: i.assignee, reviewer_id: i.reviewer })
 // A task's plan weeks as the app shows them. A group's run from the earliest
-// start to the latest end of its scheduled, unarchived leaves at any depth; a
-// leaf without an end counts as its start week.
+// start to the latest end of its scheduled, unarchived subtasks; a subtask
+// without an end counts as its start week.
 const subtasksOf = (i: (typeof issues)[number]) =>
   issues.filter((child) => child.parent === i.key && !child.archived)
 function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {

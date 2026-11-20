@@ -227,9 +227,8 @@ async function hasOwnedEndpoint(
 
 /* The deleted item states whose work may still be in the live tables. A
  * project item's move leaves tasks in issues under its absent projects until
- * each one moves, and detaches their children outside it only then; a stuck
- * move keeps them until Delete now purges them; a restore writes tasks back
- * before its reveal. A task item moves its tasks and detaches their children
+ * each one moves; a stuck move keeps them until Delete now purges them; a
+ * restore writes tasks back before its reveal. A task item moves its tasks
  * in one transaction, and a ready item has nothing left in the live tables.
  * A state added later counts as in flight until someone decides otherwise. */
 const IN_FLIGHT = DELETED_ITEM_STATES.filter((state) => state !== 'ready')

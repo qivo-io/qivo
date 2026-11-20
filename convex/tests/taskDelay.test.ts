@@ -425,10 +425,10 @@ describe('a single read’s load is the list’s load', () => {
         const where = { sub: fx.sub, sub2: fx.sub2, sib: fx.sib, arc }
         const planted: Doc<'issues'>[] = []
         for (const s of tasks) {
+          // a subtask has no subtasks of its own, so a parent has no parent
+          const tops = planted.filter((t) => t.parent_id === undefined)
           const parent =
-            s.parent === null || planted.length === 0
-              ? undefined
-              : planted[s.parent % planted.length]
+            s.parent === null || tops.length === 0 ? undefined : tops[s.parent % tops.length]
           const over: Partial<Doc<'issues'>> = {
             // a subtask is in its parent's sub-project
             project_id: parent?.project_id ?? where[s.project].id,

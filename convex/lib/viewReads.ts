@@ -17,7 +17,7 @@
  * - groupCheck and groupFacts, which tasks are groups and what a group
  *   shows of its subtasks, and firstSubtaskCheck, which tasks are groups
  *   from each one's first subtask alone;
- * - shownParents, the ancestors of a view's rows that the reader is shown;
+ * - shownParents, the parents of a view's rows that the reader is shown;
  * - projectCounts and mineCounts, the leaf counts of a project selection's
  *   sub-projects or of a person's own rows (model/overviewCounts.ts), which
  *   the Overview and the Roadmap's headings read;
@@ -1041,24 +1041,11 @@ export const noSubtasks = (): Subtasks => ({
   parents: new Set(),
 })
 
-/** The release from which every backend that can run keeps one level of
- * subtasks: v0.1.98, the backend's rollback floor, released at this
- * instant. The rule itself shipped in v0.1.17: the parent fence
- * (model/issues.ts parentChainCheck) refuses a parent that has a parent of
- * its own and a parent for a task that has subtasks, on the app, REST and
- * MCP, and a Deleted items restore drops such a parent (model/deletedItems.ts
- * keptParent). Data stored before it keeps its shape, so a subtask with
- * subtasks of its own, a nested group, needs both of its links stored
- * before this instant: a task created at or after it never holds a parent
- * and a subtask at once, and a task's subtasks it gained at or after it were
- * then without subtasks and stay so. Every create stamps created_at with the
- * server's clock, and no write changes it. */
-export const ONE_LEVEL_SINCE = '2026-10-29T00:24:00.000Z'
-
-/** Whether `task`, which has a parent, was created under the rule of one
- * level (ONE_LEVEL_SINCE), so it has no subtasks and needs no group check. */
-export const withoutSubtasks = (task: Pick<Doc<'issues'>, 'parent_id' | 'created_at'>): boolean =>
-  task.parent_id !== undefined && task.created_at >= ONE_LEVEL_SINCE
+/** Whether `task` is a subtask, which has no subtasks of its own (one
+ * level of subtasks, model/issues.ts parentChainCheck), so it needs no
+ * group check. */
+export const withoutSubtasks = (task: Pick<Doc<'issues'>, 'parent_id'>): boolean =>
+  task.parent_id !== undefined
 
 /** Whether the task with this id is a group, once groupCheck read it. */
 export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
@@ -1075,8 +1062,8 @@ export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
  * one in steps
  * (inSteps), so it sees every row it reads. A task known to be a group
  * (Subtasks parents) skips the first look and reads its subtasks in steps
- * from the start, a range less, and a subtask created under the rule of one
- * level (withoutSubtasks) reads nothing. Each subtask counts at lib/limits.ts
+ * from the start, a range less, and a subtask (withoutSubtasks) reads
+ * nothing. Each subtask counts at lib/limits.ts
  * TASK_ROW_MAX_BYTES unless `known` says the reader is shown it. A group's
  * subtasks are read whole, so its group facts need no other range. It asks
  * no access, as a subtask is in its task's sub-project.
@@ -1145,8 +1132,7 @@ export const isGroupKnown = (known: Subtasks, id: string): boolean | undefined =
  * makes its task a group (lib/liveTasks.ts countsAsSubtask), kept in
  * `known` as a parent so a later groupCheck or groupFacts reads its
  * subtasks from the start; a task without one gets no subtasks. Tasks
- * known already, and subtasks created under the rule of one level
- * (withoutSubtasks), read nothing. Each first subtask counts at
+ * known already, and subtasks (withoutSubtasks), read nothing. Each first subtask counts at
  * lib/limits.ts TASK_ROW_MAX_BYTES unless `known` says the reader is shown
  * it. Answer with isGroupKnown.
  */
@@ -1182,24 +1168,24 @@ export type GroupFacts = {
   /** every leaf under the group is Done and it has at least one
    * (src/lib/issueGroups.ts isIssueDone) */
   done: boolean
-  /** the newest updated_at, in ms, of the group and its descendants, which
+  /** the newest updated_at, in ms, of the group and its subtasks, which
    * the Stale filter reads (src/store/planner.ts isStale) */
   newest: number
   /** the group's calculated dates (src/lib/issueGroups.ts groupSpan): the
-   * earliest start and latest end week of the scheduled leaves under it,
-   * absent when none is scheduled, and whether the walk could not see the
-   * whole subtree, the `unknown` of groupProgress */
+   * earliest start and latest end week of its scheduled subtasks, absent
+   * when none is scheduled, and whether it has no subtask that counts, the
+   * `unknown` of groupProgress */
   span: { start_week?: string; end_week?: string; partial: boolean }
 }
 
 /**
  * The facts of each of `groups`, groups the reader is shown, by group id,
- * walking their subtasks as src/lib/issueGroups.ts walkLeaves does: through
- * the subtasks that count for them (groupCheck), into nested groups stored
- * before the rule of one level, cycle-safe. A subtask that counts is in its
- * group's sub-project, so the reader is shown it as it is shown the group,
- * and the walk asks no access. It reads each group's and each descendant's
- * subtasks once, into `known`, which then holds those subtasks as shown.
+ * from their subtasks as src/lib/issueGroups.ts walkLeaves reads them: the
+ * subtasks that count for them (groupCheck), each a leaf, as a subtask has
+ * no subtasks of its own. A subtask that counts is in its group's
+ * sub-project, so the reader is shown it as it is shown the group, and the
+ * read asks no access. It reads each group's subtasks once, into `known`,
+ * which then holds those subtasks as shown and without subtasks.
  */
 export async function groupFacts(
   ctx: QueryCtx,
@@ -1207,59 +1193,28 @@ export async function groupFacts(
   groups: readonly Doc<'issues'>[],
   known: Subtasks,
 ): Promise<Map<string, GroupFacts>> {
-  // read the subtrees a level at a time, each task once; a task read
-  // before reads nothing again
-  const visited = new Set<string>()
-  let level: readonly Doc<'issues'>[] = [...new Map(groups.map((g) => [g.id, g])).values()]
-  while (level.length > 0) {
-    for (const t of level) visited.add(t.id)
-    await groupCheck(ctx, guard, level, known)
-    // a subtask a group gained under the rule of one level has none of its
-    // own (ONE_LEVEL_SINCE), so only those of older groups get a check
-    for (const t of level)
-      if (t.created_at >= ONE_LEVEL_SINCE)
-        for (const kid of known.kids.get(t.id) ?? [])
-          if (!known.kids.has(kid.id) && !known.parents.has(kid.id)) known.kids.set(kid.id, [])
-    const kids = level.flatMap((t) => known.kids.get(t.id) ?? [])
-    for (const kid of kids) known.shown.set(kid.id, true)
-    level = [...new Map(kids.filter((k) => !visited.has(k.id)).map((k) => [k.id, k])).values()]
-  }
-  const kidsOf = (id: string) => known.kids.get(id) ?? []
+  await groupCheck(ctx, guard, [...new Map(groups.map((g) => [g.id, g])).values()], known)
   const out = new Map<string, GroupFacts>()
   for (const group of groups) {
-    const seen = new Set([group.id])
-    const stack = [...kidsOf(group.id)]
-    let unknown = stack.length === 0
-    let total = 0
+    const kids = known.kids.get(group.id) ?? []
     let done = 0
     let newest = Date.parse(group.updated_at)
     let start: string | undefined
     let end: string | undefined
-    for (let task = stack.pop(); task !== undefined; task = stack.pop()) {
-      if (seen.has(task.id)) {
-        unknown = true
-        continue
-      }
-      seen.add(task.id)
-      newest = Math.max(newest, Date.parse(task.updated_at))
-      if (isGroupIn(known, task.id)) {
-        const below = kidsOf(task.id)
-        unknown ||= below.length === 0
-        stack.push(...below)
-        continue
-      }
-      total++
-      if (task.status === 'done') done++
-      if (task.start_week === undefined) continue
+    for (const kid of kids) {
+      known.shown.set(kid.id, true)
+      if (!known.kids.has(kid.id)) known.kids.set(kid.id, [])
+      newest = Math.max(newest, Date.parse(kid.updated_at))
+      if (kid.status === 'done') done++
+      if (kid.start_week === undefined) continue
       const last =
-        task.end_week !== undefined && task.end_week > task.start_week
-          ? task.end_week
-          : task.start_week
-      if (start === undefined || task.start_week < start) start = task.start_week
+        kid.end_week !== undefined && kid.end_week > kid.start_week ? kid.end_week : kid.start_week
+      if (start === undefined || kid.start_week < start) start = kid.start_week
       if (end === undefined || last > end) end = last
     }
+    const unknown = kids.length === 0
     out.set(group.id, {
-      done: !unknown && total > 0 && total === done,
+      done: !unknown && kids.length === done,
       newest,
       span:
         start === undefined || end === undefined
@@ -1273,15 +1228,14 @@ export async function groupFacts(
 // --- parents ----------------------------------------------------------------------
 
 /**
- * The tasks the reader is shown above `rows`, a view's rows, that are not
- * rows themselves, each once, cycle-safe, as src/lib/boardGroups.ts
- * groupBoardCell walks a card's parents. A parent is shown only in the
- * row's own sub-project (lib/liveTasks.ts liveLink), which the reader is
- * shown, so no access is asked: when it is a row or one of `read`, tasks
- * the view read that are in the reader's working set, or else when, read
- * by id and charged at lib/limits.ts TASK_ROW_MAX_BYTES, it is active. The
- * walk goes on above each shown parent. More than `most` of them throws
- * OverBudget.
+ * The parents the reader is shown of `rows`, a view's rows, that are not
+ * rows themselves, each once, as src/lib/boardGroups.ts groupBoardCell
+ * reads a card's parent. A parent is shown only in the row's own
+ * sub-project (lib/liveTasks.ts liveLink), which the reader is shown, so no
+ * access is asked: when it is a row or one of `read`, tasks the view read
+ * that are in the reader's working set, or else when, read by id and
+ * charged at lib/limits.ts TASK_ROW_MAX_BYTES, it is active. A parent has
+ * no parent of its own. More than `most` of them throws OverBudget.
  */
 export async function shownParents(
   ctx: QueryCtx,
@@ -1290,44 +1244,36 @@ export async function shownParents(
   read: ReadonlyMap<string, Doc<'issues'>>,
   most: number,
 ): Promise<Doc<'issues'>[]> {
-  const inRows = new Set(rows.map((t) => t.id))
-  // every task decided, shown or not
-  const decided = new Map<string, Doc<'issues'> | null>(rows.map((t) => [t.id, t]))
+  const inRows = new Map(rows.map((t) => [t.id, t]))
+  // every parent decided, shown or not
+  const decided = new Set<string>()
   const out: Doc<'issues'>[] = []
-  let level: readonly Doc<'issues'>[] = rows
-  while (level.length > 0) {
-    const next: Doc<'issues'>[] = []
-    const wanted = new Map<string, Doc<'issues'>>()
-    for (const t of level) {
-      const id = t.parent_id
-      if (id === undefined || decided.has(id) || wanted.has(id)) continue
-      const known = read.get(id)
-      if (known === undefined) wanted.set(id, t)
-      else if (liveLink(known, t)) {
-        decided.set(id, known)
-        next.push(known)
-      }
+  const wanted = new Map<string, Doc<'issues'>>()
+  for (const t of rows) {
+    const id = t.parent_id
+    if (id === undefined || inRows.has(id) || decided.has(id) || wanted.has(id)) continue
+    const known = read.get(id)
+    if (known === undefined) wanted.set(id, t)
+    else {
+      decided.add(id)
+      if (liveLink(known, t)) out.push(known)
     }
-    const ids = [...wanted.keys()]
-    for (let at = 0; at < ids.length; ) {
-      const step = ids.slice(at, at + (await guard.upTo(BY_ID, Math.min(CHECKS, ids.length - at))))
-      at += step.length
-      const found = await settled(step.map((id) => byId(ctx, 'issues', id)))
-      for (const [i, parent] of found.entries()) {
-        const child = wanted.get(step[i])
-        decided.set(step[i], null)
-        if (parent === null) continue
-        guard.charge(parent, TASK_ROW_MAX_BYTES)
-        if (child === undefined || !liveLink(parent, child) || parent.archived_at !== undefined)
-          continue
-        decided.set(parent.id, parent)
-        next.push(parent)
-      }
-    }
-    for (const parent of next) if (!inRows.has(parent.id)) out.push(parent)
-    if (out.length > most) throw new OverBudget()
-    level = next
   }
+  const ids = [...wanted.keys()]
+  for (let at = 0; at < ids.length; ) {
+    const step = ids.slice(at, at + (await guard.upTo(BY_ID, Math.min(CHECKS, ids.length - at))))
+    at += step.length
+    const found = await settled(step.map((id) => byId(ctx, 'issues', id)))
+    for (const [i, parent] of found.entries()) {
+      const child = wanted.get(step[i])
+      if (parent === null) continue
+      guard.charge(parent, TASK_ROW_MAX_BYTES)
+      if (child === undefined || !liveLink(parent, child) || parent.archived_at !== undefined)
+        continue
+      out.push(parent)
+    }
+  }
+  if (out.length > most) throw new OverBudget()
   return out
 }
 

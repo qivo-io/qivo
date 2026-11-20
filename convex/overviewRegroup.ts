@@ -16,12 +16,13 @@
  * transaction. It adds the projects to the top-level project's
  * overview_regroups row and starts one chain of steps, each its own
  * transaction, which reads the projects' active tasks a page at a time
- * (issues by_project_archived) and reconciles each task and its parent with
- * what the counts hold for them (reconcileTask), reading their subtasks
- * again. While the row exists, the counts of every top-level project of
- * the organization answer `counting` (countsReady). A task written
- * meanwhile reconciles itself and its parents; either may come first, and
- * the second finds nothing to move.
+ * (issues by_project_archived) and reconciles each task with what the
+ * counts hold for it (reconcileTask), reading its subtasks again. An active
+ * task's parent is an active task of its sub-project, so the steps
+ * reconcile it on its own. While the row exists, the counts of every
+ * top-level project of the organization answer `counting` (countsReady). A
+ * task written meanwhile reconciles itself and its parents; either may come
+ * first, and the second finds nothing to move.
  *
  * Convex drops the calls a failed mutation scheduled, so a step that fails
  * leaves the row in place. `recover` runs every ten minutes (crons.ts) and
@@ -129,23 +130,12 @@ export const step = internalMutation({
     // where this step stands in the page, and whether it finished a task
     let position = row.after
     let finishedOne = false
-    const checked = new Set<string>()
     for (const task of page.page) {
       if (finishedBefore(task, row.after)) continue
       // a step always finishes one task, so the walk moves on
       if (finishedOne && (await usedMoreThan(ctx, OVERVIEW_REGROUP.room)))
         return await goOn({ after: position })
-      if (task.org_id === row.org_id && !checked.has(task.id)) {
-        checked.add(task.id)
-        await reconcileTask(ctx.db, row.org_id, task.id, task, 'read')
-      }
-      const parentId = task.parent_id
-      if (parentId !== undefined && !checked.has(parentId)) {
-        checked.add(parentId)
-        const parent = await byId(ctx, 'issues', parentId)
-        if (parent !== null && parent.org_id === row.org_id)
-          await reconcileTask(ctx.db, row.org_id, parent.id, parent, 'read')
-      }
+      if (task.org_id === row.org_id) await reconcileTask(ctx.db, row.org_id, task.id, task, 'read')
       position = positionAfter(position, task)
       finishedOne = true
     }

@@ -70,16 +70,13 @@ export function linkViews(
 export type SectionState = 'loading' | 'failed' | 'retrying' | 'unavailable' | 'ready'
 
 /** A subtask as the group totals read it. */
-export type TotalsRow = { isGroup: boolean; done: boolean; remaining?: number | null }
+export type TotalsRow = { done: boolean; remaining?: number | null }
 
 /** What a group's Progress says: loading; completion unknown, `partial`
-    once rows were read; the leaves of a complete list beside a row that is
-    itself a group, whose own leaves the list does not hold; or a complete
-    count. */
+    once rows were read; or a complete count. */
 export type Progress =
   | { state: 'loading' }
   | { state: 'unknown'; partial: boolean }
-  | { state: 'visible'; done: number; total: number }
   | { state: 'complete'; done: number; total: number; pct: number }
 
 /** What a group's Remaining says: loading, unknown, or the open hours of
@@ -90,12 +87,10 @@ export type Remaining =
   | { state: 'unknown' }
   | { state: 'complete'; hours: number | undefined }
 
-/** A group's Progress and Remaining from its subtask list. The leaves are
-    the rows that are no group. A row that is itself a group, stored before
-    the one-level rule, holds subtasks the list does not, so Remaining is
-    then unknown and Progress counts the leaves the list holds. A list that
-    is not complete leaves both unknown. `delivered` says whether an answer
-    arrived for the task before a failure. */
+/** A group's Progress and Remaining from its subtask list. A subtask has
+    no subtasks of its own, so each row is a leaf. A list that is not
+    complete leaves both unknown. `delivered` says whether an answer arrived
+    for the task before a failure. */
 export function groupTotals(list: {
   state: SectionState
   complete: boolean
@@ -110,14 +105,11 @@ export function groupTotals(list: {
       progress: { state: 'unknown', partial: state !== 'unavailable' && delivered },
       remaining: { state: 'unknown' },
     }
-  const leaves = rows.filter((row) => !row.isGroup)
-  const total = leaves.length
-  const done = leaves.filter((row) => row.done).length
-  if (rows.some((row) => row.isGroup))
-    return { progress: { state: 'visible', done, total }, remaining: { state: 'unknown' } }
+  const total = rows.length
+  const done = rows.filter((row) => row.done).length
   let sum = 0
   let any = false
-  for (const leaf of leaves) {
+  for (const leaf of rows) {
     if (leaf.done || leaf.remaining == null) continue
     sum += leaf.remaining
     any = true

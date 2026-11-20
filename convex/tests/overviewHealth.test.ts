@@ -35,10 +35,10 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import {
-  BEFORE_RULE,
   DAY,
   measured,
   mixOf,
+  PLANTED_AT,
   plantPeople,
   plantShared,
   shift,
@@ -418,7 +418,7 @@ describe('figures', () => {
       plantIssue(t, {
         org_id: f.org.id,
         project_id: project.id,
-        created_at: BEFORE_RULE,
+        created_at: PLANTED_AT,
         ...fields,
       })
     await task({ title: 'Overdue', due_date: shift(DAY, -3) })
@@ -482,7 +482,7 @@ describe('figures', () => {
 async function orderCase() {
   const t = newT()
   const f = await withReadingAdmin(t)
-  const zed = await plantSeat(t, { org_id: f.org.id, name: 'Zed', accepted_at: BEFORE_RULE })
+  const zed = await plantSeat(t, { org_id: f.org.id, name: 'Zed', accepted_at: PLANTED_AT })
   const top = await plantProject(t, { org_id: f.org.id, name: 'Ordered' })
   // the admin, who reads it, holds a grant on it, so a sub-project without
   // a lead of its own keeps none
@@ -1117,13 +1117,13 @@ async function plantOpen(
   owners: readonly Doc<'profiles'>[],
 ): Promise<void> {
   const parents = await plantTasks(t, project, Math.round(n / 10), (i) =>
-    openMix(i, owners, 'parent', BEFORE_RULE),
+    openMix(i, owners, 'parent', PLANTED_AT),
   )
   await plantTasks(t, project, n - 3 * parents.length, (i) =>
-    openMix(i, owners, 'plain', BEFORE_RULE),
+    openMix(i, owners, 'plain', PLANTED_AT),
   )
   await plantTasks(t, project, 2 * parents.length, (i) => ({
-    ...openMix(i + 3, owners, 'subtask', BEFORE_RULE),
+    ...openMix(i + 3, owners, 'subtask', PLANTED_AT),
     parent_id: (parents[Math.floor(i / 2)] as Doc<'issues'>).id,
   }))
 }
@@ -1184,7 +1184,7 @@ async function sharedCase(o: { tops: number; subs: number | ((top: number) => nu
     org_id: f.org.id,
     org_role: 'user',
     auth_user_id: `auth_${uuid()}`,
-    accepted_at: BEFORE_RULE,
+    accepted_at: PLANTED_AT,
   })
   const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
   const planted = await plantShared(t, f.org.id, f.user, me, o)
@@ -1244,9 +1244,9 @@ describe('real limits', () => {
     for (const [i, sub] of c.subs.entries()) {
       await plantOpen(c.t, sub, 30, c.owners)
       await plantTasks(c.t, sub, i === 2 ? 66 : 67, (k) => ({
-        ...mixOf(k, c.owners, 'plain', BEFORE_RULE),
+        ...mixOf(k, c.owners, 'plain', PLANTED_AT),
         status: 'done',
-        done_at: BEFORE_RULE,
+        done_at: PLANTED_AT,
         remaining_hours: 0,
       }))
     }
@@ -1291,7 +1291,7 @@ describe('real limits', () => {
           active: true,
           kind: 'person',
           plannable_hours: 40,
-          accepted_at: BEFORE_RULE,
+          accepted_at: PLANTED_AT,
           created_at: NOW,
         })
         roster.push((await ctx.db.get(_id)) as Doc<'profiles'>)
@@ -1343,7 +1343,7 @@ describe.runIf(process.env.QIVO_HEALTH_ORG_OPEN === '1')(
             const n = Math.min(30, left)
             left -= n
             await plantTasks(c.t, await subOf(c.t, top, `Elsewhere ${i}-${k}`), n, (j) => ({
-              ...openMix(j, c.owners, 'plain', BEFORE_RULE),
+              ...openMix(j, c.owners, 'plain', PLANTED_AT),
               assignee_id: (c.owners[Math.floor(j / 2) % c.owners.length] as Doc<'profiles'>).id,
             }))
           }

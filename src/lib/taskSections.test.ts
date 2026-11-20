@@ -71,11 +71,7 @@ describe("a task's links as its window lists them", () => {
 })
 
 describe("a group's Progress and Remaining", () => {
-  const leaf = (done: boolean, remaining?: number): TotalsRow => ({
-    isGroup: false,
-    done,
-    remaining,
-  })
+  const leaf = (done: boolean, remaining?: number): TotalsRow => ({ done, remaining })
   const list = (
     state: SectionState,
     rows: TotalsRow[],
@@ -123,14 +119,6 @@ describe("a group's Progress and Remaining", () => {
     expect(groupTotals(list('ready', []))).toEqual({
       progress: { state: 'complete', done: 0, total: 0, pct: 0 },
       remaining: { state: 'complete', hours: undefined },
-    })
-  })
-
-  it('cannot total a list with a group row, whose own subtasks the list lacks', () => {
-    const group: TotalsRow = { isGroup: true, done: false, remaining: 8 }
-    expect(groupTotals(list('ready', [leaf(true), group, leaf(false, 1)]))).toEqual({
-      progress: { state: 'visible', done: 1, total: 2 },
-      remaining: { state: 'unknown' },
     })
   })
 })

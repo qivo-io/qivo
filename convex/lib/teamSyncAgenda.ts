@@ -108,7 +108,7 @@ import {
  *
  * tests/teamSyncAgenda.test.ts ("real limits") logs what each case reads
  * under convex-test's transaction limits with rows as the app writes them,
- * in ordinary text and data from before the rule of one level, a staff
+ * in ordinary text, a staff
  * reader in 3 teams and 10 owners holding the scope's tasks unless a case
  * says otherwise, each case one figure at its design size, or the figures
  * one read takes together at their sum, such as a project's open and Done
@@ -221,7 +221,7 @@ export type AgendaAnswer =
        * reading floor (lib/teamSync.ts readingBounds); the page keeps those
        * at or after its exact reading point (doneSinceKind) */
       done: ViewRow[]
-      /** the shown ancestors of rows, asks and Done tasks that are none of
+      /** the shown parents of rows, asks and Done tasks that are none of
        * them */
       parents: ViewRow[]
       /** the walk's people, humans and agents, by id; the page orders them */
