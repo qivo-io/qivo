@@ -2187,8 +2187,7 @@ hours and their other scheduled work, counted as the app counts it for you.
 For organization admins and users that includes work in projects they
 cannot read, without naming it. For viewers and guests it includes only
 work they can read or own, so two users can get different verdicts for one
-task. A group whose `progress` is `partial` can only be `late`, as in the
-app. The server judges today's date in UTC, so near midnight or a week
+task. The server judges today's date in UTC, so near midnight or a week
 boundary it can differ from the app, which uses the browser's time zone.
 
 `delay` can also be `{"status": "unavailable", "projected_end_week":
