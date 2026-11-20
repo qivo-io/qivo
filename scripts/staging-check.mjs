@@ -11119,8 +11119,8 @@ async function projectDirectoryCheck() {
      *  the other state. The search before it has waited for the list's
      *  answer, so the list does not redraw under the press. A star is not
      *  pressed again, since one that went back on a refusal looks like one
-     *  whose press was lost, and a second press would then set back what
-     *  the first set. The waits after it fail the step when a press is
+     *  whose press was lost, and a second press could then take and hide
+     *  the refusal. The waits after it fail the step when a press is
      *  lost. */
     const pressStar = async (on) => {
       eq(

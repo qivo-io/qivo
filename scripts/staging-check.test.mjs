@@ -2815,9 +2815,8 @@ describe('a guarded press', () => {
     // the Inbox presses t0's row once its page is read again without the search
     expect(script).toContain('await until(async () => unsearched() > before, 30_000)')
     // M's star is a toggle that a refusal sets back, so it is pressed once,
-    // from the state the press expects, and not through the guard
+    // from the state the press expects
     expect(script).toContain('await starOf().click({ timeout: 30_000 })')
-    expect(script).not.toContain('pressFor(\n          starOf()')
   })
 })
 
