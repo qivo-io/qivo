@@ -214,14 +214,17 @@ async function cursorPosition(
  * ARCHIVE_LABELS.scan labels hold a matching one or it has more, and their
  * text last. A search past LIMITS.search, once trimmed, is refused first.
  *
- * A row reads whether it is a group and, for a group, the subtree its
- * facts walk, its parent outside the page, its text unless the search read
- * it and its newest comment, all counted by the page (lib/machineSubtree.ts).
- * A row whose reads do not fit ends the page before its task, so the next
- * page starts with it. The first task a page looks at may use the rest of
- * the rows' budget and always answers, as a group whose subtree does not
- * fit even that with the facts of a subtree too large to read. The delays
- * of the rows are read last, within ACTIVE_PAGE.delays.
+ * A row reads whether it is a group, a check that reads its active
+ * subtasks whole, which are all its facts count, then its parent outside
+ * the page, its text unless the search read it and its newest comment, all
+ * counted by the page (lib/machineSubtree.ts). A row whose reads do not fit
+ * the rows' budget ends the page before its task, so the next page starts
+ * with it. The first task a page looks at is not held to that budget: its
+ * group check may read up to the request's room, which LIMITS.subtasks.max
+ * subtasks fit, so it answers and paging moves on, and a check that passes
+ * even that refuses the page with TASK_LIST_UNREADABLE. So a group's row
+ * always has the facts of all its active subtasks. The delays of the rows
+ * are read last, within ACTIVE_PAGE.delays.
  */
 export async function listActiveIssuesCore(
   ctx: QueryCtx,
@@ -337,38 +340,31 @@ export async function listActiveIssuesCore(
   const streams: AsyncGenerator<Doc<'issues'>>[] = []
   try {
     const heap = await openHeads(ctx, ids, after, tally, rowsCeiling, streams)
-    const kept: { task: Doc<'issues'>; partial: boolean }[] = []
+    const kept: Doc<'issues'>[] = []
     const lastComments = new Map<string, string | null>()
     /* Reads what the row of `task` needs besides what its filters read:
-     * whether it is a group and its subtree, its parent, its text and its
-     * newest comment. Null when they do not fit the rows' budget, which the
-     * first task a page looks at never answers: its subtree takes the rest
-     * of that budget, and one that does not fit gives the facts of a
-     * subtree too large to read ('partial'). */
-    const rowReads = async (
-      task: Doc<'issues'>,
-      first: boolean,
-    ): Promise<'row' | 'partial' | null> => {
-      if (!first && !(await tally.under(rowsCeiling))) return null
+     * whether it is a group, with its active subtasks, its parent, its text
+     * and its newest comment. False when they do not fit the rows' budget,
+     * which the first task a page looks at never answers: its group check
+     * reads up to the request's room, and one that does not fit even that
+     * refuses the page. */
+    const rowReads = async (task: Doc<'issues'>, first: boolean): Promise<boolean> => {
+      if (!first && !(await tally.under(rowsCeiling))) return false
       const group = reads.known(task)
         ? reads.isGroup(task)
         : await reads.group(task, first ? hard : rowsCeiling)
       if (group === null) {
-        if (!first) return null
+        if (!first) return false
         throw badRequest(TASK_LIST_UNREADABLE)
       }
-      let whole = true
-      if (group) {
-        whole = await reads.walk(task, rowsCeiling)
-        if (!whole && !first) return null
-      }
+      if (group) reads.walk(task)
       await reads.parent(task)
       await textOf(task)
       tally.range()
       const comment = await latestComment(ctx, task.id)
       if (comment !== null) tally.doc(comment)
       lastComments.set(task.id, comment?.created_at ?? null)
-      return whole ? 'row' : 'partial'
+      return true
     }
 
     let last: Doc<'issues'> | null = null
@@ -389,13 +385,12 @@ export async function listActiveIssuesCore(
       reads.tasks.set(task.id, task)
       const first = last === null
       if (await keeps(task)) {
-        const row = await rowReads(task, first)
-        if (row === null) {
+        if (!(await rowReads(task, first))) {
           // the row does not fit this page, so the next page starts with it
           stopped = true
           break
         }
-        kept.push({ task, partial: row === 'partial' })
+        kept.push(task)
       }
       last = task
       looked++
@@ -414,7 +409,7 @@ export async function listActiveIssuesCore(
       me,
       clock: delayClock(org, o.today),
       profiles: new Map(profiles.map((p) => [p.id, p])),
-      rows: kept.map(({ task }) => ({
+      rows: kept.map((task) => ({
         issue: task,
         // the list's projects are in the catalogue
         project: projectOf(task.project_id) as Doc<'projects'>,
@@ -424,7 +419,7 @@ export async function listActiveIssuesCore(
       share: ACTIVE_PAGE.delays,
     })
     const rows = await Promise.all(
-      kept.map(({ task, partial }) => {
+      kept.map((task) => {
         const shared = {
           me,
           project: projectOf(task.project_id),
@@ -435,7 +430,6 @@ export async function listActiveIssuesCore(
           lastComments,
           texts,
           children: reads.kids,
-          partial,
           forecast,
         }
         return view.surface === 'rest'

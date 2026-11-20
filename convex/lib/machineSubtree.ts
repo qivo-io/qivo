@@ -18,8 +18,8 @@
  * - readTally counts what a read makes against its own budget, every
  *   document at its size as Convex counts it (getDocumentSize), or at a
  *   fixed size for one the caller may not be shown;
- * - subtreeReads reads which tasks are groups, the subtrees a group's facts
- *   walk (lib/core.ts groupFacts) and rows' parents by id.
+ * - subtreeReads reads which tasks are groups, with the active subtasks a
+ *   group's facts count (lib/core.ts groupFacts), and rows' parents by id.
  *
  * A document the caller may not be shown counts at lib/limits.ts
  * TASK_ROW_MAX_BYTES in every budget decision, so a hidden title's length
@@ -186,15 +186,12 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
     /** Whether `task`, whose subtasks are read, is a group. */
     isGroup,
     /**
-     * Reads, within `ceiling`, what group `root`'s facts read (lib/core.ts
-     * groupFacts over groupCounter): its active subtasks, each a leaf with
-     * no subtasks of its own. False when `ceiling` stopped the read, so the
-     * row's facts are those of a subtree too large to read.
+     * Keeps what group `root`'s facts read (lib/core.ts groupFacts over
+     * groupCounter): the active subtasks its check read whole (group),
+     * each a leaf with no subtasks of its own. It reads nothing.
      */
-    walk: async (root: Doc<'issues'>, ceiling: ReadTotals): Promise<boolean> => {
-      if (!(await readKids(root, ceiling))) return false
+    walk: (root: Doc<'issues'>): void => {
       for (const kid of kids.get(root.id) ?? []) if (!kids.has(kid.id)) kids.set(kid.id, [])
-      return true
     },
     /** Reads the parent of `task` by id unless the list holds it, counted
      * at the fixed size unless the caller can read it, and keeps it in

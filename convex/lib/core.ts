@@ -1345,10 +1345,11 @@ type Reader = {
  * passes the subtrees its page read (lib/machineSubtree.ts subtreeReads),
  * and an archived list and a single-task read the task's subtreeIndex with
  * the groupCounter that walk used, which the totals then share. `partial` says the subtree was
- * too large to read and `children` holds only the root's subtasks (a
- * single-task read or an active list) or one of them (an archived list), so
- * a group answers null plan weeks and a partial progress that counts
- * nothing. */
+ * too large to read and `children` holds only the root's subtasks it read
+ * (a single-task read of an archived group) or one of them (an archived
+ * list), so a group answers null plan weeks and a partial progress that
+ * counts nothing. An active list's group check reads a group's active
+ * subtasks whole, so its rows are never partial. */
 type Subtree = {
   children: ChildIndex
   counts?: GroupCounter

@@ -1542,10 +1542,9 @@ reads the task's description and its `last_comment_at` the task's newest
 comment, and a row whose parent is not on the page reads that parent. A
 row whose reads do not fit in the rest of a page ends the page
 before it, and the next page starts with it. The first task a page looks at
-always answers, so paging moves on. If it is a group with more subtasks
-than the page can read, its row has `start_week` and `end_week` set to
-`null` and a `progress` of `0` of `0` with `partial: true`, as a single
-task's read describes below.
+always answers, so paging moves on. A group's row reads all of its active
+subtasks, so its dates and `progress` come from all of them, and its
+`progress` is never `partial` on this list.
 
 A cursor works only for the organization, caller, project, filters and
 search it came from, whether you name the project by uuid, number or key. A
