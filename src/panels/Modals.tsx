@@ -1980,7 +1980,7 @@ function SubtaskChoice({
       </Label>
       {!checked && (
         <p className="mt-1 pl-6 text-sm leading-normal text-text-2">
-          They stay in their projects. Those directly under it become{' '}
+          They stay in its sub-project as{' '}
           <span className="whitespace-nowrap">top-level tasks.</span>
         </p>
       )}
@@ -2091,52 +2091,35 @@ function FateReason({
 const plural = (n: number, noun: string) =>
   `${n.toLocaleString('en-US')} ${noun}${n === 1 ? '' : 's'}`
 
-/** A subtask the window lists for an archive. `editable` is whether I can
-    change it, which the archive needs for every subtask it takes along. */
-type ArchiveRow = { task: IssueVM; editable: boolean }
-
-/* What archiving a task takes along: its subtasks, in order, from its
-   family (P.familyOf). */
-function archivePlan(family: TaskFamily): { rows: ArchiveRow[] } {
-  const rows = family.root.children.flatMap((key) => {
-    const child = family.byId[key]
-    return child ? [{ task: child, editable: P.canWrite(child.project) }] : []
-  })
-  return { rows }
-}
-
-type TaskPlans = {
-  archive: ReturnType<typeof archivePlan>
-  delete: ReturnType<typeof P.deletePlan>
-}
-/* Both lists of a task from its family, or none while it is unknown. */
-const readPlans = (family: TaskFamily | null): TaskPlans =>
+/* The subtasks an archive or a delete of a task takes along, in order,
+   from its family (P.familyOf), or none while it is unknown. A subtask is
+   in its task's own sub-project, so whoever may archive or delete the task
+   may take each of them along; the server checks every write again. */
+const readRows = (family: TaskFamily | null): IssueVM[] =>
   family
-    ? { archive: archivePlan(family), delete: P.deletePlan(family) }
-    : { archive: { rows: [] }, delete: { rows: [], deletable: [] } }
+    ? family.root.children.flatMap((key) => {
+        const child = family.byId[key]
+        return child ? [child] : []
+      })
+    : []
 /* What a choice depends on, to tell whether it changed since the person read it. */
-const planKey = (plans: TaskPlans, fate: Fate) =>
-  fate === 'archive'
-    ? plans.archive.rows.map((r) => `${r.task.id}:${r.task.project}:${r.editable}`).join()
-    : plans.delete.rows.map((r) => `${r.task.id}:${r.task.project}:${r.deletable}`).join()
+const rowsKey = (rows: IssueVM[]) => rows.map((task) => `${task.id}:${task.project}`).join()
 
 /* ---------- Archive or delete a task ----------
    Opened from the task menu by people who can edit the task, for every task.
-   Archive takes it off the board with its whole subtree, or alone when the
-   subtasks are kept, which become top-level tasks. A subtree with a subtask
-   in a project I can't edit can't be archived, so Archive waits for the
-   subtasks to be kept. Unfinished work needs a reason, saved as a comment.
-   Delete moves it to Deleted items, with the subtasks I can delete unless
-   they are kept; a subtask I can't delete stays and becomes a top-level
-   task. The lists are taken when the window opens; if the chosen
-   one changed by the click, the window shows the new lists and asks again,
-   ignoring clicks for a second, so what leaves is what the person read. Both
-   actions wait for the server, the window refuses to close meanwhile, and a
-   refusal leaves it open on the lists as they are now. The task is the
-   window's (`task`), shown from its own read, and its lists come from its
-   family (P.familyOf): while that is unknown, also once the window is
-   open, it says why and acts on nothing. While its own archive or delete
-   is on its way the window shows no task, and nothing here either. */
+   Archive takes it off the board with its subtasks, or alone when the
+   subtasks are kept, which become top-level tasks. Unfinished work needs a
+   reason, saved as a comment. Delete moves it to Deleted items, with its
+   subtasks unless they are kept, which then become top-level tasks. The
+   list is taken when the window opens; if it changed by the click, the
+   window shows the new list and asks again, ignoring clicks for a second,
+   so what leaves is what the person read. Both actions wait for the
+   server, the window refuses to close meanwhile, and a refusal leaves it
+   open on the list as it is now. The task is the window's (`task`), shown
+   from its own read, and its list comes from its family (P.familyOf):
+   while that is unknown, also once the window is open, it says why and
+   acts on nothing. While its own archive or delete is on its way the
+   window shows no task, and nothing here either. */
 function ArchiveOrDeleteTaskModal({
   task,
   onClose,
@@ -2170,7 +2153,7 @@ function ArchiveOrDeleteTaskModal({
     const now = task ? (P.taskShown(task.id) ?? task) : undefined
     return now ? P.familyOf(now) : null
   }
-  const [plans, setPlans] = useStateM(() => readPlans(family))
+  const [rows, setRows] = useStateM(() => readRows(family))
   const [fate, setFate] = useStateM<Fate>('archive')
   const [reason, setTypedReason] = useStateM(initialReason)
   const setReason = (value: string) => {
@@ -2178,7 +2161,7 @@ function ArchiveOrDeleteTaskModal({
     onReasonChange?.(value)
   }
   const [archiveAll, setArchiveAll] = useStateM(true)
-  const [deleteAll, setDeleteAll] = useStateM(plans.delete.deletable.length > 0)
+  const [deleteAll, setDeleteAll] = useStateM(rows.length > 0)
   const [changed, setChanged] = useStateM(false)
   const [saving, setSaving] = useStateM(false)
   // when the window last asked again: the click right after (a double click,
@@ -2186,56 +2169,41 @@ function ArchiveOrDeleteTaskModal({
   const askedAt = useRefM(0)
   if (!it) return null
   const archiving = fate === 'archive'
-  const { rows } = plans.archive
-  const plan = plans.delete
-  const hasSubtasks = rows.length > 0
-  const n = plan.deletable.length
+  const n = rows.length
+  const hasSubtasks = n > 0
   // the statuses as they are now; the rows are what the window opened with
   const live = (row: IssueVM) => family?.byId[row.id] ?? row
-  const unfinishedRows = rows.filter((r) => !P.isDone(live(r.task))).length
-  const readOnly = rows.some((r) => !r.editable)
-  const withSubtasks = archiving ? archiveAll && hasSubtasks : deleteAll && n > 0
+  const unfinishedRows = rows.filter((task) => !P.isDone(live(task))).length
+  const withSubtasks = hasSubtasks && (archiving ? archiveAll : deleteAll)
   // Archiving takes unfinished work off the board when the task itself is
   // unfinished and its subtasks are kept (it is a task of its own then), or
-  // when anything in its whole subtree is.
+  // when it or any of its subtasks is.
   // a group's Done comes from its whole list (TaskFamily done)
   const unfinished = archiving && (withSubtasks ? !family?.done : it.status !== 'done')
   const showReason = !archiving || unfinished
-  const archiveBlocked = archiving && withSubtasks && readOnly
   const canSubmit =
     !saving &&
     !!family &&
     (archiving
-      ? !archiveBlocked &&
-        (!unfinished || (reason.trim().length > 0 && !reasonTooLong(true, reason)))
+      ? !unfinished || (reason.trim().length > 0 && !reasonTooLong(true, reason))
       : !reasonTooLong(false, reason))
-  const viewOnly = plan.rows.some((r) => !r.deletable)
-  const suffix = !withSubtasks
-    ? ''
-    : archiving
-      ? readOnly
-        ? "At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects."
-        : ''
-      : viewOnly
-        ? "Subtasks marked View only aren't deleted. They stay and become top-level tasks."
-        : ''
   const status = P.statusOf(it.status)
-  // ask again with the lists as they are now
-  const reask = (now: TaskPlans) => {
+  // ask again with the list as it is now
+  const reask = (now: IssueVM[]) => {
     askedAt.current = Date.now()
-    setPlans(now)
+    setRows(now)
     setChanged(true)
-    if (!now.delete.deletable.length) setDeleteAll(false)
+    if (!now.length) setDeleteAll(false)
   }
   const finish = (sent: Promise<boolean>) => {
     setSaving(true)
     void refusedOnThrow(sent).then((done) => {
       if (done) return // the caller closes the window
       setSaving(false)
-      // the lists as they are now, also when the task is shown from its
-      // own read, whose answer may have changed
-      const now = readPlans(familyNow())
-      if (planKey(now, fate) !== planKey(plans, fate)) reask(now)
+      // the list as it is now, also when the task is shown from its own
+      // read, whose answer may have changed
+      const now = readRows(familyNow())
+      if (rowsKey(now) !== rowsKey(rows)) reask(now)
     })
   }
   const submit = () => {
@@ -2243,26 +2211,17 @@ function ArchiveOrDeleteTaskModal({
     const current = familyNow()
     // the family went unknown since the render: nothing goes
     if (!current) return
-    const now = readPlans(current)
-    const gone = archiving ? !now.archive.rows.length : !now.delete.rows.length
+    const now = readRows(current)
+    const gone = !now.length
     // nothing under it any more: the task alone goes, as the person confirmed
-    if (!gone && planKey(now, fate) !== planKey(plans, fate)) return reask(now)
+    if (!gone && rowsKey(now) !== rowsKey(rows)) return reask(now)
     if (archiving) finish(onArchive(unfinished ? reason.trim() : '', !gone && !withSubtasks))
-    else
-      finish(onDelete(withSubtasks && !gone ? plan.deletable.map((t) => t.id) : [], reason.trim()))
+    else finish(onDelete(withSubtasks && !gone ? rows.map((t) => t.id) : [], reason.trim()))
   }
   // the list shows what the selected card does to the subtasks
-  const listed = archiving ? rows.length > 0 : plan.rows.length > 0
-  const heading = archiving
-    ? withSubtasks
-      ? `Also archives ${plural(rows.length, 'subtask')}:`
-      : `Keeps ${plural(rows.length, 'subtask')}:`
-    : withSubtasks
-      ? `Also deletes ${plural(n, 'subtask')}:`
-      : `Keeps ${plural(plan.rows.length, 'subtask')}:`
-  const listRows: ArchiveRow[] = archiving
-    ? rows
-    : plan.rows.map((r) => ({ task: r.task, editable: r.deletable }))
+  const heading = withSubtasks
+    ? `Also ${archiving ? 'archives' : 'deletes'} ${plural(n, 'subtask')}:`
+    : `Keeps ${plural(n, 'subtask')}:`
   return (
     <ModalShell
       icon="inbox"
@@ -2292,11 +2251,11 @@ function ArchiveOrDeleteTaskModal({
       <div data-task-fate>
         <FateLead data-fate-lead>
           <b className="text-text-1">{it.key}</b>
-          {rows.length ? (
+          {n ? (
             <>
               {' '}
-              has {plural(rows.length, 'subtask')}
-              {rows.length === 1
+              has {plural(n, 'subtask')}
+              {n === 1
                 ? unfinishedRows
                   ? ', which is unfinished.'
                   : ', which is done.'
@@ -2310,7 +2269,6 @@ function ArchiveOrDeleteTaskModal({
               is <b className="text-text-1">{status ? status.name : it.status}</b>.
             </>
           )}
-          {suffix && ` ${suffix}`}
         </FateLead>
         {changed && (
           <p className="mb-3 text-sm text-danger">
@@ -2322,29 +2280,24 @@ function ArchiveOrDeleteTaskModal({
             {familyWait(it)}.
           </p>
         )}
-        {listed && (
+        {hasSubtasks && (
           <FateList data-fate-subtasks heading={heading} going={withSubtasks}>
-            {listRows.map((r) => {
-              const task = live(r.task)
+            {rows.map((row) => {
+              const task = live(row)
               const st = P.statusOf(task.status)
-              const going = withSubtasks && r.editable
               return (
-                <div key={r.task.id} data-fate-subtask={r.task.key} className={fateRow}>
-                  <span className="shrink-0 font-semibold text-text-3">{r.task.key}</span>
+                <div key={row.id} data-fate-subtask={row.key} className={fateRow}>
+                  <span className="shrink-0 font-semibold text-text-3">{row.key}</span>
                   <span className="min-w-0 flex-1 truncate text-text-1">{task.title}</span>
-                  {!r.editable ? (
-                    <span className="shrink-0 font-medium text-text-1">View only</span>
-                  ) : (
-                    !P.isGroup(task) && (
-                      <span
-                        className={cn(
-                          'shrink-0',
-                          going && task.status !== 'done' ? 'text-danger' : 'text-text-3',
-                        )}
-                      >
-                        {st ? st.name : task.status}
-                      </span>
-                    )
+                  {!P.isGroup(task) && (
+                    <span
+                      className={cn(
+                        'shrink-0',
+                        withSubtasks && task.status !== 'done' ? 'text-danger' : 'text-text-3',
+                      )}
+                    >
+                      {st ? st.name : task.status}
+                    </span>
                   )}
                 </div>
               )
@@ -2366,11 +2319,7 @@ function ArchiveOrDeleteTaskModal({
               archiving &&
               hasSubtasks && (
                 <SubtaskChoice
-                  label={
-                    rows.length === 1
-                      ? 'Also archive the subtask'
-                      : `Also archive the ${rows.length} subtasks`
-                  }
+                  label={n === 1 ? 'Also archive the subtask' : `Also archive the ${n} subtasks`}
                   checked={archiveAll}
                   onChange={setArchiveAll}
                 />
@@ -2388,21 +2337,14 @@ function ArchiveOrDeleteTaskModal({
             onSelect={() => setFate('delete')}
             extra={
               !archiving &&
-              (n > 0 ? (
+              hasSubtasks && (
                 <SubtaskChoice
                   danger
                   label={n === 1 ? 'Also delete the subtask' : `Also delete the ${n} subtasks`}
                   checked={deleteAll}
                   onChange={setDeleteAll}
                 />
-              ) : (
-                plan.rows.length > 0 && (
-                  <p className="mt-2 text-sm leading-normal text-text-2">
-                    You can't delete its subtasks, so they stay in their projects and become
-                    top-level tasks.
-                  </p>
-                )
-              ))
+              )
             }
           >
             Moves it to Deleted items with its comments, attachments and links. You can restore it

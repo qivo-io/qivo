@@ -9011,8 +9011,6 @@ export function andMore(words: string[], more: number, others: (n: number) => st
   return words.length === 1 ? `${words[0]} and ${others(more)}` : others(more)
 }
 
-/** A subtask the Archive or delete window lists for a delete (P.deletePlan). */
-export type DeleteRow = { task: IssueVM; deletable: boolean }
 /** What Move and Archive or delete take along with a task (P.familyOf):
     `root` is the task as they read it, whose `children` are the family's,
     `byId` holds it, its parent when known and every subtask under it by
@@ -13038,21 +13036,8 @@ export const PLANNER = {
     return shown ? moveAnswerTask(shown, projectId, onSaved) : null
   },
 
-  /* What the Archive or delete window lists for deleting a task: each of
-     its subtasks, with whether I can delete it (Edit access to its
-     project). The task and its subtasks are those of `family`
-     (P.familyOf), which holds only a complete list of subtasks. */
-  deletePlan: (family: TaskFamily): { rows: DeleteRow[]; deletable: IssueVM[] } => {
-    const { byId, root } = family
-    const rows: DeleteRow[] = root.children.flatMap((key) => {
-      const child = byId[key]
-      return child ? [{ task: child, deletable: PLANNER.canWrite(child.project) }] : []
-    })
-    return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task) }
-  },
-
   /* Move a task to Deleted items, and with it the `subtasks` (handles) the
-     Archive or delete window listed as deletable, from the task's family
+     Archive or delete window listed and chose, from the task's family
      (P.familyOf). Every other subtask under a deleted task loses its parent
      and becomes a top-level task; the server checks the subtasks again and
      refuses the whole delete if they changed, and a chosen subtask the
