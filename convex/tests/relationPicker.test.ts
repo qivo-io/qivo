@@ -263,17 +263,19 @@ describe('access', () => {
     const open = await task(t, f, f.sub)
     const onPcb = await task(t, f, f.sub2)
     // the Linked tasks picker reads the family; the Parent and Subtasks
-    // pickers offer only FW's tasks, and read the family's levels too
+    // pickers offer only FW's tasks, whose level the opened task's check
+    // read, so they read no other project's level
     const usual = await allIds(t, me, open.id, 'link')
     expect(usual).toEqual([onPcb.id])
     expect(await allIds(t, me, open.id, 'parent')).toEqual([])
     Object.assign(OWN_READS, UNCHECKED)
-    for (const kind of ['parent', 'subtask', 'link'] as const)
-      expect(await pick(t, me, open.id, kind)).toEqual({
-        state: 'unavailable',
-        reason: 'access_unchecked',
-        message: expect.stringContaining('could not finish checking'),
-      })
+    expect(await pick(t, me, open.id, 'link')).toEqual({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+      message: expect.stringContaining('could not finish checking'),
+    })
+    for (const kind of ['parent', 'subtask'] as const)
+      expect(await pick(t, me, open.id, kind)).toMatchObject({ state: 'ok', rows: [] })
     // with the task in PCB opened, its own check stops
     expect(await pick(t, me, onPcb.id, 'link')).toEqual({ state: 'unavailable' })
     Object.assign(OWN_READS, ONE_UP)
