@@ -2117,7 +2117,7 @@ dates, it counts only active subtasks of an active group.
 subtasks:
 
 ```json
-{ "progress": { "done": 2, "total": 3, "percent": 67, "partial": true } }
+{ "progress": { "done": 2, "total": 3, "percent": 67, "partial": false } }
 ```
 
 It counts the same subtasks as the group's dates, scheduled or not, and

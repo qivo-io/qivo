@@ -2168,7 +2168,7 @@ must stop. A group's `start_week` and `end_week` come from its subtasks.
 `progress` is `null` for a task without subtasks. For a group it is the
 **Progress** of the app's task window, `done` of `total` of its subtasks,
 for example `{"done": 2, "total": 3,
-"percent": 67, "partial": true}`. It counts the same subtasks as the
+"percent": 67, "partial": false}`. It counts the same subtasks as the
 group's dates, scheduled or not, and `done` counts those that are Done.
 `percent` is rounded, and `0` when `total` is `0`. `partial` is `true` when
 Qivo could not read the whole group, so the true completion is unknown. The app then says "Completion unknown".
