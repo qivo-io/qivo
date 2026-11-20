@@ -1386,10 +1386,10 @@ async function purgeLeft(run: Run): Promise<boolean> {
 
 /* --------------------------------------------------------------- restores */
 
-/* The index ranges a reveal may read per task it writes back or attaches:
- * the assignment check of its assignee and reviewer (keepsHolder), a
- * parent outside, task.restored subscriptions, the Restored notice and the
- * used_ids row of its id (lib/db.ts insertUsed). With a different assignee
+/* The index ranges a reveal may read per task it writes back: the
+ * assignment check of its assignee and reviewer (keepsHolder), a task
+ * item's parent outside it, task.restored subscriptions, the Restored
+ * notice and the used_ids row of its id (lib/db.ts insertUsed). With a different assignee
  * and reviewer on each task, most of it is each person's assignment check.
  * Convex's 4,096 ranges leave room for that above TRASH_BUDGET's 2,500, and
  * a count of a parent's subtasks that runs out of what the budget has left

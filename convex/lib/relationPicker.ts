@@ -755,9 +755,8 @@ type Parent = { parent_id?: string }
  *   set, alike for every reason, a check of its access a bound of the
  *   reader's own reads stopped included;
  * - `{ state: 'unavailable', reason: 'access_unchecked', message }` where
- *   such a bound stopped a check of the family's projects, or of the
- *   project of a parent a row names, so the picker says Qivo could not
- *   check them;
+ *   such a bound stopped the Linked tasks picker's check of the family's
+ *   projects (familyOf), so the picker says Qivo could not check them;
  * - `{ state: 'refused', message }` for the Parent or Subtasks picker of a
  *   reader without Edit on the task's project, which the write refuses
  *   with the same sentence (model/issues.ts NO_WRITE_ACCESS);

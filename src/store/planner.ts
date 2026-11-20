@@ -4966,7 +4966,7 @@ let reshaping = false
 /** The row of group `uuid` that the window's delay takes the group's
     facts from (windowDelayIssue), or undefined. The group is one the
     window shows from its answer whose dates the answer cannot give, as
-    when a subtask has subtasks of its own, and the row is its row in a
+    when its subtask list is not complete, and the row is its row in a
     view whose read is current, the live subscription's own answer on the
     newest connection, which carries the server's span. A stopped view's
     kept rows hear no change to the task, so they never lend it. */
