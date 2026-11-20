@@ -373,46 +373,6 @@ describe('deletedItems.people', () => {
     expect(await offered(t, f.user, 'assignees')).toEqual([ann.id])
   })
 
-  it('offers the holder of a task the seat may read in an item it reads in part, and nobody for the rest', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const xena = await person(t, f.org.id, 'Xena Cross')
-    const yuri = await person(t, f.org.id, 'Yuri Root')
-    // Lin leads Board rev alone
-    const lin = await person(t, f.org.id, 'Lin Park')
-    await patch(t, 'projects', f.sub2.id, { lead_id: lin.id })
-    // a task of Firmware with a subtask there and one in Board rev: Xena
-    // holds both subtasks, the Firmware one first by number, Yuri the task
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      assignee_id: yuri.id,
-    })
-    const inFirmware = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-      assignee_id: xena.id,
-    })
-    const inBoard = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: parent.id,
-      assignee_id: xena.id,
-    })
-    expect(inFirmware.num).toBeLessThan(inBoard.num)
-    await deleteTask(t, f.user, parent.id, { subtask_ids: [inFirmware.id, inBoard.id] })
-    await runSteps(t)
-    // the lead of the whole project reads every task of the item
-    expect([...(await offered(t, f.user, 'assignees'))].sort()).toEqual([xena.id, yuri.id].sort())
-    // Lin reads the Board rev subtask alone: Xena through it, and not Yuri
-    expect(await offered(t, lin, 'assignees')).toEqual([xena.id])
-    const found = await page(t, lin, { scope: { org_id: f.org.id, all: true }, assignee: xena.id })
-    expect(found.entries.length).toBeGreaterThan(0)
-    const none = await page(t, lin, { scope: { org_id: f.org.id, all: true }, assignee: yuri.id })
-    expect(none.entries).toEqual([])
-  })
-
   it('answers person rows with you, in name order with ties by id, and keeps every word of a search', async () => {
     const { t, f, dana } = await scene()
     const first = await person(t, f.org.id, 'Sam Lee')

@@ -3067,7 +3067,6 @@ describe('restore calls', () => {
       item_parent_id: f.meta.id,
     })
     expect(projectItem.deleted_at).not.toBe(item.deleted_at)
-    expect(rows.get(sub.id)?.cross_project_id).toBeUndefined()
     const kept = rows.get(older.id)
     expect(kept?.item_id).toBe(projectItem.id)
     for (const field of fields) expect(kept?.[field]).toBeUndefined()

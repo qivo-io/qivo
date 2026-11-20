@@ -416,8 +416,7 @@ describe('the page at the design size', () => {
     for (const [i, sub] of live.entries())
       await plantTaskItem(t, f, sub, sub.parent_id ?? '', f.admin, START + i * 1000, lead.id)
     const scope = { org_id: f.org.id, all: true as const }
-    // 701 ordered ranges, past the 256 sources allowed before 5 November,
-    // and 700 cross-project ranges, past the 1,024 find allowed then
+    // 701 ordered ranges, past the 256 sources allowed before 5 November
     const first = await readPage(t, lead, { scope })
     record(
       'a member leading 700 sub-projects one by one browsing All, the first page',

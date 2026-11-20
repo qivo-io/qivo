@@ -2588,12 +2588,9 @@ export default defineSchema({
     title: v.string(),
     project_id: v.string(),
     archived: v.boolean(),
-    // a task item's subtask in another project than the item's root: that
-    // project, so its lead finds the item (model/deletedItemsPage.ts
-    // taskPlan). Only a family stored before the rule that a subtask stays
-    // in its parent's sub-project (model/issues.ts sameSubProject) has one:
-    // a sibling sub-project of the root's, or, from before the earlier rule
-    // of one top-level project, any other project.
+    // Nothing writes or reads it any more. An earlier release set it on a
+    // task item's subtask in another project than the item's root, which a
+    // subtask in its parent's sub-project never is.
     cross_project_id: v.optional(v.string()),
     // the title, a newline and the readable text of the description
     // (model/descriptions.ts deletedSearchText)
@@ -2612,6 +2609,7 @@ export default defineSchema({
     .index('by_task', ['task_id'])
     .index('by_item', ['item_id'])
     .index('by_org_num', ['org_id', 'num'])
+    // nothing reads it any more (cross_project_id)
     .index('by_org_cross_project', ['org_id', 'cross_project_id'])
     // an organization's tasks of one assignee, newest delete first, and
     // with neither field the rows stored before the page's release

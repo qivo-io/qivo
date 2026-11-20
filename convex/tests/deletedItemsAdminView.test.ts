@@ -500,9 +500,7 @@ describe('an admin by ordinary access', () => {
     expect(found.entries[0].task).not.toHaveProperty('root_title')
     expect(JSON.stringify(found)).not.toContain('Contoso')
     expect((await page(t, f.admin, { scope, search: 'Contoso' })).entries).toEqual([])
-    // a scope of a project the admin reads lists it, one they cannot read names nothing
-    const opsScope = { org_id: f.org.id, project_ids: [ops.top.id] }
-    expect((await walk(t, f.admin, { scope: opsScope })).ids).toEqual([item.id])
+    // a scope of a project they cannot read names nothing
     const fwScope = { org_id: f.org.id, project_ids: [f.meta.id] }
     expect(await page(t, f.admin, { scope: fwScope })).toEqual({
       entries: [],
@@ -754,14 +752,12 @@ describe('an admin by ordinary access', () => {
     expect(paged.pages.length).toBeGreaterThan(2)
     expectOnlyReadable(paged)
     Object.assign(DELETED_PAGE, DEFAULT_PAGE)
-    // a scoped browse holds an admin's item by its fields, so it lists the
-    // hidden family through Operations, and no item only in Firmware
+    // a scoped browse of Operations lists no item only in Firmware
     const ofOps = await walk(t, f.admin, {
       scope: { org_id: f.org.id, project_ids: [ops.top.id] },
       kind: 'task',
     })
-    expect(ofOps.ids).toEqual([family.id, plain.id])
-    expect(ofOps.items.find((r) => r.id === family.id)).toMatchObject({ hidden: true, title: '' })
+    expect(ofOps.ids).toEqual([plain.id])
     // All projects lists every item, the unreadable ones hidden
     const all = await walk(t, f.admin, { scope, kind: 'task' })
     expect(all.ids).toEqual([family.id, ...[...unreadable].reverse(), plain.id])

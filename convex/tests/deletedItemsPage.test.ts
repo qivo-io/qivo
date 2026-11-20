@@ -353,34 +353,6 @@ describe('who sees what', () => {
     later()
     await deleteTask(t, f.user, theirs.id)
     later()
-    // a family each way between Firmware, which Sam leads, and Bench, where
-    // Sam is a member, under Testbed platform, which Sam does not lead: a
-    // scope of Bench holds both through Bench's own ranges (scopeRanges)
-    const bench = await plantProject(t, {
-      org_id,
-      type: 'project',
-      parent_id: f.meta.id,
-      name: 'Bench',
-    })
-    await grant(t, bench.id, sam.id, 'user')
-    const benchRoot = await plantIssue(t, { org_id, project_id: bench.id, title: 'Bench root' })
-    const fwSub = await plantIssue(t, {
-      org_id,
-      project_id: f.sub.id,
-      parent_id: benchRoot.id,
-      title: 'Firmware subtask',
-    })
-    await deleteTask(t, f.user, benchRoot.id, { subtask_ids: [fwSub.id] })
-    later()
-    const fwRoot = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Firmware root' })
-    const benchSub = await plantIssue(t, {
-      org_id,
-      project_id: bench.id,
-      parent_id: fwRoot.id,
-      title: 'Bench subtask',
-    })
-    await deleteTask(t, f.user, fwRoot.id, { subtask_ids: [benchSub.id] })
-    later()
     // a project item a lead's stored rows name, with a sub-project lead and a member
     const trial = await tree(t, f, 'Field trial', lena, [
       { name: 'Site', lead: sam },
@@ -391,20 +363,10 @@ describe('who sees what', () => {
     await plantIssue(t, { org_id, project_id: trial.subs[1].id, title: 'Seal the samples' })
     await deleteProject(t, lena, trial.top.id)
     later()
-    // a redacted task item for the lead of the subtask's project
-    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    // people who lead or use projects that hold no item
+    await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
     await tree(t, f, 'Elsewhere', other, [{ name: 'Over there' }])
     await grant(t, f.meta.id, dana.id, 'user')
-    await grant(t, ops.top.id, dana.id, 'user')
-    const root = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Contoso diligence' })
-    const sub = await plantIssue(t, {
-      org_id,
-      project_id: ops.subs[0].id,
-      parent_id: root.id,
-      title: 'Provision the data room',
-    })
-    await deleteTask(t, dana, root.id, { subtask_ids: [sub.id] })
-    later()
     // a deleted sub-project of a live top-level project
     await plantIssue(t, { org_id, project_id: f.sub2.id, title: 'Board task' })
     await deleteProject(t, f.user, f.sub2.id)
@@ -433,15 +395,6 @@ describe('who sees what', () => {
 
     const people = [f.admin, f.user, f.viewer, f.guest, sam, lena, tia, omar, dana, other, gus]
     await expectAsListed(t, [...people, f.otherAdmin])
-    // the redacted row shows the subtask, not the root
-    const omars = await walk(t, omar, { scope: { org_id, all: true } })
-    expect(omars.items).toEqual([expect.objectContaining({ redacted: true })])
-    expect(JSON.stringify(omars)).not.toContain('Contoso')
-    // Sam's scope of Bench holds both families
-    const sams = await walk(t, sam, { scope: { org_id, project_ids: [bench.id] } })
-    expect([...sams.ids].sort()).toEqual(
-      [(await itemFor(t, benchRoot.id)).id, (await itemFor(t, fwRoot.id)).id].sort(),
-    )
   })
 
   it("keeps the item rows' answer for view-only deleters, lost access, deleted projects, stuck and moving items", async () => {
@@ -457,11 +410,7 @@ describe('who sees what', () => {
     later()
     // a task item whose project goes to Deleted items afterwards
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const subtask = await plantIssue(t, {
-      org_id,
-      project_id: ops.subs[0].id,
-      parent_id: task.id,
-    })
+    const subtask = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: task.id })
     await deleteTask(t, f.guest, task.id, { subtask_ids: [subtask.id] })
     later()
     await t.run(async (ctx) => {
@@ -537,61 +486,6 @@ describe('who sees what', () => {
         label,
       ).toEqual([item])
     }
-  })
-
-  it('holds a family from before the subtask rule in the scope of a project the person only uses, through the one they lead under another top-level project', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    // Sam leads Lab, under Field trial, which Sam does not lead, and is a
-    // member of Firmware, under Testbed platform
-    const sam = await person(t, org_id, 'Sam')
-    const trial = await tree(t, f, 'Field trial', undefined, [{ name: 'Lab', lead: sam }])
-    const lab = trial.subs[0]
-    await grant(t, f.sub.id, sam.id, 'user')
-    // the admin, who deleted the families, edits Field trial through a grant
-    await grant(t, trial.top.id, f.admin.id, 'user')
-    // two families from before the subtask rule, which the admin deleted:
-    // the root in Lab with a subtask in Firmware, and the root in Firmware
-    // with a subtask in Lab
-    const family = async (home: string, other: string, title: string) => {
-      const root = await plantIssue(t, {
-        org_id,
-        project_id: home,
-        title: `${title} probe`,
-        assignee_id: sam.id,
-      })
-      const sub = await plantIssue(t, {
-        org_id,
-        project_id: other,
-        parent_id: root.id,
-        title: `${title} probe mount`,
-        assignee_id: sam.id,
-      })
-      await deleteTask(t, f.admin, root.id, { subtask_ids: [sub.id] })
-      later()
-      return (await itemFor(t, root.id)).id
-    }
-    const labRooted = await family(lab.id, f.sub.id, 'Calibrate the')
-    const firmwareRooted = await family(f.sub.id, lab.id, 'Flash the')
-    const both = [firmwareRooted, labRooted]
-    // Sam sees each through Lab, in All projects and in a scope of
-    // Firmware, browsing, searching and filtering by assignee
-    for (const scope of [
-      { org_id, all: true as const },
-      { org_id, project_ids: [f.sub.id] },
-      { org_id, project_ids: [lab.id] },
-    ])
-      for (const extra of [{}, { search: 'probe' }, { assignee: sam.id }]) {
-        const label = JSON.stringify([scope, extra])
-        const walked = await walk(t, sam, { scope, ...extra })
-        expect([...walked.ids].sort(), label).toEqual([...both].sort())
-        expect(
-          walked.pages.every((p) => p.missing !== 'reads'),
-          label,
-        ).toBe(true)
-      }
-    await expectAsListed(t, [sam])
   })
 
   it('answers unknown, foreign, hidden and deleted project ids alike, and an organization without a seat', async () => {
@@ -722,7 +616,7 @@ describe('parts and scopes', () => {
     expect(tasks.entries.map((e) => e.item_id)).toEqual([(await itemFor(t, task.id)).id])
   })
 
-  it("holds a top-level project's deleted sub-projects, then the task items of its sub-projects of any state and its cross-project items", async () => {
+  it("holds a top-level project's deleted sub-projects, then the task items of its sub-projects of any state", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -736,11 +630,6 @@ describe('parts and scopes', () => {
     const leaving = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
     const inSub = await plantIssue(t, { org_id, project_id: f.sub.id })
     await deleteTask(t, f.user, inSub.id)
-    later()
-    // rooted under another top-level project, with a subtask in Firmware
-    const crossRoot = await plantIssue(t, { org_id, project_id: away.id })
-    const crossSub = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: crossRoot.id })
-    await deleteTask(t, f.user, crossRoot.id, { subtask_ids: [crossSub.id] })
     later()
     const outside = await plantIssue(t, { org_id, project_id: away.id })
     await deleteTask(t, f.user, outside.id)
@@ -759,7 +648,6 @@ describe('parts and scopes', () => {
       await id(leaving.id),
       inArchived.id,
       await id(leavingTask.id),
-      await id(crossRoot.id),
       await id(inSub.id),
     ])
     // the lead of the top-level project reads the same, but for the item
@@ -768,26 +656,18 @@ describe('parts and scopes', () => {
     expect(lead.entries.map((e) => e.item_id)).toEqual([
       await id(leaving.id),
       inArchived.id,
-      await id(crossRoot.id),
       await id(inSub.id),
     ])
-    // a sub-project holds no project entry, and its own and cross-project items
+    // a sub-project holds no project entry, and its own items
     const sub = await page(t, f.user, { scope: { org_id, project_ids: [f.sub.id] } })
-    expect(sub.entries.map((e) => e.item_id)).toEqual([await id(crossRoot.id), await id(inSub.id)])
+    expect(sub.entries.map((e) => e.item_id)).toEqual([await id(inSub.id)])
     const there = await page(t, f.user, { scope: { org_id, project_ids: [away.id] } })
-    expect(there.entries.map((e) => e.item_id)).toEqual([
-      await id(outside.id),
-      await id(crossRoot.id),
-    ])
+    expect(there.entries.map((e) => e.item_id)).toEqual([await id(outside.id)])
     const both = await page(t, f.user, {
       scope: { org_id, project_ids: [f.sub.id, away.id] },
       kind: 'task',
     })
-    expect(both.entries.map((e) => e.item_id)).toEqual([
-      await id(outside.id),
-      await id(crossRoot.id),
-      await id(inSub.id),
-    ])
+    expect(both.entries.map((e) => e.item_id)).toEqual([await id(outside.id), await id(inSub.id)])
   })
 })
 
@@ -1012,57 +892,6 @@ describe('search', () => {
     const walked = await walk(t, f.user, { scope: { org_id, all: true }, search: 'pump', limit: 1 })
     expect(walked.entries).toEqual(pump.entries)
   })
-
-  it("never names a redacted item's root in a hit", async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    const omar = await person(t, org_id, 'Omar')
-    const dana = await person(t, org_id, 'Dana')
-    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
-    await grant(t, f.meta.id, dana.id, 'user')
-    await grant(t, ops.top.id, dana.id, 'user')
-    const root = await plantIssue(t, {
-      org_id,
-      project_id: f.sub.id,
-      title: 'Contoso acquisition due diligence',
-      description: 'Data room checklist',
-    })
-    const shown = await plantIssue(t, {
-      org_id,
-      project_id: ops.subs[0].id,
-      parent_id: root.id,
-      title: 'Provision the racks',
-    })
-    const hidden = await plantIssue(t, {
-      org_id,
-      project_id: ops.subs[0].id,
-      parent_id: root.id,
-      title: 'Data room keys',
-    })
-    await deleteTask(t, dana, root.id, { subtask_ids: [shown.id, hidden.id] })
-    const item = await itemFor(t, root.id)
-
-    const found = await page(t, omar, { scope: { org_id, all: true }, search: 'data room' })
-    expect(found.entries).toEqual([
-      {
-        item_id: item.id,
-        task: {
-          key: `QN-${hidden.num}`,
-          title: 'Data room keys',
-          archived: false,
-          path: [],
-          redacted: true,
-        },
-      },
-    ])
-    expect(found.items).toEqual([expect.objectContaining({ redacted: true })])
-    expect(JSON.stringify(found)).not.toContain('Contoso')
-    // the root's words find nothing for the lead who cannot see it
-    expect(
-      (await page(t, omar, { scope: { org_id, all: true }, search: 'contoso' })).entries,
-    ).toEqual([])
-  })
 })
 
 describe('stops', () => {
@@ -1202,8 +1031,9 @@ describe('stops', () => {
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
     const infra = ops.subs[0]
     const secret = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
-    // three task items rooted in a project Omar cannot see, each with ten
-    // subtasks there before the one in Infra, which his redacted row shows
+    // three task items Omar deleted, rooted in a project he cannot see, each
+    // with ten subtasks there before the one in Infra, which his redacted
+    // row shows
     const items: string[] = []
     for (let i = 0; i < 3; i++)
       items.unshift(
@@ -1212,7 +1042,7 @@ describe('stops', () => {
           const item = plantedItem(f, secret, {
             parent_project_id: f.hidden.id,
             deleted_at,
-            deleted_by: f.user.id,
+            deleted_by: omar.id,
             projects: [secret, infra].map((p) => ({
               id: p.id,
               name: p.name,
@@ -1235,10 +1065,9 @@ describe('stops', () => {
               title,
               project_id: project.id,
               archived: false,
-              ...(project.id === secret.id ? {} : { cross_project_id: project.id }),
               search_text: `${title}\nCheck who holds each key before the audit.`,
               deleted_at,
-              deleted_by: f.user.id,
+              deleted_by: omar.id,
               item_project_id: secret.id,
               item_parent_id: f.hidden.id,
             })

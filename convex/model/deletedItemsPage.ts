@@ -25,13 +25,11 @@
  * items of a kind, one person's, or those under the scope's projects. Anyone
  * else reads their own deletes, the project items whose stored rows name
  * them as lead, and the items under projects of the scope (live or
- * archived), with the task items that have a subtask there: with All
- * projects under each project they lead, and with some projects under each
- * project of the scope they see, whatever their level there, since a
- * family from before the subtask rule can join it to a project they lead
- * outside the scope (scopeRanges). The ordered ranges are read newest
- * first from the cursor and merged; the stored-lead and cross-project
- * ranges have no order, so they are read whole and sorted. Every item is
+ * archived): with All projects under each project they lead, and with some
+ * projects under each project of the scope they see, whatever their level
+ * there (scopeRanges). The ordered ranges are read newest first from the
+ * cursor and merged; the stored-lead range has no order, so it is read
+ * whole and sorted. Every item is
  * judged by viewOf for the seat in its organization, so its scope, filters
  * and visibility decide before the page is cut. A task item is in the
  * scope of anyone but an admin through a project of it they see (heldFor).
@@ -61,8 +59,7 @@
  * the names and keys its row shows. Task entries come from the task numbers
  * the text names and from search_text queries, each filtered to the items
  * of one of the seat's sources, with fixed allowances set before any reads
- * (gatherTasks); the cross-project items no query covers are read whole. A
- * candidate counts only in a project the seat may read in its view of the
+ * (gatherTasks). A candidate counts only in a project the seat may read in its view of the
  * item (ItemView readable), so an admin's search keeps its sources and
  * drops the tasks they cannot read, which is how it narrows an admin's
  * search. Every page gathers the same candidates and orders them, and is
@@ -133,8 +130,7 @@ type Profile = Doc<'profiles'>
  * of all the projects they can read. Inside it they browse, filter by
  * assignee and search; past it they get too_wide, and a scope of fewer
  * projects serves them. `adminSources` bounds the ranges an admin's scope
- * of some projects opens, the ordered and the cross-project ranges together
- * (taskPlan, searchPlan). Past it the admin reads the organization's range
+ * of some projects opens (taskPlan, searchPlan). Past it the admin reads the organization's range
  * of the kind and keeps the scope in code, and searches the organization in
  * one query, which leaves the search's room to its results. `searches`
  * search queries one call plans, past which the seat's search reads its
@@ -159,12 +155,11 @@ type Profile = Doc<'profiles'>
  * description cap in a three-byte script can pass that eighth; with
  * ordinary text it is a few dozen KB.
  * `find` is the share of `call` the ranges that find items may spend:
- * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges are the page's own
- * bound, set by the widest browse inside the design size: a member who
- * leads the 700 sub-projects one by one opens a range for their own
- * deletes, for each sub-project and for its cross-project rows, and the
- * range of the stored rows that name them as lead, which with the project
- * entries before them is 1,403 ranges on the first page. That leaves about
+ * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges hold the widest
+ * browse inside the design size: a member who leads the 700 sub-projects
+ * one by one opens a range for their own deletes, for each sub-project, and
+ * the range of the stored rows that name them as lead, which with the
+ * project entries before them is 703 ranges on the first page. That leaves about
  * 4 MiB, 8,000 documents and 960 ranges for sights and for judging items,
  * which reads mostly what the seat's sight holds. A part of a page that
  * cannot open every source inside `find` lists none of their items. The
@@ -522,26 +517,17 @@ const leads = (seat: Seat, p: Doc<'projects'> | undefined): boolean =>
 /**
  * The projects whose ranges hold the task items `seat`'s person sees in
  * `scope`, for anyone but an admin: each top-level project they lead in it
- * (`tops`), read with its sub-projects (parentRange), each other project
- * read on its own (`alone`, projectRange), and each project whose
- * cross-project task rows name more items (`cross`). With All projects
- * those are the projects they lead or whose top-level project they lead,
- * which hold every item they see. With some projects they are the
- * projects of the scope they see, whatever their level there. A family
- * from before the rule of one top-level project, which the rule that a
- * subtask stays in its parent's sub-project (model/issues.ts
- * sameSubProject) narrowed later, can join a
- * project of the scope to one they lead outside it, under another
- * top-level project, and they see it through that one, so only the ranges
- * of the scope's own projects name it: its root's range, or the
- * cross-project rows of its subtask. viewOf and heldFor then judge every
- * item these ranges name, so none hidden from them is listed (taskPlan,
- * searchPlan).
+ * (`tops`), read with its sub-projects (parentRange), and each other
+ * project read on its own (`alone`, projectRange). With All projects those
+ * are the projects they lead or whose top-level project they lead, which
+ * hold every item they see. With some projects they are the projects of
+ * the scope they see, whatever their level there. viewOf and heldFor then
+ * judge every item these ranges name, so none hidden from them is listed
+ * (taskPlan, searchPlan).
  */
 function scopeRanges(seat: Seat, scope: Scoped) {
   const tops: string[] = []
   const alone: string[] = []
-  const cross: string[] = []
   const { projects } = seat.sight
   const inScope = (p: Doc<'projects'>) => scope.all || scope.ids.has(p.id)
   for (const p of projects.values()) {
@@ -555,9 +541,8 @@ function scopeRanges(seat: Seat, scope: Scoped) {
     if (scope.all && !leads(seat, p) && !topLed) continue
     // read with its top-level project, whose range the page reads too
     if (!(topLed && parent !== undefined && inScope(parent))) alone.push(p.id)
-    cross.push(p.id)
   }
-  return { tops, alone, cross }
+  return { tops, alone }
 }
 
 /* -------------------------------------------------------------- the run */
@@ -755,13 +740,11 @@ const assigneeRange =
 /* ------------------------------------------------------------ the plans */
 
 /** Where one seat's items of a part come from (projectPlan, taskPlan):
- * ranges read newest first, the projects whose cross-project task rows
- * name more items, and whether the project items whose stored rows name
- * the person as lead count. `keeps` is what the scope and the kind keep of
- * what they read. */
+ * ranges read newest first, and whether the project items whose stored
+ * rows name the person as lead count. `keeps` is what the scope and the
+ * kind keep of what they read. */
 type Plan = {
   ordered: Opener<Item>[]
-  cross: string[]
   storedLead: boolean
   keeps: (item: Item) => boolean
 }
@@ -779,14 +762,14 @@ function projectPlan(run: Run, seat: Seat, scope: Scoped | null): Plan | 'too_wi
     else if (all || scope.tops.size > DELETED_PAGE.adminSources)
       ordered = [kindRange(org, 'project')]
     else ordered = [...scope.tops].map((top) => parentRange(org, top, 'project'))
-    return { ordered, cross: [], storedLead: false, keeps }
+    return { ordered, storedLead: false, keeps }
   }
   const ordered = [deleterRange(org, seat.me.id, 'project')]
   for (const p of seat.sight.projects.values())
     if (p.type === 'meta' && leads(seat, p) && (all || scope.tops.has(p.id)))
       ordered.push(parentRange(org, p.id, 'project'))
   if (ordered.length > DELETED_PAGE.sources) return 'too_wide'
-  return { ordered, cross: [], storedLead: true, keeps }
+  return { ordered, storedLead: true, keeps }
 }
 
 /** The task entries' sources of `seat` for `scope`: task items only, as a
@@ -803,37 +786,29 @@ function taskPlan(run: Run, seat: Seat, scope: Scoped, projects = false): Plan |
   const org = seat.me.org_id
   const keeps = (item: Item) => item.kind === 'task' && holdsTasks(scope, item)
   if (seat.admin) {
-    const wide = { ordered: [kindRange(org, 'task')], cross: [], storedLead: false, keeps }
+    const wide = { ordered: [kindRange(org, 'task')], storedLead: false, keeps }
     if (a.deletedBy !== undefined)
       return { ...wide, ordered: [deleterRange(org, a.deletedBy, 'task')] }
     if (scope.all) return wide
     const ordered: Opener<Item>[] = []
-    const cross: string[] = []
     for (const p of scope.named) {
       // a sub-project of a top-level project the scope names is read with it
       if (p.parent_id !== undefined && scope.tops.has(p.parent_id)) continue
-      if (p.type === 'meta') {
-        ordered.push(parentRange(org, p.id, 'task'))
-        for (const sub of seat.sight.projects.values())
-          if (sub.parent_id === p.id) cross.push(sub.id)
-      } else {
-        ordered.push(projectRange(org, p.id))
-        cross.push(p.id)
-      }
+      ordered.push(p.type === 'meta' ? parentRange(org, p.id, 'task') : projectRange(org, p.id))
     }
-    if (ordered.length + cross.length > DELETED_PAGE.adminSources) return wide
-    return { ordered, cross, storedLead: false, keeps }
+    if (ordered.length > DELETED_PAGE.adminSources) return wide
+    return { ordered, storedLead: false, keeps }
   }
   const kind = projects ? undefined : 'task'
-  const { tops, alone, cross } = scopeRanges(seat, scope)
+  const { tops, alone } = scopeRanges(seat, scope)
   const ordered = [
     deleterRange(org, seat.me.id, kind),
     ...tops.map((id) => parentRange(org, id, kind)),
     ...alone.map((id) => projectRange(org, id)),
   ]
   if (ordered.length > DELETED_PAGE.sources) return 'too_wide'
-  if (!projects) return { ordered, cross, storedLead: false, keeps }
-  return { ordered, cross, storedLead: true, keeps: (item) => holdsTasks(scope, item) }
+  if (!projects) return { ordered, storedLead: false, keeps }
+  return { ordered, storedLead: true, keeps: (item) => holdsTasks(scope, item) }
 }
 
 /* ---------------------------------------------------- reading the items */
@@ -880,9 +855,11 @@ async function* sortedAfter(found: Item[], from: At | null): AsyncGenerator<Item
     if (from === null || before(from, itemAt(item))) yield item
 }
 
-/** The items `plan`'s unordered ranges name for `seat`, read whole through
- * `reader`, each item by id once, until `stop` says the reads ran out.
- * `cut` then, since an item it did not read could sort anywhere. */
+/** The items `plan`'s unordered range names for `seat`, the project items
+ * whose stored rows name the person as lead when the plan reads them
+ * (storedLead), read whole through `reader`, each item by id once, until
+ * `stop` says the reads ran out. `cut` then, since an item it did not read
+ * could sort anywhere. */
 async function unorderedItems(
   reader: QueryCtx,
   seat: Seat,
@@ -890,31 +867,17 @@ async function unorderedItems(
   known: Map<string, Item | null>,
   stop: () => boolean,
 ): Promise<{ found: Item[]; cut: boolean }> {
+  if (!plan.storedLead) return { found: [], cut: false }
+  if (stop()) return { found: [], cut: true }
   const org = seat.me.org_id
   const ids = new Set<string>()
-  const name = async (rows: AsyncIterable<{ item_id: string }>): Promise<boolean> => {
-    for await (const row of rows) {
-      ids.add(row.item_id)
-      if (stop()) return false
-    }
-    return true
+  const rows = reader.db
+    .query('deleted_rows')
+    .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', seat.me.id))
+  for await (const row of rows) {
+    ids.add(row.item_id)
+    if (stop()) return { found: [], cut: true }
   }
-  const ranges: (() => AsyncIterable<{ item_id: string }>)[] = []
-  if (plan.storedLead)
-    ranges.push(() =>
-      reader.db
-        .query('deleted_rows')
-        .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', seat.me.id)),
-    )
-  for (const project of plan.cross)
-    ranges.push(() =>
-      reader.db
-        .query('deleted_tasks')
-        .withIndex('by_org_cross_project', (q) =>
-          q.eq('org_id', org).eq('cross_project_id', project),
-        ),
-    )
-  for (const range of ranges) if (stop() || !(await name(range()))) return { found: [], cut: true }
   const found: Item[] = []
   for (const id of ids) {
     if (!known.has(id)) {
@@ -1266,17 +1229,16 @@ type Query = {
   value?: string
 }
 
-/** What a scoped seat's search reads: its queries, and the cross-project
- * items no query covers, which it reads whole. When the gathering's room
- * runs out while it reads the unordered ranges that name those items, it
- * holds those it read, and the page says `matches` as every search page
- * does. */
-type SearchPlan = { queries: Query[]; crossItems: Item[] }
+/** What a scoped seat's search reads: its queries. When the gathering's
+ * room runs out while it reads the stored lead rows that name more
+ * project items, it holds those it read, and the page says `matches` as
+ * every search page does. */
+type SearchPlan = { queries: Query[] }
 
 /** The search over a seat's whole organization, which judges every
  * candidate: an admin's All projects, an admin's search past the bounds,
  * and anyone else's past DELETED_PAGE.searches. */
-const WHOLE: SearchPlan = { queries: [{}], crossItems: [] }
+const WHOLE: SearchPlan = { queries: [{}] }
 
 /**
  * The search sources of `seat` for `scope`. An admin's All projects is one
@@ -1287,63 +1249,51 @@ const WHOLE: SearchPlan = { queries: [{}], crossItems: [] }
  * (deleted_by), the projects the browse reads for them (scopeRanges), so
  * with some projects every project of the scope they see, and each project
  * item their stored rows name as lead that no other query covers
- * (item_id). Each query finds every task of the items of its source,
- * wherever the task sits. The cross-project items the browse finds through
- * subtasks, whose roots no query holds, are read whole instead
- * (crossItems), as an item holds at most LIMITS.subtasks.max + 1 tasks,
- * once viewOf shows the item to the seat (gatherTasks).
+ * (item_id). Each query finds every task of the items of its source.
  * Past DELETED_PAGE.adminSources for an admin, or DELETED_PAGE.searches
  * for anyone, the seat searches its organization whole (WHOLE).
  */
 async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPlan> {
   const { a } = run
   if (seat.admin && a.deletedBy !== undefined)
-    return { queries: [{ field: 'deleted_by', value: a.deletedBy }], crossItems: [] }
+    return { queries: [{ field: 'deleted_by', value: a.deletedBy }] }
   if (seat.admin && scope.all) return WHOLE
   const parents = new Set<string>()
   const projects = new Set<string>()
-  const cross: string[] = []
   if (seat.admin) {
     for (const p of scope.named) {
       if (p.parent_id !== undefined && scope.tops.has(p.parent_id)) continue
-      if (p.type !== 'meta') {
-        projects.add(p.id)
-        cross.push(p.id)
-        continue
-      }
-      parents.add(p.id)
-      for (const sub of seat.sight.projects.values()) if (sub.parent_id === p.id) cross.push(sub.id)
+      if (p.type === 'meta') parents.add(p.id)
+      else projects.add(p.id)
     }
     // past the browse's bounds the browse reads the organization's range too
-    if (parents.size + projects.size + cross.length > DELETED_PAGE.adminSources) return WHOLE
+    if (parents.size + projects.size > DELETED_PAGE.adminSources) return WHOLE
   } else {
     const ranges = scopeRanges(seat, scope)
     for (const id of ranges.tops) parents.add(id)
     for (const id of ranges.alone) projects.add(id)
-    cross.push(...ranges.cross)
     if (1 + parents.size + projects.size > DELETED_PAGE.searches) return WHOLE
   }
-  const unordered: Plan = { ordered: [], cross, storedLead: !seat.admin, keeps: () => true }
   const queries: Query[] = []
   if (!seat.admin) queries.push({ field: 'deleted_by', value: seat.me.id })
   for (const id of parents) queries.push({ field: 'item_parent_id', value: id })
   for (const id of projects) queries.push({ field: 'item_project_id', value: id })
-  // the items of the unordered ranges that no query covers
-  const covered = (item: Item) =>
-    (!seat.admin && item.deleted_by === seat.me.id) ||
-    (item.parent_project_id !== undefined && parents.has(item.parent_project_id)) ||
-    projects.has(item.project_id)
-  const reader = spending(run.ctx, run.gather, run.call)
-  const out = () => spent(run.gather) || spent(run.call)
-  const { found } = await unorderedItems(reader, seat, unordered, new Map(), out)
-  const crossItems: Item[] = []
-  for (const item of found) {
-    if (covered(item) || !holdsTasks(scope, item)) continue
-    if (item.kind === 'project') queries.push({ field: 'item_id', value: item.id })
-    else crossItems.push(item)
+  if (!seat.admin) {
+    // the project items their stored rows name as lead that no query covers
+    const covered = (item: Item) =>
+      item.deleted_by === seat.me.id ||
+      (item.parent_project_id !== undefined && parents.has(item.parent_project_id)) ||
+      projects.has(item.project_id)
+    const reader = spending(run.ctx, run.gather, run.call)
+    const out = () => spent(run.gather) || spent(run.call)
+    const led: Plan = { ordered: [], storedLead: true, keeps: () => true }
+    const { found } = await unorderedItems(reader, seat, led, new Map(), out)
+    for (const item of found)
+      if (!covered(item) && holdsTasks(scope, item))
+        queries.push({ field: 'item_id', value: item.id })
   }
   if (queries.length > DELETED_PAGE.searches) return WHOLE
-  return { queries, crossItems }
+  return { queries }
 }
 
 /**
@@ -1461,19 +1411,6 @@ async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: 
           return f
         })
         await readQuery(seat, query)
-      }
-      for (const item of plan.crossItems) {
-        if (out()) throw new Stop()
-        // a family hidden from the seat, whose tasks it need not read
-        if ((await judged(seat, item.id, reader)) === null) continue
-        const tasks = reader.db
-          .query('deleted_tasks')
-          .withIndex('by_item', (q) => q.eq('item_id', item.id))
-        for await (const task of tasks) {
-          await consider(seat, task, reader)
-          // each task's row holds its searchable text
-          if (out()) throw new Stop()
-        }
       }
     }
   } catch (e) {

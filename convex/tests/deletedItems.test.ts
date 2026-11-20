@@ -571,9 +571,6 @@ describe("the Deleted items page's fields on each stored task", () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    // under another top-level project, for a subtask from before the
-    // subtask rule (model/issues.ts sameSubProject)
-    const elsewhere = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     const root = await plantIssue(t, {
       org_id,
       project_id: f.sub.id,
@@ -583,18 +580,18 @@ describe("the Deleted items page's fields on each stored task", () => {
     })
     const sibling = await plantIssue(t, {
       org_id,
-      project_id: f.sub2.id,
+      project_id: f.sub.id,
       parent_id: root.id,
       title: 'Board fit',
       assignee_id: f.admin.id,
     })
-    const older = await plantIssue(t, {
+    const other = await plantIssue(t, {
       org_id,
-      project_id: elsewhere.id,
+      project_id: f.sub.id,
       parent_id: root.id,
-      title: 'Bracket from before the rule',
+      title: 'Bracket',
     })
-    await deleteTask(t, f, root.id, { subtask_ids: [sibling.id, older.id] })
+    await deleteTask(t, f, root.id, { subtask_ids: [sibling.id, other.id] })
 
     const item = await itemFor(t, root.id)
     const rows = new Map((await storedTasks(t, item.id)).map((r) => [r.task_id, r]))
@@ -608,15 +605,10 @@ describe("the Deleted items page's fields on each stored task", () => {
     expect(rows.get(sibling.id)).toMatchObject({
       ...copies,
       assignee_id: f.admin.id,
-      cross_project_id: f.sub2.id,
       search_text: 'Board fit\n',
     })
-    expect(rows.get(older.id)).toMatchObject({
-      ...copies,
-      cross_project_id: elsewhere.id,
-      search_text: 'Bracket from before the rule\n',
-    })
-    expect(rows.get(older.id)?.assignee_id).toBeUndefined()
+    expect(rows.get(other.id)).toMatchObject({ ...copies, search_text: 'Bracket\n' })
+    expect(rows.get(other.id)?.assignee_id).toBeUndefined()
     // the words a person reads, without a link's destination
     const text = rows.get(root.id)?.search_text ?? ''
     expect(text.startsWith('Battery level\n')).toBe(true)

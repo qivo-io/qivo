@@ -848,8 +848,6 @@ async function storeTask(
     title: task.title,
     project_id: task.project_id,
     archived,
-    cross_project_id:
-      item.kind === 'task' && task.project_id !== item.project_id ? task.project_id : undefined,
     search_text: deletedSearchText(task),
     assignee_id: task.assignee_id,
     ...itemCopies(item),
@@ -2237,8 +2235,7 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
     return true
   }
   const { _id, _creationTime, ...light } = task
-  // a new row, so that a restore of `into` past its cursor still meets it;
-  // in the project item that holds its project it is no cross-project task.
+  // a new row, so that a restore of `into` past its cursor still meets it.
   // It keeps its search text and assignee and copies `into`, so the
   // Deleted items page finds it with the item that holds it now, and a row
   // stored before the page's release stays one, without the copies. The
@@ -2247,7 +2244,6 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
     ...light,
     item_id: into.id,
-    cross_project_id: undefined,
     ...(task.deleted_at === undefined ? {} : itemCopies(into)),
   })
   await countInto(run.ctx, into, task)
