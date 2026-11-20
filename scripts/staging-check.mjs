@@ -1643,6 +1643,9 @@ let callbackServer
 let redirectUri
 /** The WebSocket URLs the app page opened, which name its Convex backend. */
 let appSockets = []
+/** The app page's WebSockets that are still open, whose frames
+ *  recordFrames reads. */
+let openSockets = new Set()
 
 /** Starts the loopback OAuth callback. Codes stay in memory. */
 async function startCallback() {
@@ -1718,7 +1721,12 @@ async function openBrowser() {
   // recorded from the first navigation on, because the app's Convex client
   // connects as soon as the page loads, before verifyTarget runs
   appSockets = []
-  app.on('websocket', (ws) => appSockets.push(ws.url()))
+  openSockets = new Set()
+  app.on('websocket', (ws) => {
+    appSockets.push(ws.url())
+    openSockets.add(ws)
+    ws.on('close', () => openSockets.delete(ws))
+  })
 }
 
 /** Routes the Vercel bypass on browser context `target`, when the run has
@@ -2213,6 +2221,34 @@ export async function pressFor(
       SEARCH_LOST,
       `${what} after a press, which left no sign, and the step pressed again`,
     )
+  }
+}
+
+/** Records the frames the app page passes on its WebSockets, those open
+ *  now and those it opens later, each `{ socket, out, text }` in the order
+ *  they pass (`out` for a frame the page sent), until `stop`. Answers the
+ *  growing list as `frames`. */
+function recordFrames() {
+  const frames = []
+  const offs = []
+  const listen = (ws) => {
+    const sent = (frame) => frames.push({ socket: ws, out: true, text: String(frame.payload) })
+    const received = (frame) => frames.push({ socket: ws, out: false, text: String(frame.payload) })
+    ws.on('framesent', sent)
+    ws.on('framereceived', received)
+    offs.push(() => {
+      ws.off('framesent', sent)
+      ws.off('framereceived', received)
+    })
+  }
+  for (const ws of openSockets) listen(ws)
+  app.on('websocket', listen)
+  return {
+    frames,
+    stop: () => {
+      app.off('websocket', listen)
+      for (const off of offs) off()
+    },
   }
 }
 
@@ -10883,6 +10919,21 @@ export const PROJECT_DIRECTORY_MARKS = {
   state: 'data-project-directory-state',
 }
 
+/** The write the directory's star sends (convex/projectNav.ts
+ *  setFavorite). */
+export const SET_FAVORITE_MUTATION = 'projectNav:setFavorite'
+
+/** The states the page asked for project `id`'s star, in the order it
+ *  sent them, read from `frames`, each `{ out, text }` as recordFrames
+ *  records them: the star's writes (SET_FAVORITE_MUTATION) among the
+ *  frames the page sent. A press on the star sends its write at once. */
+export function favoritesSent(frames, id) {
+  return frames.flatMap((frame) => {
+    const args = frame.out ? sentMutation(frame.text, SET_FAVORITE_MUTATION) : null
+    return args?.project_id === id && typeof args.favorite === 'boolean' ? [args.favorite] : []
+  })
+}
+
 /** The group of each row the directory shows, by id, read from
  *  `sequence`, the page's group headings (`{ group }`, 'favorites' or
  *  'rest') and rows (`{ row, starred }`) in order. A row under a heading
@@ -10919,20 +10970,22 @@ export function atProject(pathname, num) {
  *  from the sidebar, waits for the browse list to answer with a row,
  *  searches the run's tag and waits for the search's answer (searchAnswered)
  *  with M's row and Alpha's, which sorts before M by name and so comes
- *  first while M is no favorite. It stars M (pressFor, until the star shows
- *  the press) and waits for the server's answer to put M under Favorites,
- *  ahead of Alpha under Other projects (directoryGroups). It expands M and
- *  waits for Alpha and Zulu from projectNav.children, pressing Load more while
- *  one is still to come, opens Zulu from that list, pressing again while
- *  the directory says the workspace has not loaded it yet, and waits for
- *  Zulu's address (`/p/` and its number) and for the header to name Zulu.
- *  Back in All projects it searches M's name, waits for the answer, unstars
- *  M the same way and waits for the Favorites heading to go; a failure
- *  unstars it through the store, so no later step meets the run's project
- *  as a favorite. It reads none of
- *  Nora's own favorites, which a deployment seeded before dataset version
- *  10 does not hold, and must run before the run archives M. It needs a
- *  backend from v0.1.126 on. */
+ *  first while M is no favorite. It stars M from a star that shows it off,
+ *  pressing again only while the app has sent no write of M's star
+ *  (pressFor, favoritesSent), and waits for the server's answer to put M
+ *  under Favorites, ahead of Alpha under Other projects (directoryGroups).
+ *  It expands M and waits for Alpha and Zulu from projectNav.children,
+ *  pressing Load more while one is still to come, opens Zulu from that
+ *  list, pressing again while the directory says the workspace has not
+ *  loaded it yet, and waits for Zulu's address (`/p/` and its number) and
+ *  for the header to name Zulu. Back in All projects it searches M's name,
+ *  waits for the answer, unstars M the same way, from a star that shows it
+ *  on, and waits for the Favorites heading to go and the star to show it
+ *  off; a failure unstars it through the store, so no later step meets the
+ *  run's project as a favorite. It reads none of Nora's own favorites,
+ *  which a deployment seeded before dataset version 10 does not hold, and
+ *  must run before the run archives M. It needs a backend from v0.1.126
+ *  on. */
 async function projectDirectoryCheck() {
   const m = PROJECT_DIRECTORY_MARKS
   await check(PROJECT_DIRECTORY_STEP, async () => {
@@ -10968,14 +11021,32 @@ async function projectDirectoryCheck() {
       await row(M).waitFor({ timeout: 60_000 })
     }
     const starOf = () => row(M).locator(`[${m.star}]`)
-    /** Presses M's star until it shows `on`, which a press that took shows
-     *  at once, while the server's answer is on its way. */
-    const pressStar = (on, what) =>
-      pressFor(
-        starOf(),
-        async () => (await starOf().getAttribute('aria-pressed')) === String(on),
-        what,
-      )
+    /** Presses M's star to set it `on` until the app sends the star's write
+     *  for `on`, which a press that took sends at once. The star must show
+     *  the other state before each press. A press counts as lost only
+     *  while the app has sent no write of M's star, so a press that took
+     *  is never repeated, also when the star goes back on a refusal. */
+    const pressStar = async (on, what) => {
+      const record = recordFrames()
+      try {
+        await pressFor(
+          starOf(),
+          async () => favoritesSent(record.frames, M.id).includes(on),
+          what,
+          {
+            lost: async () => favoritesSent(record.frames, M.id).length === 0,
+            before: async () =>
+              eq(
+                await starOf().getAttribute('aria-pressed'),
+                String(!on),
+                `M's star before a press that ${on ? 'stars' : 'unstars'} it`,
+              ),
+          },
+        )
+      } finally {
+        record.stop()
+      }
+    }
     let starred = false
     try {
       // the sidebar shows over the workspace, not over Settings
@@ -10998,7 +11069,7 @@ async function projectDirectoryCheck() {
       // the star, and the server's answer that puts M under Favorites,
       // ahead of Alpha under Other projects
       starred = true
-      await pressStar(true, "M's star is not on")
+      await pressStar(true, "M's star sent no write that stars M")
       expect(
         await until(async () => {
           const shown = await sequence()
@@ -11042,7 +11113,7 @@ async function projectDirectoryCheck() {
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
       await search(M.name)
-      await pressStar(false, "M's star is still on")
+      await pressStar(false, "M's star sent no write that unstars M")
       expect(
         await until(
           async () =>
