@@ -7332,31 +7332,31 @@ export const MENTION_GONE = 'can no longer be mentioned on this task'
 export const MENTION_PEOPLE_QUERY = 'pickers:syncRecipients'
 
 /** A task's owner lists and Team sync's Mention window read their people
- *  from the deployment (pickers.taskOwners, syncRecipients and canOwn).
- *  Over REST as Nora the step makes `<tag> Owners` under the run project M
- *  with Leo Martins as its lead, grants the Standard agent User on it, and
- *  makes `<tag> owner pickers` there, In Progress and unassigned. In the
- *  task's window, Assignee searches the agent's name and picks the agent
- *  from the deployment's batch, Reviewer searches Nora's and picks her,
- *  then No reviewer clears it, each checked with GET /tasks/{ref}. In Team
- *  sync for M by its address, the task's card on the agent's line opens
- *  its owner list, which finds and picks Nora, also checked over REST. On
- *  the card, now on Nora's line, the Mention window searches "Leo", waits
- *  for the deployment's answer to that search (MENTION_PEOPLE_QUERY), which
- *  must list only people named Leo, picks him from it and takes a note. The sub-project's
- *  lead then goes back to Nora over REST, the User grant a handover leaves
- *  the outgoing lead is removed, and GET /projects/{ref}/users must stop
- *  listing Leo, so he can no longer see the task. Send must then show
- *  that Leo can no longer be mentioned, keep the note and post nothing
- *  (GET /tasks/{ref}/comments unchanged), and Cancel closes the window.
- *  It assigns only the run's own agent and Nora, who does the picking, and
- *  posts no comment. It notifies only the run's own Standard agent, which
- *  follows the task once it is assigned and gets the task's later changes,
- *  such as its handover to Nora, in its Inbox. No fixture person is
- *  notified, since a lead change and a removed grant send no Inbox
- *  message. The cleanup, which deletes M, removes the
- *  sub-project and the task. It needs a backend from v0.1.147 on, which
- *  answers the pickers and people.byIds. */
+ *  from the deployment (pickers.taskOwners, syncRecipients and canOwn). Over
+ *  REST as Nora the step makes `<tag> Owners` under the run project M with
+ *  Leo Martins as its lead, grants the Standard agent User on it, and makes
+ *  `<tag> owner pickers` there, In Progress and unassigned. In the task's
+ *  window, Assignee searches the agent's name and picks the agent from the
+ *  deployment's batch, Reviewer searches Nora's and picks her, then No
+ *  reviewer clears it, each checked with GET /tasks/{ref}. In Team sync for
+ *  M by its address, the task's card on the agent's line opens its owner
+ *  list, which finds and picks Nora, also checked over REST. On the card,
+ *  now on Nora's line, the Mention window searches "Leo", waits for the
+ *  deployment's answer to that search (MENTION_PEOPLE_QUERY), which must
+ *  list only people named Leo, picks him from it and takes a note. The
+ *  sub-project's lead then goes back to Nora over REST, the User grant a
+ *  handover leaves the outgoing lead is removed, and GET
+ *  /projects/{ref}/users must stop listing Leo, so he can no longer see the
+ *  task. Send must then show that Leo can no longer be mentioned, keep the
+ *  note and post nothing (GET /tasks/{ref}/comments unchanged), and Cancel
+ *  closes the window. It assigns only the run's own agent and Nora, who does
+ *  the picking, and posts no comment. It notifies only the run's own
+ *  Standard agent, which follows the task once it is assigned and gets the
+ *  task's later changes, such as its handover to Nora, in its Inbox. No
+ *  fixture person is notified, since a lead change and a removed grant send
+ *  no Inbox message. The cleanup, which deletes M, removes the sub-project
+ *  and the task. It needs a backend from v0.1.147 on, which answers the
+ *  pickers and people.byIds. */
 async function ownerPickersCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -9749,24 +9749,23 @@ export const REASSIGN_PEOPLE_QUERY = 'accessRemovals:reassignChoices'
 
 /** The removal window on the deployment's answers (accessRemovals.preview
  *  and reassignChoices): the run makes `<tag> Removal` under its second
- *  project N over REST, gives the Standard agent a User grant there and a
- *  To Do task, then in the app presses the agent's Remove in that
- *  sub-project's access editor. The window must list the task's key and
- *  title from the preview; the step chooses Reassign, searches the picker
- *  for Nora's name, waits for the deployment's answer to that search
- *  (REASSIGN_PEOPLE_QUERY), whose rows must all name her, since she can be
- *  the only person the picker opens with, chooses her and presses
- *  REMOVAL_EXPECTED.submit, which must close the window. Over REST the task must then be Nora's and the
+ *  project N over REST, gives the Standard agent a User grant there and a To
+ *  Do task, then in the app presses the agent's Remove in that sub-project's
+ *  access editor. The window must list the task's key and title from the
+ *  preview; the step chooses Reassign, searches the picker for Nora's name,
+ *  waits for the deployment's answer to that search (REASSIGN_PEOPLE_QUERY),
+ *  whose rows must all name her, since she can be the only person the picker
+ *  opens with, chooses her and presses REMOVAL_EXPECTED.submit, which must
+ *  close the window. Over REST the task must then be Nora's and the
  *  sub-project must hold no grant for the agent. Not under M, where the
- *  agent's Viewer grant keeps its sight of every sub-project, so the
- *  removal would take no task out of sight and open no window. Without an
- *  N it makes a tagged top-level project of its own (run.projects.R), which
- *  the cleanup deletes and the sweep finds by its tag. The task goes to
- *  run.created. It runs while the run's projects are active, after
- *  ui/settings-teams, and needs a backend from the release of the
- *  removal window or later. Against an older one the press cannot read
- *  the preview, so the window never opens and the step fails waiting for
- *  it. */
+ *  agent's Viewer grant keeps its sight of every sub-project, so the removal
+ *  would take no task out of sight and open no window. Without an N it makes
+ *  a tagged top-level project of its own (run.projects.R), which the cleanup
+ *  deletes and the sweep finds by its tag. The task goes to run.created. It
+ *  runs while the run's projects are active, after ui/settings-teams, and
+ *  needs a backend from the release of the removal window or later. Against
+ *  an older one the press cannot read the preview, so the window never opens
+ *  and the step fails waiting for it. */
 async function removalWindowCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
