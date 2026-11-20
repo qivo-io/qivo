@@ -2129,6 +2129,58 @@ export const listAnswers = (texts, text) => {
   return texts.length > 0 && texts.every((row) => words.every((word) => folded(row).includes(word)))
 }
 
+/** Whether `frames`, as recordFrames records them, hold a read of query
+ *  `udfPath` with `search` as its search argument that the server has
+ *  answered: the page subscribed it (an Add in a ModifyQuerySet), and later
+ *  on the same socket, before the page removed it, a transition updated or
+ *  failed it. A transition in parts (TransitionChunk) counts once all its
+ *  parts have come. A read the app makes once, such as a picker's batch,
+ *  subscribes its query until the first answer as a live list does. */
+export function searchRead(frames, udfPath, search) {
+  const asked = new Map()
+  const parts = new Map()
+  for (const { socket, out, text } of frames) {
+    let message
+    try {
+      message = JSON.parse(text)
+    } catch {
+      continue
+    }
+    if (!asked.has(socket)) asked.set(socket, new Set())
+    const ids = asked.get(socket)
+    if (out) {
+      if (message?.type !== 'ModifyQuerySet' || !Array.isArray(message.modifications)) continue
+      for (const m of message.modifications) {
+        if (m?.type === 'Add' && m.udfPath === udfPath && m.args?.[0]?.search === search)
+          ids.add(m.queryId)
+        else if (m?.type === 'Remove') ids.delete(m.queryId)
+      }
+      continue
+    }
+    if (message?.type === 'TransitionChunk') {
+      const held = message.partNumber === 0 ? [] : parts.get(socket)
+      if (held?.length !== message.partNumber) {
+        parts.delete(socket)
+        continue
+      }
+      held.push(message.chunk)
+      parts.set(socket, held)
+      if (held.length < message.totalParts) continue
+      parts.delete(socket)
+      try {
+        message = JSON.parse(held.join(''))
+      } catch {
+        continue
+      }
+    }
+    if (message?.type !== 'Transition' || !Array.isArray(message.modifications)) continue
+    const answered = (m) =>
+      (m?.type === 'QueryUpdated' || m?.type === 'QueryFailed') && ids.has(m.queryId)
+    if (message.modifications.some(answered)) return true
+  }
+  return false
+}
+
 /** Types `text` into `search`, the search field of an open picker or of a
  *  list on a page, and waits until `rows`, the list's choices, show the
  *  search's answer (listAnswers). Such a list keeps the rows of the text
@@ -2138,23 +2190,42 @@ export const listAnswers = (texts, text) => {
  *  Playwright's WebKit presses about as late as the search rests, and lost
  *  such presses. A list whose rows are off until the search is answered,
  *  such as the Board's Assignee menu, needs no such wait, since a press
- *  waits for its row to be on. `what` names the field in a NOTE and in the
- *  failure. */
-async function searchAnswered(search, text, rows, what = "a picker's search") {
-  const holds = await typeSearch(search, text, what)
-  expect(
-    await until(
-      async () => (await holds()) && listAnswers(await rows.allTextContents(), text),
-      30_000,
-    ),
-    `${what} did not settle on its answer for ${text}`,
-  )
+ *  waits for its row to be on.
+ *
+ *  The rows alone tell the answer only while some row before the search
+ *  does not name it. Where every row before may name it, as in a list
+ *  that holds only the person searched for, the caller passes `read`:
+ *  `query`, the query the list reads its answer with, and `busy`, what the
+ *  list shows while that read is on its way or typing has not rested. The
+ *  wait then also needs the server's answer to a read of `query` for
+ *  `text` (searchRead, on the frames from before the typing) and no
+ *  `busy`, so the rows it reads are that answer's. `what` names the field
+ *  in a NOTE and in the failure. */
+async function searchAnswered(search, text, rows, what = "a picker's search", read = null) {
+  const record = read === null ? null : recordFrames()
+  try {
+    const holds = await typeSearch(search, text, what)
+    const answered = async () =>
+      record === null ||
+      (searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0)
+    expect(
+      await until(
+        async () =>
+          (await holds()) && (await answered()) && listAnswers(await rows.allTextContents(), text),
+        30_000,
+      ),
+      `${what} did not settle on its answer for ${text}`,
+    )
+  } finally {
+    record?.stop()
+  }
 }
 
 /** Types `text` into an open picker's `search` and presses `choice` once
- *  `rows`, the list's choices, show the search's answer (searchAnswered). */
-async function pressSearched(search, text, rows, choice) {
-  await searchAnswered(search, text, rows)
+ *  `rows`, the list's choices, show the search's answer (searchAnswered,
+ *  which takes `read`). */
+async function pressSearched(search, text, rows, choice, read = null) {
+  await searchAnswered(search, text, rows, undefined, read)
   await choice.click({ timeout: 30_000 })
 }
 
@@ -7256,6 +7327,10 @@ export const OWNER_PICKERS_NAMES = { project: 'Owners', task: 'owner pickers' }
  *  can no longer be mentioned. */
 export const MENTION_GONE = 'can no longer be mentioned on this task'
 
+/** The read of the Mention window's people (convex/pickers.ts
+ *  syncRecipients), whose answer for a search the step waits for. */
+export const MENTION_PEOPLE_QUERY = 'pickers:syncRecipients'
+
 /** A task's owner lists and Team sync's Mention window read their people
  *  from the deployment (pickers.taskOwners, syncRecipients and canOwn).
  *  Over REST as Nora the step makes `<tag> Owners` under the run project M
@@ -7266,8 +7341,9 @@ export const MENTION_GONE = 'can no longer be mentioned on this task'
  *  then No reviewer clears it, each checked with GET /tasks/{ref}. In Team
  *  sync for M by its address, the task's card on the agent's line opens
  *  its owner list, which finds and picks Nora, also checked over REST. On
- *  the card, now on Nora's line, the Mention window searches "Leo", picks
- *  him from the deployment's recipients and takes a note. The sub-project's
+ *  the card, now on Nora's line, the Mention window searches "Leo", waits
+ *  for the deployment's answer to that search (MENTION_PEOPLE_QUERY), which
+ *  must list only people named Leo, picks him from it and takes a note. The sub-project's
  *  lead then goes back to Nora over REST, the User grant a handover leaves
  *  the outgoing lead is removed, and GET /projects/{ref}/users must stop
  *  listing Leo, so he can no longer see the task. Send must then show
@@ -7367,13 +7443,21 @@ async function ownerPickersCheck() {
     await card.locator(`[data-sync-mention="${t.key}"]`).click()
     const mention = app.locator(`[data-sync-mention-window="${t.key}"]`)
     await mention.waitFor({ timeout: 20_000 })
-    // the window lists its first people until the search rests, so Leo is
-    // pressed in the answer, where his row shows the choice at once
+    // the window lists its first people until the search rests, and they
+    // can be Leo alone, so the rows alone cannot tell the answer. Leo is
+    // pressed once the window shows the server's answer for his name, where
+    // his row shows the choice at once. A choice stays on whatever a later
+    // read lists, so this is also where a failed search fails the step.
     await searchAnswered(
       mention.locator('[data-sync-mention-search]'),
       'Leo',
       mention.locator('[data-sync-mention-person]'),
       "the Mention window's search",
+      {
+        query: MENTION_PEOPLE_QUERY,
+        // the list's Loading and held lines
+        busy: mention.locator('[data-sync-mention-list] [role="status"]'),
+      },
     )
     const person = mention.locator(`[data-sync-mention-person="${leo.id}"]`)
     await pressFor(

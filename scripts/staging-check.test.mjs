@@ -96,6 +96,7 @@ import {
   MCP_ACCESS_LISTS_STEP,
   MCP_ACCESS_MARKS,
   MENTION_GONE,
+  MENTION_PEOPLE_QUERY,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
   MILESTONES_SECTION_QUERY,
@@ -191,6 +192,7 @@ import {
   STARTUP_SELECTION_MARKS,
   STARTUP_SELECTION_STEP,
   searchOf,
+  searchRead,
   selectedCreatorsStarts,
   selectProblems,
   send,
@@ -2680,7 +2682,7 @@ describe('a search that lost its typed text', () => {
     expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
-      'async function searchAnswered(search, text, rows, what = "a picker\'s search")',
+      'async function searchAnswered(search, text, rows, what = "a picker\'s search", read = null)',
       'typeSearch(search, text, what)',
       'words, "Deleted items\' search")',
     ])
@@ -3010,6 +3012,84 @@ describe("a browser's notification permission", () => {
     expect(can.slice(can.indexOf('} catch (error) {'))).not.toContain('notifications = ')
     for (const step of ['INBOX_FEED_STEP', 'NOTIFICATION_DELIVERY_STEP'])
       expect(script).toContain(`if (!(await alertsCan(${step}))) return`)
+  })
+})
+
+describe("a search's read on the sync socket", () => {
+  const sent = (socket, ...modifications) => ({
+    socket,
+    out: true,
+    text: JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 1, newVersion: 2, modifications }),
+  })
+  const add = (queryId, search, udfPath = MENTION_PEOPLE_QUERY) => ({
+    type: 'Add',
+    queryId,
+    udfPath,
+    args: [search === null ? { org_id: 'org' } : { org_id: 'org', search }],
+  })
+  const transition = (...modifications) =>
+    JSON.stringify({ type: 'Transition', startVersion: {}, endVersion: {}, modifications })
+  const got = (socket, ...modifications) => ({
+    socket,
+    out: false,
+    text: transition(...modifications),
+  })
+  const updated = (queryId) => ({ type: 'QueryUpdated', queryId, value: {}, logLines: [] })
+  const read = (frames) => searchRead(frames, MENTION_PEOPLE_QUERY, 'Leo')
+
+  it('answers once the server updates or fails the read of the search', () => {
+    expect(read([sent('a', add(3, 'Leo')), got('a', updated(3))])).toBe(true)
+    expect(
+      read([
+        sent('a', add(3, 'Leo')),
+        got('a', { type: 'QueryFailed', queryId: 3, errorMessage: 'no', logLines: [] }),
+      ]),
+    ).toBe(true)
+  })
+  it('does not answer for the rows before the search, another read or another socket', () => {
+    // the read before the search, answered, and the search's read on its way
+    expect(read([sent('a', add(2, null)), got('a', updated(2)), sent('a', add(3, 'Leo'))])).toBe(
+      false,
+    )
+    expect(read([sent('a', add(3, 'Le')), got('a', updated(3))])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo', 'pickers:taskOwners')), got('a', updated(3))])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo')), got('b', updated(3))])).toBe(false)
+    expect(read([got('a', updated(3)), sent('a', add(3, 'Leo'))])).toBe(false)
+    // removed before any answer, as when the text changed again
+    expect(
+      read([
+        sent('a', add(3, 'Leo')),
+        sent('a', { type: 'Remove', queryId: 3 }),
+        got('a', updated(3)),
+      ]),
+    ).toBe(false)
+  })
+  it('reads an answer that comes in parts once every part has come, in order', () => {
+    const text = transition(updated(3))
+    const chunk = (partNumber, chunk) => ({
+      socket: 'a',
+      out: false,
+      text: JSON.stringify({
+        type: 'TransitionChunk',
+        chunk,
+        partNumber,
+        totalParts: 2,
+        transitionId: 't',
+      }),
+    })
+    const half = Math.floor(text.length / 2)
+    const first = chunk(0, text.slice(0, half))
+    const second = chunk(1, text.slice(half))
+    expect(read([sent('a', add(3, 'Leo')), first])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo')), first, second])).toBe(true)
+    expect(read([sent('a', add(3, 'Leo')), second, first])).toBe(false)
+  })
+  it('is what the searches of lists that may hold only matching rows wait for', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(script).toContain(
+      'searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0',
+    )
+    expect(script).toContain('query: MENTION_PEOPLE_QUERY,')
   })
 })
 
