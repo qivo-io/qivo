@@ -2076,7 +2076,9 @@ export async function typeSearch(field, text, what) {
 }
 
 /** The NOTE a step prints when a search field lost its typed text
- *  (typeSearch). The WebKit workflow's summary lists these lines. */
+ *  (typeSearch), or when a guarded press showed no sign of taking and the
+ *  step pressed again (pressFor). The WebKit workflow's summary lists these
+ *  lines. */
 export const SEARCH_LOST = 'search-lost'
 
 /** Searches Settings › Users for `text` and waits for the page the
@@ -2119,25 +2121,77 @@ export const listAnswers = (texts, text) => {
   return texts.length > 0 && texts.every((row) => words.every((word) => folded(row).includes(word)))
 }
 
-/** Types `text` into an open picker's `search` and presses `choice` once
- *  `rows`, the list's choices, show the search's answer (listAnswers). A
- *  picker opens on its first people or projects and replaces them with the
- *  answer once typing has rested, emptying the list in between, and a press
- *  that lands on a row as it goes is lost. Chromium and Firefox press
- *  before the list changes. Playwright's WebKit presses about as late as
- *  the search rests, and lost such presses. A list whose rows are off until
- *  the search is answered, such as the Board's Assignee menu, needs no such
- *  wait, since a press waits for its row to be on. */
-async function pressSearched(search, text, rows, choice) {
-  const holds = await typeSearch(search, text, "a picker's search")
+/** Types `text` into `search`, the search field of an open picker or of a
+ *  list on a page, and waits until `rows`, the list's choices, show the
+ *  search's answer (listAnswers). Such a list keeps the rows of the text
+ *  before until typing has rested, then replaces them with the answer,
+ *  emptying the list in between, and a press that lands on a row as it
+ *  goes is lost. Chromium and Firefox press before the list changes.
+ *  Playwright's WebKit presses about as late as the search rests, and lost
+ *  such presses. A list whose rows are off until the search is answered,
+ *  such as the Board's Assignee menu, needs no such wait, since a press
+ *  waits for its row to be on. `what` names the field in a NOTE and in the
+ *  failure. */
+async function searchAnswered(search, text, rows, what = "a picker's search") {
+  const holds = await typeSearch(search, text, what)
   expect(
     await until(
       async () => (await holds()) && listAnswers(await rows.allTextContents(), text),
       30_000,
     ),
-    `the picker's list did not settle on its search for ${text}`,
+    `${what} did not settle on its answer for ${text}`,
   )
+}
+
+/** Types `text` into an open picker's `search` and presses `choice` once
+ *  `rows`, the list's choices, show the search's answer (searchAnswered). */
+async function pressSearched(search, text, rows, choice) {
+  await searchAnswered(search, text, rows)
   await choice.click({ timeout: 30_000 })
+}
+
+/** How long a guarded press waits for its sign before it may press again
+ *  (pressFor). */
+export const PRESS_AGAIN_MS = 5_000
+
+/** The most presses one guarded press makes (pressFor). */
+export const PRESS_TRIES = 3
+
+/** Presses `target` and waits until `done` answers true, within `ms` of
+ *  the first press, else fails the step with `what`, a line that says what
+ *  is still missing. A press can be lost on a page that redraws under it,
+ *  as a list does when a search's answer replaces its rows
+ *  (searchAnswered), and a lost press leaves nothing to wait for. When
+ *  `done` has not come `again` ms after a press and `lost` answers true, it
+ *  presses again, at most PRESS_TRIES presses in all, and says so in a
+ *  NOTE (SEARCH_LOST). `lost` must answer true only while the page shows
+ *  no sign that the press reached it, so a press that took is never
+ *  repeated and a toggle it set is never set back. Without `lost`, `done`
+ *  must be that sign, shown as soon as a press takes, and a press counts
+ *  as lost while `done` does not answer. Fails also when a press finds no
+ *  `target` within 30 s. */
+export async function pressFor(
+  target,
+  done,
+  what,
+  { lost = null, ms = 30_000, again = PRESS_AGAIN_MS } = {},
+) {
+  const end = Date.now() + ms
+  for (let presses = 1; ; presses++) {
+    await target.click({ timeout: 30_000 })
+    const next = Date.now() + again
+    for (;;) {
+      if (await done()) return
+      expect(Date.now() < end, presses > 1 ? `${what}, after ${presses} presses` : what)
+      if (presses < PRESS_TRIES && Date.now() >= next && (lost === null || (await lost()))) break
+      await sleep(500)
+    }
+    say(
+      'NOTE',
+      SEARCH_LOST,
+      `${what} after a press, which left no sign, and the step pressed again`,
+    )
+  }
 }
 
 /** Adds an agent with the given role on the Users page and returns its id
@@ -2481,11 +2535,14 @@ async function openDeletedItems(kind, search) {
   const org = await evaluate(app, () => window.PLANNER.homeOrg)
   const trigger = app.locator(`[${m.scope}]`)
   await settledPicker(trigger)
-  await trigger.click()
   const all = app.locator(`[data-project-pick-all="${org}"]`)
-  await all.waitFor({ timeout: 30_000 })
-  if ((await all.getAttribute('aria-checked')) !== 'true') await all.click()
   const field = app.locator('[data-project-picker-search]')
+  // a press on the trigger can be lost as the page redraws, and the picker
+  // then stays shut, so the trigger is pressed again only while it is
+  await pressFor(trigger, () => all.isVisible(), 'the scope picker shows no All projects row', {
+    lost: async () => (await field.count()) === 0,
+  })
+  if ((await all.getAttribute('aria-checked')) !== 'true') await all.click()
   if ((await field.count()) > 0) await field.press('Escape')
   await field.waitFor({ state: 'detached', timeout: 10_000 })
   await app.getByRole('radio', { name: kind, exact: true }).click()
@@ -7252,11 +7309,20 @@ async function ownerPickersCheck() {
     await card.locator(`[data-sync-mention="${t.key}"]`).click()
     const mention = app.locator(`[data-sync-mention-window="${t.key}"]`)
     await mention.waitFor({ timeout: 20_000 })
-    await mention.locator('[data-sync-mention-search]').fill('Leo')
+    // the window lists its first people until the search rests, so Leo is
+    // pressed in the answer, where his row shows the choice at once
+    await searchAnswered(
+      mention.locator('[data-sync-mention-search]'),
+      'Leo',
+      mention.locator('[data-sync-mention-person]'),
+      "the Mention window's search",
+    )
     const person = mention.locator(`[data-sync-mention-person="${leo.id}"]`)
-    await person.waitFor({ timeout: 30_000 })
-    await person.click()
-    eq(await person.getAttribute('aria-pressed'), 'true', 'Leo is not chosen')
+    await pressFor(
+      person,
+      async () => (await person.getAttribute('aria-pressed')) === 'true',
+      'Leo is not chosen',
+    )
     const note = `${run.tag} never sent`
     await mention.locator('textarea[aria-label="Note"]').fill(note)
     // Leo loses sight of the task before Send. The lead goes back to Nora,
@@ -7617,6 +7683,7 @@ export const INBOX_LIST_MARKS = {
   crumb: 'data-msg-crumb',
   until: 'data-msg-until',
   search: 'data-inbox-search',
+  pageState: 'data-inbox-page-state',
   filter: 'data-inbox-filter',
   showSnoozed: 'data-inbox-show-snoozed',
   menu: 'data-msg-menu',
@@ -7648,8 +7715,10 @@ export function sentMutation(text, udfPath) {
  *  REST, a fresh load of /app/~/inbox must show t0's row, by its task and
  *  organization, on the first page with M's name and then Alpha's in its
  *  crumb, having subscribed the page. A search by t0's key, and then by M's
- *  name, must subscribe the page with that search and hold t0's row. From the row's menu it sends Mark as read
- *  (messages.readItem with t0's organization, task and a cutoff), Mark as
+ *  name, must subscribe the page with that search and hold t0's row. Once
+ *  the search is cleared and the page read again without it, from the
+ *  row's menu it sends Mark as read (messages.readItem with t0's
+ *  organization, task and a cutoff), Mark as
  *  unread (messages.unreadItem), Snooze for an hour (messages.snoozeItem
  *  with a time), after which the row leaves, Show snoozed brings it back
  *  with its return time, and Unsnooze (messages.snoozeItem with null).
@@ -7697,7 +7766,18 @@ async function inboxListCheck() {
         )
         await row.waitFor({ timeout: 60_000 })
       }
+      // the list shows the searched page until the cleared text rests and
+      // then reads its page afresh, so the menus below, which press t0's
+      // row, wait for that page's answer
+      const unsearched = () => pages().filter((args) => args.search === undefined).length
+      const before = unsearched()
       await search.fill('')
+      expect(
+        await until(async () => unsearched() > before, 30_000),
+        'the Inbox did not read its page again once the search was cleared',
+      )
+      await app.locator(`[${m.pageState}="ok"]`).waitFor({ timeout: 60_000 })
+      await row.waitFor({ timeout: 60_000 })
       /** The arguments of the first `udfPath` sent after frame `from`. */
       const wrote = async (udfPath, from, what) => {
         let args = null
@@ -9294,7 +9374,14 @@ async function settingsTeamsCheck() {
         waitUntil: 'domcontentloaded',
       })
       await app.locator('[data-org-teams][data-teams-state="ok"]').waitFor({ timeout: 60_000 })
-      await app.locator('[data-teams-search]').fill(name)
+      // the list keeps its first teams until the search rests, and the
+      // presses that follow land in the answer
+      await searchAnswered(
+        app.locator('[data-teams-search]'),
+        name,
+        app.locator('[data-org-teams] [data-team-row]'),
+        'the Teams search',
+      )
       const row = app.locator(`[data-org-teams] [data-team-row="${team.id}"]`)
       expect(
         await until(async () => (await row.count()) === 1),
@@ -9303,9 +9390,14 @@ async function settingsTeamsCheck() {
       eq(await row.locator('[data-team-kept]').count(), 0, 'kept rows')
       return row
     }
-    /** The run's team's page, opened from its row in the list. */
+    /** The run's team's page, opened from its row in the list. The page
+     *  carries its state mark as soon as a press opens it. */
     const opened = async (row) => {
-      await row.locator('[data-team-open]').click()
+      await pressFor(
+        row.locator('[data-team-open]'),
+        async () => (await app.locator('[data-team-settings-state]').count()) > 0,
+        "the team's page did not open from its row",
+      )
       await app.locator('[data-team-settings-state="ok"]').waitFor({ timeout: 60_000 })
       await app
         .locator('[data-team-members][data-team-members-state="ok"]')
@@ -10453,6 +10545,7 @@ export const SETTINGS_PROJECTS_STEP = 'ui/settings-projects'
  *  (src/panels/settings/ProjectLists.tsx). */
 export const SETTINGS_PROJECTS_MARKS = {
   search: 'data-settings-projects-search',
+  list: 'data-settings-projects',
   row: 'data-project-row',
   subList: 'data-subproject-list',
   subRow: 'data-subproject-row',
@@ -10469,9 +10562,10 @@ export const SETTINGS_PROJECTS_MARKS = {
  *  (projectSettings.projects, subProjects, archived and
  *  archivedSubProjects): the run makes `<tag> Lists` over REST with two
  *  sub-projects, `<tag> Lists A` and `<tag> Lists B`. In the app as Nora it
- *  searches Settings › Projects for the run's tag, waits for the project's
- *  row, opens it and waits for both sub-projects' rows. Over REST it
- *  archives B alone and then the project, which carries A. In Archived
+ *  searches Settings › Projects for the run's tag, waits for the search's
+ *  answer (searchAnswered) and the project's row, opens it (pressFor) and
+ *  waits for both sub-projects' rows. Over REST it archives B alone and
+ *  then the project, which carries A. In Archived
  *  projects it searches the tag, waits for the project's entry with A and B
  *  beneath it as search hits, shows its sub-projects and checks A solid
  *  (archived with it) and B dashed (archived on its own), and presses
@@ -10497,10 +10591,22 @@ async function settingsProjectsCheck() {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
       waitUntil: 'domcontentloaded',
     })
-    await app.locator(`[${m.search}]`).fill(run.tag)
+    // the list keeps its first projects until the search rests, so the
+    // project is opened in the answer, where its row shows it open at once
+    await searchAnswered(
+      app.locator(`[${m.search}]`),
+      run.tag,
+      app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`),
+      'the Settings › Projects search',
+    )
     const row = app.locator(`[${m.row}="${lists.id}"]`)
     await row.waitFor({ timeout: 60_000 })
-    await row.locator('button').first().click()
+    const open = row.locator('button').first()
+    await pressFor(
+      open,
+      async () => (await open.getAttribute('aria-expanded')) === 'true',
+      `${lists.name} is not open in Settings › Projects`,
+    )
     for (const sub of [a, b])
       await app
         .locator(`[${m.subList}="${lists.id}"] [${m.subRow}="${sub.id}"]`)
@@ -10789,17 +10895,19 @@ export function atProject(pathname, num) {
  *  and its sub-projects Alpha and Zulu, so the step adds no project the
  *  later steps' tag searches would list. In the app it opens All projects
  *  from the sidebar, waits for the browse list to answer with a row,
- *  searches the run's tag and waits for M's row and Alpha's, which sorts
- *  before M by name and so comes first while M is no favorite. It stars M
- *  and waits for the server's answer to put M under Favorites, ahead of
- *  Alpha under Other projects (directoryGroups). It expands M and waits
- *  for Alpha and Zulu from projectNav.children, pressing Load more while
+ *  searches the run's tag and waits for the search's answer (searchAnswered)
+ *  with M's row and Alpha's, which sorts before M by name and so comes
+ *  first while M is no favorite. It stars M (pressFor, until the star shows
+ *  the press) and waits for the server's answer to put M under Favorites,
+ *  ahead of Alpha under Other projects (directoryGroups). It expands M and
+ *  waits for Alpha and Zulu from projectNav.children, pressing Load more while
  *  one is still to come, opens Zulu from that list, pressing again while
  *  the directory says the workspace has not loaded it yet, and waits for
  *  Zulu's address (`/p/` and its number) and for the header to name Zulu.
- *  Back in All projects it searches M's name, unstars M and waits for the
- *  Favorites heading to go; a failure unstars it through the store, so no
- *  later step meets the run's project as a favorite. It reads none of
+ *  Back in All projects it searches M's name, waits for the answer, unstars
+ *  M the same way and waits for the Favorites heading to go; a failure
+ *  unstars it through the store, so no later step meets the run's project
+ *  as a favorite. It reads none of
  *  Nora's own favorites, which a deployment seeded before dataset version
  *  10 does not hold, and must run before the run archives M. It needs a
  *  backend from v0.1.126 on. */
@@ -10826,11 +10934,26 @@ async function projectDirectoryCheck() {
     const favorites = () => app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()
     /** The ids of the rows the page shows, in order. */
     const ids = (shown) => shown.flatMap((item) => ('row' in item ? [item.row] : []))
+    // the directory keeps the rows it showed until the search rests, so
+    // what the step reads and presses after a search is the answer
     const search = async (text) => {
-      await app.locator(`[${m.search}]`).fill(text)
+      await searchAnswered(
+        app.locator(`[${m.search}]`),
+        text,
+        app.locator(`[${m.page}] [${m.row}]`),
+        'the directory search',
+      )
       await row(M).waitFor({ timeout: 60_000 })
     }
     const starOf = () => row(M).locator(`[${m.star}]`)
+    /** Presses M's star until it shows `on`, which a press that took shows
+     *  at once, while the server's answer is on its way. */
+    const pressStar = (on, what) =>
+      pressFor(
+        starOf(),
+        async () => (await starOf().getAttribute('aria-pressed')) === String(on),
+        what,
+      )
     let starred = false
     try {
       // the sidebar shows over the workspace, not over Settings
@@ -10852,8 +10975,8 @@ async function projectDirectoryCheck() {
       )
       // the star, and the server's answer that puts M under Favorites,
       // ahead of Alpha under Other projects
-      await starOf().click()
       starred = true
+      await pressStar(true, "M's star is not on")
       expect(
         await until(async () => {
           const shown = await sequence()
@@ -10897,7 +11020,7 @@ async function projectDirectoryCheck() {
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
       await search(M.name)
-      await starOf().click()
+      await pressStar(false, "M's star is still on")
       expect(
         await until(
           async () =>

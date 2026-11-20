@@ -132,6 +132,8 @@ import {
   PHONE_SELECTS_STEP,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PRESS_AGAIN_MS,
+  PRESS_TRIES,
   PROJECT_BY_IDS_STEP,
   PROJECT_DETAIL_REFUSALS,
   PROJECT_DIALOGS_EXPECTED,
@@ -152,6 +154,7 @@ import {
   parseArgs,
   peoplePagesMax,
   phoneSelectPages,
+  pressFor,
   pressSettled,
   projectDeleteRoute,
   projectPagesMax,
@@ -2667,7 +2670,7 @@ describe('a search that lost its typed text', () => {
       seen.done()
     }
   })
-  it('guards the Users search, the searched pickers and the Deleted items search, and the workflow lists its NOTE', () => {
+  it('guards the Users search, the searched pickers and lists and the Deleted items search, and the workflow lists its NOTE', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(SEARCH_LOST).toBe('search-lost')
     // Deleted items types twice, each time right after the page opened
@@ -2675,7 +2678,8 @@ describe('a search that lost its typed text', () => {
     expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
-      'typeSearch(search, text, "a picker\'s search")',
+      'async function searchAnswered(search, text, rows, what = "a picker\'s search")',
+      'typeSearch(search, text, what)',
       'words, "Deleted items\' search")',
     ])
       expect(script, use).toContain(use)
@@ -2684,6 +2688,91 @@ describe('a search that lost its typed text', () => {
       'utf8',
     )
     expect(workflow).toContain(`^NOTE +(browser|${SEARCH_LOST})`)
+  })
+})
+
+describe('a guarded press', () => {
+  /** A stand-in target whose presses `takes` lets reach the page, and a
+   *  page that shows `state` once a press reached it. */
+  const targetOf = (takes) => {
+    const page = { presses: 0, state: false }
+    return {
+      page,
+      click: async () => {
+        page.presses++
+        if (takes(page.presses)) page.state = true
+      },
+    }
+  }
+  const quick = { again: 0, ms: 1500 }
+  let lines
+  let spy
+  beforeEach(() => {
+    lines = []
+    spy = vi.spyOn(console, 'log').mockImplementation((line) => lines.push(String(line)))
+  })
+  afterEach(() => spy.mockRestore())
+
+  it('presses once when the press takes', async () => {
+    const target = targetOf(() => true)
+    await pressFor(target, async () => target.page.state, 'Leo is not chosen', quick)
+    expect(target.page.presses).toBe(1)
+    expect(lines).toEqual([])
+    expect(PRESS_AGAIN_MS).toBe(5_000)
+  })
+  it('presses again while a press left no sign, and says so each time', async () => {
+    const target = targetOf((n) => n === 3)
+    await pressFor(target, async () => target.page.state, 'Leo is not chosen', quick)
+    expect(target.page.presses).toBe(3)
+    expect(lines).toEqual(
+      Array(2).fill(
+        `NOTE ${SEARCH_LOST}  Leo is not chosen after a press, which left no sign, and the step pressed again`,
+      ),
+    )
+  })
+  it('fails after its last press when no press shows', async () => {
+    const target = targetOf(() => false)
+    await expect(
+      pressFor(target, async () => target.page.state, 'Leo is not chosen', quick),
+    ).rejects.toThrow(`Leo is not chosen, after ${PRESS_TRIES} presses`)
+    expect(target.page.presses).toBe(PRESS_TRIES)
+  })
+  it('never presses again once the page shows the press, and fails when the result never comes', async () => {
+    const target = targetOf(() => true)
+    let reads = 0
+    // the press took at once, and its result shows on the third read
+    const slow = async () => ++reads >= 3
+    await pressFor(target, slow, 'M stays a favorite', { ...quick, lost: async () => false })
+    expect(target.page.presses).toBe(1)
+    await expect(
+      pressFor(target, async () => false, 'M stays a favorite', {
+        ...quick,
+        lost: async () => !target.page.state,
+      }),
+    ).rejects.toThrow(/^M stays a favorite$/)
+    expect(target.page.presses).toBe(2)
+    expect(lines).toEqual([])
+  })
+  it('guards the presses that follow a search or a redraw, each on its own sign', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    for (const what of [
+      "'Leo is not chosen'",
+      "'the scope picker shows no All projects row'",
+      `"the team's page did not open from its row"`,
+      `"M's star is not on"`,
+      `"M's star is still on"`,
+      'name} is not open in Settings › Projects`',
+    ])
+      expect(script, what).toContain(what)
+    for (const search of [
+      `"the Mention window's search"`,
+      "'the Teams search'",
+      "'the directory search'",
+      "'the Settings › Projects search'",
+    ])
+      expect(script, search).toContain(search)
+    // the Inbox presses t0's row once its page is read again without the search
+    expect(script).toContain('await until(async () => unsearched() > before, 30_000)')
   })
 })
 
