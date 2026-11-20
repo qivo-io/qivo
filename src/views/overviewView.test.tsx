@@ -534,7 +534,6 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
       ...(taskRow(board.snapshot, 'far', 'todo', 90) as unknown as OverviewRow),
       paused: true,
       has_subtasks: false,
-      has_hidden_subtasks: false,
     }
     Reflect.deleteProperty(far, 'description')
     board.server.overview.edit = (query, answer) =>

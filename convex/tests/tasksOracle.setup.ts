@@ -5,10 +5,9 @@
  * one of its windows together: the active tasks of the seat's organization
  * that the seat is shown (lib/workingSet.ts, lib/access.ts Access.holds),
  * each with its text from its description row, its parent's id only when
- * the seat is shown the parent (parentLink), has_subtasks from its active
- * subtasks (lib/liveTasks.ts countsAsSubtask) and has_hidden_subtasks
- * false; the links
- * from each shown task as source whose target the seat is shown; the label
+ * the seat is shown the parent (parentLink) and has_subtasks from its
+ * active subtasks (lib/liveTasks.ts countsAsSubtask); the links from each
+ * shown task as source whose target the seat is shown; the label
  * assignments, attachment rows and the seat's follows of the shown tasks;
  * and the anonymized load rows of the active tasks the seat is not shown,
  * every such row for staff and only the seat's own for anyone else
@@ -135,7 +134,6 @@ export async function tasksOracle(ctx: QueryCtx, me: Doc<'profiles'>): Promise<T
       description: await descriptionOf(ctx.db, task),
       ...parentLink(task, ownParent),
       has_subtasks: (kids.get(task.id) ?? []).length > 0,
-      has_hidden_subtasks: false,
     })
     for (const row of kept(
       await ctx.db

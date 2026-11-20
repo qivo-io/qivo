@@ -127,8 +127,6 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   if (labelName)
     snap.labels.push({

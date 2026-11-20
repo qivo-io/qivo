@@ -917,8 +917,6 @@ describe('Milestones', { timeout: 30_000 }, () => {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     // a past one and one of this week, whatever the day the test runs on
     snap.milestones.push(

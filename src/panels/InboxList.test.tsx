@@ -134,8 +134,6 @@ function group(
     paused: false,
     created_at: minute(n),
     updated_at: minute(n),
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   const message: Row<'messages'> = {
     id: `message-${org}-${uuid}`,

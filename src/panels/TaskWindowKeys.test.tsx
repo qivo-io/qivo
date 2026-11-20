@@ -54,8 +54,6 @@ async function load(description = '') {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.onUpdate.mockImplementation((ref, _args, next) => {
     if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))

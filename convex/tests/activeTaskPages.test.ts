@@ -479,7 +479,7 @@ describe('visibility', () => {
     const shape = async (fx: Fx) => {
       const got = await restPages(fx.t, { callerId: fx.agent.id, access: 'read', limit: '200' })
       return {
-        rows: got.rows.map((row) => [row.title, row.is_group, row.has_hidden_parent, row.progress]),
+        rows: got.rows.map((row) => [row.title, row.is_group, row.parent_id, row.progress]),
         sizes: got.sizes,
       }
     }

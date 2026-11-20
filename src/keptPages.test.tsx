@@ -150,15 +150,11 @@ function windowTask(snap: Snapshot, ref: string) {
   if (!row) return null
   const subtasks = snap.issues
     .filter((it) => it.parent_id === row.id)
-    .map(
-      ({
-        description: _d,
-        parent_id: _p,
-        has_hidden_parent: _hp,
-        has_hidden_subtasks: _hs,
-        ...short
-      }) => ({ ...short, has_subtasks: false, level: 'lead' }),
-    )
+    .map(({ description: _d, parent_id: _p, ...short }) => ({
+      ...short,
+      has_subtasks: false,
+      level: 'lead',
+    }))
   return {
     state: 'ok',
     task: { ...row, has_subtasks: subtasks.length > 0 },

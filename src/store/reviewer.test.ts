@@ -81,8 +81,6 @@ function fixture() {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...extra,
   })
   const a = task('A', {

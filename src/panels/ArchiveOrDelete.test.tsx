@@ -93,8 +93,6 @@ function fixture() {
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...extra,
   })
   next.issues.push(
@@ -573,8 +571,6 @@ describe('Archive or delete a task the window shows from its own answer', () => 
         ...row('far', 40, { status: 'progress' }),
         description: '',
         has_subtasks: true,
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
       },
       level: 'lead',
       labels: [],

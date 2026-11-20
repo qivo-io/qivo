@@ -158,7 +158,6 @@ describe('a write from the task window’s own answer', () => {
     const child = await plant()
     const answer = await answerOf(fx, fx.guest, child.id)
     expect(answer.task.parent_id).toBe(parent.id)
-    expect(answer.task.has_hidden_parent).toBe(false)
     expect(answer.parent?.id).toBe(parent.id)
     expect(expectedFrom(answer.task, ['parent_id'])).toEqual({ parent_id: parent.id })
     await detach(child.id, answer.task)
@@ -295,7 +294,7 @@ describe('a write from the task window’s own answer', () => {
     expect((await stored(fx, task.id))?.title).toBe('Planted task')
   })
 
-  it('answers a list that is not whole as hidden subtasks with no subtask counted, which the app takes for a group', async () => {
+  it('answers a list that is not whole with no subtask counted, which the app takes for a group', async () => {
     const fx = await setup()
     const root = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: root.id })
@@ -303,7 +302,6 @@ describe('a write from the task window’s own answer', () => {
     const answer = await answerOf(fx, fx.user, root.id)
     expect(answer.subtasks).toEqual({ rows: [], complete: false })
     expect(answer.task.has_subtasks).toBe(false)
-    expect(answer.task.has_hidden_subtasks).toBe(true)
     // and the server still refuses a group's dates and own hours
     Object.assign(TASK_WINDOW, structuredClone(DEFAULT_TASK_WINDOW))
     await expectRefusal(

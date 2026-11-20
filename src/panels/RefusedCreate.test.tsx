@@ -282,8 +282,6 @@ describe('a new task the server refuses', { timeout: 30_000 }, () => {
           status_at: at,
           created_at: at,
           updated_at: at,
-          has_hidden_subtasks: false,
-          has_hidden_parent: false,
         },
       ])
       refuse(new ConvexError({ code: 'forbidden', message: 'no write access to this project' }))

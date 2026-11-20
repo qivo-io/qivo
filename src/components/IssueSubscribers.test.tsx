@@ -105,8 +105,6 @@ beforeEach(async () => {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
@@ -212,8 +210,6 @@ async function showFromAnswer() {
     created_at: NOW,
     updated_at: NOW,
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   }
   await act(async () => {
     windowRead?.({

@@ -166,8 +166,6 @@ const viewRow = (snap: Whole, id: string, project: string): ViewRow => ({
   created_at: NOW,
   updated_at: NOW,
   has_subtasks: false,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
 })
 
 describe('the project lookups', () => {

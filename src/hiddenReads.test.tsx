@@ -162,8 +162,6 @@ beforeEach(async () => {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   direct = new Map()
   const { createNotificationsStandIn } = await import('./store/notificationsStandIn.setup')

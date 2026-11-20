@@ -148,8 +148,6 @@ function fixture(me = 'Admin'): Snapshot {
         paused: false,
         created_at: NOW,
         updated_at: NOW,
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
       },
     ],
     teams,

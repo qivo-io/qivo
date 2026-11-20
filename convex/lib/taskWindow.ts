@@ -109,16 +109,16 @@ export const TASK_WINDOW = {
 }
 
 /** A task in one of the window's lists: the task's app row (TaskRow,
- * lib/workspaceParts.ts taskFields) without its text, parent and hidden
- * facts, with whether it is a group (an active subtask makes it one,
+ * lib/workspaceParts.ts taskFields) without its text and parent, with
+ * whether it is a group (an active subtask makes it one,
  * lib/liveTasks.ts countsAsSubtask) and the caller's level on its project.
  * Status, owners, dates, remaining hours and pause stay, because the window
  * computes a group's progress, remaining total and plan span from its
  * subtasks. */
-export type ShortRow = Omit<
-  TaskRow,
-  'description' | 'parent_id' | 'has_hidden_parent' | 'has_hidden_subtasks' | 'has_subtasks'
-> & { has_subtasks: boolean; level: AccessLevel }
+export type ShortRow = Omit<TaskRow, 'description' | 'parent_id' | 'has_subtasks'> & {
+  has_subtasks: boolean
+  level: AccessLevel
+}
 
 /** What a read answers for a task the caller may not open, alike for every
  * reason. */
@@ -509,9 +509,7 @@ async function shownParent(ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'iss
  *   lib/workspaceParts.ts taskFields): its text from its description row
  *   (model/descriptions.ts descriptionOf, as every reader takes it since
  *   the second release of the move), its parent's id only when the window
- *   shows the parent (shownParent), has_subtasks, has_hidden_parent,
- *   always false, and has_hidden_subtasks,
- *   true only while the subtask list is incomplete. `level` is the caller's
+ *   shows the parent (shownParent) and has_subtasks. `level` is the caller's
  *   level on its project, `labels` its label rows, `follow` the caller's
  *   follow or null, and `parent` that parent as a short row, else null.
  *   `subtasks.rows` are its active subtasks, in its own sub-project, as
@@ -541,13 +539,12 @@ async function shownParent(ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'iss
  * at once: the status control, the owner rule and the remaining total
  * depend on whether the task is a group. Past TASK_WINDOW, or at a subtask
  * whose level a bound stopped, the subtasks answer `complete: false` with
- * the rows read before it; has_subtasks then says whether one read counts,
- * and has_hidden_subtasks is true, so the window can say its completion is
- * unknown. A subtask whose own has_subtasks is
- * true is a group stored before the rule of one level, and the answer holds
- * none of its subtasks, so the app must treat a remaining total or progress
- * that needs its leaves as unknown (src/store/planner.ts remainingOf and
- * progressOf walk every descendant).
+ * the rows read before it, so the window can say its completion is
+ * unknown, and has_subtasks says whether one read counts. A subtask whose
+ * own has_subtasks is true is a group stored before the rule of one level,
+ * and the answer holds none of its subtasks, so the app must treat a
+ * remaining total or progress that needs its leaves as unknown
+ * (src/store/planner.ts remainingOf and progressOf walk every descendant).
  *
  * The labels, of an active or archived task, stop at TASK_WINDOW.rows. An
  * archived answer reads one description and those label rows besides the
@@ -620,8 +617,6 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
     description,
     ...parentLink(task, parent),
     has_subtasks: kids.counting.length > 0,
-    // says only that the list is incomplete; no subtask is hidden
-    has_hidden_subtasks: !kids.complete,
   }
   return {
     state: 'ok' as const,

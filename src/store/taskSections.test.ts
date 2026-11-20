@@ -92,20 +92,12 @@ describe("the task window's sections in the store", () => {
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...extra,
   })
   /* Workspace task `row` as a short row of an answer (convex/lib/taskWindow.ts
      ShortRow). */
   const short = (row: Snapshot['issues'][number], has_subtasks = false) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_subtasks: _hidden,
-      has_hidden_parent: _hiddenParent,
-      ...rest
-    } = row
+    const { description: _text, parent_id: _parent, ...rest } = row
     return { ...rest, has_subtasks, level: 'lead' }
   }
   const row = (id: string) => {
@@ -114,9 +106,9 @@ describe("the task window's sections in the store", () => {
     return found
   }
   /* The task answer of task-a with these subtasks. */
-  const taskAnswer = (kids: unknown[], complete = true, hidden = !complete) => ({
+  const taskAnswer = (kids: unknown[], complete = true) => ({
     state: 'ok',
-    task: { ...row('task-a'), has_subtasks: kids.length > 0, has_hidden_subtasks: hidden },
+    task: { ...row('task-a'), has_subtasks: kids.length > 0 },
     level: 'lead',
     labels: [],
     follow: null,

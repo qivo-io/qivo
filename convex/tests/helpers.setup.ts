@@ -1427,7 +1427,7 @@ export function appLoadRows(snap: WholeTasks, gone: ReadonlySet<string> = new Se
   const shown = snap.issues.flatMap((task) => {
     const project = projects.get(task.project_id)
     const row = loadRowFor(task, {
-      isGroup: parents.has(task.id) || task.has_hidden_subtasks,
+      isGroup: parents.has(task.id),
       projectLive: project !== undefined && project.archived_at === undefined,
       ownerInOrg: (id) => !gone.has(id),
       visible: true,
@@ -1464,7 +1464,6 @@ export function appPausedRows(snap: WholeTasks): AppPausedRow[] {
     if (
       !task.paused ||
       parents.has(task.id) ||
-      task.has_hidden_subtasks ||
       task.status === 'done' ||
       task.archived_at !== undefined ||
       project === undefined ||

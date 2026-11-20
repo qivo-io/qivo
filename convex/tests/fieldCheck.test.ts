@@ -272,27 +272,18 @@ describe('entering Review', () => {
 })
 
 describe('task parents', () => {
-  it('compares the stored parent, read by parent_id alone or in its pair, and matches none read hidden', async () => {
+  it('compares the stored parent read as parent_id, and refuses has_hidden_parent beside it', async () => {
     const fx = await setup()
     const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const plant = () =>
       plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: parent.id })
-    // the parent read by id matches, with has_hidden_parent or without it
-    for (const seen of [
-      { parent_id: parent.id },
-      { parent_id: parent.id, has_hidden_parent: false },
-    ]) {
-      const child = await plant()
-      await edit(fx, fx.guest, child.id, { parent_id: other.id }, seen)
-      expect((await task(fx.t, child.id))?.parent_id).toBe(other.id)
-    }
-    // no parent, a parent read hidden and another parent do not
-    for (const seen of [
-      { parent_id: null },
-      { parent_id: null, has_hidden_parent: true },
-      { parent_id: other.id },
-    ]) {
+    // the parent read by id matches
+    const saved = await plant()
+    await edit(fx, fx.guest, saved.id, { parent_id: other.id }, { parent_id: parent.id })
+    expect((await task(fx.t, saved.id))?.parent_id).toBe(other.id)
+    // no parent and another parent do not
+    for (const seen of [{ parent_id: null }, { parent_id: other.id }]) {
       const child = await plant()
       const data = await fieldChanged(edit(fx, fx.guest, child.id, { parent_id: null }, seen))
       expect(data.changes).toEqual([
@@ -300,6 +291,19 @@ describe('task parents', () => {
       ])
       expect((await task(fx.t, child.id))?.parent_id).toBe(parent.id)
     }
+    // has_hidden_parent is no key of expected, so the argument validator
+    // refuses the edit before it runs
+    const refused = await plant()
+    await expect(
+      edit(
+        fx,
+        fx.guest,
+        refused.id,
+        { parent_id: other.id },
+        { parent_id: parent.id, has_hidden_parent: false },
+      ),
+    ).rejects.toThrow(/`has_hidden_parent`/)
+    expect((await task(fx.t, refused.id))?.parent_id).toBe(parent.id)
   })
 })
 

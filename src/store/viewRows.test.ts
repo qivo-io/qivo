@@ -67,8 +67,6 @@ function row(id: string, num: number, over: Partial<ViewRow> = {}): ViewRow {
     created_at: AT,
     updated_at: AT,
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...over,
   }
 }
@@ -101,8 +99,6 @@ const held = (id: string, num: number, over: Partial<Snapshot['issues'][number]>
   created_at: AT,
   updated_at: AT,
   paused: false,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...over,
 })
 
@@ -510,7 +506,7 @@ describe('the delays of tasks only a view brings', () => {
     const { span: _span, group_done: _done, ...fields } = row
     read({
       state: 'ok',
-      task: { ...fields, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+      task: { ...fields, description: '' },
       level: 'viewer',
       labels: [],
       follow: null,
@@ -566,15 +562,14 @@ describe('the delays of tasks only a view brings', () => {
       start_week: weekToISO(TODAY_WEEK - 2),
       end_week: weekToISO(TODAY_WEEK - 1),
     })
-    const { has_hidden_subtasks: _h, has_hidden_parent: _p, ...short } = kid
     read({
       state: 'ok',
-      task: { ...fields, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+      task: { ...fields, description: '' },
       level: 'user',
       labels: [],
       follow: null,
       parent: null,
-      subtasks: { rows: [{ ...short, has_subtasks: true, level: 'user' }], complete: true },
+      subtasks: { rows: [{ ...kid, has_subtasks: true, level: 'user' }], complete: true },
     })
     await turn()
     expect(P.taskDetail('grp')?.datesKnown).toBe(false)
@@ -609,18 +604,12 @@ describe('the delays of tasks only a view brings', () => {
     const read = taskReads.get('grp')
     if (!read) throw new Error('no task read')
     const { span: _span, group_done: _done, ...fields } = group
-    const { has_hidden_subtasks: _h, has_hidden_parent: _p, ...kid } = row('kid', 21)
+    const kid = row('kid', 21)
     /** The window's answer, the group due on `due`. */
     const windowRead = async (due: string) => {
       read({
         state: 'ok',
-        task: {
-          ...fields,
-          due_date: due,
-          description: '',
-          has_hidden_subtasks: false,
-          has_hidden_parent: false,
-        },
+        task: { ...fields, due_date: due, description: '' },
         level: 'user',
         labels: [],
         follow: null,

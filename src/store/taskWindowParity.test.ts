@@ -66,8 +66,6 @@ async function wholeWith(t: T, person: Doc<'profiles'>) {
         ...taskFields(task),
         description: await descriptionOf(ctx.db, task),
         has_subtasks: kid !== null,
-        has_hidden_parent: false,
-        has_hidden_subtasks: false,
       })
     }
     return { rows, labels }
@@ -269,23 +267,15 @@ describe('the task window stand-in', () => {
       ...taskFields(task),
       ...(task.parent_id ? { parent_id: task.parent_id } : {}),
       description: '',
-      has_hidden_parent: false,
-      has_hidden_subtasks: false,
     })
     const leaky = {
       ...whole,
       projects: projects.map(({ _id, _creationTime, ...row }) => row),
-      // the group's row as a fixture writes it, with no hidden fact, so
-      // the stand-in must find the hidden subtask itself
-      // and the orphan's with its hidden parent's id, so the stand-in must
+      // the orphan's row with its hidden parent's id, so the stand-in must
       // leave that id out itself
       issues: [
         ...whole.issues.map((row) =>
-          row.id === group.id
-            ? { ...row, has_hidden_subtasks: false }
-            : row.id === orphan.id
-              ? { ...row, parent_id: hiddenParent.id, has_hidden_parent: false }
-              : row,
+          row.id === orphan.id ? { ...row, parent_id: hiddenParent.id } : row,
         ),
         hiddenRow(secret),
         hiddenRow(hiddenParent),
@@ -319,6 +309,6 @@ describe('the task window stand-in', () => {
     }
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: group.id }),
-    ).toMatchObject({ task: { has_subtasks: true, has_hidden_subtasks: false } })
+    ).toMatchObject({ task: { has_subtasks: true } })
   })
 })

@@ -104,8 +104,6 @@ async function loadingInbox(
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   // a task in the first task window, which answers, with its own item
   snap.issues.push({
@@ -120,8 +118,6 @@ async function loadingInbox(
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   snap.messages.push({
     id: 'message-b',
@@ -455,12 +451,7 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     )
     await act(async () => open?.click())
     // the row names the task by its uuid alone, and the answer says archived
-    const {
-      description: _text,
-      has_hidden_subtasks: _h,
-      has_hidden_parent: _p,
-      ...row
-    } = snap.issues.find((it) => it.id === 'fd000000-b') ?? {}
+    const { description: _text, ...row } = snap.issues.find((it) => it.id === 'fd000000-b') ?? {}
     await act(async () =>
       windowReads[0]?.next({
         state: 'archived',
@@ -574,12 +565,7 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     // the pane reads the row's task, which the workspace does not hold while
     // every task loads, with its subtask, one still to arrive
     const kid = snap.issues.find((it) => it.id === 'fd000000-b')
-    const {
-      description: _text,
-      has_hidden_subtasks: _h,
-      has_hidden_parent: _p,
-      ...short
-    } = kid ?? {}
+    const { description: _text, ...short } = kid ?? {}
     const row = snap.issues.find((it) => it.id === '00000000-a')
     const answer = {
       ...answerOf(snap),

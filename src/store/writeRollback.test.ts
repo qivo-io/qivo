@@ -93,8 +93,6 @@ describe('rollback during snapshot trouble', () => {
       created_at: '2026-09-14T08:00:00.000Z',
       updated_at: '2026-09-14T08:00:00.000Z',
       paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
   }
 

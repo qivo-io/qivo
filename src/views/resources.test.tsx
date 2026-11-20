@@ -450,7 +450,7 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
       act(async () => {
         windowRead?.({
           state: 'ok',
-          task: { ...two, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+          task: { ...two, description: '' },
           level: 'lead',
           labels: [],
           follow: null,

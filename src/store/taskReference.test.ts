@@ -105,8 +105,6 @@ const task = (id: string, num: number, extra: Partial<Snapshot['issues'][number]
   paused: false,
   created_at: AT,
   updated_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...extra,
 })
 /** The answer readWindowTask gives an active task (convex/lib/taskWindow.ts). */
@@ -129,7 +127,7 @@ const okAnswer = (
 }
 /** The answer readWindowTask gives an archived task. */
 const archivedAnswer = (id: string, num: number) => {
-  const { description: _d, has_hidden_subtasks: _h, has_hidden_parent: _p, ...row } = task(id, num)
+  const { description: _d, ...row } = task(id, num)
   return {
     state: 'archived',
     task: { ...row, archived_at: '2026-09-14T09:00:00.000Z', is_group: false },

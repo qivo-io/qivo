@@ -130,8 +130,6 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     network.onUpdate.mockImplementation((ref, args, next, fail) => {
       const name = getFunctionName(ref)
@@ -226,8 +224,6 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     snap.messages.push({
       id: 'message-soak',
@@ -302,8 +298,6 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     snap.messages.push({
       id: 'message-soak',
@@ -448,8 +442,6 @@ async function twoOrganizations({ homeFile, homeRead }: { homeFile: boolean; hom
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   // the tasks the parts do not send, which only the server holds
   const homeTask = task(home, snap.projects[0].id, 2, 'Run the soak test')

@@ -110,8 +110,6 @@ async function load(o: { labels?: Label[]; serverOnly?: Label[]; on?: string[] }
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   const labels = (o.labels ?? []).map((l) => ({ ...l, org_id: org }))
   const serverOnly = (o.serverOnly ?? []).map((l) => ({ ...l, org_id: org }))
@@ -722,8 +720,6 @@ describe('the label picker of a task the window shows from its own answer', () =
           created_at: NOW,
           updated_at: NOW,
           has_subtasks: false,
-          has_hidden_subtasks: false,
-          has_hidden_parent: false,
         },
         level: 'lead',
         labels: labels.map((label_id) => ({ issue_id: 'far', label_id })),

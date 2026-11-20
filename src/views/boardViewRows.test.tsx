@@ -440,7 +440,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     await act(async () => {
       read?.({
         state: 'ok',
-        task: { ...row, description, has_hidden_subtasks: false, has_hidden_parent: false },
+        task: { ...row, description },
         level: 'lead',
         labels: [],
         follow: null,

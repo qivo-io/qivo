@@ -54,13 +54,7 @@ const byNumber = (a: { num: number; id: string }, b: { num: number; id: string }
 
 /* The oracle's row of a task cut to the short row the window sends. */
 function cut(row: TaskRow, level: string | null | undefined) {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_parent: _hiddenParent,
-    has_hidden_subtasks: _hiddenKids,
-    ...rest
-  } = row
+  const { description: _text, parent_id: _parent, ...rest } = row
   return { ...rest, has_subtasks: rest.has_subtasks ?? false, level }
 }
 
@@ -721,7 +715,7 @@ describe('what a read reveals', () => {
     }
   })
 
-  it('names the parent, in the task’s own sub-project, and says of no hidden one', async () => {
+  it('names the parent, in the task’s own sub-project', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
@@ -731,9 +725,10 @@ describe('what a read reveals', () => {
     })
     expect(kid).toMatchObject({
       state: 'ok',
-      task: { parent_id: w.parent.id, has_hidden_parent: false },
+      task: { parent_id: w.parent.id },
       parent: { id: w.parent.id, has_subtasks: true, level: 'user' },
     })
+    expect(kid.state === 'ok' && kid.task).not.toHaveProperty('has_hidden_parent')
   })
 
   it('tells a subtask stored as a group before the rule of one level', async () => {
@@ -958,7 +953,6 @@ describe('real limits', () => {
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.subtasks.complete).toBe(true)
     expect(answer.subtasks.rows).toHaveLength(LIMITS.subtasks.max)
-    expect(answer.task.has_hidden_subtasks).toBe(false)
     expect(answer.task.description).toBe(ordinary(0).description)
     expect(answer.parent?.id).toBe(grandparent.id)
     expect(read).toBeLessThan(TASK_WINDOW.bytes / MIB)
@@ -1208,7 +1202,6 @@ describe('real limits', () => {
     const three = await taskRead(t, f, task.id)
     if (three.answer.state !== 'ok') throw new Error(three.answer.state)
     expect(three.answer.subtasks).toMatchObject({ complete: true, rows: { length: 3 } })
-    expect(three.answer.task.has_hidden_subtasks).toBe(false)
     await plantMany(t, f, 1, () => ({ description: legacy, parent_id: task.id }), {
       each: 1,
       rows: false,
@@ -1217,7 +1210,8 @@ describe('real limits', () => {
     if (four.answer.state !== 'ok') throw new Error(four.answer.state)
     expect(four.answer.subtasks).toMatchObject({ complete: false, rows: { length: 3 } })
     expect(four.answer.task.has_subtasks).toBe(true)
-    expect(four.answer.task.has_hidden_subtasks).toBe(true)
+    // the list's own complete says so, and the task row no more
+    expect(four.answer.task).not.toHaveProperty('has_hidden_subtasks')
     // the look for a fourth reads it whole, one body past the budget at most
     expect(four.read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
   })
@@ -1290,7 +1284,6 @@ describe('a check of the caller access that a bound stops', () => {
       rows: [expect.objectContaining({ id: mine.id })],
       complete: true,
     })
-    expect(stopped.opened.state === 'ok' && stopped.opened.task.has_hidden_subtasks).toBe(false)
     expect(stopped.links).toMatchObject({ state: 'ok', links: [], tasks: [], complete: false })
     // a task in PCB answers as a hidden one does
     expect(stopped.onPcb).toEqual({ state: 'unavailable' })

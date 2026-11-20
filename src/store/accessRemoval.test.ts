@@ -145,8 +145,6 @@ describe('removing access through the server preview', () => {
       paused: false,
       created_at: NOW,
       updated_at: NOW,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
       ...extra,
     })
     snap.issues.push(

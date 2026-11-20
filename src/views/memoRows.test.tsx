@@ -106,8 +106,6 @@ async function load(prepare: (snap: Snapshot) => void = noop) {
       created_at: AT,
       updated_at: AT,
       paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
   prepare(snapshot)
   // the project under a top-level project, as every writer stores one that

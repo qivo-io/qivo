@@ -94,8 +94,6 @@ function viewRow(id: string, num: number, over: Partial<ViewRow> = {}): ViewRow 
     created_at: '2026-10-01T08:00:00.000Z',
     updated_at: '2026-10-01T08:00:00.000Z',
     has_subtasks: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
     ...over,
   }
 }
@@ -149,13 +147,13 @@ const answerOf = (row: Row<'issues'>) => {
 /* The stored row as a view's answer sends it. */
 const asView = (row: Row<'issues'>): ViewRow => {
   const { description: _text, ...rest } = row
-  return { ...rest, has_subtasks: false, has_hidden_subtasks: false, has_hidden_parent: false }
+  return { ...rest, has_subtasks: false }
 }
 /* The stored row as the window's own read answers it. */
 const asWindow = (row: Row<'issues'>, extra: Partial<Extract<TaskAnswer, { state: 'ok' }>> = {}) =>
   ({
     state: 'ok',
-    task: { ...row, has_subtasks: false, has_hidden_subtasks: false, has_hidden_parent: false },
+    task: { ...row, has_subtasks: false },
     level: 'lead',
     labels: [],
     follow:

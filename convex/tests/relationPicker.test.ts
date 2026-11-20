@@ -624,10 +624,11 @@ describe('the Subtasks picker', () => {
     await task(t, f, f.sub, { parent_id: withArchived.id, archived_at: NOW })
     const answer = okOf(await pick(t, f.guest, open.id, 'subtask'))
     // FW alone, where a subtask stays with its parent
-    expect(answer.rows.map((r) => [r.title, r.parent_id ?? null, r.has_hidden_parent])).toEqual([
-      ['Plain', null, false],
-      ['Recent', shownParent.id, false],
+    expect(answer.rows.map((r) => [r.title, r.parent_id ?? null])).toEqual([
+      ['Plain', null],
+      ['Recent', shownParent.id],
     ])
+    for (const row of answer.rows) expect(row).not.toHaveProperty('has_hidden_parent')
     for (const out of [current, shownParent, withArchived, inPcb])
       expect(answer.rows.map((r) => r.id)).not.toContain(out.id)
     expect(answer.rows.map((r) => r.id)).toContain(plain.id)

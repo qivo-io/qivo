@@ -169,8 +169,6 @@ async function app(path: string) {
           status_at: STORED_AT,
           created_at: STORED_AT,
           updated_at: STORED_AT,
-          has_hidden_subtasks: false,
-          has_hidden_parent: false,
         }
         storedRow = row
         server = { ...server, issues: [...server.issues, row] }

@@ -147,8 +147,6 @@ async function load({
     assignee_id: holder,
     created_at: NOW,
     updated_at: NOW,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.onUpdate.mockImplementation((ref, args: { ids?: string[] }, next) => {
     const name = getFunctionName(ref)

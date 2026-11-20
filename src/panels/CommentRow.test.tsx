@@ -89,8 +89,6 @@ async function open() {
     paused: false,
     created_at: at(0),
     updated_at: at(0),
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)

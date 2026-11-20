@@ -71,8 +71,6 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
       paused: false,
       created_at: '2026-09-14T08:00:00.000Z',
       updated_at: '2026-09-14T08:00:00.000Z',
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
     snap.messages.push({
       id: 'message-a',

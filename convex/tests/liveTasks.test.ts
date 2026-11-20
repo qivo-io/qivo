@@ -224,7 +224,6 @@ describe('the guard on parent links', () => {
     })
     if (window.state !== 'ok') throw new Error(window.state)
     expect(window.parent).toBeNull()
-    expect(window.task.has_hidden_parent).toBe(false)
     expect('parent_id' in window.task).toBe(false)
     // the task window of the active group, whose only subtask is in AWAY
     const groupWindow = await as(fx.t, fx.guest).query(api.taskWindow.task, {
@@ -232,18 +231,18 @@ describe('the guard on parent links', () => {
       ref: group.id,
     })
     if (groupWindow.state !== 'ok') throw new Error(groupWindow.state)
-    expect(groupWindow.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
+    expect(groupWindow.task).toMatchObject({ has_subtasks: false })
     expect(groupWindow.subtasks).toEqual({ rows: [], complete: true })
     expect(JSON.stringify(groupWindow)).not.toContain(kid.id)
     // a view read, the Board of FW
     const board = await boardFor(fx.t, fx.guest, projectScope(fx.guest, fx.sub.id), NO_FILTERS)
     if (board.state !== 'ok') throw new Error(board.state)
     const row = board.rows.find((r) => r.id === child.id)
-    expect(row?.has_hidden_parent).toBe(false)
+    expect(row).toBeDefined()
     expect(row).not.toHaveProperty('parent_id')
     // the REST read
     const rest = await restGet(fx, child.id)
-    expect(rest).toMatchObject({ parent_id: null, has_hidden_parent: false })
+    expect(rest).toMatchObject({ parent_id: null })
     for (const answer of [window, board, rest])
       expect(JSON.stringify(answer)).not.toContain(parent.id)
   })

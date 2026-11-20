@@ -5724,7 +5724,7 @@ const SERVER_STAMPS = new Set([
 /* Snapshot fields that only feed a set of tasks (the base's flags,
    store/workspaceBase.ts, and subtaskParentsNow), where false means the
    same as absent. */
-const SET_FLAGS = new Set(['has_subtasks', 'has_hidden_subtasks', 'has_hidden_parent'])
+const SET_FLAGS = new Set(['has_subtasks'])
 
 /** Every row section in one canonical form: map entries,
     set members and array items sorted, object keys sorted and undefined
@@ -9851,7 +9851,7 @@ function storedLinkOf(
     (convex/lib/taskWindow.ts ShortRow), without the picker's own fields,
     with whether it has subtasks, which a pick decides. */
 function shortOfCandidate(row: RelationCandidate, has_subtasks: boolean): ShortRow {
-  const { parent_id: _parent, has_hidden_parent: _hidden, exact: _exact, ...fields } = row
+  const { parent_id: _parent, exact: _exact, ...fields } = row
   return { ...fields, has_subtasks }
 }
 
@@ -9974,17 +9974,11 @@ function slotsBehind(slots: readonly ViewSlot[]): ViewSlot[] {
 }
 
 /** New task `row`, numbered `num`, as a view's answer sends it (ViewRow):
-    no text, has_hidden_parent and has_hidden_subtasks false, and a group
-    without the facts only a read of its subtasks gives when `group`. */
+    no text, and a group without the facts only a read of its subtasks
+    gives when `group`. */
 function newViewRow(row: Row<'issues'>, num: number, group: boolean): ViewRow {
   const { description: _text, ...fields } = row
-  return {
-    ...fields,
-    num,
-    has_subtasks: group,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  }
+  return { ...fields, num, has_subtasks: group }
 }
 
 /** The `view` part of the create of new task `row` (P.addIssue,
@@ -10111,8 +10105,6 @@ function newParentShort(
   const {
     description: _text,
     parent_id: _parent,
-    has_hidden_parent: _hiddenParent,
-    has_hidden_subtasks: _hidden,
     has_subtasks: _group,
     ...fields
   } = row as TaskOk['task']
@@ -10131,14 +10123,7 @@ function newParentShort(
     parent (P.createParent) lists it once the server attached it, at
     `at`. */
 function newChildShort(row: TaskOk['task'], level: ShortRow['level'], at: string): ShortRow {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_parent: _hiddenParent,
-    has_hidden_subtasks: _hidden,
-    has_subtasks: group,
-    ...fields
-  } = row
+  const { description: _text, parent_id: _parent, has_subtasks: group, ...fields } = row
   return { ...fields, has_subtasks: !!group, level, updated_at: at }
 }
 
@@ -10495,9 +10480,8 @@ const PRINTED: Record<string, Record<string, (value: unknown) => unknown>> = {
 
 /** A write's `expected` from `over` (convex/model/expected.ts): null for
     unset and a long text as its print. A task's parent goes as
-    expected.parent_id alone, the parent the person saw or null, which the
-    server takes without has_hidden_parent (convex/model/issues.ts
-    TASK_FIELDS). */
+    expected.parent_id, the parent the person saw or null
+    (convex/model/issues.ts TASK_FIELDS). */
 function expectedOf(over: Over): Record<string, unknown> {
   const printed = PRINTED[over.table] ?? {}
   const out: Record<string, unknown> = {}

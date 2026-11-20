@@ -53,8 +53,6 @@ const taskOf = (snap: Snapshot, num: number, over: Partial<Task> = {}): Task => 
   created_at: AT,
   updated_at: AT,
   paused: false,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...over,
 })
 

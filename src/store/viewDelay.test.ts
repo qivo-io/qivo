@@ -45,8 +45,6 @@ const row = (id: string, owner: string, over: Partial<ViewRow> = {}): ViewRow =>
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
   has_subtasks: false,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...over,
 })
 

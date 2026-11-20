@@ -339,8 +339,6 @@ describe("a section read with mine (My view's)", () => {
       assignee_id: server.profiles[0].id,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
 
   it("asks with mine and no projects apart from a named read, and paints a create by the answer's projects", async () => {

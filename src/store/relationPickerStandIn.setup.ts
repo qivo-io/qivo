@@ -19,10 +19,10 @@
    current relations of the picker's own kind, decided per kind as the
    reader's decide does: the Parent picker's tasks without a parent and
    with room for one more subtask, never the current parent; the Subtasks
-   picker's tasks without subtasks, with their parent and
-   has_hidden_parent false, never a current subtask; and the Linked tasks
-   picker's tasks it is not linked to, its parent and subtasks included;
-   every fragment of the search in the task's ID or title
+   picker's tasks without subtasks, with their parent, never a current
+   subtask; and the Linked tasks picker's tasks it is not linked to, its
+   parent and subtasks included; every fragment of the search in the
+   task's ID or title
    (convex/lib/search.ts allWordsMatcher); a search that is one task ID
    answers that task first, marked `exact`, and every later batch leaves
    it out; at most RELATION_PICKER.rows tasks a batch.
@@ -178,19 +178,11 @@ export function relationPickerStandIn(
     return !linked.has(row.id)
   }
   const shortOf = (row: Task, exact?: boolean): RelationCandidate => {
-    const {
-      description: _text,
-      parent_id: parent,
-      has_hidden_parent: _hiddenParent,
-      has_hidden_subtasks: _hidden,
-      ...fields
-    } = row
+    const { description: _text, parent_id: parent, ...fields } = row
     return {
       ...fields,
       level,
-      ...(args.kind === 'subtask'
-        ? { ...(parent ? { parent_id: parent } : {}), has_hidden_parent: false }
-        : {}),
+      ...(args.kind === 'subtask' && parent ? { parent_id: parent } : {}),
       ...(exact ? { exact: true as const } : {}),
     }
   }

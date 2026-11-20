@@ -106,8 +106,6 @@ beforeEach(async () => {
       paused: false,
       created_at: at(0),
       updated_at: at(0),
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     })
   message('a-1', 'task-a', 1)
   message('a-5', 'task-a', 5)

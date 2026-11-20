@@ -150,8 +150,6 @@ async function boot(address: string, phone: boolean, second = false) {
     paused: false,
     created_at: AT,
     updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   })
   if (second) {
     snap.orgs[0].next_issue_num = 2
@@ -282,14 +280,12 @@ async function boot(address: string, phone: boolean, second = false) {
       paused: false,
       created_at: AT,
       updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
     }
     const next = structuredClone(server)
     next.orgs[0].next_issue_num = row.num
     next.issues.push(row)
     publish(next)
-    const { description: _text, has_hidden_subtasks: _h, has_hidden_parent: _p, ...stored } = row
+    const { description: _text, ...stored } = row
     return Promise.resolve(stored)
   })
   history.pushState(null, '', '/before')
@@ -651,8 +647,6 @@ describe('a Back that closes a phone layer over a task the workspace does not ho
         paused: false,
         created_at: AT,
         updated_at: AT,
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
       },
     ]
     await settle()
@@ -731,8 +725,6 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
         created_at: AT,
         updated_at: AT,
         archived_at: '2026-09-14T09:00:00.000Z',
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
       },
     ]
     const open = await waitFor(

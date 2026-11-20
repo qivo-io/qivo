@@ -640,8 +640,6 @@ export function overviewStandIn(
     const row = {
       ...rest,
       ...(parent !== undefined && shown.has(parent) ? { parent_id: parent } : {}),
-      has_hidden_parent: false,
-      has_hidden_subtasks: false,
     } as Omit<ViewRow, 'has_subtasks'>
     const view: ViewRow = isGroup(t)
       ? {

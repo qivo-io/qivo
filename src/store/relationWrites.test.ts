@@ -71,20 +71,12 @@ const task = (id: string, num: number, over: Partial<Task> = {}): Task => ({
   created_at: AT,
   updated_at: AT,
   status_at: AT,
-  has_hidden_subtasks: false,
-  has_hidden_parent: false,
   ...over,
 })
 const far = (over: Partial<Task> = {}) => task(FAR, 40, { title: 'Tune the antenna', ...over })
 /* Task `row` as a short row of an answer. */
 const short = (row: Task, has_subtasks = false) => {
-  const {
-    description: _text,
-    parent_id: _parent,
-    has_hidden_subtasks: _hidden,
-    has_hidden_parent: _hiddenParent,
-    ...rest
-  } = row
+  const { description: _text, parent_id: _parent, ...rest } = row
   return { ...rest, has_subtasks, level: 'lead' as const }
 }
 /* Task `row` as a relation picker's row, with the parent the Subtasks
