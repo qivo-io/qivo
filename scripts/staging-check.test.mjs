@@ -61,7 +61,6 @@ import {
   FIXTURE_STATUS,
   FORMERLY_BARE,
   failedShot,
-  favoritesSent,
   freeMilestoneWeek,
   freePastMilestoneWeek,
   HIDDEN_PARENT_REFUSED,
@@ -183,7 +182,6 @@ import {
   resolveConfig,
   results,
   SEARCH_LOST,
-  SET_FAVORITE_MUTATION,
   SETTINGS_PROJECTS_MARKS,
   SETTINGS_PROJECTS_STEP,
   SETTINGS_USERS_EXPECTED,
@@ -2783,33 +2781,6 @@ describe('a guarded press', () => {
     expect(timeouts[1]).toBeLessThanOrEqual(1000)
     expect(chosen).toBe(false)
   })
-  it('gives the check before a press the time that press may take', async () => {
-    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
-    // the first press is lost, and the page takes 1.5 s to answer the check
-    // that runs before the second
-    const allowed = []
-    let presses = 0
-    const target = { click: async () => void presses++ }
-    await expect(
-      pressFor(target, async () => false, 'Leo is not chosen', {
-        again: 0,
-        ms: 1000,
-        before: async (timeout) => {
-          allowed.push(timeout)
-          if (allowed.length === 1) return
-          await wait(Math.min(timeout, 1500))
-          if (timeout < 1500)
-            throw Object.assign(new Error('locator.getAttribute: Timeout exceeded'), {
-              name: 'TimeoutError',
-            })
-        },
-      }),
-    ).rejects.toThrow(/^Leo is not chosen, and press 2 found nothing to press in the time left$/)
-    expect(allowed[0]).toBe(30_000)
-    expect(allowed[1]).toBeGreaterThan(0)
-    expect(allowed[1]).toBeLessThanOrEqual(1000)
-    expect(presses).toBe(1)
-  })
   it('fails a sign that answers only once its time is up', async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms))
     const target = { click: async () => {} }
@@ -2825,118 +2796,12 @@ describe('a guarded press', () => {
       ),
     ).rejects.toThrow(/^M stays a favorite$/)
   })
-  describe("the directory's star", () => {
-    /** A frame the page sent that writes project `id`'s star as `favorite`. */
-    const write = (id, favorite, udfPath = SET_FAVORITE_MUTATION) => ({
-      out: true,
-      text: JSON.stringify({
-        type: 'Mutation',
-        requestId: 1,
-        udfPath,
-        args: [{ org_id: 'org', project_id: id, favorite }],
-      }),
-    })
-    /** A stand-in star of project `m`, off at first unless `on`, whose
-     *  presses `takes` lets reach the page. A press that takes shows the
-     *  new state and sends the star's write, after `held` ms when the
-     *  connection is down, and a `refused` write takes the state back a
-     *  moment later. */
-    const starOf = (takes, { on = false, refused = false, held = 0 } = {}) => {
-      const page = { on, presses: 0, frames: [] }
-      return {
-        page,
-        click: async () => {
-          page.presses++
-          if (!takes(page.presses)) return
-          const want = !page.on
-          const send = () => page.frames.push(write('m', want))
-          if (held > 0) setTimeout(send, held)
-          else send()
-          page.on = want
-          if (refused) setTimeout(() => (page.on = !want), 50)
-        },
-      }
-    }
-    /** pressFor's sign, `lost` and `before` as the step gives them for a
-     *  press that sets the star `on`. */
-    const options = (star, on) => ({
-      again: 0,
-      ms: 1500,
-      lost: async () => favoritesSent(star.page.frames, 'm').length === 0 && star.page.on === !on,
-      before: async () => {
-        if (star.page.on === on) throw new Error(`the star shows ${on} before the press`)
-      },
-    })
-    const sent = (star, on) => async () => favoritesSent(star.page.frames, 'm').includes(on)
-
-    it('reads the writes of one project star the page sent, in order', () => {
-      expect(
-        favoritesSent(
-          [
-            write('m', true),
-            { ...write('m', false), out: false },
-            write('other', false),
-            write('m', false, 'projectNav:other'),
-            { out: true, text: 'not json' },
-            write('m', false),
-          ],
-          'm',
-        ),
-      ).toEqual([true, false])
-    })
-    it('never presses again a star whose press took and went back', async () => {
-      const star = starOf(() => true, { refused: true })
-      await pressFor(star, sent(star, true), 'the star sent no write', options(star, true))
-      await new Promise((done) => setTimeout(done, 100))
-      expect(star.page.presses).toBe(1)
-      expect(star.page.on).toBe(false)
-      expect(favoritesSent(star.page.frames, 'm')).toEqual([true])
-      expect(lines).toEqual([])
-    })
-    it('presses again only while no write went out', async () => {
-      const star = starOf((n) => n === 2)
-      await pressFor(star, sent(star, true), 'the star sent no write', options(star, true))
-      expect(star.page.presses).toBe(2)
-      expect(favoritesSent(star.page.frames, 'm')).toEqual([true])
-      expect(lines).toHaveLength(1)
-    })
-    it('waits, without another press, for a write the connection holds back', async () => {
-      // the press took and the star shows it, and the write goes out later
-      const star = starOf(() => true, { held: 700 })
-      await pressFor(star, sent(star, true), 'the star sent no write', options(star, true))
-      expect(star.page.presses).toBe(1)
-      expect(star.page.on).toBe(true)
-      expect(favoritesSent(star.page.frames, 'm')).toEqual([true])
-      expect(lines).toEqual([])
-    })
-    it('presses no star that already shows what the press would set', async () => {
-      // M shows unstarred where the step comes to unstar it
-      const star = starOf(() => true)
-      await expect(
-        pressFor(star, sent(star, false), 'the star sent no write', options(star, false)),
-      ).rejects.toThrow('the star shows false before the press')
-      expect(star.page.presses).toBe(0)
-      expect(star.page.frames).toEqual([])
-    })
-    it('is how the step presses M', () => {
-      const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
-      for (const part of [
-        'async () => favoritesSent(record.frames, M.id).includes(on)',
-        'favoritesSent(record.frames, M.id).length === 0 &&',
-        '(await shows(PRESS_AGAIN_MS)) === String(!on),',
-        'String(!on),',
-      ])
-        expect(script, part).toContain(part)
-    })
-  })
   it('guards the presses that follow a search or a redraw, each on its own sign', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     for (const what of [
       "'Leo is not chosen'",
       "'the scope picker shows no All projects row'",
       `"the team's page did not open from its row"`,
-      `"M's star sent no write that stars M"`,
-      `"M's star sent no write that unstars M"`,
       'name} is not open in Settings › Projects`',
     ])
       expect(script, what).toContain(what)
@@ -2949,6 +2814,10 @@ describe('a guarded press', () => {
       expect(script, search).toContain(search)
     // the Inbox presses t0's row once its page is read again without the search
     expect(script).toContain('await until(async () => unsearched() > before, 30_000)')
+    // M's star is a toggle that a refusal sets back, so it is pressed once,
+    // from the state the press expects, and not through the guard
+    expect(script).toContain('await starOf().click({ timeout: 30_000 })')
+    expect(script).not.toContain('pressFor(\n          starOf()')
   })
 })
 
