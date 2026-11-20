@@ -948,12 +948,11 @@ describe('webhook events', () => {
       for (const e of await ctx.db.query('webhook_events').collect()) await ctx.db.delete(e._id)
     })
 
-    const inside = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: inside.id })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
     await deleteProject(t, f, f.sub2.id)
     expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
-    // the detached child outside is the only news
-    expect(await events(t)).toEqual([['task.updated', outside.id]])
+    expect(await events(t)).toEqual([])
   })
 })
 
@@ -971,12 +970,11 @@ describe('moving a project to Deleted items', () => {
     expect((await itemFor(t, f.sub2.id)).reason).toBe('é'.repeat(500))
   })
 
-  it('hides the projects at once, moves the tasks people see first, and finishes in bounded steps', async () => {
+  it('hides the projects at once and finishes in bounded steps', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     await t.run(async (ctx) => {
       await ctx.db.insert('milestones', {
         id: uuid(),
@@ -998,27 +996,11 @@ describe('moving a project to Deleted items', () => {
       inside.push(task)
     }
     const group = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const member = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: group.id })
+    const member = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: group.id })
     const chatty = await plantIssue(t, { org_id, project_id: f.sub.id })
     for (let i = 0; i < 7; i++) await comment(t, chatty)
     const file = await attach(t, chatty)
-    // planted last, so a move in index order would reach them last
-    const outsideParent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
-    const inChild = await plantIssue(t, {
-      org_id,
-      project_id: f.sub2.id,
-      parent_id: outsideParent.id,
-    })
-    const inParent = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const outChild = await plantIssue(t, {
-      org_id,
-      project_id: hiddenSub.id,
-      parent_id: inParent.id,
-    })
-    await plantSubscription(t, { issue_id: outChild.id, profile_id: f.admin.id })
-    const edges = [inChild, inParent]
-    const others = [...inside, group, member, chatty]
-    const all = [...others, ...edges]
+    const all = [...inside, group, member, chatty]
 
     Object.assign(TRASH_BUDGET, { rows: 6, tasks: 4, ranges: 50 })
     await deleteProject(t, f, f.meta.id)
@@ -1040,31 +1022,16 @@ describe('moving a project to Deleted items', () => {
     const stillLive = async (tasks: Doc<'issues'>[]) =>
       (await Promise.all(tasks.map((task) => liveTask(t, task.id)))).filter((x) => x !== null)
         .length
-    /* No other task moves before both edge tasks have: checked after the
-     * user's transaction and after every step. */
-    const edgesFirst = async () => {
-      if ((await stillLive(others)) < others.length) expect(await stillLive(edges)).toBe(0)
-    }
-    await edgesFirst()
     let steps = 0
     let sawSplit = false
-    let sawTasksPhase = false
     for (;;) {
       const before = (await storedRows(t, item.id)).length
       await step(t, item.id)
       steps++
       const moved = (await storedRows(t, item.id)).length - before
       expect(moved, `step ${steps}`).toBeLessThanOrEqual(TRASH_BUDGET.rows + 1)
-      await edgesFirst()
       const job = await jobFor(t, item.id)
       if (job === null) break
-      if (job.phase === 'move_tasks' && !sawTasksPhase) {
-        // the edges phase ended: the edge task's child outside is detached
-        expect(await stillLive(edges)).toBe(0)
-        expect((await liveTask(t, outChild.id))?.parent_id).toBeUndefined()
-        expect(await stillLive(others)).toBeGreaterThan(0)
-        sawTasksPhase = true
-      }
       const chattyStored = (await storedRows(t, item.id)).filter(
         (r) => r.owner_id === chatty.id && r.table === 'comments',
       ).length
@@ -1072,7 +1039,6 @@ describe('moving a project to Deleted items', () => {
         sawSplit = true
       expect(steps).toBeLessThan(200)
     }
-    expect(sawTasksPhase).toBe(true)
     expect(sawSplit).toBe(true)
     expect(steps).toBeGreaterThan(5)
 
@@ -1098,19 +1064,9 @@ describe('moving a project to Deleted items', () => {
         (await ctx.db.query('project_access').collect()).filter((g) => tree.has(g.project_id)),
       ).toEqual([])
     })
-    // the hierarchy inside is kept, and so is a parent outside
+    // the hierarchy inside is kept
     expect((await storedIssue(t, member.id))?.parent_id).toBe(group.id)
-    expect((await storedIssue(t, inChild.id))?.parent_id).toBe(outsideParent.id)
     expect(await fileState(t, file.storage_id)).toBe('kept')
-    const notices = await t.run((ctx) =>
-      ctx.db
-        .query('messages')
-        .withIndex('by_recipient_issue', (q) =>
-          q.eq('recipient_id', f.admin.id).eq('issue_id', outChild.id),
-        )
-        .collect(),
-    )
-    expect(notices.map((m) => m.detail)).toEqual(['Detached from its parent'])
     await assertNoDanglingRefs(t, 'after a project moved in steps')
   })
 
@@ -1137,9 +1093,7 @@ describe('moving a project to Deleted items', () => {
     expect(await storedTasks(t, item.id)).toHaveLength(40)
   })
 
-  it('stops a step on its byte budget, which the tasks it reads and passes over spend too', async () => {
-    // none of these tasks has a parent or a child outside, so the first phase
-    // reads each of them and moves none
+  it('stops a step on its byte budget', async () => {
     const t = newT({ transactionLimits: { bytesRead: 600_000 } })
     const f = await withReadingAdmin(t)
     const description = 'Spec line. '.repeat(1_500) // about 16 KB
@@ -1160,9 +1114,7 @@ describe('moving a project to Deleted items', () => {
   })
 
   it('moves a task with LIMITS.subtasks.max subtasks in its own project within the real limits', async () => {
-    // Convex's limits and the real budgets, for a parent at the cap with one
-    // child outside. The next case shows under a lowered read limit that the
-    // move finds that child without reading the children inside.
+    // Convex's limits and the real budgets, for a parent at the cap
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withReadingAdmin(t)
@@ -1170,8 +1122,6 @@ describe('moving a project to Deleted items', () => {
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const description = 'Check the sensor reading against the bench value and note any drift.'
     const subtasks = await plantChildren(t, parent, f.sub2.id, LIMITS.subtasks.max, description)
-    // planted last, so a scan of the children in index order reaches it last
-    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
 
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
@@ -1180,71 +1130,34 @@ describe('moving a project to Deleted items', () => {
       state: 'ready',
       counts: { tasks: LIMITS.subtasks.max + 1 },
     })
-    expect((await liveTask(t, outside.id))?.parent_id).toBeUndefined()
     expect((await storedIssue(t, subtasks[subtasks.length - 1]))?.parent_id).toBe(parent.id)
   })
 
-  it('finds a child outside without reading the children inside, and scans the tasks over steps', async () => {
-    // the old scan read every child inside, 60 of 16 KB and more than the
-    // transaction may read, before it found the one outside
-    const t = newT({ transactionLimits: { bytesRead: 600_000 } })
-    chargeFilteredReads()
-    const f = await withReadingAdmin(t)
-    const org_id = f.org.id
-    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    await plantChildren(t, parent, f.sub2.id, 60, 'Spec line. '.repeat(1_500))
-    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
-    TRASH_BUDGET.bytes = 100_000
-
-    // the parent has a child outside, so the user's own delete moves it
-    // first and detaches that child
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    expect(await liveTask(t, parent.id)).toBeNull()
-    expect((await liveTask(t, outside.id))?.parent_id).toBeUndefined()
-    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'move_edges' })
-
-    // the scan of the other tasks goes on in steps within the byte budget
-    let edgeSteps = 0
-    let steps = 0
-    for (let job = await jobFor(t, item.id); job !== null; job = await jobFor(t, item.id)) {
-      if (job.phase === 'move_edges') edgeSteps++
-      await step(t, item.id)
-      steps++
-      expect(steps).toBeLessThan(60)
-    }
-    expect(edgeSteps).toBeGreaterThan(2)
-    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 61 } })
-    expect((await storedIssue(t, parent.id))?.parent_id).toBeUndefined()
-  })
-
-  it('detaches without an actor once the deleter is gone', async () => {
+  it('finishes a move whose job an earlier release saved in move_edges', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
-    await plantSubscription(t, { issue_id: child.id, profile_id: f.admin.id })
+    const kid = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
+    for (let i = 0; i < 4; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
-    expect(await liveTask(t, parent.id)).not.toBeNull()
-    await t.run((ctx) => ctx.db.delete(f.user._id))
+    const item = await itemFor(t, f.sub2.id)
+    // the job as an earlier release saved it, partway through its first phase
+    await t.run(async (ctx) => {
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the move left no step')
+      await ctx.db.patch(job._id, { phase: 'move_edges', cursor: { index: 0, after: 1 } })
+    })
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     await runSteps(t)
-    expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
-    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
-    const notices = await t.run((ctx) =>
-      ctx.db
-        .query('messages')
-        .withIndex('by_recipient_issue', (q) =>
-          q.eq('recipient_id', f.admin.id).eq('issue_id', child.id),
-        )
-        .collect(),
-    )
-    expect(notices.map((m) => [m.detail, m.actor_id])).toEqual([
-      ['Detached from its parent', undefined],
-    ])
+    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 6 } })
+    expect(await jobFor(t, item.id)).toBeNull()
+    expect((await storedIssue(t, kid.id))?.parent_id).toBe(parent.id)
+    await assertNoDanglingRefs(t, 'after a move an earlier release left in move_edges')
   })
 })
 
@@ -1701,7 +1614,7 @@ describe('purging', () => {
     const strandedFile = await attach(t, stranded)
     await comment(t, stranded)
     await plantHistory(t, stranded, { listed: 2, unlisted: 1 })
-    const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: stranded.id })
+    const child = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: stranded.id })
     await plantHistory(t, child, { listed: 1 })
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
@@ -1735,9 +1648,9 @@ describe('purging', () => {
     })
     expect(await fileState(t, strandedFile.storage_id)).toBe('held')
     expect(await historyOf(t, stranded.id)).toEqual([])
-    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
-    // the detached child keeps its own history
-    expect(await historyOf(t, child.id)).toHaveLength(1)
+    // its subtask, in the same sub-project, goes with it
+    expect(await liveTask(t, child.id)).toBeNull()
+    expect(await historyOf(t, child.id)).toEqual([])
     await assertNoDanglingRefs(t, 'after a stuck item was purged')
     await assertNoOrphanHistory(t, 'after a stuck item was purged')
   })

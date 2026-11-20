@@ -33,9 +33,8 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
-import { byId } from '../lib/db'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
-import { startPurge, TRASH_BUDGET } from '../model/deletedItems'
+import { TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask } from '../model/descriptions'
 import { ITEM_UNREAD_CAP, postMessage, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
@@ -47,7 +46,6 @@ import {
   messagesFor,
   NOW,
   newT,
-  type OrgFixture,
   plantCopiedIssue,
   plantIssue,
   plantMessage,
@@ -1422,8 +1420,8 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
 
 describe('archiveDoneIssues checks the projects that writers marked', () => {
   /* withOrg with a Done parent in f.sub, done long before night 0, and its
-   * open child in f.sub2. Night 0, a full pass, leaves the parent waiting
-   * for the child, and no later window reaches it. */
+   * open child there. Night 0, a full pass, leaves the parent waiting for the
+   * child, and no later window reaches it. */
   async function waitingParent() {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -1435,7 +1433,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
     })
     const child = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: f.sub2.id,
+      project_id: f.sub.id,
       parent_id: parent.id,
       status: 'todo',
     })
@@ -1462,7 +1460,6 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
     'a parent change',
     'a move that detaches',
     'a move to Deleted items',
-    "its project's move to Deleted items",
   ] as const)('a Done parent that waited for a child goes the night after %s', async (change) => {
     const { t, f, parent, child } = await waitingParent()
     const org_id = f.org.id
@@ -1494,122 +1491,16 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
       await as(t, f.user).mutation(api.issues.move, {
         org_id,
         id: child.id,
-        project_id: f.sub.id,
+        project_id: f.sub2.id,
         detach_parent: true,
       })
-    else if (change === 'a move to Deleted items')
-      await as(t, f.user).mutation(api.issues.deleteDeep, { org_id, id: child.id })
-    else await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: f.sub2.id })
+    else await as(t, f.user).mutation(api.issues.deleteDeep, { org_id, id: child.id })
     await settle(t)
     expect((await rechecks(t)).map((row) => row.project_id)).toEqual([f.sub.id])
 
     expect(await runArchive(t, night(1))).toBe(1)
     expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
     expect(await rechecks(t)).toEqual([])
-  })
-
-  /* Moves project `projectId` to Deleted items with a budget so small that
-   * its move stops before any of its tasks, and leaves the item stuck, as
-   * a job that gave up does. Returns the item. */
-  async function stuckProjectItem(t: T, f: OrgFixture, projectId: string) {
-    vi.useFakeTimers()
-    try {
-      Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
-      await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: projectId })
-      Object.assign(TRASH_BUDGET, DEFAULT_TRASH_BUDGET)
-      return await t.run(async (ctx) => {
-        const item = await ctx.db
-          .query('deleted_items')
-          .withIndex('by_target', (q) => q.eq('target_id', projectId))
-          .unique()
-        if (item === null) throw new Error('the project is not in Deleted items')
-        const job = await ctx.db
-          .query('deleted_item_jobs')
-          .withIndex('by_item', (q) => q.eq('item_id', item.id))
-          .unique()
-        if (job?.scheduled_id !== undefined) await ctx.scheduler.cancel(job.scheduled_id)
-        if (job !== null) await ctx.db.delete(job._id)
-        await ctx.db.patch(item._id, { state: 'stuck' })
-        return item
-      })
-    } finally {
-      vi.useRealTimers()
-    }
-  }
-
-  /* Starts the purge of item `itemId`, as an admin's Delete now does, and
-   * runs its steps. */
-  async function purgeItem(t: T, itemId: string): Promise<void> {
-    await t.run(async (ctx) => {
-      const item = await byId(ctx, 'deleted_items', itemId)
-      if (item === null) throw new Error('no such item')
-      await startPurge(ctx, item)
-    })
-    await settle(t)
-  }
-
-  it('a Done parent goes the night after its open child is deleted for good with a project item whose move got stuck', async () => {
-    const { t, f, parent, child } = await waitingParent()
-    const item = await stuckProjectItem(t, f, f.sub2.id)
-    // the move stopped before the child, so nothing marked the parent yet
-    expect(await issueRow(t, child.id)).not.toBeNull()
-    expect(await rechecks(t)).toEqual([])
-
-    await purgeItem(t, item.id)
-    expect(await issueRow(t, child.id)).toBeNull()
-    expect((await rechecks(t)).map((row) => row.project_id)).toEqual([f.sub.id])
-    expect(await runArchive(t, night(1))).toBe(1)
-    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
-  })
-
-  it('a Done parent goes the night after a stuck sub-project item is purged with its parent item', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    // A parent in another top-level project, which only data from before
-    // the subtask rule holds, so that it stays live when the child's
-    // top-level project goes.
-    const elsewhere = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: elsewhere.id,
-      status: 'done',
-      done_at: night(-40),
-    })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: parent.id,
-      status: 'todo',
-    })
-    expect(await runArchive(t, night(0))).toBe(0)
-    const stuck = await stuckProjectItem(t, f, f.sub2.id)
-    vi.useFakeTimers()
-    try {
-      await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.meta.id })
-    } finally {
-      vi.useRealTimers()
-    }
-    await settle(t)
-    const top = await t.run((ctx) =>
-      ctx.db
-        .query('deleted_items')
-        .withIndex('by_target', (q) => q.eq('target_id', f.meta.id))
-        .unique(),
-    )
-    expect(top?.state).toBe('ready')
-    expect(await rechecks(t)).toEqual([])
-
-    // the top-level item's purge purges the stuck one, child and all
-    await purgeItem(t, top!.id)
-    expect(await t.run((ctx) => byId(ctx, 'deleted_items', stuck.id))).toBeNull()
-    expect(await issueRow(t, child.id)).toBeNull()
-    expect((await rechecks(t)).map((row) => row.project_id)).toEqual([elsewhere.id])
-    expect(await runArchive(t, night(1))).toBe(1)
-    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
   })
 
   it('outside a public demo, a writer adds its row without reading, a row a restore', async () => {
