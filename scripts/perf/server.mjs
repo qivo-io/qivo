@@ -426,8 +426,8 @@
 //                        bringing anything back into it
 //   deletedstate         states the Deleted items reads and writes answer
 //                        whatever the items say: too-wide, missing-reads,
-//                        missing-matches, legacy, stopped (each page stops
-//                        after ten entries), hidden (an admin's task rows
+//                        missing-matches, stopped (each page stops after
+//                        ten entries), hidden (an admin's task rows
 //                        hidden), people-stopped (the people's list stops
 //                        before its first person), error (every read
 //                        fails), slow (each restore or purge waits 1.5 s),
@@ -1148,7 +1148,6 @@ const forcedDeleted = (() => {
   if (deletedStates.has('too-wide')) force.tooWide = true
   if (deletedStates.has('missing-reads')) force.missing = 'reads'
   if (deletedStates.has('missing-matches')) force.missing = 'matches'
-  if (deletedStates.has('legacy')) force.legacy = true
   if (deletedStates.has('stopped')) force.stopped = 10
   if (deletedStates.has('hidden')) force.hidden = true
   if (deletedStates.has('people-stopped')) force.peopleStopped = 0

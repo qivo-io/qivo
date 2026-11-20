@@ -8,12 +8,10 @@
  * these cases. The rows come from deletedItems.item and the page, the only
  * reads of the items since deletedItems.list and matches went.
  *
- * Two rules of this view come with the admin access split. An admin's
- * probe for rows stored before the page stays organization-wide
- * (model/deletedItemsPage.ts Seat.admin, olderRows), so `legacy` can come
- * from projects they cannot read, and the admin's assignee index can end a
- * short page at a row it dropped, which the next page's cursor moves past.
- * Both say nothing a task they cannot read holds.
+ * One rule of this view comes with the admin access split. The admin's
+ * assignee index can end a short page at a row it dropped, which the next
+ * page's cursor moves past. That says nothing a task they cannot read
+ * holds.
  *
  * The last block reads at the design size, one figure raised a case, and
  * logs its reads as tests/deletedItemsPageReads.test.ts does. */

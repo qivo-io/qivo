@@ -132,13 +132,11 @@ export function subtitleOf(roles: readonly Pick<DeletedRole, 'role'>[]): string 
   return `${what} Files of items deleted in an organization you administer count toward its storage until they are deleted for good.`
 }
 
-/** The notes above a page, from its answer: a page without a scope, a
-    scope too wide to list, entries a stopped read may have missed, the
-    standing note of every search, and rows stored before v0.1.122, the
-    first release that wrote what the page's search and Assigned to read,
-    which only their key finds. Each one only where the answer says it. */
+/** The notes above a page, from its answer: a page without a scope,
+    entries a stopped read may have missed and the standing note of every
+    search. Each one only where the answer says it. */
 export function notesOf(
-  page: Pick<DeletedPage, 'entries' | 'scope_needed' | 'missing' | 'legacy'> | null,
+  page: Pick<DeletedPage, 'entries' | 'scope_needed' | 'missing'> | null,
   searching: boolean,
 ): { key: string; text: string }[] {
   if (page === null) return []
@@ -152,11 +150,6 @@ export function notesOf(
     })
   if (page.missing === 'matches')
     notes.push({ key: 'matches', text: 'Some matching tasks might not be listed.' })
-  if (page.legacy)
-    notes.push({
-      key: 'legacy',
-      text: 'Tasks deleted on or before 5 November 2026 are found by their key only, and Assigned to may miss them.',
-    })
   return notes
 }
 

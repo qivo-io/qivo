@@ -2237,14 +2237,13 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   const { _id, _creationTime, ...light } = task
   // a new row, so that a restore of `into` past its cursor still meets it.
   // It keeps its search text and assignee and copies `into`, so the
-  // Deleted items page finds it with the item that holds it now, and a row
-  // stored before the page's release stays one, without the copies. The
-  // page then judges its assignee against `into`'s deletion, as every
-  // other reference the split moves.
+  // Deleted items page finds it with the item that holds it now. The page
+  // then judges its assignee against `into`'s deletion, as every other
+  // reference the split moves.
   await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
     ...light,
     item_id: into.id,
-    ...(task.deleted_at === undefined ? {} : itemCopies(into)),
+    ...itemCopies(into),
   })
   await countInto(run.ctx, into, task)
   return true

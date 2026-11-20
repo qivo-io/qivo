@@ -3064,9 +3064,9 @@ describe('Deleted items on the benchmark page', () => {
     expect(
       await wide.read('deletedItems:page', { scope: { org_id: wide.org, all: true } }),
     ).toMatchObject({ entries: [], too_wide: true })
-    const notes = await deleted('deleted=30&deletedstate=missing-matches,legacy,stopped')
+    const notes = await deleted('deleted=30&deletedstate=missing-matches,stopped')
     const noted = await notes.read('deletedItems:page', { scope: { org_id: notes.org, all: true } })
-    expect(noted).toMatchObject({ missing: 'matches', legacy: true })
+    expect(noted).toMatchObject({ missing: 'matches' })
     expect(noted.entries).toHaveLength(10)
     expect(noted.next_cursor).toEqual(expect.any(String))
     const hidden = await deleted('deleted=5&role=admin&deletedstate=hidden')

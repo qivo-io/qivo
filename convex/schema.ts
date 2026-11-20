@@ -2576,14 +2576,15 @@ export default defineSchema({
   }).index('by_org', ['org_id']),
 
   /* One row per stored task, written and deleted with its issues row in
-   * deleted_rows: what search, counts and finding a task's item need. From
-   * the release of the Deleted items page (model/deletedItemsPage.ts) each
-   * row also holds the text the page searches, which includes the readable
-   * text of the task's description, so a row is no longer light, and the
-   * task's assignee and copies of its item's fields, which the page's
-   * search and assignee sources filter on. A row stored before that release
-   * (v0.1.122) has none of them, and the page finds it by its number alone
-   * (by_org_num). */
+   * deleted_rows: what search, counts and finding a task's item need. Each
+   * row also holds the text the Deleted items page
+   * (model/deletedItemsPage.ts) searches, which includes the readable text
+   * of the task's description, so a row is not light, and the task's
+   * assignee and copies of its item's fields, which the page's search and
+   * assignee sources filter on. Both writes (model/deletedItems.ts
+   * storeTask and splitOff) set search_text, deleted_at and
+   * item_project_id; assignee_id, deleted_by and item_parent_id are absent
+   * where the task or its item has none. */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),
@@ -2603,8 +2604,7 @@ export default defineSchema({
     // Copies of the item's deleted_at, deleted_by, project_id and
     // parent_project_id, which never change while the row stays with its
     // item. A split (model/deletedItems.ts splitOff) writes them again for
-    // the item the task moves to. deleted_at is absent only on a row stored
-    // before the page's release.
+    // the item the task moves to.
     deleted_at: v.optional(v.string()),
     deleted_by: v.optional(v.string()),
     item_project_id: v.optional(v.string()),
@@ -2615,8 +2615,7 @@ export default defineSchema({
     .index('by_org_num', ['org_id', 'num'])
     // nothing reads it any more (cross_project_id)
     .index('by_org_cross_project', ['org_id', 'cross_project_id'])
-    // an organization's tasks of one assignee, newest delete first, and
-    // with neither field the rows stored before the page's release
+    // an organization's tasks of one assignee, newest delete first
     .index('by_org_assignee', ['org_id', 'assignee_id', 'deleted_at'])
     // one item's tasks of one assignee, by number
     .index('by_item_assignee', ['item_id', 'assignee_id', 'num'])

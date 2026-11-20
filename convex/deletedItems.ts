@@ -104,11 +104,10 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
  * (a profile id, needs a scope) apply before the page is cut. Pass
  * `next_cursor` back as `cursor` with the same arguments until it is null;
  * a page may hold fewer entries, even none, while it is not. `too_wide`
- * asks a caller who is no organization admin for a narrower scope,
+ * asks a caller who is no organization admin for a narrower scope, and
  * `missing` says that entries before the last one may be missing, which
- * every search page says, and `legacy` that tasks deleted before v0.1.122
- * are found by their key only. An organization without the caller's seat,
- * and a scope that names nothing the caller sees, answer an empty last page
+ * every search page says. An organization without the caller's seat, and a
+ * scope that names nothing the caller sees, answer an empty last page
  * alike. */
 export const page = authedQuery({
   args: {

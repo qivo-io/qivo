@@ -532,16 +532,12 @@ describe('what the page reads', () => {
     expect(has('[data-deleted-page-end] [data-page-retry]')).toBe(true)
   })
 
-  it('says both missing notes and the older rows as standing notes', async () => {
+  it('says both missing notes as standing notes', async () => {
     await load(world())
     force.missing = 'reads'
-    force.legacy = true
     await open(undefined, undefined, true)
     await choose(`all:${ORG}`)
-    expect(all('[data-deleted-note]').map((el) => el.dataset.deletedNote)).toEqual([
-      'reads',
-      'legacy',
-    ])
+    expect(all('[data-deleted-note]').map((el) => el.dataset.deletedNote)).toEqual(['reads'])
     force.missing = 'matches'
     await type('[data-deleted-search]', 'route')
     expect(text('[data-deleted-note="matches"]')).toBe('Some matching tasks might not be listed.')
