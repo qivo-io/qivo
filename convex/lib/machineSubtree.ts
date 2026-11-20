@@ -10,7 +10,7 @@
  * subtreeReads answers from the catalogue's flags, which it reads nothing
  * for. The single-task read (lib/core.ts taskOut) reads no catalogue and
  * asks lib/access.ts accessOf only about its links' other tasks and the
- * owner's load, so it keeps its own walk (lib/core.ts subtreeIndex) and
+ * owner's load, so it reads its own subtasks (lib/core.ts subtreeIndex) and
  * uses readTally for its first pages, an archived task's subtask page
  * among them (lib/core.ts subtasksByNumber). Project completion reads the stored counts instead
  * (lib/core.ts projectCompletion).
@@ -185,14 +185,6 @@ export function subtreeReads(ctx: QueryCtx, view: MachineView, tally: ReadTally)
       (await readKids(task, ceiling)) ? isGroup(task) : null,
     /** Whether `task`, whose subtasks are read, is a group. */
     isGroup,
-    /**
-     * Keeps what group `root`'s facts read (lib/core.ts groupFacts over
-     * groupCounter): the active subtasks its check read whole (group),
-     * each a leaf with no subtasks of its own. It reads nothing.
-     */
-    walk: (root: Doc<'issues'>): void => {
-      for (const kid of kids.get(root.id) ?? []) if (!kids.has(kid.id)) kids.set(kid.id, [])
-    },
     /** Reads the parent of `task` by id unless the list holds it, counted
      * at the fixed size unless the caller can read it, and keeps it in
      * `tasks`, where issueOut finds it (lib/core.ts parentOut). A parent

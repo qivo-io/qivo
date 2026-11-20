@@ -350,14 +350,10 @@ export async function listActiveIssuesCore(
      * refuses the page. */
     const rowReads = async (task: Doc<'issues'>, first: boolean): Promise<boolean> => {
       if (!first && !(await tally.under(rowsCeiling))) return false
-      const group = reads.known(task)
-        ? reads.isGroup(task)
-        : await reads.group(task, first ? hard : rowsCeiling)
-      if (group === null) {
+      if (!reads.known(task) && (await reads.group(task, first ? hard : rowsCeiling)) === null) {
         if (!first) return false
         throw badRequest(TASK_LIST_UNREADABLE)
       }
-      if (group) reads.walk(task)
       await reads.parent(task)
       await textOf(task)
       tally.range()
