@@ -680,7 +680,7 @@ describe('an admin by ordinary access', () => {
     expect((await page(t, f.admin, { scope })).items).toMatchObject([{ hidden: true }])
   })
 
-  it("lists a hidden item on the admin's assignee index only through a task they read, and on a scoped browse by its fields, and no unreadable task", async () => {
+  it("lists on the admin's assignee index only the items of tasks they read, a family through its subtask, and on a scoped browse only the scope's items", async () => {
     const t = newT()
     const f = await withOrg(t)
     const dana = await person(t, f.org.id, 'Dana')
@@ -714,11 +714,27 @@ describe('an admin by ordinary access', () => {
       unreadable.push((await itemFor(t, task.id)).id)
       later()
     }
-    // a family whose root the admin cannot read, its subtask assigned to Mia in Infra
-    const root = await plantIssue(t, {
+    // a family in Firmware, its subtask assigned to Mia
+    const secretRoot = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       title: 'Secret family root',
+    })
+    const secretSub = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Secret family subtask',
+      parent_id: secretRoot.id,
+      assignee_id: mia.id,
+    })
+    await deleteTask(t, dana, secretRoot.id, { subtask_ids: [secretSub.id] })
+    unreadable.push((await itemFor(t, secretRoot.id)).id)
+    later()
+    // a family in Infra, its subtask assigned to Mia
+    const root = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: infra.id,
+      title: 'Wire the server room',
     })
     const sub = await plantIssue(t, {
       org_id: f.org.id,
@@ -734,10 +750,12 @@ describe('an admin by ordinary access', () => {
     const expectOnlyReadable = (walked: Awaited<ReturnType<typeof walk>>) => {
       expect(walked.ids).toEqual([family.id, plain.id])
       expect(walked.items.map((r) => r.id).sort()).toEqual([family.id, plain.id].sort())
+      expect(walked.items.every((r) => r.hidden !== true)).toBe(true)
       expect(walked.entries.find((e) => e.item_id === family.id)?.task).toEqual({
         key: `QN-${sub.num}`,
         title: 'Cable the racks',
         root_key: `QN-${root.num}`,
+        root_title: 'Wire the server room',
         archived: false,
         path: ['Operations', 'Infra'],
       })
@@ -752,16 +770,19 @@ describe('an admin by ordinary access', () => {
     expect(paged.pages.length).toBeGreaterThan(2)
     expectOnlyReadable(paged)
     Object.assign(DELETED_PAGE, DEFAULT_PAGE)
-    // a scoped browse of Operations lists no item only in Firmware
+    // a scoped browse of Operations lists its items and none in Firmware
     const ofOps = await walk(t, f.admin, {
       scope: { org_id: f.org.id, project_ids: [ops.top.id] },
       kind: 'task',
     })
-    expect(ofOps.ids).toEqual([plain.id])
+    expect(ofOps.ids).toEqual([family.id, plain.id])
     // All projects lists every item, the unreadable ones hidden
     const all = await walk(t, f.admin, { scope, kind: 'task' })
     expect(all.ids).toEqual([family.id, ...[...unreadable].reverse(), plain.id])
-    expect(all.items.filter((r) => r.hidden === true)).toHaveLength(7)
+    expect(all.items.filter((r) => r.hidden === true).map((r) => r.id)).toEqual(
+      [...unreadable].reverse(),
+    )
+    expect(JSON.stringify(all.pages)).not.toMatch(/Secret/)
   })
 
   it('restores a project item for an admin without stored levels, and clears an admin holder who cannot work there, as the reveal judges every holder', async () => {

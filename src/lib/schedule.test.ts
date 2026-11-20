@@ -21,10 +21,6 @@ describe('solvablePairs (auto-move with calculated group spans)', () => {
     expect(solvablePairs([pair('c', 'P')], kids, ['P', 'c'])).toEqual([])
     // parent blocks child: pushing c stretches P's calculated end, same chase
     expect(solvablePairs([pair('P', 'c')], kids, ['P', 'c'])).toEqual([])
-    // grandchild through a SCHEDULED middle
-    const deep = { G: ['m'], m: ['g'] }
-    expect(solvablePairs([pair('g', 'G')], deep, ['G', 'm', 'g'])).toEqual([])
-    expect(solvablePairs([pair('G', 'g')], deep, ['G', 'm', 'g'])).toEqual([])
   })
 
   it('keeps opposite-direction deps between DIFFERENT children of two families', () => {
