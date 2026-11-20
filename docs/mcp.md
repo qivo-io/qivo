@@ -1472,9 +1472,9 @@ since. A call without `expected` saves as before. The rule, for each key:
 | `set_team` with `team_id` | `name` |
 | `update_user` | `plannable_hours` |
 
-Each key belongs to the argument of the same name, with three exceptions on
-a task. `parent_id` belongs to `parent`, as does `has_hidden_parent` while
-Qivo still takes it, and `project_id` to `project` or `sub_project`. A delete takes any of its keys.
+Each key belongs to the argument of the same name, with two exceptions on
+a task. `parent_id` belongs to `parent`, and `project_id` to `project` or
+`sub_project`. A delete takes any of its keys.
 `archived`, `archive_reason`, `add_labels` and `remove_labels` take no key
 and are never checked. A call that creates a record takes no `expected`.
 A call that creates a task, comment, project, milestone, label or team
@@ -1484,10 +1484,11 @@ Send each value as a read tool answered it:
 
 - `get_task` gives a task's fields. Send `parent_id` as the parent's uuid,
   or `null` for no parent. A parent you read matches while it stays the
-  parent. Qivo still takes `has_hidden_parent` beside `parent_id`, and a
-  later release refuses it, so stop sending it. `has_hidden_parent: true`
-  matches nothing. An active task with subtasks reads `remaining_hours:
-  null`, also while it stores hours of its own, so send `null`.
+  parent. `expected` no longer takes `has_hidden_parent`, so a call that
+  still sends it, alone or beside `parent_id`, is refused with `unknown
+  field "expected.has_hidden_parent"; expected takes …`. An active task
+  with subtasks reads `remaining_hours: null`, also while it stores hours
+  of its own, so send `null`.
 - `get_project` gives a project's fields, the first 50 of its milestones'
   `name` and `date` and the first 50 of its user grants and of its team
   grants (`grants`), and `list_project_related` the rest of each. `lead_id`
@@ -1539,10 +1540,8 @@ field "expected.colour"; expected takes name, color`,
 `expected.title must be a string that is not blank, of at most 255
 characters`, `expected.name must be a string that is not blank, of at most
 40 characters` (a label's), `expected.assignee_id must be a profile uuid or
-null`, `expected.date must be a date as YYYY-MM-DD`,
-`expected.parent_id applies only when the request sends parent` and
-`expected.parent_id and expected.has_hidden_parent go together`, when
-`has_hidden_parent` comes without `parent_id`. `expected`
+null`, `expected.date must be a date as YYYY-MM-DD` and
+`expected.parent_id applies only when the request sends parent`. `expected`
 on a call that creates is refused with `expected applies only when changing
 an existing <record>`: `task` for `create_task`, `comment` for
 `add_comment`, `project` for `create_project`, and `label`, `team` and
@@ -2146,13 +2145,13 @@ MCP`.
 `list_tasks` rows and `get_task` share these fields besides the task's own
 columns: `owner_id` (whose work it is, the reviewer while the task is in
 `review` with one, else the assignee, and always the assignee on a group),
-`parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
-the address the app's **Copy link** gives. `parent_id` is the parent's uuid,
-or `null` for a task without a parent. A parent is in its subtask's own
-sub-project, so if you can read a subtask you can read its parent.
-`has_hidden_parent` is always `false`, and a later release removes it, so
-stop reading it. A group's `start_week` and `end_week` come from its
-subtasks, at any depth.
+`parent_id`, `start_week` and `end_week`, and `url`, the address the
+app's **Copy link** gives. `parent_id` is the parent's uuid, or `null` for
+a task without a parent. A parent is in its subtask's own sub-project, so
+if you can read a subtask you can read its parent. Tasks no longer have
+`has_hidden_parent`, which was always `false`, so a client that reads it
+must stop. A group's `start_week` and `end_week` come from its subtasks,
+at any depth.
 
 `progress` is `null` for a task without subtasks. For a group it is the
 **Progress** of the app's task window, `done` of `total` tasks without

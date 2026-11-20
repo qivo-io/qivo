@@ -1970,7 +1970,7 @@ Task shape of a list row from `GET /v1/tasks`:
   "reviewer_id": "…uuid or null", "reviewer_name": "Aisha Rahman",
   "owner_id": "…uuid or null",
   "reporter_id": "…uuid or null", "reporter_name": "Nora Berg",
-  "parent_id": null, "has_hidden_parent": false,
+  "parent_id": null,
   "start_week": null, "end_week": null, "due_date": null, "delay": null,
   "remaining_hours": 8, "remaining_set_at": "…timestamp or null…",
   "paused": false, "progress": null,
@@ -2101,8 +2101,8 @@ to read the rest.
 group. `url` is the address the app's **Copy link** gives. `parent_id` is
 the parent task's uuid, or `null` for a task without a parent. A parent is
 in its subtask's own sub-project, so a caller who can read a subtask can
-read its parent. `has_hidden_parent` is always `false`, and a later release
-removes it, so stop reading it.
+read its parent. Tasks no longer have `has_hidden_parent`, which was always
+`false`, so a client that reads it must stop.
 
 The single-task fields name only tasks the caller can read. `subtasks` lists
 the first page of the direct subtasks, by number. An active task lists its
@@ -3082,9 +3082,8 @@ These routes and tools take `expected`, with these keys:
 | `PATCH /v1/teams/{id}` | `set_team` with `team_id` | `name` |
 | `PATCH /v1/users/{id}` | `update_user` | `plannable_hours` |
 
-Each key belongs to the request field of the same name, with three
-exceptions on a task. `parent_id` belongs to `parent`, as does
-`has_hidden_parent` while Qivo still takes it, and `project_id` to
+Each key belongs to the request field of the same name, with two
+exceptions on a task. `parent_id` belongs to `parent`, and `project_id` to
 `project` or `sub_project`. A delete changes
 the whole record, so it takes any of its keys. `archived`, `archive_reason`,
 `add_labels` and `remove_labels` take no key and are never checked. Routes
@@ -3095,8 +3094,8 @@ with `expected applies only when changing an existing <record>`, such as
 
 A value has the type a read answers, which is a string for text and dates,
 a number for `remaining_hours`, `review_hours` and `plannable_hours`, a
-boolean for `paused`, `track_delay` and `has_hidden_parent`, a uuid for an
-id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
+boolean for `paused` and `track_delay`, a uuid for an id, and `null` where
+the field can be unset. `level` is `user`, `viewer` or `null`.
 A value also follows the rule of its field, the one a write of that field
 follows. `start_week`, `end_week` and `due_date` are real calendar dates
 written `YYYY-MM-DD`. `remaining_hours` is a number from 0 to 99999.9,
@@ -3121,9 +3120,9 @@ Send each field as the read showed it:
 
 - **A task's parent.** Send `parent_id` as `GET /v1/tasks/{ref}` answered
   it, the parent's uuid or `null` for no parent. A parent you read matches
-  while it stays the parent. Qivo still takes `has_hidden_parent` beside
-  `parent_id`, and a later release refuses it, so stop sending it.
-  `has_hidden_parent: true` matches nothing.
+  while it stays the parent. `expected` no longer takes `has_hidden_parent`,
+  so a request that still sends it, alone or beside `parent_id`, is a `400`
+  with `unknown field "expected.has_hidden_parent"; expected takes …`.
 - **A group's remaining time.** An active task with subtasks reads
   `remaining_hours: null`, also while it stores hours from before its
   subtasks, so send `null`.
@@ -3169,10 +3168,6 @@ that breaks its field's rule is a `400`, never a `409`:
   label or team.
 - `expected.<key> applies only when the request sends <field>`, such as
   `expected.parent_id applies only when the request sends parent`.
-- `expected.parent_id and expected.has_hidden_parent go together`, when
-  `has_hidden_parent` comes without `parent_id`.
-- `expected.has_hidden_parent must be false when expected.parent_id names a
-  task`.
 
 Until later in October 2026, a value that broke its field's rule, such as a
 `due_date` of `2026-02-31` or a `title` of `""`, was compared and could

@@ -209,8 +209,9 @@ at the other change, and decide whether yours still applies before you
 resend it with the new values in `expected`; ask the user when the two
 changes disagree. Fields you leave out of `expected` are not checked. Send
 each value as the last read showed it, such as `parent_id` for `parent`,
-and `null` for a field that was unset. Do not send `has_hidden_parent`; a
-later release refuses it.
+and `null` for a field that was unset. Tasks no longer have
+`has_hidden_parent`, so do not read it, and `expected` refuses it as an
+unknown field.
 
 Useful field rules:
 
@@ -302,8 +303,6 @@ Useful field rules:
   pass a cursor that is not `null` to `list_task_related` with `list` or to
   `GET /v1/tasks/{ref}/subtasks`, `/links`, `/followers` or `/attachments`
   until its `next_cursor` is `null`. A short or empty page is not the end.
-  `has_hidden_parent` is always `false` and a later release removes it, so
-  do not read it.
 - **Move:** send `project`, and `sub_project` when `project` names a
   meta-project, on `update_task` or PATCH. You need User or Lead access on
   both sub-projects, and the task's assignee and reviewer must be able to work
