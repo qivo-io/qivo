@@ -49,6 +49,7 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   DESCRIPTION_IMAGES_STEP,
+  DIRECTORY_SEARCH_QUERY,
   deletedPageProblem,
   deletedRowsOf,
   deleteOutcome,
@@ -95,6 +96,7 @@ import {
   MCP_ACCESS_LISTS_STEP,
   MCP_ACCESS_MARKS,
   MENTION_GONE,
+  MENTION_PEOPLE_QUERY,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
   MILESTONES_SECTION_QUERY,
@@ -132,6 +134,8 @@ import {
   PHONE_SELECTS_STEP,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PRESS_AGAIN_MS,
+  PRESS_TRIES,
   PROJECT_BY_IDS_STEP,
   PROJECT_DETAIL_REFUSALS,
   PROJECT_DIALOGS_EXPECTED,
@@ -152,6 +156,7 @@ import {
   parseArgs,
   peoplePagesMax,
   phoneSelectPages,
+  pressFor,
   pressSettled,
   projectDeleteRoute,
   projectPagesMax,
@@ -159,6 +164,7 @@ import {
   purgeAnswerOf,
   querySetChanges,
   RATE_BUDGET,
+  REASSIGN_PEOPLE_QUERY,
   REGROUP_WAIT,
   RELATION_EXPECTED,
   RELATION_STEP,
@@ -186,6 +192,7 @@ import {
   STARTUP_SELECTION_MARKS,
   STARTUP_SELECTION_STEP,
   searchOf,
+  searchRead,
   selectedCreatorsStarts,
   selectProblems,
   send,
@@ -2667,7 +2674,7 @@ describe('a search that lost its typed text', () => {
       seen.done()
     }
   })
-  it('guards the Users search, the searched pickers and the Deleted items search, and the workflow lists its NOTE', () => {
+  it('guards the Users search, the searched pickers and lists and the Deleted items search, and the workflow lists its NOTE', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(SEARCH_LOST).toBe('search-lost')
     // Deleted items types twice, each time right after the page opened
@@ -2675,7 +2682,8 @@ describe('a search that lost its typed text', () => {
     expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
-      'typeSearch(search, text, "a picker\'s search")',
+      'async function searchAnswered(search, text, rows, what = "a picker\'s search", read = null)',
+      'typeSearch(search, text, what)',
       'words, "Deleted items\' search")',
     ])
       expect(script, use).toContain(use)
@@ -2684,6 +2692,131 @@ describe('a search that lost its typed text', () => {
       'utf8',
     )
     expect(workflow).toContain(`^NOTE +(browser|${SEARCH_LOST})`)
+  })
+})
+
+describe('a guarded press', () => {
+  /** A stand-in target whose presses `takes` lets reach the page, and a
+   *  page that shows `state` once a press reached it. */
+  const targetOf = (takes) => {
+    const page = { presses: 0, state: false }
+    return {
+      page,
+      click: async () => {
+        page.presses++
+        if (takes(page.presses)) page.state = true
+      },
+    }
+  }
+  const quick = { again: 0, ms: 1500 }
+  let lines
+  let spy
+  beforeEach(() => {
+    lines = []
+    spy = vi.spyOn(console, 'log').mockImplementation((line) => lines.push(String(line)))
+  })
+  afterEach(() => spy.mockRestore())
+
+  it('presses once when the press takes', async () => {
+    const target = targetOf(() => true)
+    await pressFor(target, async () => target.page.state, 'Leo is not chosen', quick)
+    expect(target.page.presses).toBe(1)
+    expect(lines).toEqual([])
+    expect(PRESS_AGAIN_MS).toBe(5_000)
+  })
+  it('presses again while a press left no sign, and says so each time', async () => {
+    const target = targetOf((n) => n === 3)
+    await pressFor(target, async () => target.page.state, 'Leo is not chosen', quick)
+    expect(target.page.presses).toBe(3)
+    expect(lines).toEqual(
+      Array(2).fill(
+        `NOTE ${SEARCH_LOST}  Leo is not chosen after a press, which left no sign, and the step pressed again`,
+      ),
+    )
+  })
+  it('fails after its last press when no press shows', async () => {
+    const target = targetOf(() => false)
+    await expect(
+      pressFor(target, async () => target.page.state, 'Leo is not chosen', quick),
+    ).rejects.toThrow(`Leo is not chosen, after ${PRESS_TRIES} presses`)
+    expect(target.page.presses).toBe(PRESS_TRIES)
+  })
+  it('never presses again once the page shows the press, and fails when the result never comes', async () => {
+    const target = targetOf(() => true)
+    let reads = 0
+    // the press took at once, and its result shows on the third read
+    const slow = async () => ++reads >= 3
+    await pressFor(target, slow, 'M stays a favorite', { ...quick, lost: async () => false })
+    expect(target.page.presses).toBe(1)
+    await expect(
+      pressFor(target, async () => false, 'M stays a favorite', {
+        ...quick,
+        lost: async () => !target.page.state,
+      }),
+    ).rejects.toThrow(/^M stays a favorite$/)
+    expect(target.page.presses).toBe(2)
+    expect(lines).toEqual([])
+  })
+  it('gives a press after the first only the time that is left, and fails when it lands past it', async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+    // the first press is lost, and the row takes 1.5 s to be pressable again
+    const timeouts = []
+    let chosen = false
+    const target = {
+      click: async ({ timeout }) => {
+        timeouts.push(timeout)
+        if (timeouts.length === 1) return
+        await wait(Math.min(timeout, 1500))
+        if (timeout < 1500)
+          throw Object.assign(new Error('locator.click: Timeout exceeded'), {
+            name: 'TimeoutError',
+          })
+        chosen = true
+      },
+    }
+    await expect(
+      pressFor(target, async () => chosen, 'Leo is not chosen', { again: 0, ms: 1000 }),
+    ).rejects.toThrow(/^Leo is not chosen, and press 2 found nothing to press in the time left$/)
+    expect(timeouts[0]).toBe(30_000)
+    expect(timeouts[1]).toBeLessThanOrEqual(1000)
+    expect(chosen).toBe(false)
+  })
+  it('fails a sign that answers only once its time is up', async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+    const target = { click: async () => {} }
+    await expect(
+      pressFor(
+        target,
+        async () => {
+          await wait(1200)
+          return true
+        },
+        'M stays a favorite',
+        { ms: 1000, again: 5_000 },
+      ),
+    ).rejects.toThrow(/^M stays a favorite$/)
+  })
+  it('guards the presses that follow a search or a redraw, each on its own sign', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    for (const what of [
+      "'Leo is not chosen'",
+      "'the scope picker shows no All projects row'",
+      `"the team's page did not open from its row"`,
+      'name} is not open in Settings › Projects`',
+    ])
+      expect(script, what).toContain(what)
+    for (const search of [
+      `"the Mention window's search"`,
+      "'the Teams search'",
+      "'the directory search'",
+      "'the Settings › Projects search'",
+    ])
+      expect(script, search).toContain(search)
+    // the Inbox presses t0's row once its page is read again without the search
+    expect(script).toContain('await until(async () => unsearched() > before, 30_000)')
+    // M's star is a toggle that a refusal sets back, so it is pressed once,
+    // from the state the press expects
+    expect(script).toContain('await starOf().click({ timeout: 30_000 })')
   })
 })
 
@@ -2787,6 +2920,92 @@ describe("a browser's notification permission", () => {
     expect(can.slice(can.indexOf('} catch (error) {'))).not.toContain('notifications = ')
     for (const step of ['INBOX_FEED_STEP', 'NOTIFICATION_DELIVERY_STEP'])
       expect(script).toContain(`if (!(await alertsCan(${step}))) return`)
+  })
+})
+
+describe("a search's read on the sync socket", () => {
+  const sent = (socket, ...modifications) => ({
+    socket,
+    out: true,
+    text: JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 1, newVersion: 2, modifications }),
+  })
+  const add = (queryId, search, udfPath = MENTION_PEOPLE_QUERY) => ({
+    type: 'Add',
+    queryId,
+    udfPath,
+    args: [search === null ? { org_id: 'org' } : { org_id: 'org', search }],
+  })
+  const transition = (...modifications) =>
+    JSON.stringify({ type: 'Transition', startVersion: {}, endVersion: {}, modifications })
+  const got = (socket, ...modifications) => ({
+    socket,
+    out: false,
+    text: transition(...modifications),
+  })
+  const updated = (queryId) => ({ type: 'QueryUpdated', queryId, value: {}, logLines: [] })
+  const read = (frames) => searchRead(frames, MENTION_PEOPLE_QUERY, 'Leo')
+
+  it('answers once the server updates or fails the read of the search', () => {
+    expect(read([sent('a', add(3, 'Leo')), got('a', updated(3))])).toBe(true)
+    expect(
+      read([
+        sent('a', add(3, 'Leo')),
+        got('a', { type: 'QueryFailed', queryId: 3, errorMessage: 'no', logLines: [] }),
+      ]),
+    ).toBe(true)
+  })
+  it('does not answer for the rows before the search, another read or another socket', () => {
+    // the read before the search, answered, and the search's read on its way
+    expect(read([sent('a', add(2, null)), got('a', updated(2)), sent('a', add(3, 'Leo'))])).toBe(
+      false,
+    )
+    expect(read([sent('a', add(3, 'Le')), got('a', updated(3))])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo', 'pickers:taskOwners')), got('a', updated(3))])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo')), got('b', updated(3))])).toBe(false)
+    expect(read([got('a', updated(3)), sent('a', add(3, 'Leo'))])).toBe(false)
+    // removed before any answer, as when the text changed again
+    expect(
+      read([
+        sent('a', add(3, 'Leo')),
+        sent('a', { type: 'Remove', queryId: 3 }),
+        got('a', updated(3)),
+      ]),
+    ).toBe(false)
+  })
+  it('reads an answer that comes in parts once every part has come, in order', () => {
+    const text = transition(updated(3))
+    const chunk = (partNumber, chunk) => ({
+      socket: 'a',
+      out: false,
+      text: JSON.stringify({
+        type: 'TransitionChunk',
+        chunk,
+        partNumber,
+        totalParts: 2,
+        transitionId: 't',
+      }),
+    })
+    const half = Math.floor(text.length / 2)
+    const first = chunk(0, text.slice(0, half))
+    const second = chunk(1, text.slice(half))
+    expect(read([sent('a', add(3, 'Leo')), first])).toBe(false)
+    expect(read([sent('a', add(3, 'Leo')), first, second])).toBe(true)
+    expect(read([sent('a', add(3, 'Leo')), second, first])).toBe(false)
+  })
+  it('is what the searches of lists that may hold only matching rows wait for', () => {
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(script).toContain(
+      'searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0',
+    )
+    for (const query of [
+      'query: MENTION_PEOPLE_QUERY,',
+      'query: DIRECTORY_SEARCH_QUERY,',
+      'query: REASSIGN_PEOPLE_QUERY,',
+    ])
+      expect(script, query).toContain(query)
+    expect(MENTION_PEOPLE_QUERY).toBe('pickers:syncRecipients')
+    expect(DIRECTORY_SEARCH_QUERY).toBe('projectNav:search')
+    expect(REASSIGN_PEOPLE_QUERY).toBe('accessRemovals:reassignChoices')
   })
 })
 

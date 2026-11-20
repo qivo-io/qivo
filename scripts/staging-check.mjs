@@ -1643,6 +1643,9 @@ let callbackServer
 let redirectUri
 /** The WebSocket URLs the app page opened, which name its Convex backend. */
 let appSockets = []
+/** The app page's WebSockets that are still open, whose frames
+ *  recordFrames reads. */
+let openSockets = new Set()
 
 /** Starts the loopback OAuth callback. Codes stay in memory. */
 async function startCallback() {
@@ -1718,7 +1721,12 @@ async function openBrowser() {
   // recorded from the first navigation on, because the app's Convex client
   // connects as soon as the page loads, before verifyTarget runs
   appSockets = []
-  app.on('websocket', (ws) => appSockets.push(ws.url()))
+  openSockets = new Set()
+  app.on('websocket', (ws) => {
+    appSockets.push(ws.url())
+    openSockets.add(ws)
+    ws.on('close', () => openSockets.delete(ws))
+  })
 }
 
 /** Routes the Vercel bypass on browser context `target`, when the run has
@@ -2076,7 +2084,9 @@ export async function typeSearch(field, text, what) {
 }
 
 /** The NOTE a step prints when a search field lost its typed text
- *  (typeSearch). The WebKit workflow's summary lists these lines. */
+ *  (typeSearch), or when a guarded press showed no sign of taking and the
+ *  step pressed again (pressFor). The WebKit workflow's summary lists these
+ *  lines. */
 export const SEARCH_LOST = 'search-lost'
 
 /** Searches Settings › Users for `text` and waits for the page the
@@ -2119,25 +2129,197 @@ export const listAnswers = (texts, text) => {
   return texts.length > 0 && texts.every((row) => words.every((word) => folded(row).includes(word)))
 }
 
+/** Whether `frames`, as recordFrames records them, hold a read of query
+ *  `udfPath` with `search` as its search argument that the server has
+ *  answered: the page subscribed it (an Add in a ModifyQuerySet), and later
+ *  on the same socket, before the page removed it, a transition updated or
+ *  failed it. A transition in parts (TransitionChunk) counts once all its
+ *  parts have come. A read the app makes once, such as a picker's batch,
+ *  subscribes its query until the first answer as a live list does. */
+export function searchRead(frames, udfPath, search) {
+  const asked = new Map()
+  const parts = new Map()
+  for (const { socket, out, text } of frames) {
+    let message
+    try {
+      message = JSON.parse(text)
+    } catch {
+      continue
+    }
+    if (!asked.has(socket)) asked.set(socket, new Set())
+    const ids = asked.get(socket)
+    if (out) {
+      if (message?.type !== 'ModifyQuerySet' || !Array.isArray(message.modifications)) continue
+      for (const m of message.modifications) {
+        if (m?.type === 'Add' && m.udfPath === udfPath && m.args?.[0]?.search === search)
+          ids.add(m.queryId)
+        else if (m?.type === 'Remove') ids.delete(m.queryId)
+      }
+      continue
+    }
+    if (message?.type === 'TransitionChunk') {
+      const held = message.partNumber === 0 ? [] : parts.get(socket)
+      if (held?.length !== message.partNumber) {
+        parts.delete(socket)
+        continue
+      }
+      held.push(message.chunk)
+      parts.set(socket, held)
+      if (held.length < message.totalParts) continue
+      parts.delete(socket)
+      try {
+        message = JSON.parse(held.join(''))
+      } catch {
+        continue
+      }
+    }
+    if (message?.type !== 'Transition' || !Array.isArray(message.modifications)) continue
+    const answered = (m) =>
+      (m?.type === 'QueryUpdated' || m?.type === 'QueryFailed') && ids.has(m.queryId)
+    if (message.modifications.some(answered)) return true
+  }
+  return false
+}
+
+/** Types `text` into `search`, the search field of an open picker or of a
+ *  list on a page, and waits until `rows`, the list's choices, show the
+ *  search's answer (listAnswers). Such a list keeps the rows of the text
+ *  before until typing has rested, then replaces them with the answer,
+ *  emptying the list in between, and a press that lands on a row as it
+ *  goes is lost. Chromium and Firefox press before the list changes.
+ *  Playwright's WebKit presses about as late as the search rests, and lost
+ *  such presses. A list whose rows are off until the search is answered,
+ *  such as the Board's Assignee menu, needs no such wait, since a press
+ *  waits for its row to be on.
+ *
+ *  The rows alone tell the answer only while some row before the search
+ *  does not name it. Where every row before may name it, as in a list
+ *  that holds only the person searched for, the caller passes `read`:
+ *  `query`, the query the list reads its answer with, and `busy`, what the
+ *  list shows while that read is on its way or typing has not rested. The
+ *  wait then also needs the server's answer to a read of `query` for
+ *  `text` (searchRead, on the frames from before the typing) and no
+ *  `busy`, so the rows it reads are that answer's. `what` names the field
+ *  in a NOTE and in the failure. */
+async function searchAnswered(search, text, rows, what = "a picker's search", read = null) {
+  const record = read === null ? null : recordFrames()
+  try {
+    const holds = await typeSearch(search, text, what)
+    const answered = async () =>
+      record === null ||
+      (searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0)
+    expect(
+      await until(
+        async () =>
+          (await holds()) && (await answered()) && listAnswers(await rows.allTextContents(), text),
+        30_000,
+      ),
+      `${what} did not settle on its answer for ${text}`,
+    )
+  } finally {
+    record?.stop()
+  }
+}
+
 /** Types `text` into an open picker's `search` and presses `choice` once
- *  `rows`, the list's choices, show the search's answer (listAnswers). A
- *  picker opens on its first people or projects and replaces them with the
- *  answer once typing has rested, emptying the list in between, and a press
- *  that lands on a row as it goes is lost. Chromium and Firefox press
- *  before the list changes. Playwright's WebKit presses about as late as
- *  the search rests, and lost such presses. A list whose rows are off until
- *  the search is answered, such as the Board's Assignee menu, needs no such
- *  wait, since a press waits for its row to be on. */
-async function pressSearched(search, text, rows, choice) {
-  const holds = await typeSearch(search, text, "a picker's search")
-  expect(
-    await until(
-      async () => (await holds()) && listAnswers(await rows.allTextContents(), text),
-      30_000,
-    ),
-    `the picker's list did not settle on its search for ${text}`,
-  )
+ *  `rows`, the list's choices, show the search's answer (searchAnswered,
+ *  which takes `read`). */
+async function pressSearched(search, text, rows, choice, read = null) {
+  await searchAnswered(search, text, rows, undefined, read)
   await choice.click({ timeout: 30_000 })
+}
+
+/** How long a guarded press waits for its sign before it may press again
+ *  (pressFor). */
+export const PRESS_AGAIN_MS = 5_000
+
+/** The most presses one guarded press makes (pressFor). */
+export const PRESS_TRIES = 3
+
+/** `n` presses in words. */
+const pressCount = (n) => `${n} ${n === 1 ? 'press' : 'presses'}`
+
+/** Presses `target` and waits until `done` answers true within `ms` of
+ *  the first press, else fails the step with `what`, a line that says what
+ *  is still missing. The first press waits up to 30 s for `target` and
+ *  fails the step when it finds none. A press can be lost on a page that
+ *  redraws under it, as a list does when a search's answer replaces its
+ *  rows (searchAnswered), and a lost press leaves nothing to wait for.
+ *  When `done` has not come `again` ms after a press and `lost` answers
+ *  true, it presses again, at most PRESS_TRIES presses in all, and says so
+ *  in a NOTE (SEARCH_LOST). Such a press waits for `target` only for what
+ *  is left of `ms`, and a `done` that answers once `ms` is up fails the
+ *  step too. `lost` must answer true only while the page shows no sign
+ *  that the press reached it, so a press that took is never repeated and
+ *  a toggle it set is never set back. Without `lost`, `done` must be that
+ *  sign, shown as soon as a press takes, and a press counts as lost while
+ *  `done` does not answer. A toggle that can go back by itself, as a star
+ *  does when the server refuses it, shows no such sign and is pressed
+ *  once, without this guard. */
+export async function pressFor(
+  target,
+  done,
+  what,
+  { lost = null, ms = 30_000, again = PRESS_AGAIN_MS } = {},
+) {
+  let end = 0
+  for (let presses = 1; ; presses++) {
+    if (presses === 1) {
+      await target.click({ timeout: 30_000 })
+      end = Date.now() + ms
+    } else {
+      const left = end - Date.now()
+      expect(left > 0, `${what}, after ${pressCount(presses - 1)}`)
+      try {
+        await target.click({ timeout: left })
+      } catch (error) {
+        if (error?.name !== 'TimeoutError') throw error
+        fail(`${what}, and press ${presses} found nothing to press in the time left`)
+      }
+    }
+    const next = Date.now() + again
+    for (;;) {
+      const shown = await done()
+      // a sign that answers past the limit fails, as one that never answers
+      expect(Date.now() < end, presses > 1 ? `${what}, after ${pressCount(presses)}` : what)
+      if (shown) return
+      if (presses < PRESS_TRIES && Date.now() >= next && (lost === null || (await lost()))) break
+      await sleep(500)
+    }
+    say(
+      'NOTE',
+      SEARCH_LOST,
+      `${what} after a press, which left no sign, and the step pressed again`,
+    )
+  }
+}
+
+/** Records the frames the app page passes on its WebSockets, those open
+ *  now and those it opens later, each `{ socket, out, text }` in the order
+ *  they pass (`out` for a frame the page sent), until `stop`. Answers the
+ *  growing list as `frames`. */
+function recordFrames() {
+  const frames = []
+  const offs = []
+  const listen = (ws) => {
+    const sent = (frame) => frames.push({ socket: ws, out: true, text: String(frame.payload) })
+    const received = (frame) => frames.push({ socket: ws, out: false, text: String(frame.payload) })
+    ws.on('framesent', sent)
+    ws.on('framereceived', received)
+    offs.push(() => {
+      ws.off('framesent', sent)
+      ws.off('framereceived', received)
+    })
+  }
+  for (const ws of openSockets) listen(ws)
+  app.on('websocket', listen)
+  return {
+    frames,
+    stop: () => {
+      app.off('websocket', listen)
+      for (const off of offs) off()
+    },
+  }
 }
 
 /** Adds an agent with the given role on the Users page and returns its id
@@ -2481,11 +2663,14 @@ async function openDeletedItems(kind, search) {
   const org = await evaluate(app, () => window.PLANNER.homeOrg)
   const trigger = app.locator(`[${m.scope}]`)
   await settledPicker(trigger)
-  await trigger.click()
   const all = app.locator(`[data-project-pick-all="${org}"]`)
-  await all.waitFor({ timeout: 30_000 })
-  if ((await all.getAttribute('aria-checked')) !== 'true') await all.click()
   const field = app.locator('[data-project-picker-search]')
+  // a press on the trigger can be lost as the page redraws, and the picker
+  // then stays shut, so the trigger is pressed again only while it is
+  await pressFor(trigger, () => all.isVisible(), 'the scope picker shows no All projects row', {
+    lost: async () => (await field.count()) === 0,
+  })
+  if ((await all.getAttribute('aria-checked')) !== 'true') await all.click()
   if ((await field.count()) > 0) await field.press('Escape')
   await field.waitFor({ state: 'detached', timeout: 10_000 })
   await app.getByRole('radio', { name: kind, exact: true }).click()
@@ -7141,31 +7326,36 @@ export const OWNER_PICKERS_NAMES = { project: 'Owners', task: 'owner pickers' }
  *  can no longer be mentioned. */
 export const MENTION_GONE = 'can no longer be mentioned on this task'
 
+/** The read of the Mention window's people (convex/pickers.ts
+ *  syncRecipients), whose answer for a search the step waits for. */
+export const MENTION_PEOPLE_QUERY = 'pickers:syncRecipients'
+
 /** A task's owner lists and Team sync's Mention window read their people
- *  from the deployment (pickers.taskOwners, syncRecipients and canOwn).
- *  Over REST as Nora the step makes `<tag> Owners` under the run project M
- *  with Leo Martins as its lead, grants the Standard agent User on it, and
- *  makes `<tag> owner pickers` there, In Progress and unassigned. In the
- *  task's window, Assignee searches the agent's name and picks the agent
- *  from the deployment's batch, Reviewer searches Nora's and picks her,
- *  then No reviewer clears it, each checked with GET /tasks/{ref}. In Team
- *  sync for M by its address, the task's card on the agent's line opens
- *  its owner list, which finds and picks Nora, also checked over REST. On
- *  the card, now on Nora's line, the Mention window searches "Leo", picks
- *  him from the deployment's recipients and takes a note. The sub-project's
- *  lead then goes back to Nora over REST, the User grant a handover leaves
- *  the outgoing lead is removed, and GET /projects/{ref}/users must stop
- *  listing Leo, so he can no longer see the task. Send must then show
- *  that Leo can no longer be mentioned, keep the note and post nothing
- *  (GET /tasks/{ref}/comments unchanged), and Cancel closes the window.
- *  It assigns only the run's own agent and Nora, who does the picking, and
- *  posts no comment. It notifies only the run's own Standard agent, which
- *  follows the task once it is assigned and gets the task's later changes,
- *  such as its handover to Nora, in its Inbox. No fixture person is
- *  notified, since a lead change and a removed grant send no Inbox
- *  message. The cleanup, which deletes M, removes the
- *  sub-project and the task. It needs a backend from v0.1.147 on, which
- *  answers the pickers and people.byIds. */
+ *  from the deployment (pickers.taskOwners, syncRecipients and canOwn). Over
+ *  REST as Nora the step makes `<tag> Owners` under the run project M with
+ *  Leo Martins as its lead, grants the Standard agent User on it, and makes
+ *  `<tag> owner pickers` there, In Progress and unassigned. In the task's
+ *  window, Assignee searches the agent's name and picks the agent from the
+ *  deployment's batch, Reviewer searches Nora's and picks her, then No
+ *  reviewer clears it, each checked with GET /tasks/{ref}. In Team sync for
+ *  M by its address, the task's card on the agent's line opens its owner
+ *  list, which finds and picks Nora, also checked over REST. On the card,
+ *  now on Nora's line, the Mention window searches "Leo", waits for the
+ *  deployment's answer to that search (MENTION_PEOPLE_QUERY), which must
+ *  list only people named Leo, picks him from it and takes a note. The
+ *  sub-project's lead then goes back to Nora over REST, the User grant a
+ *  handover leaves the outgoing lead is removed, and GET
+ *  /projects/{ref}/users must stop listing Leo, so he can no longer see the
+ *  task. Send must then show that Leo can no longer be mentioned, keep the
+ *  note and post nothing (GET /tasks/{ref}/comments unchanged), and Cancel
+ *  closes the window. It assigns only the run's own agent and Nora, who does
+ *  the picking, and posts no comment. It notifies only the run's own
+ *  Standard agent, which follows the task once it is assigned and gets the
+ *  task's later changes, such as its handover to Nora, in its Inbox. No
+ *  fixture person is notified, since a lead change and a removed grant send
+ *  no Inbox message. The cleanup, which deletes M, removes the sub-project
+ *  and the task. It needs a backend from v0.1.147 on, which answers the
+ *  pickers and people.byIds. */
 async function ownerPickersCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -7252,11 +7442,28 @@ async function ownerPickersCheck() {
     await card.locator(`[data-sync-mention="${t.key}"]`).click()
     const mention = app.locator(`[data-sync-mention-window="${t.key}"]`)
     await mention.waitFor({ timeout: 20_000 })
-    await mention.locator('[data-sync-mention-search]').fill('Leo')
+    // the window lists its first people until the search rests, and they
+    // can be Leo alone, so the rows alone cannot tell the answer. Leo is
+    // pressed once the window shows the server's answer for his name, where
+    // his row shows the choice at once. A choice stays on whatever a later
+    // read lists, so this is also where a failed search fails the step.
+    await searchAnswered(
+      mention.locator('[data-sync-mention-search]'),
+      'Leo',
+      mention.locator('[data-sync-mention-person]'),
+      "the Mention window's search",
+      {
+        query: MENTION_PEOPLE_QUERY,
+        // the list's Loading and held lines
+        busy: mention.locator('[data-sync-mention-list] [role="status"]'),
+      },
+    )
     const person = mention.locator(`[data-sync-mention-person="${leo.id}"]`)
-    await person.waitFor({ timeout: 30_000 })
-    await person.click()
-    eq(await person.getAttribute('aria-pressed'), 'true', 'Leo is not chosen')
+    await pressFor(
+      person,
+      async () => (await person.getAttribute('aria-pressed')) === 'true',
+      'Leo is not chosen',
+    )
     const note = `${run.tag} never sent`
     await mention.locator('textarea[aria-label="Note"]').fill(note)
     // Leo loses sight of the task before Send. The lead goes back to Nora,
@@ -7617,6 +7824,7 @@ export const INBOX_LIST_MARKS = {
   crumb: 'data-msg-crumb',
   until: 'data-msg-until',
   search: 'data-inbox-search',
+  pageState: 'data-inbox-page-state',
   filter: 'data-inbox-filter',
   showSnoozed: 'data-inbox-show-snoozed',
   menu: 'data-msg-menu',
@@ -7648,8 +7856,10 @@ export function sentMutation(text, udfPath) {
  *  REST, a fresh load of /app/~/inbox must show t0's row, by its task and
  *  organization, on the first page with M's name and then Alpha's in its
  *  crumb, having subscribed the page. A search by t0's key, and then by M's
- *  name, must subscribe the page with that search and hold t0's row. From the row's menu it sends Mark as read
- *  (messages.readItem with t0's organization, task and a cutoff), Mark as
+ *  name, must subscribe the page with that search and hold t0's row. Once
+ *  the search is cleared and the page read again without it, from the
+ *  row's menu it sends Mark as read (messages.readItem with t0's
+ *  organization, task and a cutoff), Mark as
  *  unread (messages.unreadItem), Snooze for an hour (messages.snoozeItem
  *  with a time), after which the row leaves, Show snoozed brings it back
  *  with its return time, and Unsnooze (messages.snoozeItem with null).
@@ -7697,7 +7907,18 @@ async function inboxListCheck() {
         )
         await row.waitFor({ timeout: 60_000 })
       }
+      // the list shows the searched page until the cleared text rests and
+      // then reads its page afresh, so the menus below, which press t0's
+      // row, wait for that page's answer
+      const unsearched = () => pages().filter((args) => args.search === undefined).length
+      const before = unsearched()
       await search.fill('')
+      expect(
+        await until(async () => unsearched() > before, 30_000),
+        'the Inbox did not read its page again once the search was cleared',
+      )
+      await app.locator(`[${m.pageState}="ok"]`).waitFor({ timeout: 60_000 })
+      await row.waitFor({ timeout: 60_000 })
       /** The arguments of the first `udfPath` sent after frame `from`. */
       const wrote = async (udfPath, from, what) => {
         let args = null
@@ -9294,7 +9515,14 @@ async function settingsTeamsCheck() {
         waitUntil: 'domcontentloaded',
       })
       await app.locator('[data-org-teams][data-teams-state="ok"]').waitFor({ timeout: 60_000 })
-      await app.locator('[data-teams-search]').fill(name)
+      // the list keeps its first teams until the search rests, and the
+      // presses that follow land in the answer
+      await searchAnswered(
+        app.locator('[data-teams-search]'),
+        name,
+        app.locator('[data-org-teams] [data-team-row]'),
+        'the Teams search',
+      )
       const row = app.locator(`[data-org-teams] [data-team-row="${team.id}"]`)
       expect(
         await until(async () => (await row.count()) === 1),
@@ -9303,9 +9531,14 @@ async function settingsTeamsCheck() {
       eq(await row.locator('[data-team-kept]').count(), 0, 'kept rows')
       return row
     }
-    /** The run's team's page, opened from its row in the list. */
+    /** The run's team's page, opened from its row in the list. The page
+     *  carries its state mark as soon as a press opens it. */
     const opened = async (row) => {
-      await row.locator('[data-team-open]').click()
+      await pressFor(
+        row.locator('[data-team-open]'),
+        async () => (await app.locator('[data-team-settings-state]').count()) > 0,
+        "the team's page did not open from its row",
+      )
       await app.locator('[data-team-settings-state="ok"]').waitFor({ timeout: 60_000 })
       await app
         .locator('[data-team-members][data-team-members-state="ok"]')
@@ -9508,24 +9741,30 @@ export const REMOVAL_EXPECTED = {
   chosen: (name) => `New assignee: ${name}`,
 }
 
+/** The read of the removal window's Reassign picker
+ *  (convex/accessRemovals.ts reassignChoices), whose answer for a search
+ *  the step waits for. */
+export const REASSIGN_PEOPLE_QUERY = 'accessRemovals:reassignChoices'
+
 /** The removal window on the deployment's answers (accessRemovals.preview
  *  and reassignChoices): the run makes `<tag> Removal` under its second
- *  project N over REST, gives the Standard agent a User grant there and a
- *  To Do task, then in the app presses the agent's Remove in that
- *  sub-project's access editor. The window must list the task's key and
- *  title from the preview; the step chooses Reassign, searches the picker
- *  for Nora's name, chooses her and presses REMOVAL_EXPECTED.submit, which
- *  must close the window. Over REST the task must then be Nora's and the
+ *  project N over REST, gives the Standard agent a User grant there and a To
+ *  Do task, then in the app presses the agent's Remove in that sub-project's
+ *  access editor. The window must list the task's key and title from the
+ *  preview; the step chooses Reassign, searches the picker for Nora's name,
+ *  waits for the deployment's answer to that search (REASSIGN_PEOPLE_QUERY),
+ *  whose rows must all name her, since she can be the only person the picker
+ *  opens with, chooses her and presses REMOVAL_EXPECTED.submit, which must
+ *  close the window. Over REST the task must then be Nora's and the
  *  sub-project must hold no grant for the agent. Not under M, where the
- *  agent's Viewer grant keeps its sight of every sub-project, so the
- *  removal would take no task out of sight and open no window. Without an
- *  N it makes a tagged top-level project of its own (run.projects.R), which
- *  the cleanup deletes and the sweep finds by its tag. The task goes to
- *  run.created. It runs while the run's projects are active, after
- *  ui/settings-teams, and needs a backend from the release of the
- *  removal window or later. Against an older one the press cannot read
- *  the preview, so the window never opens and the step fails waiting for
- *  it. */
+ *  agent's Viewer grant keeps its sight of every sub-project, so the removal
+ *  would take no task out of sight and open no window. Without an N it makes
+ *  a tagged top-level project of its own (run.projects.R), which the cleanup
+ *  deletes and the sweep finds by its tag. The task goes to run.created. It
+ *  runs while the run's projects are active, after ui/settings-teams, and
+ *  needs a backend from the release of the removal window or later. Against
+ *  an older one the press cannot read the preview, so the window never opens
+ *  and the step fails waiting for it. */
 async function removalWindowCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
@@ -9565,12 +9804,19 @@ async function removalWindowCheck() {
     await dialog.locator('[data-access-removal-reassign] input[type="radio"]').check()
     const picker = dialog.locator('[data-reassign-to]')
     await picker.click()
+    // the picker opens on the people who could take the task, who can be
+    // Nora alone, so it waits for the server's answer to her name
     await pressSearched(
       app.locator('[data-reassign-search]'),
       run.nora.name,
       // the people; the row that names no one stays whatever the search
       app.locator('[data-reassign-choice]:not([data-reassign-choice=""])'),
       app.locator(`[data-reassign-choice="${run.nora.id}"]`),
+      {
+        query: REASSIGN_PEOPLE_QUERY,
+        // the picker's Loading people and held lines
+        busy: app.locator('[data-reassign-people] [role="status"]'),
+      },
     )
     expect(
       await until(
@@ -10453,6 +10699,7 @@ export const SETTINGS_PROJECTS_STEP = 'ui/settings-projects'
  *  (src/panels/settings/ProjectLists.tsx). */
 export const SETTINGS_PROJECTS_MARKS = {
   search: 'data-settings-projects-search',
+  list: 'data-settings-projects',
   row: 'data-project-row',
   subList: 'data-subproject-list',
   subRow: 'data-subproject-row',
@@ -10469,9 +10716,10 @@ export const SETTINGS_PROJECTS_MARKS = {
  *  (projectSettings.projects, subProjects, archived and
  *  archivedSubProjects): the run makes `<tag> Lists` over REST with two
  *  sub-projects, `<tag> Lists A` and `<tag> Lists B`. In the app as Nora it
- *  searches Settings › Projects for the run's tag, waits for the project's
- *  row, opens it and waits for both sub-projects' rows. Over REST it
- *  archives B alone and then the project, which carries A. In Archived
+ *  searches Settings › Projects for the run's tag, waits for the search's
+ *  answer (searchAnswered) and the project's row, opens it (pressFor) and
+ *  waits for both sub-projects' rows. Over REST it archives B alone and
+ *  then the project, which carries A. In Archived
  *  projects it searches the tag, waits for the project's entry with A and B
  *  beneath it as search hits, shows its sub-projects and checks A solid
  *  (archived with it) and B dashed (archived on its own), and presses
@@ -10497,10 +10745,22 @@ async function settingsProjectsCheck() {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
       waitUntil: 'domcontentloaded',
     })
-    await app.locator(`[${m.search}]`).fill(run.tag)
+    // the list keeps its first projects until the search rests, so the
+    // project is opened in the answer, where its row shows it open at once
+    await searchAnswered(
+      app.locator(`[${m.search}]`),
+      run.tag,
+      app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`),
+      'the Settings › Projects search',
+    )
     const row = app.locator(`[${m.row}="${lists.id}"]`)
     await row.waitFor({ timeout: 60_000 })
-    await row.locator('button').first().click()
+    const open = row.locator('button').first()
+    await pressFor(
+      open,
+      async () => (await open.getAttribute('aria-expanded')) === 'true',
+      `${lists.name} is not open in Settings › Projects`,
+    )
     for (const sub of [a, b])
       await app
         .locator(`[${m.subList}="${lists.id}"] [${m.subRow}="${sub.id}"]`)
@@ -10755,6 +11015,10 @@ export const PROJECT_DIRECTORY_MARKS = {
   state: 'data-project-directory-state',
 }
 
+/** The read the directory lists a search with (convex/projectNav.ts
+ *  search), whose answer for each search the step waits for. */
+export const DIRECTORY_SEARCH_QUERY = 'projectNav:search'
+
 /** The group of each row the directory shows, by id, read from
  *  `sequence`, the page's group headings (`{ group }`, 'favorites' or
  *  'rest') and rows (`{ row, starred }`) in order. A row under a heading
@@ -10789,20 +11053,24 @@ export function atProject(pathname, num) {
  *  and its sub-projects Alpha and Zulu, so the step adds no project the
  *  later steps' tag searches would list. In the app it opens All projects
  *  from the sidebar, waits for the browse list to answer with a row,
- *  searches the run's tag and waits for M's row and Alpha's, which sorts
- *  before M by name and so comes first while M is no favorite. It stars M
- *  and waits for the server's answer to put M under Favorites, ahead of
- *  Alpha under Other projects (directoryGroups). It expands M and waits
- *  for Alpha and Zulu from projectNav.children, pressing Load more while
- *  one is still to come, opens Zulu from that list, pressing again while
- *  the directory says the workspace has not loaded it yet, and waits for
- *  Zulu's address (`/p/` and its number) and for the header to name Zulu.
- *  Back in All projects it searches M's name, unstars M and waits for the
- *  Favorites heading to go; a failure unstars it through the store, so no
- *  later step meets the run's project as a favorite. It reads none of
- *  Nora's own favorites, which a deployment seeded before dataset version
- *  10 does not hold, and must run before the run archives M. It needs a
- *  backend from v0.1.126 on. */
+ *  searches the run's tag and waits for the server's answer to that search
+ *  (searchAnswered with DIRECTORY_SEARCH_QUERY) with M's row and Alpha's,
+ *  which sorts before M by name and so comes first while M is no favorite.
+ *  It stars M with one press, from a star that shows it off, and waits
+ *  for the server's answer to put M under Favorites, ahead of Alpha under
+ *  Other projects (directoryGroups). It expands M and waits for Alpha and
+ *  Zulu from projectNav.children, pressing Load more while one is still to
+ *  come, opens Zulu from that list, pressing again while the directory says
+ *  the workspace has not loaded it yet, and waits for Zulu's address (`/p/`
+ *  and its number) and for the header to name Zulu. Back in All projects,
+ *  which still holds the search for the tag, it searches M's name and waits
+ *  for the server's answer to that search the same way, whose rows must all
+ *  name M's name. It unstars M as it starred it, from a star that shows it
+ *  on, and waits for the Favorites heading to go and the star to show it
+ *  off; a failure unstars it through the store, so no later step meets the
+ *  run's project as a favorite. It reads none of Nora's own favorites, which
+ *  a deployment seeded before dataset version 10 does not hold, and must run
+ *  before the run archives M. It needs a backend from v0.1.126 on. */
 async function projectDirectoryCheck() {
   const m = PROJECT_DIRECTORY_MARKS
   await check(PROJECT_DIRECTORY_STEP, async () => {
@@ -10826,11 +11094,42 @@ async function projectDirectoryCheck() {
     const favorites = () => app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()
     /** The ids of the rows the page shows, in order. */
     const ids = (shown) => shown.flatMap((item) => ('row' in item ? [item.row] : []))
+    // the directory keeps the rows it showed until the search rests. All
+    // projects is a kept page, which on the way back still holds the search
+    // for the run's tag, whose rows can all name M's name as well, so the
+    // rows alone cannot tell the answer. Each search waits for the server's
+    // answer for its own text, and what the step reads and presses after it
+    // is that answer.
     const search = async (text) => {
-      await app.locator(`[${m.search}]`).fill(text)
+      await searchAnswered(
+        app.locator(`[${m.search}]`),
+        text,
+        app.locator(`[${m.page}] [${m.row}]`),
+        'the directory search',
+        {
+          query: DIRECTORY_SEARCH_QUERY,
+          // the page until the read of what it lists has answered
+          busy: app.locator(`[${m.page}]:not([${m.state}="ok"])`),
+        },
+      )
       await row(M).waitFor({ timeout: 60_000 })
     }
     const starOf = () => row(M).locator(`[${m.star}]`)
+    /** Presses M's star once to set it `on`, from a star that must show
+     *  the other state. The search before it has waited for the list's
+     *  answer, so the list does not redraw under the press. A star is not
+     *  pressed again, since one that went back on a refusal looks like one
+     *  whose press was lost, and a second press could then take and hide
+     *  the refusal. The waits after it fail the step when a press is
+     *  lost. */
+    const pressStar = async (on) => {
+      eq(
+        await starOf().getAttribute('aria-pressed'),
+        String(!on),
+        `M's star before a press that ${on ? 'stars' : 'unstars'} it`,
+      )
+      await starOf().click({ timeout: 30_000 })
+    }
     let starred = false
     try {
       // the sidebar shows over the workspace, not over Settings
@@ -10852,8 +11151,8 @@ async function projectDirectoryCheck() {
       )
       // the star, and the server's answer that puts M under Favorites,
       // ahead of Alpha under Other projects
-      await starOf().click()
       starred = true
+      await pressStar(true)
       expect(
         await until(async () => {
           const shown = await sequence()
@@ -10897,7 +11196,7 @@ async function projectDirectoryCheck() {
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
       await search(M.name)
-      await starOf().click()
+      await pressStar(false)
       expect(
         await until(
           async () =>
