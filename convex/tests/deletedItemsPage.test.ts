@@ -570,9 +570,10 @@ describe('order and continuation', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const ids = await plantItems(t, f, 3)
-    // the user's own deletes, Testbed platform and Skunkworks, and the
-    // cross-project rows of Firmware and Board rev: five ranges a page
-    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 6 } })
+    // the user's own deletes, Testbed platform and Skunkworks: three ranges
+    // a page, and one more left so the page goes on to its entry. A source
+    // that opened a second range on a later page would stop it short.
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 4 } })
     const walked = await walk(t, f.user, {
       scope: { org_id: f.org.id, all: true },
       kind: 'task',
@@ -1141,7 +1142,7 @@ describe('stops', () => {
     const first = await page(t, f.user, args)
     expect(first.entries.map((e) => e.task?.key)).toEqual(keys.slice(0, 2))
     // the next page reads the item's last task, then cannot open its sources
-    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 1 } })
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 4 } })
     const second = await page(t, f.user, { ...args, cursor: first.next_cursor ?? '' })
     expect(second.entries).toEqual([
       { item_id: item, task: expect.objectContaining({ key: keys[2] }) },
@@ -1259,9 +1260,8 @@ describe('stops', () => {
     })
     // the project entries need only Sam's own deletes
     expect((await page(t, sam, { scope: all, kind: 'project' })).too_wide).toBeUndefined()
-    // a scope of Firmware reads Sam's own deletes and Firmware's range,
-    // whose cross-project rows name the task items of Board rev that have a
-    // subtask in Firmware (scopeRanges)
+    // a scope of Firmware reads Sam's own deletes and Firmware's range
+    // (scopeRanges), which holds the task item of Clamp: two
     const firmware = { scope: { org_id, project_ids: [f.sub.id] } }
     Object.assign(DELETED_PAGE, { sources: 1 })
     expect(await page(t, sam, firmware)).toMatchObject({ entries: [], too_wide: true })
