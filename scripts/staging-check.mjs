@@ -2255,7 +2255,10 @@ const pressCount = (n) => `${n} ${n === 1 ? 'press' : 'presses'}`
  *  sign, shown as soon as a press takes, and a press counts as lost while
  *  `done` does not answer. `before`, when given, runs before each press
  *  and fails the step when the page is not in the state a press expects,
- *  such as a toggle that already shows what the press would set. */
+ *  such as a toggle that already shows what the press would set. It gets
+ *  the ms it may take, 30 s before the first press and what is left of
+ *  `ms` before a later one, and a read that waits for the page takes it
+ *  as its timeout. */
 export async function pressFor(
   target,
   done,
@@ -2264,15 +2267,20 @@ export async function pressFor(
 ) {
   let end = 0
   for (let presses = 1; ; presses++) {
-    if (before !== null) await before()
     if (presses === 1) {
+      if (before !== null) await before(30_000)
       await target.click({ timeout: 30_000 })
       end = Date.now() + ms
     } else {
-      const left = end - Date.now()
-      expect(left > 0, `${what}, after ${pressCount(presses - 1)}`)
+      /** What is left of `ms`, which a later press and its `before` share. */
+      const left = () => {
+        const rest = end - Date.now()
+        expect(rest > 0, `${what}, after ${pressCount(presses - 1)}`)
+        return rest
+      }
       try {
-        await target.click({ timeout: left })
+        if (before !== null) await before(left())
+        await target.click({ timeout: left() })
       } catch (error) {
         if (error?.name !== 'TimeoutError') throw error
         fail(`${what}, and press ${presses} found nothing to press in the time left`)
@@ -11073,7 +11081,8 @@ export function atProject(pathname, num) {
  *  (searchAnswered with DIRECTORY_SEARCH_QUERY) with M's row and Alpha's,
  *  which sorts before M by name and so comes first while M is no favorite.
  *  It stars M from a star that shows it off, pressing again only while the
- *  app has sent no write of M's star (pressFor, favoritesSent), and waits
+ *  app has sent no write of M's star and the star still shows it off
+ *  (pressFor, favoritesSent), and waits
  *  for the server's answer to put M under Favorites, ahead of Alpha under
  *  Other projects (directoryGroups). It expands M and waits for Alpha and
  *  Zulu from projectNav.children, pressing Load more while one is still to
@@ -11133,22 +11142,28 @@ async function projectDirectoryCheck() {
     }
     const starOf = () => row(M).locator(`[${m.star}]`)
     /** Presses M's star to set it `on` until the app sends the star's write
-     *  for `on`, which a press that took sends at once. The star must show
-     *  the other state before each press. A press counts as lost only
-     *  while the app has sent no write of M's star, so a press that took
+     *  for `on`. The star must show the other state before each press. A
+     *  press that took shows the new state at once and sends the write,
+     *  which waits for the connection when that is down. So a press counts
+     *  as lost only while the app has sent no write of M's star and the
+     *  star still shows the state before the press, and a press that took
      *  is never repeated, also when the star goes back on a refusal. */
     const pressStar = async (on, what) => {
       const record = recordFrames()
+      /** What M's star shows, read within `timeout` ms. */
+      const shows = (timeout) => starOf().getAttribute('aria-pressed', { timeout })
       try {
         await pressFor(
           starOf(),
           async () => favoritesSent(record.frames, M.id).includes(on),
           what,
           {
-            lost: async () => favoritesSent(record.frames, M.id).length === 0,
-            before: async () =>
+            lost: async () =>
+              favoritesSent(record.frames, M.id).length === 0 &&
+              (await shows(PRESS_AGAIN_MS)) === String(!on),
+            before: async (timeout) =>
               eq(
-                await starOf().getAttribute('aria-pressed'),
+                await shows(timeout),
                 String(!on),
                 `M's star before a press that ${on ? 'stars' : 'unstars'} it`,
               ),

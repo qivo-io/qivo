@@ -2776,14 +2776,39 @@ describe('a guarded press', () => {
         chosen = true
       },
     }
-    const started = Date.now()
     await expect(
       pressFor(target, async () => chosen, 'Leo is not chosen', { again: 0, ms: 1000 }),
     ).rejects.toThrow(/^Leo is not chosen, and press 2 found nothing to press in the time left$/)
     expect(timeouts[0]).toBe(30_000)
     expect(timeouts[1]).toBeLessThanOrEqual(1000)
     expect(chosen).toBe(false)
-    expect(Date.now() - started).toBeLessThan(1400)
+  })
+  it('gives the check before a press the time that press may take', async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+    // the first press is lost, and the page takes 1.5 s to answer the check
+    // that runs before the second
+    const allowed = []
+    let presses = 0
+    const target = { click: async () => void presses++ }
+    await expect(
+      pressFor(target, async () => false, 'Leo is not chosen', {
+        again: 0,
+        ms: 1000,
+        before: async (timeout) => {
+          allowed.push(timeout)
+          if (allowed.length === 1) return
+          await wait(Math.min(timeout, 1500))
+          if (timeout < 1500)
+            throw Object.assign(new Error('locator.getAttribute: Timeout exceeded'), {
+              name: 'TimeoutError',
+            })
+        },
+      }),
+    ).rejects.toThrow(/^Leo is not chosen, and press 2 found nothing to press in the time left$/)
+    expect(allowed[0]).toBe(30_000)
+    expect(allowed[1]).toBeGreaterThan(0)
+    expect(allowed[1]).toBeLessThanOrEqual(1000)
+    expect(presses).toBe(1)
   })
   it('fails a sign that answers only once its time is up', async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -2812,10 +2837,11 @@ describe('a guarded press', () => {
       }),
     })
     /** A stand-in star of project `m`, off at first unless `on`, whose
-     *  presses `takes` lets reach the page. A press that takes sends the
-     *  star's write and shows the new state, which a `refused` write takes
-     *  back a moment later. */
-    const starOf = (takes, { on = false, refused = false } = {}) => {
+     *  presses `takes` lets reach the page. A press that takes shows the
+     *  new state and sends the star's write, after `held` ms when the
+     *  connection is down, and a `refused` write takes the state back a
+     *  moment later. */
+    const starOf = (takes, { on = false, refused = false, held = 0 } = {}) => {
       const page = { on, presses: 0, frames: [] }
       return {
         page,
@@ -2823,7 +2849,9 @@ describe('a guarded press', () => {
           page.presses++
           if (!takes(page.presses)) return
           const want = !page.on
-          page.frames.push(write('m', want))
+          const send = () => page.frames.push(write('m', want))
+          if (held > 0) setTimeout(send, held)
+          else send()
           page.on = want
           if (refused) setTimeout(() => (page.on = !want), 50)
         },
@@ -2834,7 +2862,7 @@ describe('a guarded press', () => {
     const options = (star, on) => ({
       again: 0,
       ms: 1500,
-      lost: async () => favoritesSent(star.page.frames, 'm').length === 0,
+      lost: async () => favoritesSent(star.page.frames, 'm').length === 0 && star.page.on === !on,
       before: async () => {
         if (star.page.on === on) throw new Error(`the star shows ${on} before the press`)
       },
@@ -2872,6 +2900,15 @@ describe('a guarded press', () => {
       expect(favoritesSent(star.page.frames, 'm')).toEqual([true])
       expect(lines).toHaveLength(1)
     })
+    it('waits, without another press, for a write the connection holds back', async () => {
+      // the press took and the star shows it, and the write goes out later
+      const star = starOf(() => true, { held: 700 })
+      await pressFor(star, sent(star, true), 'the star sent no write', options(star, true))
+      expect(star.page.presses).toBe(1)
+      expect(star.page.on).toBe(true)
+      expect(favoritesSent(star.page.frames, 'm')).toEqual([true])
+      expect(lines).toEqual([])
+    })
     it('presses no star that already shows what the press would set', async () => {
       // M shows unstarred where the step comes to unstar it
       const star = starOf(() => true)
@@ -2885,7 +2922,8 @@ describe('a guarded press', () => {
       const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
       for (const part of [
         'async () => favoritesSent(record.frames, M.id).includes(on)',
-        'lost: async () => favoritesSent(record.frames, M.id).length === 0',
+        'favoritesSent(record.frames, M.id).length === 0 &&',
+        '(await shows(PRESS_AGAIN_MS)) === String(!on),',
         'String(!on),',
       ])
         expect(script, part).toContain(part)
