@@ -410,14 +410,14 @@ Later in November 2026 `list_tasks` and `get_task` results lost
 `has_hidden_parent`, which was always `false`, and the `expected` of
 `update_task` stopped taking it (see [Task results](#task-results) and
 [Refusing a change when a field changed since you read
-it](#refusing-a-change-when-a-field-changed-since-you-read-it)). The
-`update_task` description had asked clients to stop sending it. A client
-holding the older catalogue still finds the key in the schema of
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). A client
+holding an older catalogue still finds the key in the schema of
 `expected`, and a call that sends it, alone or beside `parent_id`, is
 refused with `unknown field "expected.has_hidden_parent"; expected takes
 …` and changes nothing. Such a client must send `parent_id` alone and stop
-reading the field, and its model learns that only after the client
-refreshes its tool list.
+reading the field. The catalogue just before this change says so in the
+descriptions of `get_task` and `update_task`, and a client holding an
+earlier one learns it only after it refreshes its tool list.
 
 ## Access model: the credential is a user
 
