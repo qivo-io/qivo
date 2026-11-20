@@ -343,9 +343,14 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     await act(async () => vi.advanceTimersByTime(29 * MINUTE))
     expect(hiddenPages().sort()).toEqual(['inbox', 'overview', 'roadmap'])
 
-    // 30 minutes without input: only the page on screen stays
+    // 30 minutes without input: only the page on screen stays. Each
+    // released page leaves on its own idle callback (components/KeptView.tsx),
+    // so the wait is for every hidden page, not for the first ones to go
     await act(async () => vi.advanceTimersByTime(MINUTE))
-    await waitFor(() => !overview.isConnected && !inbox.isConnected, 'the released pages gone')
+    await waitFor(
+      () => hiddenPages().length === 0 && !overview.isConnected && !inbox.isConnected,
+      'the released pages gone',
+    )
     expect(hiddenPages()).toEqual([])
     expect(board.isConnected).toBe(true)
 
