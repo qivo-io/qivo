@@ -9484,7 +9484,7 @@ function chosenSubtaskIds(
 
 /** P.deleteIssue on the watched task the window shows from its own answer
     (answerTaskOf), with the subtasks `subtasks` (handles) the Archive or
-    delete window listed as deletable, their uuids from the answer's whole
+    delete window listed and chose, their uuids from the answer's whole
     subtask list (P.familyOf), and no delete while that is unknown or no
     longer holds one of them. It waits for the server, as the window asks,
     and paints nothing: the window's answer says the task is gone, and the
