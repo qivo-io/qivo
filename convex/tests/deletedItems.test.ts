@@ -1456,21 +1456,32 @@ describe('purging', () => {
     // the activity keeps the trashed project's id until the purge: the
     // early task's delete, the item's own task and the task that moved out
     expect(await filedUnder()).toHaveLength(1 + 3 + 2)
-    // a row an earlier release's restore left naming the item, for a task
-    // it wrote back without its parent; the purge deletes it with the item
-    await t.run((ctx) =>
-      ctx.db.insert('deleted_item_parents', {
-        item_id: item.id,
-        task_id: own.id,
-        parent_id: early.id,
-      }),
-    )
+    // two rows an earlier release's restore left naming the item, for tasks
+    // it wrote back without their parent; the purge deletes them before the
+    // item
+    for (const task_id of [own.id, uuid()])
+      await t.run((ctx) =>
+        ctx.db.insert('deleted_item_parents', { item_id: item.id, task_id, parent_id: early.id }),
+      )
+    const waiting = () => t.run((ctx) => ctx.db.query('deleted_item_parents').collect())
     await assertNoDanglingRefs(t, 'while a project is in Deleted items')
 
+    // one row per step, so a step deletes only the first of the two rows
+    TRASH_BUDGET.rows = 1
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    let oneLeft = false
+    for (let steps = 0; (await jobFor(t, item.id)) !== null; steps++) {
+      expect(steps).toBeLessThan(200)
+      await step(t, item.id)
+      const left = await waiting()
+      if (left.length > 0) expect(await itemById(t, item.id)).not.toBeNull()
+      if (left.length === 1) oneLeft = true
+    }
+    expect(oneLeft).toBe(true)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await t.run((ctx) => ctx.db.query('deleted_item_parents').collect())).toEqual([])
+    expect(await waiting()).toEqual([])
     // the task item whose project was in it, and the sub-project item whose
     // parent was, could never come back
     expect(await itemById(t, earlyItem.id)).toBeNull()
@@ -2194,15 +2205,17 @@ describe("an organization's deletion", () => {
     const f = await withReadingAdmin(t)
     const { files, elsewhere, items, draining } = await trashInFlight(t, f)
     const [readyFile, ...trashOnly] = files
-    // a row an earlier release's restore left naming the moving project
-    // item; it names no organization, so the teardown finds it by item
-    await t.run((ctx) =>
-      ctx.db.insert('deleted_item_parents', {
-        item_id: items[2].id,
-        task_id: uuid(),
-        parent_id: uuid(),
-      }),
-    )
+    // two rows an earlier release's restore left naming the moving project
+    // item; they name no organization, so the teardown finds them by item
+    for (let i = 0; i < 2; i++)
+      await t.run((ctx) =>
+        ctx.db.insert('deleted_item_parents', {
+          item_id: items[2].id,
+          task_id: uuid(),
+          parent_id: uuid(),
+        }),
+      )
+    const waiting = () => t.run((ctx) => ctx.db.query('deleted_item_parents').collect())
     // a live attachment in the other organization names the ready item's
     // stored bytes, which the fence must keep
     const keeper = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
@@ -2243,6 +2256,7 @@ describe("an organization's deletion", () => {
     // one row per step, so the trash phase takes many
     Object.assign(REMOVAL_BUDGET, { rows: 256, bytes: 1 })
     const phases: OrgRemovalPhase[] = []
+    let oneLeft = false
     for (;;) {
       const removal = await removalOf(t, f.org.id)
       if (removal === null) break
@@ -2259,7 +2273,13 @@ describe("an organization's deletion", () => {
       )
       if (org !== null) await expectLiveCounts(t, f.org.id)
       await t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
+      // the item outlasts the rows that name it, also a step that deleted
+      // only the first of them
+      const left = await waiting()
+      if (left.length > 0) expect(await itemById(t, items[2].id)).not.toBeNull()
+      if (left.length === 1) oneLeft = true
     }
+    expect(oneLeft).toBe(true)
     expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(5)
     const order = phases.map((phase) => ORG_REMOVAL_PHASES.indexOf(phase))
     expect(order).toEqual([...order].sort((a, b) => a - b))
