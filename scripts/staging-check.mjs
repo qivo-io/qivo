@@ -11007,6 +11007,10 @@ export const PROJECT_DIRECTORY_MARKS = {
  *  setFavorite). */
 export const SET_FAVORITE_MUTATION = 'projectNav:setFavorite'
 
+/** The read the directory lists a search with (convex/projectNav.ts
+ *  search), whose answer for each search the step waits for. */
+export const DIRECTORY_SEARCH_QUERY = 'projectNav:search'
+
 /** The states the page asked for project `id`'s star, in the order it
  *  sent them, read from `frames`, each `{ out, text }` as recordFrames
  *  records them: the star's writes (SET_FAVORITE_MUTATION) among the
@@ -11052,24 +11056,25 @@ export function atProject(pathname, num) {
  *  and its sub-projects Alpha and Zulu, so the step adds no project the
  *  later steps' tag searches would list. In the app it opens All projects
  *  from the sidebar, waits for the browse list to answer with a row,
- *  searches the run's tag and waits for the search's answer (searchAnswered)
- *  with M's row and Alpha's, which sorts before M by name and so comes
- *  first while M is no favorite. It stars M from a star that shows it off,
- *  pressing again only while the app has sent no write of M's star
- *  (pressFor, favoritesSent), and waits for the server's answer to put M
- *  under Favorites, ahead of Alpha under Other projects (directoryGroups).
- *  It expands M and waits for Alpha and Zulu from projectNav.children,
- *  pressing Load more while one is still to come, opens Zulu from that
- *  list, pressing again while the directory says the workspace has not
- *  loaded it yet, and waits for Zulu's address (`/p/` and its number) and
- *  for the header to name Zulu. Back in All projects it searches M's name,
- *  waits for the answer, unstars M the same way, from a star that shows it
+ *  searches the run's tag and waits for the server's answer to that search
+ *  (searchAnswered with DIRECTORY_SEARCH_QUERY) with M's row and Alpha's,
+ *  which sorts before M by name and so comes first while M is no favorite.
+ *  It stars M from a star that shows it off, pressing again only while the
+ *  app has sent no write of M's star (pressFor, favoritesSent), and waits
+ *  for the server's answer to put M under Favorites, ahead of Alpha under
+ *  Other projects (directoryGroups). It expands M and waits for Alpha and
+ *  Zulu from projectNav.children, pressing Load more while one is still to
+ *  come, opens Zulu from that list, pressing again while the directory says
+ *  the workspace has not loaded it yet, and waits for Zulu's address (`/p/`
+ *  and its number) and for the header to name Zulu. Back in All projects,
+ *  which still holds the search for the tag, it searches M's name and waits
+ *  for the server's answer to that search the same way, whose rows must all
+ *  name M's name. It unstars M as it starred it, from a star that shows it
  *  on, and waits for the Favorites heading to go and the star to show it
  *  off; a failure unstars it through the store, so no later step meets the
- *  run's project as a favorite. It reads none of Nora's own favorites,
- *  which a deployment seeded before dataset version 10 does not hold, and
- *  must run before the run archives M. It needs a backend from v0.1.126
- *  on. */
+ *  run's project as a favorite. It reads none of Nora's own favorites, which
+ *  a deployment seeded before dataset version 10 does not hold, and must run
+ *  before the run archives M. It needs a backend from v0.1.126 on. */
 async function projectDirectoryCheck() {
   const m = PROJECT_DIRECTORY_MARKS
   await check(PROJECT_DIRECTORY_STEP, async () => {
@@ -11093,14 +11098,23 @@ async function projectDirectoryCheck() {
     const favorites = () => app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()
     /** The ids of the rows the page shows, in order. */
     const ids = (shown) => shown.flatMap((item) => ('row' in item ? [item.row] : []))
-    // the directory keeps the rows it showed until the search rests, so
-    // what the step reads and presses after a search is the answer
+    // the directory keeps the rows it showed until the search rests. All
+    // projects is a kept page, which on the way back still holds the search
+    // for the run's tag, whose rows can all name M's name as well, so the
+    // rows alone cannot tell the answer. Each search waits for the server's
+    // answer for its own text, and what the step reads and presses after it
+    // is that answer.
     const search = async (text) => {
       await searchAnswered(
         app.locator(`[${m.search}]`),
         text,
         app.locator(`[${m.page}] [${m.row}]`),
         'the directory search',
+        {
+          query: DIRECTORY_SEARCH_QUERY,
+          // the page until the read of what it lists has answered
+          busy: app.locator(`[${m.page}]:not([${m.state}="ok"])`),
+        },
       )
       await row(M).waitFor({ timeout: 60_000 })
     }

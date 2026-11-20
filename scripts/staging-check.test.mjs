@@ -49,6 +49,7 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   DESCRIPTION_IMAGES_STEP,
+  DIRECTORY_SEARCH_QUERY,
   deletedPageProblem,
   deletedRowsOf,
   deleteOutcome,
@@ -3089,7 +3090,10 @@ describe("a search's read on the sync socket", () => {
     expect(script).toContain(
       'searchRead(record.frames, read.query, text.trim()) && (await read.busy.count()) === 0',
     )
-    expect(script).toContain('query: MENTION_PEOPLE_QUERY,')
+    for (const query of ['query: MENTION_PEOPLE_QUERY,', 'query: DIRECTORY_SEARCH_QUERY,'])
+      expect(script, query).toContain(query)
+    expect(MENTION_PEOPLE_QUERY).toBe('pickers:syncRecipients')
+    expect(DIRECTORY_SEARCH_QUERY).toBe('projectNav:search')
   })
 })
 
