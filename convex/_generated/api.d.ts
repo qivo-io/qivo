@@ -277,7 +277,6 @@ import type * as profiles from "../profiles.js";
 import type * as projectNav from "../projectNav.js";
 import type * as projectSettings from "../projectSettings.js";
 import type * as projects from "../projects.js";
-import type * as regroup from "../regroup.js";
 import type * as roadmap from "../roadmap.js";
 import type * as search from "../search.js";
 import type * as snapshot from "../snapshot.js";
@@ -569,7 +568,6 @@ declare const fullApi: ApiFromModules<{
   projectNav: typeof projectNav;
   projectSettings: typeof projectSettings;
   projects: typeof projects;
-  regroup: typeof regroup;
   roadmap: typeof roadmap;
   search: typeof search;
   snapshot: typeof snapshot;
