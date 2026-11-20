@@ -2584,7 +2584,7 @@ export default defineSchema({
    * assignee sources filter on. Both writes (model/deletedItems.ts
    * storeTask and splitOff) set search_text, deleted_at and
    * item_project_id; assignee_id, deleted_by and item_parent_id are absent
-   * where the task or its item has none. The schema keeps them optional. */
+   * where the task or its item has none. */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),

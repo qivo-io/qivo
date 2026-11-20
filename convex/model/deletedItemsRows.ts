@@ -5,11 +5,7 @@
  * item is judged with the seat in its own organization, never the home
  * one. Rows are projections for that seat (model/deletedItems.ts viewOf),
  * never stored documents. It also holds the metering the page spends its
- * budgets with (Reads, spent, spending).
- *
- * deletedItems.list and matches, the list and search of the apps from
- * before the page, are gone, with their code here and the search_title
- * index of deleted_tasks that they read. */
+ * budgets with (Reads, spent, spending). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
