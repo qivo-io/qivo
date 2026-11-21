@@ -87,10 +87,10 @@ import { type TaskRow, taskFields } from './workspaceParts'
 export type Reads = { bytes: number; documents: number; ranges: number }
 
 /** What a read keeps back for each document it may take before it looks at
- * the request's reads again: a task row with the copy of its text that a
- * rollback to v0.1.98 writes again, at the description cap in a three-byte
- * script (about 62 KB). Other documents a view reads by the row are
- * smaller; only a row stored over the caps is larger. */
+ * the request's reads again: a task row that still holds a copy of its
+ * text, at the description cap in a three-byte script (about 62 KB). Other
+ * documents a view reads by the row are smaller; only a row stored over
+ * the caps is larger. */
 export const ROW_BYTES = 64 * 1024
 
 /** One task row, as a read keeps room for it. */
@@ -111,9 +111,9 @@ const rangesOf = (n: number): Reads => ({ bytes: 0, documents: 0, ranges: n })
 /** The real bytes a view's reads stop at, whatever the fixed charges say:
  * Convex's 16 MiB less 2 MiB for what one step can read past its last look,
  * an access question past PROJECT_ASK or a row stored over the caps. Only a
- * row past the caps, a hidden task's copy of its text (which only a
- * rollback writes) and a task the relation pickers read again that grew
- * since a batch weighed it (lib/relationPicker.ts scanScope) can make the
+ * row past the caps, a hidden task's copy of its text and a task the
+ * relation pickers read again that grew since a batch weighed it
+ * (lib/relationPicker.ts scanScope) can make the
  * real bytes pass a view's budget first, so only those reach this stop.
  * The last, far past ordinary text, can also pass Convex's own limit
  * within one step. */
@@ -870,8 +870,7 @@ function statusRuns(statuses: readonly IssueStatus[]) {
  * by_project_archived range each, or with `statuses`, those of the Focus
  * filter, one by_project_archived_status_done span of them each
  * (statusSpan). Each step reads what the room left holds at ROW_BYTES a row
- * (inSteps). Their real bytes count, a rollback's copy of a text included,
- * as the reader is shown them.
+ * (inSteps). Their real bytes count, as the reader is shown them.
  */
 export function selectionTasks(
   ctx: QueryCtx,

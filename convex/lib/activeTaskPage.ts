@@ -89,9 +89,8 @@ export const ACTIVE_PAGE = {
  * makes past the page's last check: its row read again where a page goes
  * on, its subtasks, at most LIMITS.subtasks.max, each counted as read, its
  * parent, its text (two description rows at most) and its newest comment,
- * each up to the size a rollback's copy of a text gives a row
- * (lib/viewReads.ts ROW_BYTES), and the reads issueOut makes for a parent
- * that is gone. Tests lower these. */
+ * each up to lib/viewReads.ts ROW_BYTES, and the reads issueOut makes for
+ * a parent that is gone. Tests lower these. */
 export const ACTIVE_RESERVE: ReadCeiling = { ranges: 64, documents: 128, bytes: MIB }
 
 /** The refusal of a list whose request cannot hold a page's whole budget
@@ -507,9 +506,9 @@ async function* projectTasks(
 /* Opens the ranges of `ids` after `after` and answers their heads in a
  * heap, a batch of at most ACTIVE_PAGE.opening at a time, and fewer when
  * the room left under `ceiling` holds fewer rows at lib/viewReads.ts
- * ROW_BYTES, since a row a rollback wrote can carry a copy of its text.
- * Each stream goes into `streams`, which the caller closes. Refused with
- * TASK_LIST_UNREADABLE when the heads do not all fit under `ceiling`. */
+ * ROW_BYTES. Each stream goes into `streams`, which the caller closes.
+ * Refused with TASK_LIST_UNREADABLE when the heads do not all fit under
+ * `ceiling`. */
 async function openHeads(
   ctx: QueryCtx,
   ids: readonly string[],

@@ -915,8 +915,7 @@ async function holdsDescription(run: Run, taskId: string): Promise<boolean> {
   return false
 }
 
-/** The description rows of task `taskId`, one unless a release before
- * this one wrote another. */
+/** The description rows of task `taskId`, which may be more than one. */
 const descriptionRange = (ctx: QueryCtx, taskId: string) =>
   ctx.db.query('issue_descriptions').withIndex('by_issue', (q) => q.eq('issue_id', taskId))
 

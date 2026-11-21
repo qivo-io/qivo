@@ -79,9 +79,9 @@
  * row's (model/descriptions.ts descriptionOf), and its trimmed form is
  * stored in the row in a transaction of its own, which unsets a copy the
  * task row still holds, as every description write does (describe). A task
- * whose task row holds a different text, which only a rollback leaves, is
- * skipped for internal/descriptionsBackfill's repair, so no fresher edit is
- * lost. The issues phase reads each task's description row too, which can
+ * whose task row holds a different text is skipped for
+ * internal/descriptionsBackfill's repair, so no fresher edit is lost. The
+ * issues phase reads each task's description row too, which can
  * come close to Convex's document size limit, so it walks the tasks by id
  * with a cursor of its own, in steps by bytes (taskPage), rather than by a
  * paginate cursor. Running it again is safe, and a deployment that needs

@@ -230,8 +230,8 @@ const issuesTable = defineTable({
   title: v.string(), // LIMITS.title (lib/limits.ts), trimmed
   // Markdown, LIMITS.description (lib/limits.ts), trimmed; '' for none.
   // Moved to issue_descriptions (below): no writer sets it, a description
-  // write unsets it, and internal/descriptionsBackfill's clear unsets the
-  // copies earlier releases wrote where the row holds the same text.
+  // write unsets it, and internal/descriptionsBackfill's clear unsets
+  // copies that task rows still hold (model/descriptions.ts clearTaskCopy).
   // Readers read the description row, this only for a task without one
   // (scripts/check-task-reads.mjs fails on any other read). Optional for
   // good, because deleted_rows checks its stored copies, which keep the
@@ -1763,34 +1763,15 @@ export default defineSchema({
    * items has no row once they have run, and a restore writes the row again
    * from the restored task (model/deletedItems.ts).
    *
-   * The move takes three releases. In the first, every writer kept both
-   * copies and every reader read issues.description;
-   * internal/descriptionsBackfill gave older tasks their rows. The second
-   * reads this table: every reader takes a task's text from its first row
-   * in creation order that holds the task's copies, which every writer
-   * keeps on the first row, else from its first row, and only a task
-   * without a row reads issues.description (model/descriptions.ts
-   * descriptionOf). The third, this one, writes the text here alone: a
-   * create leaves issues.description out, a description write unsets it,
-   * and the backfill's clear unsets the copies earlier releases wrote where
-   * the task's one row holds the same text. The second release is the
-   * third's rollback floor, because it reads the rows; a release before it
-   * reads only issues.description and shows no text for a task the third
-   * wrote, edited or cleared (qivo-internal docs/deployment.md).
-   *
    * The project and archived copies came after the table, in the same
    * release or a later one. A row holds them once project_id is present
    * (stamped). A row written by code from before them, or restored from an
-   * older backup, holds none, and a release from before the table, which
-   * still deploys, leaves rows with stale ones when it moves or archives
-   * tasks. The same backfill reports and mends both (`differ`). Main Search
-   * (search.ts, lib/mainSearch.ts) reads search_description and trusts these
-   * copies, so it relies on a dry run of the backfill from the third
-   * release on that reports zero `missing`, `differ`, `duplicates` and
-   * `orphans` on each deployment that serves it (qivo-internal
-   * docs/deployment.md). A dry run of a release before the third, from the
-   * second on, skips a task without issues.description before it looks for
-   * a second row, so it can report zero `duplicates` for a task with two. */
+   * older backup, holds none, and rows can hold stale ones. The same
+   * backfill reports and mends both (`differ`). Main Search (search.ts,
+   * lib/mainSearch.ts) reads search_description and trusts these copies,
+   * so it relies on a dry run of the backfill that reports zero `missing`,
+   * `differ`, `duplicates` and `orphans` on each deployment that serves it
+   * (qivo-internal docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows

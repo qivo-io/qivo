@@ -126,8 +126,7 @@ async function plantChildren(
           },
           'restore',
         )
-        // the copy of the text a rollback to the second release writes, the
-        // heaviest case
+        // a copy of the text on the task row, the heaviest case
         await ctx.db.patch(_id, { description })
       }
     })

@@ -459,8 +459,7 @@ describe('teamSync.lastComments', () => {
     expect(cut.rows.every((r) => r.at === NOW)).toBe(true)
 
     // the tasks read spend the same budget, so long ones, whose task rows
-    // hold the text as a rollback to the second release writes it, leave no
-    // comment read at all
+    // hold the text too, leave no comment read at all
     for (let n = 0; n < 3; n++) {
       await plantCopiedIssue(t, {
         ...base,
@@ -516,7 +515,7 @@ describe('teamSync.lastComments', () => {
     })
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     // read first (index order), and not the viewer's to see, their text in
-    // the task rows too, as a rollback to the second release writes it
+    // the task rows too
     for (let n = 0; n < 3; n++) {
       await plantCopiedIssue(t, {
         ...base,

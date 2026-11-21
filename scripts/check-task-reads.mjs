@@ -1,13 +1,13 @@
 /* Fails when code in convex/ reads the text a task row stores,
  * issues.description, anywhere but convex/model/descriptions.ts and the
  * one-time migration that compares both copies,
- * convex/internal/descriptionsBackfill.ts. Task descriptions are moving
- * into issue_descriptions (schema.ts), and every reader takes a task's text
+ * convex/internal/descriptionsBackfill.ts. Task descriptions are stored
+ * in issue_descriptions (schema.ts), and every reader takes a task's text
  * from model/descriptions.ts (descriptionOf, withText, descriptionsOf,
  * textsOf), which falls back to issues.description only for a task without
- * a row. Writers no longer set issues.description, and the backfill's clear
- * unsets the copies earlier releases wrote, so a direct read would silently
- * read nothing.
+ * a row. Writers do not set issues.description, and the backfill's clear
+ * unsets copies that task rows still hold (model/descriptions.ts
+ * clearTaskCopy), so a direct read would silently read nothing.
  *
  * It reads convex/'s own code with TypeScript's checker, outside the tests,
  * which plant and read rows directly, and fails on

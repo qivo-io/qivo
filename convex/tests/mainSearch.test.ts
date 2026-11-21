@@ -571,8 +571,7 @@ describe('seats', () => {
     }
     const without = await searchRun(t, seats, { text: 'gearbox' })
     // hidden matches in the first six organizations in seat order, with
-    // their text in the task rows too, as a rollback to the second release
-    // writes it, the heaviest case
+    // their text in the task rows too, the heaviest case
     for (const org of [...orgs].sort().slice(0, 6)) {
       const root = await plantProject(t, { org_id: org })
       const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
@@ -755,7 +754,7 @@ describe('main Search across seats', () => {
     // the first seat's numbers name legacy rows near 1 MiB in a project none
     // of them sees, which spend the real limit while each lookup counts as
     // LOOKUP, so no later seat's first lookup fits. The task rows hold the
-    // text, as a rollback to the second release writes it, the heaviest case.
+    // text, the heaviest case.
     // Ranges for the ten or so lookups that spend the real limit, more than
     // the default budget gives each of eight seats.
     MAIN_SEARCH.ranges = 2_000
@@ -1202,8 +1201,7 @@ describe("description rows' copies", () => {
     const shelved = await task(t, f, f.sub, 'Planted', { description: 'flux capacitor' })
     const moved = await task(t, f, f.sub, 'Planted', { description: 'flux capacitor' })
     const kept = await task(t, f, f.sub, 'Planted', { description: 'flux capacitor' })
-    // as a release from before the table leaves them: the task row changed
-    // without its description row
+    // the task rows change without their description rows
     await t.run(async (ctx) => {
       await ctx.db.patch(shelved._id, { archived_at: NOW })
       await ctx.db.patch(moved._id, { project_id: elsewhere.id })
@@ -1218,7 +1216,7 @@ describe("description rows' copies", () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const shown = await task(t, f, f.sub, 'Planted', { description: 'plain notes' })
-    // repeated rollbacks can leave a second row with the copies and other text
+    // a second row with the copies and other text
     await t.run((ctx) =>
       ctx.db.insert('issue_descriptions', {
         issue_id: shown.id,
@@ -1411,8 +1409,7 @@ describe('main Search at Convex’s limits', () => {
       num: 60_000 + i,
       description: `${notes} gearbox`,
     }))
-    // with the text in the task rows too, as a rollback to the second
-    // release writes it, which reads the most
+    // with the text in the task rows too, which reads the most
     await copyTaskTexts(t, f.org.id)
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
@@ -2599,8 +2596,7 @@ describe('a check of the caller access that a bound stops', () => {
     OWN_READS.projectShares = 4
     const elsewhere = await subOf(t, f, f.meta)
     const first = await task(t, f, f.sub, 'Zephyr first')
-    // its description row says FW, and its task row moved to `elsewhere`,
-    // as a release from before the table leaves them
+    // its description row says FW, and its task row moved to `elsewhere`
     const moved = await task(t, f, f.sub, 'Planted', { description: 'zephyr notes' })
     await withReach(t)
     await t.run(async (ctx) => {

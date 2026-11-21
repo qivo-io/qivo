@@ -686,8 +686,7 @@ describe('restoring a task item', () => {
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, task.id)
     // three subtasks of about 6 KB each, the text in their task rows too,
-    // as a rollback to the second release writes it, past a count bound of
-    // 10 KB
+    // past a count bound of 10 KB
     for (let i = 0; i < 3; i++)
       await plantCopiedIssue(t, {
         org_id,
@@ -943,8 +942,7 @@ describe('restoring a task item', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    // a parent of about 14 KB, its text in its task row too, as a rollback
-    // to the second release writes it
+    // a parent of about 14 KB, its text in its task row too
     const parent = await plantCopiedIssue(t, {
       org_id,
       project_id: f.sub.id,

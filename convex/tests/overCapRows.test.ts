@@ -482,7 +482,7 @@ describe('internal/overCapRows', () => {
   it('skips a task whose task row holds a different text, and keeps that fresher text', async () => {
     const t = newT()
     const f = await setup(t)
-    // an earlier release edited the task row alone, untrimmed
+    // the task row alone holds an untrimmed edit
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,

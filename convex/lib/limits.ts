@@ -146,13 +146,13 @@ export const MILESTONE_READ_PROJECTS = 200
 export const MILESTONE_READ_ROWS = 100
 
 /** The most a task row takes as Convex counts a document without the
- * description copy no writer sets since the third release of the
- * description move (model/descriptions.ts), with every other field set at
- * the caps: a title of LIMITS.title characters in a three-byte script, and
- * an archive date. Read budgets charge a task the reader may not be shown
- * at TASK_ROW_MAX_BYTES, so its title's length moves no answer
- * (lib/viewReads.ts viewBudget). Not in LIMITS, as nobody meets it;
- * tests/rowBounds.test.ts checks it against the schema. */
+ * description copy, which no writer sets (model/descriptions.ts insertTask,
+ * patchTask), with every other field set at the caps: a title of
+ * LIMITS.title characters in a three-byte script, and an archive date. Read
+ * budgets charge a task the reader may not be shown at TASK_ROW_MAX_BYTES,
+ * so its title's length moves no answer (lib/viewReads.ts viewBudget). Not
+ * in LIMITS, as nobody meets it; tests/rowBounds.test.ts checks it against
+ * the schema. */
 export const TASK_ROW_MAX_BYTES = 2 * 1024
 
 /** The most matching tasks one Board answers (tasks.ts board), across its

@@ -590,7 +590,7 @@ describe('refusals', () => {
           task_archived: true,
         })
     })
-    // the text is in its description row alone, as the third release left it
+    // the text is in its description row alone
     expect(task.description).toBeUndefined()
     for (const [who, level] of [
       [f.user, 'lead'],
@@ -735,10 +735,10 @@ describe('the text', () => {
       if (answer.state !== 'ok') throw new Error(answer.state)
       return answer.task.description
     }
-    // a release from before the table changed only the task row
+    // the task row holds a text that differs from its description row
     await t.run((ctx) => ctx.db.patch(task._id, { description: 'Stale copy' }))
     expect(await ask()).toBe('Shown text')
-    // the third release clears the task row's copy
+    // with the task row's copy unset
     await t.run((ctx) => ctx.db.patch(task._id, { description: undefined }))
     expect(await ask()).toBe('Shown text')
     // a task the backfill has not given a row

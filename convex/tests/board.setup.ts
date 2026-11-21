@@ -72,9 +72,8 @@ export const rowIds = (answer: BoardAnswer): string[] | string =>
 let nextNum = 900_000
 
 /** Plants `n` active tasks in `project` with `fields(i)`, `each` a
- * transaction, as raw inserts with their description rows, as the third
- * release of the description move stores them: the text in the row only,
- * unless `fields` sets issues.description too, as a rollback writes it.
+ * transaction, as raw inserts with their description rows, the text in the
+ * row only, unless `fields` sets issues.description too.
  * Each task row holds what model/issues.ts createIssueCore writes on every
  * task, its creator and reporter, here the organization's first profile,
  * and its status stamp, so it takes as many bytes as the app's row. */

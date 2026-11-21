@@ -512,11 +512,10 @@ async function shownParent(ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'iss
  * - `{ state: 'ok', task, level, labels, follow, parent, subtasks }` for a
  *   task in the caller's working set. `task` is its app row (TaskRow,
  *   lib/workspaceParts.ts taskFields): its text from its description row
- *   (model/descriptions.ts descriptionOf, as every reader takes it since
- *   the second release of the move), its parent's id only when the window
- *   shows the parent (shownParent) and has_subtasks. `level` is the caller's
- *   level on its project, `labels` its label rows, `follow` the caller's
- *   follow or null, and `parent` that parent as a short row, else null.
+ *   (model/descriptions.ts descriptionOf), its parent's id only when the
+ *   window shows the parent (shownParent) and has_subtasks. `level` is the
+ *   caller's level on its project, `labels` its label rows, `follow` the
+ *   caller's follow or null, and `parent` that parent as a short row, else null.
  *   `subtasks.rows` are its active subtasks, in its own sub-project, as
  *   short rows by number and then id.
  * - `{ state: 'archived', task, description, labels, level, project_archived }` for an
