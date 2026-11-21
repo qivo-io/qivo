@@ -84,21 +84,21 @@ import { vUsageCounts, vUsageMetric } from './lib/usage'
 const taskArchived = v.optional(v.literal(true))
 
 /* `task_key` on a task's relation rows (label assignments, attachments,
- * follows, and a link's on its source's behalf): the task's window_key,
- * which placed the rows in the app's task windows. No read uses the keys
- * since the workspace's tasks part went, and the window keys' data stage
- * recorded in later-work removes them with the tasks' and projects'
- * window_key. A writer still copies it from the task, and a task's key never
- * changes once set; internal/windowKeysBackfill gives a task stored before
- * keys a key and its rows the same. */
+ * follows, and a link's on its source's behalf): the copy of the task's
+ * window_key that earlier releases wrote. No code sets it now, and a move
+ * to or from Deleted items drops it (model/deletedItems.ts).
+ * Rows and stored copies written before keep it until
+ * internal/unreadFieldsRemoval unsets it, so the field stays in the schema
+ * until then. */
 const taskKey = v.optional(v.string())
 
 /* The ten tables whose rows a deleted task or project keeps in deleted_rows
  * (lib/enums.ts STORED_TABLES), defined first so deleted_rows can reuse each
  * one's validator. Convex validates the stored copies against it, so a shape
- * change fails the deploy until they fit. A semantic change does not: restore
- * writes a stored document back unchanged, so a migration or backfill of one
- * of these tables must also walk the deleted_rows rows with that `table`. */
+ * change fails the deploy until they fit. A semantic change does not: a
+ * restore sets or drops a few fields and writes the rest of a stored document
+ * back as it was stored, so a migration or backfill of one of these tables
+ * must also walk the deleted_rows rows with that `table`. */
 const projectsTable = defineTable({
   id: v.string(),
   org_id: v.string(),
@@ -120,13 +120,11 @@ const projectsTable = defineTable({
   review_hours: v.optional(v.number()),
   archived_at: v.optional(v.string()),
   created_at: v.string(),
-  // Server-owned, set once when the project is stored (lib/db.ts
-  // newWindowKey). It placed the project in the app's project windows,
-  // which no read uses since the workspace's projects part went, and the
-  // window keys' data stage recorded in later-work removes it with
-  // by_org_window. Never sent to clients, REST, MCP, webhooks or the export.
-  // internal/windowKeysBackfill still gives one to a project stored
-  // before it.
+  // The key earlier releases set when they stored the project, which
+  // placed it in the app's former project windows. No code sets it now,
+  // and a move to or from Deleted items drops it. Rows and stored copies
+  // written before keep it until internal/unreadFieldsRemoval unsets it.
+  // The app's row types and the export leave it out.
   window_key: v.optional(v.string()),
   // The name as name-ordered lists sort and search it (lib/nameKey.ts),
   // server-owned and written with the name. Never sent to clients, REST,
@@ -177,9 +175,6 @@ const projectsTable = defineTable({
   // parent 'under' for a search) by archive time, newest first for an
   // organization admin's Archived projects (model/projectSettingsLists.ts).
   .index('by_org_state_archived', ['org_id', 'archive_state', 'archived_at'])
-  // read by nothing since the workspace's projects part went; the window
-  // keys' data stage recorded in later-work removes it with window_key
-  .index('by_org_window', ['org_id', 'window_key'])
   .index('by_org_key', ['org_id', 'key'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_parent', ['parent_id'])
@@ -291,11 +286,11 @@ const issuesTable = defineTable({
   // server-owned: some relation rows of this task may carry task_archived
   // (above). Never sent to clients, REST, MCP, webhooks or the export.
   relations_marked: v.optional(v.literal(true)),
-  // server-owned, set once when the task is stored (lib/db.ts
-  // newWindowKey), as projects' window_key above; its relation rows carry
-  // it as task_key. It placed the task in the app's task windows, which no
-  // read uses since the workspace's tasks part went, and the window keys'
-  // data stage recorded in later-work removes it
+  // the key earlier releases set when they stored the task, which placed
+  // it in the app's former task windows and which its relation rows copied
+  // as task_key. As with projects' window_key above, no code sets it now,
+  // and rows and stored copies keep it until internal/unreadFieldsRemoval
+  // unsets it
   window_key: v.optional(v.string()),
   created_at: v.string(),
   updated_at: v.string(),
@@ -1243,10 +1238,13 @@ export default defineSchema({
     last_export_confirmed_at: v.optional(v.string()),
     // The last export before last_export_confirmed_at existed, which the
     // browser export of v0.1.161 and earlier set when its download started.
-    // Nothing reads or writes it (tests/manifest.test.ts pins that). It
-    // stays in the schema because Convex refuses a deploy whose schema
-    // drops a field stored rows still hold, and clearing it would be a
-    // write on every hosted deployment.
+    // Of the server's modules, only this schema and
+    // internal/unreadFieldsRemoval, which unsets it, name it
+    // (tests/manifest.test.ts pins that). The workspace's root part answers
+    // it, and an organization export holds it, when the row holds it at the
+    // time they read it. It stays in the schema until that function has run,
+    // because Convex refuses a deploy whose schema drops a field stored rows
+    // still hold.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -2087,14 +2085,14 @@ export default defineSchema({
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
     // Set on tickets of v0.1.162 and earlier whose upload declared no size,
-    // when size_bytes was the most the URL took. Nothing reads or writes it
-    // (tests/manifest.test.ts pins that), since every upload declares its
-    // size, and the file must have exactly size_bytes. A ticket that still
-    // holds it goes when it attaches, or within about an hour of its expiry
-    // when files.ts reapUploadTickets deletes it, so it needs no clearing
-    // write. It stays in the schema until a read-only check shows that no
-    // stored ticket holds it, because Convex refuses a deploy whose schema
-    // drops a field stored rows still hold.
+    // when size_bytes was the most the URL took. Every upload declares its
+    // size now and the file must have exactly size_bytes, and of the
+    // server's modules only this schema and internal/unreadFieldsRemoval,
+    // which unsets it, name it (tests/manifest.test.ts pins that). A ticket
+    // that still holds it goes when it attaches, or within about an hour of
+    // its expiry when files.ts reapUploadTickets deletes it. It stays in the
+    // schema until that function has run, because Convex refuses a deploy
+    // whose schema drops a field stored rows still hold.
     up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
@@ -2467,11 +2465,11 @@ export default defineSchema({
 
   /* One original document of a deleted item, typed by its table. Only
    * model/deletedItems.ts storeRow inserts here, writing `table` and `row`
-   * together; restore writes `row.doc` back unchanged, which is why a
-   * migration or backfill of a stored table must walk these rows too (see
-   * the stored tables above). The indexed copies reserve what the live
-   * tables would: uuids (by_row, lib/db.ts insertUnique), project keys
-   * (by_org_key, model/projects.ts keyHolder) and attachment bytes
+   * together; a restore writes most of `row.doc` back as it was stored,
+   * which is why a migration or backfill of a stored table must walk these
+   * rows too (see the stored tables above). The indexed copies reserve what
+   * the live tables would: uuids (by_row, lib/db.ts insertUnique), project
+   * keys (by_org_key, model/projects.ts keyHolder) and attachment bytes
    * (by_storage, model/attachments.ts storageIdInUse). */
   deleted_rows: defineTable({
     item_id: v.string(),

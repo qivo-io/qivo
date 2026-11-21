@@ -60,9 +60,6 @@ export const NO_TASKS: TaskSections = {
   orgLoad: [],
 }
 
-/* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
-const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-
 /* Hidden load rows in one total order, as the part sorted them. */
 function byLoad(a: OrgLoadRow, b: OrgLoadRow): number {
   const keys = (r: OrgLoadRow) => [r.owner_id, r.start_week, r.end_week, r.remaining_set_at ?? '']
@@ -71,17 +68,15 @@ function byLoad(a: OrgLoadRow, b: OrgLoadRow): number {
   return a.remaining - b.remaining
 }
 
-/** The task sections of seat `me` (see the header). Tasks come in the
- * order the part's windows gave them, by window key and then creation. */
+/** The task sections of seat `me` (see the header). Tasks come in
+ * creation order. */
 export async function tasksOracle(ctx: QueryCtx, me: Doc<'profiles'>): Promise<TaskSections> {
   const active = (
     await ctx.db
       .query('issues')
       .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
       .collect()
-  ).sort(
-    (a, b) => order(a.window_key ?? '', b.window_key ?? '') || a._creationTime - b._creationTime,
-  )
+  ).sort((a, b) => a._creationTime - b._creationTime)
   const access = accessOf(ctx, me)
   const heldOf = new Map<string, boolean>()
   for (const task of active) heldOf.set(task.id, await access.holds(task))

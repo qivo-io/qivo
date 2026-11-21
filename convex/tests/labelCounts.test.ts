@@ -133,7 +133,6 @@ const plantLabelled = async (
         org_id: f.org.id,
         issue_id: task.id,
         label_id: label.id,
-        task_key: task.window_key,
       })
   })
   return task

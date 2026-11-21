@@ -13,7 +13,6 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import * as inbox from '../inbox'
 import { OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import { ALERT_WINDOW_MS } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
 import { markMessagesRead, postMessage } from '../model/messages'
@@ -613,7 +612,6 @@ describe('the cap, the budgets and more', () => {
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
           },
           'restore',
         )
@@ -886,7 +884,6 @@ describe('inside Convex’s limits', () => {
               paused: false,
               created_at: NOW,
               updated_at: NOW,
-              window_key: newWindowKey(),
             },
             'restore',
           )

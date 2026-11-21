@@ -38,7 +38,7 @@ import {
   projectLevelsOf,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { MIB } from '../lib/limits'
 import { named } from '../lib/nameKey'
@@ -949,7 +949,6 @@ const projectDoc = (
   num: n,
   track_delay: false,
   created_at: NOW,
-  window_key: newWindowKey(),
   ...(o.archived === true ? { archived_at: NOW } : {}),
 })
 

@@ -25,7 +25,6 @@ import {
   OWN_READS,
   projectLevel,
 } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import { DEMO_FEATURE_REFUSAL } from '../lib/demo'
 import { type GrantLevel, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
@@ -565,7 +564,6 @@ describe('projectSettings.get', () => {
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
           },
           'restore',
         )
@@ -696,7 +694,6 @@ describe('projectSettings.get by organization and number', () => {
           num: 5000 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
           ...(i >= 30 ? { archived_at: NOW } : {}),
         })
     })
@@ -1934,7 +1931,6 @@ describe('real limits', () => {
           num: 1000 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
         })
         for (const crew of crews)
           await ctx.db.insert('project_team_access', {

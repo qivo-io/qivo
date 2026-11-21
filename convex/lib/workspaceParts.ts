@@ -30,8 +30,7 @@ export function rowOf<D extends { _id: unknown; _creationTime: number }>(
   return row
 }
 
-/* A row without its name key, which only serves name-ordered index reads
- * (schema.ts name_key). */
+/* A row without its server-only name key (schema.ts name_key). */
 type KeyFree<R> = Omit<R, 'name_key'>
 
 function keyFree<R extends { name_key?: string }>(row: R): KeyFree<R> {
@@ -40,8 +39,8 @@ function keyFree<R extends { name_key?: string }>(row: R): KeyFree<R> {
 }
 
 /** A relation row as the app receives it, without the organization id,
- * the archive mark and the task's window key, which only serve index
- * reads. */
+ * the archive mark and the copy of the task's window key that earlier
+ * releases stored. */
 export function relationRow<
   D extends {
     _id: unknown

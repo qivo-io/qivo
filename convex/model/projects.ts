@@ -26,7 +26,7 @@ import {
   projectLevel,
   rootMetaOf,
 } from '../lib/access'
-import { assertNewRowId, byId, insertUnique, newWindowKey } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import type { AccessLevel, GrantLevel, ProjectType } from '../lib/enums'
 import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
@@ -499,7 +499,6 @@ export async function createProjectCore(
       // Teamless projects use the neutral default unless explicitly set.
       track_delay: p.track_delay ?? true,
       created_at: now,
-      window_key: newWindowKey(),
       // a parent is never archived (above)
       archive_state: 'live',
     },

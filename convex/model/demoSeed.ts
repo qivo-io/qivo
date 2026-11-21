@@ -14,7 +14,7 @@ import {
   resolveMentions,
 } from '../internal/marketingDemoData'
 import { projectSightForProfiles } from '../lib/access'
-import { byId, insertUsed, newWindowKey } from '../lib/db'
+import { byId, insertUsed } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import { require, rule } from '../lib/functions'
@@ -395,7 +395,6 @@ async function writeStep(
         'projects',
         {
           id: projectIds[p.key],
-          window_key: newWindowKey(),
           org_id: org.id,
           type: p.parent ? 'project' : 'meta',
           parent_id: p.parent ? projectIds[p.parent] : undefined,
@@ -510,14 +509,12 @@ async function writeStep(
       const times = northstarTaskTimes(anchor, now, i)
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
-      const windowKey = newWindowKey()
       // a mention names its person by key in the data, by id once written
       const description = cleanDescription(resolveMentions(i.description, (key) => personIds[key]))
       const issueDocId = await insertTask(
         ctx.db,
         {
           id: issueIds[i.key],
-          window_key: windowKey,
           org_id: org.id,
           project_id: projectIds[i.project],
           num: index + 1,
@@ -560,7 +557,6 @@ async function writeStep(
           org_id: org.id,
           issue_id: issueIds[i.key],
           label_id: labelIds[label],
-          task_key: windowKey,
         })
       await insertActivity(
         ctx,
@@ -611,7 +607,8 @@ async function writeStep(
     ])
     for (const l of data.links) {
       // both ends must still be live, as a link to a removed task is no link
-      const ends = [await task(l.source), await task(l.target)]
+      await task(l.source)
+      await task(l.target)
       const pair = [issueIds[l.source], issueIds[l.target]].sort()
       const sourceId = l.type === 'relates' ? pair[0] : issueIds[l.source]
       // a link the history adds dates from that change
@@ -622,7 +619,6 @@ async function writeStep(
         org_id: org.id,
         id: await id(`link:${l.source}:${l.target}`),
         source_id: sourceId,
-        task_key: ends.find((end) => end.id === sourceId)?.window_key,
         target_id: l.type === 'relates' ? pair[1] : issueIds[l.target],
         type: l.type,
         pair_key: pair.join(':'),

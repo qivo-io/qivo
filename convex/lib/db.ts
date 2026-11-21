@@ -1,5 +1,5 @@
 /* Uuid-key lookup, the race-free unique insert, the used_ids record of every
- * task and project id, the room check of bulk writers and window keys.
+ * task and project id and the room check of bulk writers.
  * Serializable mutations make check-then-insert safe: two concurrent
  * insertUnique calls on the same key conflict and one retries, re-running
  * the check. So do two inserts of one task or project id by any path, in
@@ -71,44 +71,6 @@ export const ROW_ID_SHAPE =
  * found by id. Every create that takes the caller's id checks it. */
 export function assertNewRowId(id: string): void {
   if (!ROW_ID.test(id)) throw badRequest(ROW_ID_SHAPE)
-}
-
-declare const crypto: { randomUUID(): string }
-
-/** A new window key for a task or project: 8 random hex digits, which
- * placed a row in the app's windows of the workspace's tasks and projects
- * parts. The server picks it, never the writer. Every insert of a task or
- * project sets it, and a task's relation rows copy it (schema.ts taskKey);
- * no read uses it since those parts went, and the window keys' data stage
- * recorded in later-work removes it with the fields. */
-export const newWindowKey = (): string => crypto.randomUUID().slice(0, 8)
-
-/** The relation rows of task `id` (label assignments, attachments, the
- * links from it and follows) whose task_key is not `key`, every one for null
- * (a task about to get its first key). Whoever gives a task a key gives
- * these rows the same one (schema.ts taskKey). */
-export async function strayRows(ctx: ReaderCtx, id: string, key: string | null) {
-  const [labels, attachments, links, follows] = await Promise.all([
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_attachments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_source', (q) => q.eq('source_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
-      .collect(),
-  ])
-  return [...labels, ...attachments, ...links, ...follows].filter(
-    (row) => key === null || row.task_key !== key,
-  )
 }
 
 /* Chainable eq shape shared by every IndexRangeBuilder — the generic index

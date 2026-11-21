@@ -184,7 +184,6 @@ async function shared(t: T, f: OrgFixture, count: number): Promise<string[]> {
         num: 1000 + i,
         track_delay: false,
         created_at: NOW,
-        window_key: uuid().slice(0, 8),
       })
       await ctx.db.insert('project_access', {
         project_id: id,
@@ -235,7 +234,6 @@ async function sharedWithTeams(
         num: 2000 + i,
         track_delay: false,
         created_at: NOW,
-        window_key: uuid().slice(0, 8),
       })
       for (const team_id of teamIds)
         await ctx.db.insert('project_team_access', { project_id: id, team_id, level: 'user' })
@@ -270,7 +268,6 @@ async function grantsOn(t: T, f: OrgFixture, who: Doc<'profiles'>, count: number
           num: 50_000 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: uuid().slice(0, 8),
         })
         await ctx.db.insert('project_access', { project_id: id, profile_id: who.id, level: 'user' })
       }
@@ -306,7 +303,6 @@ async function teamOn(t: T, f: OrgFixture, who: Doc<'profiles'>, count: number):
           num: 70_000 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: uuid().slice(0, 8),
         })
         await ctx.db.insert('project_team_access', { project_id: id, team_id: team, level: 'user' })
       }
@@ -339,7 +335,6 @@ async function navigationOnly(
         num: 10_000 * (p + 1) + n,
         track_delay: false,
         created_at: NOW,
-        window_key: uuid().slice(0, 8),
         ...extra,
       })
       const parent = project({}, 0)

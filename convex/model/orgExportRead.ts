@@ -306,19 +306,21 @@ export function exportRow(
   // a task's or project's window key only placed it in the app's former
   // windows
   delete row.window_key
-  // a name key, or its copy on a membership, grant or team share, only
-  // serves name-ordered index reads, and so does a project's archive state
+  // a name key, or its copy on a membership, grant or team share, and a
+  // project's archive state are server-only fields
   delete row.name_key
   delete row.archive_state
   // an activity row's field prints only let a refused edit name who wrote
   // the value (model/expected.ts)
   delete row.field_prints
-  // The organization id, the archive mark and the task's window key only
-  // serve index reads.
+  // a relation row's organization id and archive mark are server-only
+  // fields
   if (section === 'issue_links' || section === 'issue_labels' || section === 'issue_attachments') {
     delete row.org_id
     delete row.task_archived
   }
+  // a relation row's copy of its task's window key, which earlier releases
+  // stored (schema.ts taskKey)
   delete row.task_key
   // An agent key's organization and name key only serve API access's
   // name-ordered index reads.

@@ -544,7 +544,6 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
         type: 'blocks',
         pair_key: `${a}:${b}`,
         created_at,
-        task_key: source.window_key,
       })
     })
   await linkOf(c1, k1, '2026-01-03T00:00:00.000Z')

@@ -841,8 +841,9 @@ describe('archived task lists page one project with a cursor', () => {
       })
     }
     const expected = await archiveOrder(fx, [fx.sub.id])
-    // about three tasks of 10 KB fill 32 KB
-    ARCHIVE_PAGE.bytes = 32 << 10
+    // a task with its 10,000-character text reads a little under 11 KB, so
+    // a page ends on its bytes after its third task
+    ARCHIVE_PAGE.bytes = 30 << 10
     const bytes = await everyPage(fx, fx.agent.id, { project: 'FW' })
     expect(bytes.rest).toEqual(expected)
     expect(bytes.mcp).toEqual(expected)

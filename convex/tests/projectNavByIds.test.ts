@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_UNCHECKED, accessOf, accessUnchecked, OWN_READS } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { BY_IDS_MAX } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
 import { DEFAULT_REVIEW_HOURS } from '../lib/review'
@@ -419,7 +419,6 @@ describe('the answer as a live read', () => {
           paused: false,
           created_at: NOW,
           updated_at: NOW,
-          window_key: newWindowKey(),
         },
         'restore',
       ),
@@ -472,7 +471,6 @@ describe('the answer as a live read', () => {
               paused: false,
               created_at: NOW,
               updated_at: NOW,
-              window_key: newWindowKey(),
             },
             'restore',
           )

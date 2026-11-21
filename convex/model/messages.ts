@@ -794,8 +794,6 @@ export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
     issue_id: string
-    /** the task's window_key, which the follow carries (schema.ts taskKey) */
-    task_key: string | undefined
     profile: Doc<'profiles'>
     org_id: string
     project: Doc<'projects'> | null
@@ -822,7 +820,6 @@ export async function subscribeToIssue(
     issue_id: a.issue_id,
     profile_id: a.profile.id,
     created_at: a.now,
-    task_key: a.task_key,
   })
   return true
 }
@@ -849,7 +846,6 @@ export async function followTask(
   }
   return await subscribeToIssue(ctx, {
     issue_id: a.issue.id,
-    task_key: a.issue.window_key,
     profile: a.me,
     org_id: a.issue.org_id,
     project,
@@ -1942,7 +1938,6 @@ async function tellMentioned(
     await a.guard?.()
     await subscribeToIssue(ctx, {
       issue_id: issue.id,
-      task_key: issue.window_key,
       profile: m,
       org_id: issue.org_id,
       project,
@@ -2124,7 +2119,6 @@ export async function notifyIssueInsert(
     if (assignee !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
-        task_key: issue.window_key,
         profile: assignee,
         org_id: issue.org_id,
         project,
@@ -2157,7 +2151,6 @@ export async function notifyIssueInsert(
     if (reviewer !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
-        task_key: issue.window_key,
         profile: reviewer,
         org_id: issue.org_id,
         project,
@@ -2294,7 +2287,6 @@ export async function notifyIssueUpdate(
     if (assignee !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
-        task_key: after.window_key,
         profile: assignee,
         org_id: after.org_id,
         project,
@@ -2314,7 +2306,6 @@ export async function notifyIssueUpdate(
     if (owner !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
-        task_key: after.window_key,
         profile: owner,
         org_id: after.org_id,
         project,
@@ -2516,7 +2507,6 @@ export async function notifyCommentInsert(
   })
   await subscribeToIssue(ctx, {
     issue_id: issue.id,
-    task_key: issue.window_key,
     profile: actor,
     org_id: issue.org_id,
     project,

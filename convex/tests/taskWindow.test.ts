@@ -11,7 +11,6 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS, projectLevel } from '../lib/access'
 import { archivedTaskCore } from '../lib/archivedTasks'
-import { newWindowKey } from '../lib/db'
 import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { readWindowLinks, readWindowTask, TASK_WINDOW } from '../lib/taskWindow'
@@ -199,7 +198,7 @@ async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promi
 /* A link row from `source` to `target`, as a writer stores it. */
 const linkRow = (
   f: OrgFixture,
-  source: Pick<Doc<'issues'>, 'id' | 'window_key'>,
+  source: Pick<Doc<'issues'>, 'id'>,
   targetId: string,
   extra: Partial<Doc<'issue_links'>> = {},
 ) => ({
@@ -210,7 +209,6 @@ const linkRow = (
   type: 'blocks' as const,
   pair_key: [source.id, targetId].sort().join(':'),
   created_at: NOW,
-  task_key: source.window_key,
   ...extra,
 })
 
@@ -291,28 +289,24 @@ async function plantWorld(t: T, f: OrgFixture) {
         org_id: f.org.id,
         issue_id: parent.id,
         label_id: label,
-        task_key: parent.window_key,
       })
     await ctx.db.insert('issue_labels', {
       org_id: f.org.id,
       issue_id: marked.id,
       label_id: 'label-a',
       task_archived: true,
-      task_key: marked.window_key,
     })
     for (const person of [f.admin, f.user, f.viewer, f.guest])
       await ctx.db.insert('issue_subscriptions', {
         issue_id: parent.id,
         profile_id: person.id,
         created_at: NOW,
-        task_key: parent.window_key,
       })
     await ctx.db.insert('issue_subscriptions', {
       issue_id: marked.id,
       profile_id: f.guest.id,
       created_at: NOW,
       task_archived: true,
-      task_key: marked.window_key,
     })
     const file = (extra: Partial<Doc<'issue_attachments'>>) =>
       ctx.storage.store(new Blob(['bytes']) as never).then((storage_id) =>
@@ -325,7 +319,6 @@ async function plantWorld(t: T, f: OrgFixture) {
           storage_id,
           inline: false,
           created_at: NOW,
-          task_key: parent.window_key,
           ...extra,
         }),
       )
@@ -595,7 +588,6 @@ describe('refusals', () => {
           issue_id: task.id,
           label_id: label,
           task_archived: true,
-          task_key: task.window_key,
         })
     })
     // the text is in its description row alone, as the third release left it
@@ -834,7 +826,6 @@ async function plantMany(
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...fields(i),
           }
           const _id = await ctx.db.insert('issues', doc)
@@ -902,7 +893,6 @@ describe('real limits', () => {
           issue_id: task.id,
           label_id: uuid(),
           task_archived: true,
-          task_key: task.window_key,
         })
     })
     const { answer, read, documents, ranges } = await taskRead(t, f, task.id)
@@ -1151,7 +1141,6 @@ describe('real limits', () => {
           num: 1000 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
           ...(i < 40 ? { archived_at: NOW } : {}),
         })
       }

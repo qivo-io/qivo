@@ -10,8 +10,9 @@
  * grandfathering), so a deployment that holds one runs this.
  *
  * Every phase walks one table. The deleted_* phases walk the copies Deleted
- * items keeps of that table (deleted_rows), because a restore writes a copy
- * back unchanged (schema.ts), and apply the same rules to its `row.doc`.
+ * items keeps of that table (deleted_rows), because a restore writes most of
+ * a copy back as it was stored (schema.ts), and apply the same rules to its
+ * `row.doc`.
  * The phases, in the order the fix runs them:
  *   projects, teams, milestones, organizations, profiles, agent_keys,
  *   mcp_tokens   names over NAME_MAX; projects also descriptions over

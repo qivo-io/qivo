@@ -19,7 +19,6 @@ import { api } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { MINT_IDS, mintFileUrls } from '../files'
-import { newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { SHAPES } from './accessShapes.setup'
 import {
@@ -220,7 +219,6 @@ async function spread(t: T, projects: Doc<'projects'>[], n: number, sid: Id<'_st
         paused: false,
         created_at: NOW,
         updated_at: NOW,
-        window_key: newWindowKey(),
       }
       await ctx.db.insert('issues', task)
       ids.push(await insertAttachment(ctx, task, sid, i))

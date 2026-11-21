@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { insertTask } from '../model/descriptions'
 import { itemEdits } from '../model/inboxItems'
 import {
@@ -268,7 +268,6 @@ async function plantTask(ctx: MutationCtx, f: OrgFixture, num: number) {
     paused: false,
     created_at: NOW,
     updated_at: NOW,
-    window_key: newWindowKey(),
   }
   await insertTask(ctx.db, task, 'restore')
   return task

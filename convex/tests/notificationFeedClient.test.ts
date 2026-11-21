@@ -32,7 +32,6 @@ import {
 import { createChannelHub, createLockManager } from '../../src/lib/notificationTabs.setup'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { newWindowKey } from '../lib/db'
 import { ALERT_WINDOW_MS } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
 import { postMessage } from '../model/messages'
@@ -1047,7 +1046,6 @@ async function plantIssueIn(
       paused: false,
       created_at: NOW,
       updated_at: NOW,
-      window_key: newWindowKey(),
     },
     'restore',
   )

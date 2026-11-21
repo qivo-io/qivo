@@ -15,7 +15,6 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { ACCESS_UNCHECKED, accessUnchecked, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { CURSOR_REFUSAL, filtersKey, listCursorText, offsetRefusal } from '../lib/listCursor'
@@ -1296,7 +1295,6 @@ describe('reads at the design size', () => {
           num: num++,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
         })
         return (await ctx.db.get(_id)) as Doc<'projects'>
       }
@@ -1356,7 +1354,6 @@ describe('reads at the design size', () => {
               num: 9000 + i,
               track_delay: false,
               created_at: NOW,
-              window_key: newWindowKey(),
             })
         })
       // withOrg's 2 and the reader's 21, and with `big` 177 more

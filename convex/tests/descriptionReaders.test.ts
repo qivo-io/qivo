@@ -22,7 +22,6 @@ import type { QueryCtx } from '../_generated/server'
 import { MARKETING_DEMO, resolveMentions } from '../internal/marketingDemoData'
 import { ACTIVE_PAGE, listActiveIssuesCore, TASK_LIST_UNREADABLE } from '../lib/activeTaskPage'
 import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '../lib/core'
-import { newWindowKey } from '../lib/db'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
 import { MIB } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
@@ -775,7 +774,6 @@ const taskDoc = (
   paused: false,
   created_at: new Date(Date.parse(NOW) + num).toISOString(),
   updated_at: NOW,
-  window_key: newWindowKey(),
   ...extra,
 })
 

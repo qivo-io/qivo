@@ -16,7 +16,6 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { ACCESS_UNCHECKED, accessOf, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import {
@@ -1265,7 +1264,6 @@ describe('tasks', () => {
               paused: false,
               created_at: NOW,
               updated_at: NOW,
-              window_key: newWindowKey(),
             },
             'restore',
           )

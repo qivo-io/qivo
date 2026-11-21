@@ -14,7 +14,6 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
-import { newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import {
@@ -164,7 +163,6 @@ async function plant(
             created_at: NOW,
             updated_at: NOW,
             status_at: NOW,
-            window_key: newWindowKey(),
             ...fields(i),
           }
           const _id = await ctx.db.insert('issues', doc)

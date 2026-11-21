@@ -16,7 +16,6 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { newWindowKey } from '../../convex/lib/db'
 import { issueKey } from '../../convex/lib/taskRefs'
 import { relationRow, taskFields } from '../../convex/lib/workspaceParts'
 import { descriptionOf } from '../../convex/model/descriptions'
@@ -159,7 +158,6 @@ async function plantWork(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
         type,
         pair_key: [group.id, target.id].sort().join(':'),
         created_at: NOW,
-        task_key: group.window_key ?? newWindowKey(),
       })
     const label = await ctx.db
       .query('labels')
@@ -170,7 +168,6 @@ async function plantWork(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
         org_id: f.org.id,
         issue_id: group.id,
         label_id: label.id,
-        task_key: group.window_key ?? newWindowKey(),
       })
     for (const [name, created_at] of [
       ['spec.pdf', '2026-01-02T00:00:00.000Z'],
@@ -185,13 +182,11 @@ async function plantWork(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
         storage_id: await ctx.storage.store(new Blob(['bytes'])),
         inline: false,
         created_at,
-        task_key: group.window_key ?? newWindowKey(),
       })
     await ctx.db.insert('issue_subscriptions', {
       issue_id: group.id,
       profile_id: subject.id,
       created_at: NOW,
-      task_key: group.window_key ?? newWindowKey(),
     })
   })
 }

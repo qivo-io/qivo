@@ -17,7 +17,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_UNCHECKED, canManageOwnProjectAccess, OWN_READS } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { NAMED_READ, namedCursor } from '../lib/namedPages'
@@ -637,7 +637,6 @@ describe('fail closed', () => {
       num: num++,
       track_delay: false,
       created_at: NOW,
-      window_key: 'twinwkey',
       ...extra,
     })
     const pia = await t.run(async (ctx) => {
@@ -1462,7 +1461,6 @@ describe('tasks', () => {
               paused: false,
               created_at: NOW,
               updated_at: NOW,
-              window_key: newWindowKey(),
             },
             'restore',
           )

@@ -38,7 +38,6 @@ import {
   TASK_READ_RESERVE,
   type TaskRelatedList,
 } from '../lib/core'
-import { newWindowKey } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { DEFAULT_PAGE_SIZE, LIMITS, TASK_ROW_MAX_BYTES } from '../lib/limits'
 import { CURSOR_REFUSAL, listCursorText, offsetRefusal } from '../lib/listCursor'
@@ -165,7 +164,6 @@ const plantTasks = (
           paused: false,
           created_at: NOW,
           updated_at: NOW,
-          window_key: newWindowKey(),
           ...over,
         },
         'restore',

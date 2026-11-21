@@ -72,7 +72,7 @@ import {
   profileCanSeeProject,
 } from '../lib/access'
 import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
-import { assertNewRowId, byId, newWindowKey, usedIdRow, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, usedIdRow, usedMoreThan } from '../lib/db'
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
@@ -1464,7 +1464,6 @@ export async function createIssueCore(
       review_at: reviewStamp(null, { status, reviewer_id }, now), // created In Review: now
       status_at: now,
       archived_at: undefined,
-      window_key: newWindowKey(),
       created_at: now,
       updated_at: now,
     },
