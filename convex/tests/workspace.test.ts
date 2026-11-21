@@ -1,16 +1,15 @@
 /* The workspace's one part (workspace.ts root, lib/workspaceParts.ts
  * readRoot): what it sends and reads, and an answer that stays the same
  * while the data it reads does, so Convex re-sends it only when it
- * changes, never for a task. Beside it, what the tasks part left: no index
- * reads a window key, and where a person is shown a task by each kind of
- * grant, on the task window's read (taskWindow.task). */
+ * changes, never for a task. Beside it, what the tasks part left: where a
+ * person is shown a task by each kind of grant, on the task window's read
+ * (taskWindow.task). */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
-import type { Doc, TableNames } from '../_generated/dataModel'
+import type { Doc } from '../_generated/dataModel'
 import { accessUnchecked, OWN_READS } from '../lib/access'
 import { navByIdsOf } from '../model/projectNavReads'
-import schema from '../schema'
 import {
   as,
   expectRefusal,
@@ -56,33 +55,6 @@ async function plantTasks(t: T, f: OrgFixture, n: number, extra: Partial<Doc<'is
 const REAL_LIMITS = {
   transactionLimits: { bytesRead: 16 * 1024 * 1024, documentsRead: 32_000, databaseQueries: 4096 },
 }
-
-describe('window keys', () => {
-  it('reads no window key: the indexes only the tasks part read are gone, and the archive marks keep theirs', () => {
-    const indexes = (table: TableNames) =>
-      schema.tables[table][' indexes']().map((index) => index.indexDescriptor)
-    expect(indexes('issues')).not.toContain('by_org_archived_window')
-    for (const table of ['issue_links', 'issue_labels', 'issue_attachments'] as const)
-      expect(indexes(table), table).not.toContain('by_org_task_archived_key')
-    expect(indexes('issue_subscriptions')).not.toContain('by_profile_task_archived_key')
-    // no index of a relation table reads task_key, and none of the tasks
-    // reads window_key
-    const fieldsOf = (table: TableNames) =>
-      schema.tables[table][' indexes']().flatMap((index) => index.fields)
-    for (const table of [
-      'issue_links',
-      'issue_labels',
-      'issue_attachments',
-      'issue_subscriptions',
-    ] as const)
-      expect(fieldsOf(table), table).not.toContain('task_key')
-    expect(fieldsOf('issues')).not.toContain('window_key')
-    // the archive steps' and the label search's indexes over the marks stay
-    expect(indexes('issue_labels')).toContain('by_label')
-    expect(indexes('issue_links')).toContain('by_org_task_archived_source')
-    expect(indexes('issue_subscriptions')).toContain('by_profile_task_archived')
-  })
-})
 
 describe('an answer Convex need not re-send', () => {
   it('is the same on every run of the same data, and logs nothing', async () => {

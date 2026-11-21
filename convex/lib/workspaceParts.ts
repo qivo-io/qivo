@@ -38,19 +38,17 @@ function keyFree<R extends { name_key?: string }>(row: R): KeyFree<R> {
   return rest
 }
 
-/** A relation row as the app receives it, without the organization id,
- * the archive mark and the copy of the task's window key that earlier
- * releases stored. */
+/** A relation row as the app receives it, without the organization id and
+ * the archive mark. */
 export function relationRow<
   D extends {
     _id: unknown
     _creationTime: number
     org_id?: string
     task_archived?: true
-    task_key?: string
   },
 >(doc: D) {
-  const { org_id: _orgId, task_archived: _mark, task_key: _key, ...row } = rowOf(doc)
+  const { org_id: _orgId, task_archived: _mark, ...row } = rowOf(doc)
   return row
 }
 
@@ -74,7 +72,7 @@ const orgRowFor = (
 /** A task as the app receives it. The parent id goes out only where the
  * read shows the parent (lib/workingSet.ts parentLink), and the text comes
  * from the task's description row (model/descriptions.ts descriptionOf). */
-export type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
+export type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id'> & {
   parent_id?: string
   /** always sent; absent reads as false, as in rows the app makes */
   has_subtasks?: boolean
@@ -84,13 +82,7 @@ export type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 
  * fields without the server-owned ones, its parent and its text, which each
  * read adds as its rules allow (TaskRow, lib/taskWindow.ts ShortRow). */
 export function taskFields(task: Doc<'issues'>) {
-  const {
-    parent_id: _parent,
-    relations_marked: _marks,
-    window_key: _window,
-    description: _stored,
-    ...row
-  } = rowOf(task)
+  const { parent_id: _parent, relations_marked: _marks, description: _stored, ...row } = rowOf(task)
   return row
 }
 

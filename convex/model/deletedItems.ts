@@ -490,16 +490,14 @@ const measured = (ctx: MutationCtx, cost: Cost): MutationCtx =>
 /* ------------------------------------------------------------ stored rows */
 
 /** The deleted_rows document `live` becomes in `item`, travelling with
- * `ownerId`, without a window key (schema.ts window_key, taskKey). `table`
- * and `row.table` both come from the one tag, so they always agree. */
+ * `ownerId`. `table` and `row.table` both come from the one tag, so they
+ * always agree. */
 function wrapRow(
   item: Pick<Item, 'id' | 'org_id'>,
   live: LiveRow,
   ownerId: string,
 ): WithoutSystemFields<Doc<'deleted_rows'>> {
   const { _id, _creationTime, ...doc } = live.doc
-  if ('window_key' in doc) delete doc.window_key
-  if ('task_key' in doc) delete doc.task_key
   return {
     item_id: item.id,
     org_id: item.org_id,
@@ -1515,14 +1513,13 @@ function docOf<T extends StoredTable>(row: Doc<'deleted_rows'>, table: T): Store
 
 /** A stored project as its reveal writes it back: its lead only while that
  * profile passes the reference predicate and may lead (design 6.1), its
- * legacy team only while the team passes the predicate, the name key of its
- * name, which a copy stored before keys lacks, and no window key. */
+ * legacy team only while the team passes the predicate, and the name key of
+ * its name, which a copy stored before keys lacks. */
 async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'projects'>> {
   const lead = p.lead_id === undefined ? null : await profileOf(s, p.lead_id)
   const team = p.team_id === undefined ? null : await teamOf(s, p.team_id)
   return {
     ...p,
-    window_key: undefined,
     name_key: nameKey(p.name),
     lead_id: sameReference(lead, s.item) && canLeadProjects(lead) ? p.lead_id : undefined,
     team_id: sameReference(team, s.item) ? p.team_id : undefined,
@@ -2370,11 +2367,11 @@ async function restoreRows(run: Run): Promise<boolean> {
   return true
 }
 
-/** Writes a stored relation row back without its archive mark and its
- * window key, with org_id where the table has it (design 5.2): a comment
- * keeps its author and editor, an attachment its uploader, only while they
- * pass the reference predicate; a follow and a label assignment stay only
- * while their profile or label passes it. Deletes the stored row. */
+/** Writes a stored relation row back without its archive mark, with org_id
+ * where the table has it (design 5.2): a comment keeps its author and
+ * editor, an attachment its uploader, only while they pass the reference
+ * predicate; a follow and a label assignment stay only while their profile
+ * or label passes it. Deletes the stored row. */
 async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
@@ -2394,7 +2391,6 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
         ...r.doc,
         org_id,
         task_archived: undefined,
-        task_key: undefined,
       })
       // counted here when its task is back already, else with the task
       // (writeTask), which a restore usually writes after its rows
@@ -2407,7 +2403,6 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
       await db.insert('issue_subscriptions', {
         ...r.doc,
         task_archived: undefined,
-        task_key: undefined,
       })
   } else if (r.table === 'issue_attachments') {
     await db.insert('issue_attachments', {
@@ -2415,7 +2410,6 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
       org_id,
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
-      task_key: undefined,
     })
     // the step its drop scheduled found it here, so a dropped image gets
     // its step again, due when the drop's was (model/descriptionImages.ts)
@@ -2514,7 +2508,6 @@ async function placeLinkBy(
       ...link,
       org_id: run.item.org_id,
       task_archived: undefined,
-      task_key: undefined,
     })
   await run.ctx.db.delete(row._id)
 }
@@ -2587,11 +2580,11 @@ function inThisItem(run: Run, taskId: string): Promise<string | null> {
  * assignment rule, creator and reporter only by the predicate, a fresh
  * done_at for an active Done task so the nightly sweep does not archive it
  * the next night (as a restore from the archive restarts it,
- * model/issues.ts doneStampUpdate), no archive mark or window key and
- * updated_at now. Deletes the stored row and, outside the reveal, the
- * task's deleted_tasks row (after a task item's reveal steps delete its
- * rows, restore_clear), and counts the task out of the tally. Returns the
- * id of the task as written. */
+ * model/issues.ts doneStampUpdate), no archive mark and updated_at now.
+ * Deletes the stored row and, outside the reveal, the task's deleted_tasks
+ * row (after a task item's reveal steps delete its rows, restore_clear),
+ * and counts the task out of the tally. Returns the id of the task as
+ * written. */
 async function writeTask(
   run: Run,
   t: StoredTask,
@@ -2607,7 +2600,6 @@ async function writeTask(
     uncountedWriter(run.ctx.db),
     {
       ...doc,
-      window_key: undefined,
       parent_id: parentId,
       ...(await restoredHolders(run, doc)),
       created_by: await keptProfile(run, doc.created_by),

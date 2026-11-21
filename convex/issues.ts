@@ -81,8 +81,7 @@ import { type FollowerRow, followerRow, MANAGE_FOLLOWERS_RULE } from './model/pi
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
- * workspace's rows. relations_marked (the archive steps' bookkeeping) and
- * window_key (where the app's former windows placed the task) stay
+ * workspace's rows. relations_marked (the archive steps' bookkeeping) stays
  * internal too.
  * The text stays out: the app reads only the number, the parent's number
  * and the archive answer from a write, and the text is the task's
@@ -91,7 +90,6 @@ const pub = ({
   _id,
   _creationTime,
   relations_marked: _marks,
-  window_key: _window,
   description: _description,
   ...row
 }: Doc<'issues'>) => row

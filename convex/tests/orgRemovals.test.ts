@@ -1722,29 +1722,6 @@ describe('recording a saved export', () => {
     })
   })
 
-  it('counts no export recorded before confirmed saves, in the settings, Billing or the reminder', async () => {
-    const { t, f } = await unbilled()
-    // the browser export of earlier releases set last_export_at when its
-    // download started, which no save confirmed
-    await t.run(async (ctx) => {
-      const org = await ctx.db
-        .query('organizations')
-        .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
-        .unique()
-      if (org) await ctx.db.patch(org._id, { last_export_at: NOW })
-    })
-    expect(await as(t, f.admin).query(api.orgRemovals.state, { org_id: f.org.id })).toMatchObject({
-      last_export_confirmed_at: null,
-    })
-    expect(await as(t, f.admin).query(api.billing.details, { org_id: f.org.id })).toMatchObject({
-      last_export_confirmed_at: null,
-    })
-    await t.run((ctx) =>
-      scheduleRemoval(ctx, { orgId: f.org.id, reason: 'requested', endedAt: NOW }),
-    )
-    expect((await deletionNotices(t)).length).toBeGreaterThan(0)
-  })
-
   it('records a saved archive that expired or that a newer one ended, within DELIVERY.streamMs of its end', async () => {
     const { t, f } = await unbilled()
     const exportId = await plantArchive(t, f.org.id)

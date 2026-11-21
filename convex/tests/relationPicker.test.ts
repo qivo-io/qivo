@@ -614,8 +614,7 @@ describe('the Subtasks picker', () => {
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const current = await task(t, f, f.sub, { parent_id: open.id })
-    // with a window key, as earlier releases stored a task
-    const plain = await task(t, f, f.sub, { title: 'Plain', window_key: 'aaaaaaaa' })
+    const plain = await task(t, f, f.sub, { title: 'Plain' })
     const shownParent = await task(t, f, f.sub, { title: 'Shown parent' })
     const inPcb = await task(t, f, f.sub2, { title: 'In PCB' })
     // a subtask, so it reads no subtask
@@ -645,7 +644,6 @@ describe('the Subtasks picker', () => {
       project_id: f.sub.id,
     })
     expect(answer.rows[0]).not.toHaveProperty('description')
-    expect(answer.rows[0]).not.toHaveProperty('window_key')
   })
 
   it('blocks a subtask and a task with 100 active subtasks, not one with 99 and an archived one', async () => {

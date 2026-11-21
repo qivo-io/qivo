@@ -83,15 +83,6 @@ import { vUsageCounts, vUsageMetric } from './lib/usage'
  * billing's storage totals included, sees marked rows like any other. */
 const taskArchived = v.optional(v.literal(true))
 
-/* `task_key` on a task's relation rows (label assignments, attachments,
- * follows, and a link's on its source's behalf): the copy of the task's
- * window_key that earlier releases wrote. No code sets it now, and a move
- * to or from Deleted items drops it (model/deletedItems.ts).
- * Rows and stored copies written before keep it until
- * internal/unreadFieldsRemoval unsets it, so the field stays in the schema
- * until then. */
-const taskKey = v.optional(v.string())
-
 /* The ten tables whose rows a deleted task or project keeps in deleted_rows
  * (lib/enums.ts STORED_TABLES), defined first so deleted_rows can reuse each
  * one's validator. Convex validates the stored copies against it, so a shape
@@ -120,12 +111,6 @@ const projectsTable = defineTable({
   review_hours: v.optional(v.number()),
   archived_at: v.optional(v.string()),
   created_at: v.string(),
-  // The key earlier releases set when they stored the project, which
-  // placed it in the app's former project windows. No code sets it now,
-  // and a move to or from Deleted items drops it. Rows and stored copies
-  // written before keep it until internal/unreadFieldsRemoval unsets it.
-  // The app's row types and the export leave it out.
-  window_key: v.optional(v.string()),
   // The name as name-ordered lists sort and search it (lib/nameKey.ts),
   // server-owned and written with the name. Never sent to clients, REST,
   // MCP, webhooks or the export. A project stored before it had one has none
@@ -286,12 +271,6 @@ const issuesTable = defineTable({
   // server-owned: some relation rows of this task may carry task_archived
   // (above). Never sent to clients, REST, MCP, webhooks or the export.
   relations_marked: v.optional(v.literal(true)),
-  // the key earlier releases set when they stored the task, which placed
-  // it in the app's former task windows and which its relation rows copied
-  // as task_key. As with projects' window_key above, no code sets it now,
-  // and rows and stored copies keep it until internal/unreadFieldsRemoval
-  // unsets it
-  window_key: v.optional(v.string()),
   created_at: v.string(),
   updated_at: v.string(),
 })
@@ -370,7 +349,6 @@ const issueLinksTable = defineTable({
   pair_key: v.string(),
   created_at: v.string(),
   task_archived: taskArchived,
-  task_key: taskKey, // the source's
 })
   // The archive steps' reads of one end's unmarked or marked rows.
   .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
@@ -386,7 +364,6 @@ const issueLabelsTable = defineTable({
   issue_id: v.string(), // label and issue must share an org
   label_id: v.string(),
   task_archived: taskArchived,
-  task_key: taskKey,
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
   .index('by_issue', ['issue_id'])
@@ -400,7 +377,6 @@ const issueSubscriptionsTable = defineTable({
   profile_id: v.string(), // recipient must be able to see the project
   created_at: v.string(),
   task_archived: taskArchived,
-  task_key: taskKey,
 })
   // a task's follows, and the archive steps' unmarked or marked ones
   .index('by_issue_task_archived', ['issue_id', 'task_archived'])
@@ -425,7 +401,6 @@ const issueAttachmentsTable = defineTable({
   uploaded_by: v.optional(v.string()),
   created_at: v.string(),
   task_archived: taskArchived,
-  task_key: taskKey,
   // When a description save took this image out of the description
   // (model/descriptionImages.ts settleDescriptionImages). It no longer counts
   // toward LIMITS.attachments.max, and a save that shows it again within a day
@@ -1236,16 +1211,6 @@ export default defineSchema({
     // itself, so this only decides whether to remind admins. The settings
     // pages, Billing and the deletion reminder read it alone.
     last_export_confirmed_at: v.optional(v.string()),
-    // The last export before last_export_confirmed_at existed, which the
-    // browser export of v0.1.161 and earlier set when its download started.
-    // Of the server's modules, only this schema and
-    // internal/unreadFieldsRemoval, which unsets it, name it
-    // (tests/manifest.test.ts pins that). The workspace's root part answers
-    // it, and an organization export holds it, when the row holds it at the
-    // time they read it. It stays in the schema until that function has run,
-    // because Convex refuses a deploy whose schema drops a field stored rows
-    // still hold.
-    last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
     .index('by_slug', ['slug']),
@@ -2084,16 +2049,6 @@ export default defineSchema({
     name: v.string(),
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
-    // Set on tickets of v0.1.162 and earlier whose upload declared no size,
-    // when size_bytes was the most the URL took. Every upload declares its
-    // size now and the file must have exactly size_bytes, and of the
-    // server's modules only this schema and internal/unreadFieldsRemoval,
-    // which unsets it, name it (tests/manifest.test.ts pins that). A ticket
-    // that still holds it goes when it attaches, or within about an hour of
-    // its expiry when files.ts reapUploadTickets deletes it. It stays in the
-    // schema until that function has run, because Convex refuses a deploy
-    // whose schema drops a field stored rows still hold.
-    up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
     // POST's own id, absent while the URL is unused (model/attachments.ts

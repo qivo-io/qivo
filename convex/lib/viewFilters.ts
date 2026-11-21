@@ -149,10 +149,10 @@ export const STEP = 64
 const LABEL_ROW: Reads = { bytes: TEAM_ROW_MAX_BYTES, documents: 1, ranges: 0 }
 
 /** The most a label assignment row takes, as Convex counts a document: an
- * organization, a task and a label id, the task's window key and the
- * archive mark, 236 bytes measured (tests/rowBounds.test.ts). A search that
- * reads a label's assignments, those of tasks the reader cannot see among
- * them, counts each at this size, so their contents move no answer. */
+ * organization, a task and a label id and the archive mark
+ * (tests/rowBounds.test.ts checks the bound). A search that reads a label's
+ * assignments, those of tasks the reader cannot see among them, counts each
+ * at LABEL_ASSIGNMENT_BYTES, so their contents move no answer. */
 export const LABEL_ASSIGNMENT_BYTES = 512
 
 /** One label assignment read in a label's range. */

@@ -669,7 +669,6 @@ describe('what a download records', () => {
     // the backend cannot know that the client received the archive, so the
     // organization's last export stays unset
     expect((await orgRow(t, f.org.id))?.last_export_confirmed_at).toBeUndefined()
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // an admin who did not ask downloads without a request row
     expect((await requestsOf(t, exportId)).map((row) => row.profile_id)).toEqual([f.admin.id])
     // a second served download keeps the first served_at, and the last
