@@ -14,7 +14,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { ACCESS_UNCHECKED, accessOf, OWN_READS } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { myViewProjects } from '../lib/overview'
@@ -198,7 +198,6 @@ async function plantTrees(
           num,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
           ...over,
         })
         return (await ctx.db.get(_id)) as Doc<'projects'>
@@ -227,7 +226,6 @@ async function plantTrees(
             status_at: NOW,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
           })
           await ctx.db.insert('issue_descriptions', {
             issue_id: id,

@@ -497,7 +497,7 @@ const plantLabel = async (t: T, orgId: string, name: string): Promise<string> =>
 }
 
 /** Gives `tasks` the label `labelId`, as model/labels.ts setTaskLabel
- * writes an assignment, with the task's window key. */
+ * writes an assignment. */
 const labelAll = async (t: T, labelId: string, tasks: readonly Doc<'issues'>[]) => {
   for (let from = 0; from < tasks.length; from += 1000)
     await t.run(async (ctx) => {
@@ -506,7 +506,6 @@ const labelAll = async (t: T, labelId: string, tasks: readonly Doc<'issues'>[]) 
           org_id: task.org_id,
           issue_id: task.id,
           label_id: labelId,
-          task_key: task.window_key,
         })
     })
 }

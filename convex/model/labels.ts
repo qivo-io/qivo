@@ -681,7 +681,6 @@ export async function setTaskLabel(
       org_id: issue.org_id,
       issue_id: issue.id,
       label_id: label.id,
-      task_key: issue.window_key,
     })
   }
   // read again, as an update may have archived the task before its labels

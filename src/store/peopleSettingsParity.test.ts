@@ -16,7 +16,6 @@ import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { InviteDeliveryRow } from '../../convex/invites'
-import { newWindowKey } from '../../convex/lib/db'
 import { nameKey } from '../../convex/lib/nameKey'
 import { newOrgDefaults } from '../../convex/model/orgs'
 import {
@@ -265,7 +264,6 @@ describe("the Users page's stand-in", () => {
             num: 500 + i,
             track_delay: false,
             created_at: NOW,
-            window_key: newWindowKey(),
           })
           parents.push(parent)
         }
@@ -282,7 +280,6 @@ describe("the Users page's stand-in", () => {
           num: 1000 + i,
           track_delay: false,
           created_at: new Date(Date.parse(NOW) + i * 1000).toISOString(),
-          window_key: newWindowKey(),
         })
         await ctx.db.insert('project_access', {
           project_id: id,

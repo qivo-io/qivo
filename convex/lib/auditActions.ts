@@ -52,7 +52,7 @@ export const AUDIT_ACTION_LABELS = {
   live_counts_backfill: 'Counted live tasks and projects',
   inbox_items_backfill: 'Built inbox items from messages',
   archived_reads_backfill: 'Marked read the messages of tasks archived before that was automatic',
-  window_keys_backfill: 'Gave tasks and projects their window keys',
+  unread_fields_removal: 'Removed the window keys and other fields earlier releases stored',
   descriptions_backfill: 'Gave tasks their description rows',
   name_keys_backfill: 'Gave people, teams and projects their name keys',
   storage_totals_backfill: 'Counted stored task files',
@@ -89,6 +89,7 @@ export const FORMER_AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = {
   panorama_refill_failed: 'Image import failed',
   panorama_library_settings_updated: 'Updated image library settings',
   legacy_icons_backfill: 'Cleared legacy project and team icons',
+  window_keys_backfill: 'Gave tasks and projects their window keys',
 }
 
 const LABELS: Readonly<Record<string, string>> = {

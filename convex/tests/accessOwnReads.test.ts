@@ -21,7 +21,7 @@ import {
   projectLevel,
   projectLevelsOf,
 } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { MAIN_SEARCH, mainSearchPage } from '../lib/mainSearch'
 import { nameKey } from '../lib/nameKey'
@@ -106,7 +106,6 @@ async function plantFamily(
       num,
       track_delay: false,
       created_at: NOW,
-      window_key: newWindowKey(),
     }
   }
   const meta = (await ctx.db.get(await ctx.db.insert('projects', row(0))))!
@@ -879,7 +878,6 @@ describe("the finding at Convex's real limits", () => {
           num,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
         })
         out.push((await byId(ctx, 'projects', id))!)
       }

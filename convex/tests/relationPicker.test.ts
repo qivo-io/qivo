@@ -121,7 +121,7 @@ const seat = async (t: T, f: OrgFixture, org_role: Doc<'profiles'>['org_role'] =
 /* A link row from `source` to `target`, as a writer stores it. */
 const linkRow = (
   f: OrgFixture,
-  source: Pick<Doc<'issues'>, 'id' | 'window_key'>,
+  source: Pick<Doc<'issues'>, 'id'>,
   targetId: string,
   type: 'blocks' | 'relates' = 'blocks',
 ) => ({
@@ -132,7 +132,6 @@ const linkRow = (
   type,
   pair_key: [source.id, targetId].sort().join(':'),
   created_at: NOW,
-  task_key: source.window_key,
 })
 
 describe('arguments', () => {
@@ -615,7 +614,8 @@ describe('the Subtasks picker', () => {
     const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const current = await task(t, f, f.sub, { parent_id: open.id })
-    const plain = await task(t, f, f.sub, { title: 'Plain' })
+    // with a window key, as earlier releases stored a task
+    const plain = await task(t, f, f.sub, { title: 'Plain', window_key: 'aaaaaaaa' })
     const shownParent = await task(t, f, f.sub, { title: 'Shown parent' })
     const inPcb = await task(t, f, f.sub2, { title: 'In PCB' })
     // a subtask, so it reads no subtask

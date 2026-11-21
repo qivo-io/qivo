@@ -37,7 +37,7 @@
  * them beyond this file. */
 
 import { internalMutation } from '../_generated/server'
-import { byId, insertUsed, newWindowKey } from '../lib/db'
+import { byId, insertUsed } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
 import { conflict } from '../lib/functions'
@@ -173,7 +173,6 @@ export const zzGuestOrg = internalMutation({
         num,
         track_delay: true, // the 0064 column default the SQL rows took
         created_at: now,
-        window_key: newWindowKey(),
         archive_state: 'live',
       } as const
       await insertUsed(ctx.db, 'projects', row, conflict(ID_TAKEN, 'id_taken'))
@@ -225,7 +224,6 @@ export const zzGuestOrg = internalMutation({
     ) => {
       const row = {
         id,
-        window_key: newWindowKey(),
         project_id,
         org_id: ZZ.org,
         num,

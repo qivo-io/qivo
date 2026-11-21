@@ -232,7 +232,6 @@ export async function plantBlocks(
         type,
         pair_key: `${a}:${b}`,
         created_at: new Date(Date.parse(NOW) + k * 1000).toISOString(),
-        task_key: source.window_key,
       })
     }
   })

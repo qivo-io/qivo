@@ -16,7 +16,6 @@ import { getDocumentSize } from 'convex/values'
 import { describe, expect, it } from 'vitest'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import { LABEL_ASSIGNMENT_BYTES } from '../lib/board'
-import { newWindowKey } from '../lib/db'
 import {
   LIMITS,
   NAME_MAX,
@@ -90,7 +89,7 @@ describe('a project row', () => {
     review_hours: LIMITS.reviewHours.max,
     archived_at: NOW,
     created_at: NOW,
-    window_key: newWindowKey(),
+    window_key: 'a1b2c3d4',
     name_key: nameKey(name),
     archive_state: 'under',
   }
@@ -223,7 +222,7 @@ describe('a task row', () => {
     status_at: NOW,
     archived_at: NOW,
     relations_marked: true,
-    window_key: newWindowKey(),
+    window_key: 'a1b2c3d4',
     created_at: NOW,
     updated_at: NOW,
   }
@@ -249,7 +248,7 @@ describe('a label assignment row', () => {
     issue_id: uuid(),
     label_id: uuid(),
     task_archived: true,
-    task_key: newWindowKey(),
+    task_key: 'a1b2c3d4',
   }
 
   it('sets every field the schema has', () => {
@@ -274,7 +273,7 @@ describe('a link row', () => {
     pair_key: `${a}:${b}`,
     created_at: NOW,
     task_archived: true,
-    task_key: newWindowKey(),
+    task_key: 'a1b2c3d4',
   }
 
   it('sets every field the schema has', () => {

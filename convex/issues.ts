@@ -688,7 +688,6 @@ export const setSubscriber = orgMutation({
       if (!keepsInbox(profile)) throw rule('a Viewer agent has no inbox and cannot follow tasks')
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
-        task_key: issue.window_key,
         profile,
         org_id: issue.org_id,
         project,

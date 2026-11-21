@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { BACKFILL_PAGE, RUN } from '../internal/usedIdsBackfill'
-import { byId, insertUsed, keepUsedId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, keepUsedId } from '../lib/db'
 import { rule } from '../lib/functions'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { insertTask } from '../model/descriptions'
@@ -256,7 +256,6 @@ describe('a used task or project id', () => {
       status: 'todo' as const,
       priority: 'low' as const,
       paused: false,
-      window_key: newWindowKey(),
       created_at: NOW,
       updated_at: NOW,
     }
@@ -455,7 +454,6 @@ describe('teardowns', () => {
           status: 'todo',
           priority: 'low',
           paused: false,
-          window_key: newWindowKey(),
           created_at: NOW,
           updated_at: NOW,
         },

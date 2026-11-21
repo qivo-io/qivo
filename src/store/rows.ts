@@ -1,5 +1,3 @@
-/* Workspace rows retain application IDs and omit database metadata and private
- * query indexes. Field types still follow the generated Convex schema. */
 import type { Doc, TableNames } from '../../convex/_generated/dataModel'
 
 export type { TableNames }

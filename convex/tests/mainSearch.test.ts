@@ -16,7 +16,6 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { canAccessProject, canSeeProject, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import { GRANT_LEVELS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import {
@@ -269,7 +268,6 @@ async function plantMany(
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...task(i),
           },
           'restore',
@@ -1555,7 +1553,6 @@ async function plantProjects(
           num: 10_000 + n,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
           ...project(i),
         })
         out.push(id)

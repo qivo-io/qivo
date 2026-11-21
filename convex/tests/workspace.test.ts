@@ -1,16 +1,14 @@
 /* The workspace's one part (workspace.ts root, lib/workspaceParts.ts
  * readRoot): what it sends and reads, and an answer that stays the same
  * while the data it reads does, so Convex re-sends it only when it
- * changes, never for a task. Beside it, what the tasks part left: the
- * window keys every writer still gives a task and its relation rows, with
- * the indexes that read them gone, and where a person is shown a task by
- * each kind of grant, on the task window's read (taskWindow.task). */
+ * changes, never for a task. Beside it, what the tasks part left: no index
+ * reads a window key, and where a person is shown a task by each kind of
+ * grant, on the task window's read (taskWindow.task). */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import { accessUnchecked, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import { navByIdsOf } from '../model/projectNavReads'
 import schema from '../schema'
 import {
@@ -29,13 +27,6 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { ready } from './projectNavFixtures.setup'
-import { plantTicket } from './uploadTickets.setup'
-
-/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
- * declare it (as snapshot.test.ts) */
-declare class Blob {
-  constructor(parts: string[])
-}
 
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
@@ -54,7 +45,6 @@ async function plantTasks(t: T, f: OrgFixture, n: number, extra: Partial<Doc<'is
         org_id: f.org.id,
         issue_id: task.id,
         label_id: 'label',
-        task_key: task.window_key,
       }),
     )
     tasks.push(task)
@@ -68,128 +58,6 @@ const REAL_LIMITS = {
 }
 
 describe('window keys', () => {
-  it("the server picks a new task's key, so a writer who crowds ids into one window does not crowd the windows", async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const ids = [0, 1, 2].map((i) => `abc00000-0000-4000-8000-00000000000${i}`)
-    for (const id of ids)
-      await as(t, f.user).mutation(api.issues.create, {
-        org_id: f.org.id,
-        id,
-        project_id: f.sub.id,
-        title: 'Crowded',
-      })
-    const keys = await t.run(async (ctx) =>
-      Promise.all(
-        ids.map(
-          async (id) =>
-            (await ctx.db
-              .query('issues')
-              .withIndex('by_uuid', (q) => q.eq('id', id))
-              .unique())!.window_key,
-        ),
-      ),
-    )
-    for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}$/)
-    expect(new Set(keys).size).toBe(3)
-  })
-
-  it("every writer of a relation row gives it its task's key", async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const [a, b] = [uuid(), uuid()]
-    const admin = as(t, f.admin)
-    for (const id of [a, b])
-      await admin.mutation(api.issues.create, {
-        org_id: f.org.id,
-        id,
-        project_id: f.sub.id,
-        title: 'Keyed',
-      })
-    const label = uuid()
-    await admin.mutation(api.labels.create, {
-      org_id: f.org.id,
-      id: label,
-      name: 'Keyed',
-      color: '#335577',
-    })
-    await admin.mutation(api.labels.toggle, {
-      org_id: f.org.id,
-      issue_id: a,
-      label_id: label,
-      on: true,
-    })
-    await admin.mutation(api.issues.addLink, {
-      org_id: f.org.id,
-      id: uuid(),
-      source_id: b,
-      target_id: a,
-      type: 'blocks',
-    })
-    await as(t, f.user).mutation(api.issues.subscribe, { org_id: f.org.id, issue_id: a })
-    // a file, attached as the app attaches one after its upload
-    const storage_id = await t.run(
-      async (ctx) => await ctx.storage.store(new Blob(['spec']) as never),
-    )
-    const stored = await t.run(async (ctx) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_uuid', (q) => q.eq('id', a))
-        .unique(),
-    )
-    if (stored === null) throw new Error('no task a')
-    await plantTicket(t, { profile: f.admin, issue: stored, storageId: storage_id })
-    await admin.mutation(api.files.attach, {
-      org_id: f.org.id,
-      id: uuid(),
-      issue_id: a,
-      storage_id,
-      name: 'spec.pdf',
-      inline: false,
-    })
-    const keyed = await t.run(async (ctx) => {
-      const keyOf = async (id: string) =>
-        (await ctx.db
-          .query('issues')
-          .withIndex('by_uuid', (q) => q.eq('id', id))
-          .unique())!.window_key
-      return {
-        a: await keyOf(a),
-        b: await keyOf(b),
-        labels: (
-          await ctx.db
-            .query('issue_labels')
-            .withIndex('by_issue', (q) => q.eq('issue_id', a))
-            .collect()
-        ).map((r) => r.task_key),
-        links: (
-          await ctx.db
-            .query('issue_links')
-            .withIndex('by_source', (q) => q.eq('source_id', b))
-            .collect()
-        ).map((r) => r.task_key),
-        follows: (
-          await ctx.db
-            .query('issue_subscriptions')
-            .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', a))
-            .collect()
-        ).map((r) => r.task_key),
-        attachments: (
-          await ctx.db
-            .query('issue_attachments')
-            .withIndex('by_issue', (q) => q.eq('issue_id', a))
-            .collect()
-        ).map((r) => r.task_key),
-      }
-    })
-    expect(keyed.a).toMatch(/^[0-9a-f]{8}$/)
-    expect(keyed.labels).toEqual([keyed.a])
-    expect(keyed.links).toEqual([keyed.b])
-    expect(keyed.follows.length).toBeGreaterThan(0)
-    for (const key of keyed.follows) expect(key).toBe(keyed.a)
-    expect(keyed.attachments).toEqual([keyed.a])
-  })
-
   it('reads no window key: the indexes only the tasks part read are gone, and the archive marks keep theirs', () => {
     const indexes = (table: TableNames) =>
       schema.tables[table][' indexes']().map((index) => index.indexDescriptor)
@@ -468,7 +336,6 @@ describe('many projects', () => {
     const subs = await t.run(async (ctx) => {
       const row = (n: number, parent_id?: string) => ({
         id: n === 0 ? parent : uuid(),
-        window_key: newWindowKey(),
         org_id: f.org.id,
         type: parent_id === undefined ? ('meta' as const) : ('project' as const),
         parent_id,
@@ -564,7 +431,6 @@ describe('many projects', () => {
             num: 1,
             track_delay: false,
             created_at: NOW,
-            window_key: newWindowKey(),
             ...extra,
           })
           return id
@@ -617,7 +483,6 @@ describe('many projects', () => {
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
           })
         }
         // a deleted project leaves no row

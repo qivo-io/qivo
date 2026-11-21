@@ -8,7 +8,6 @@ import type { WithoutSystemFields } from 'convex/server'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { type BoardAnswer, type BoardFilters, type BoardScope, readBoard } from '../lib/board'
-import { newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { as, NOW, type T, uuid } from './helpers.setup'
 
@@ -116,7 +115,6 @@ export async function plantTasks(
             status_at: rest.created_at ?? NOW,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...rest,
           }
           const _id = await ctx.db.insert('issues', doc)

@@ -145,7 +145,6 @@ export async function addLinkCore(
       type,
       pair_key: key,
       created_at: now,
-      task_key: source.window_key,
     },
     badRequest('a link with this id already exists'),
   )

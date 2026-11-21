@@ -277,7 +277,6 @@ export async function attach(
       storage_id,
       inline: false,
       created_at: NOW,
-      task_key: task.window_key,
     })
     return (await ctx.db.get(_id)) as Doc<'issue_attachments'>
   })
@@ -332,7 +331,6 @@ export async function plantRows(
         type: 'blocks',
         pair_key: [source.id, target.id].sort().join(':'),
         created_at: NOW,
-        task_key: source.window_key,
       })
     const ids: [string, Id<'comments' | 'issue_labels' | 'issue_subscriptions' | 'issue_links'>][] =
       [
@@ -352,7 +350,6 @@ export async function plantRows(
             org_id,
             issue_id: task.id,
             label_id: labelId,
-            task_key: task.window_key,
           }),
         ],
         [
@@ -361,7 +358,6 @@ export async function plantRows(
             issue_id: task.id,
             profile_id: f.admin.id,
             created_at: NOW,
-            task_key: task.window_key,
           }),
         ],
         ['issue_links', await link(task, ends.to)],

@@ -72,9 +72,9 @@ import type * as internal_overviewCountsBackfill from "../internal/overviewCount
 import type * as internal_storageTotalsBackfill from "../internal/storageTotalsBackfill.js";
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
 import type * as internal_teamCountsBackfill from "../internal/teamCountsBackfill.js";
+import type * as internal_unreadFieldsRemoval from "../internal/unreadFieldsRemoval.js";
 import type * as internal_usageRanksBackfill from "../internal/usageRanksBackfill.js";
 import type * as internal_usedIdsBackfill from "../internal/usedIdsBackfill.js";
-import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
@@ -362,9 +362,9 @@ declare const fullApi: ApiFromModules<{
   "internal/storageTotalsBackfill": typeof internal_storageTotalsBackfill;
   "internal/storedGrantees": typeof internal_storedGrantees;
   "internal/teamCountsBackfill": typeof internal_teamCountsBackfill;
+  "internal/unreadFieldsRemoval": typeof internal_unreadFieldsRemoval;
   "internal/usageRanksBackfill": typeof internal_usageRanksBackfill;
   "internal/usedIdsBackfill": typeof internal_usedIdsBackfill;
-  "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
   invites: typeof invites;
   issues: typeof issues;
   jobs: typeof jobs;

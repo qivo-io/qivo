@@ -12,7 +12,7 @@ import { expect } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { openNamedCursor } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
@@ -94,7 +94,6 @@ export const plantMetas = (
         num: n,
         track_delay: false,
         created_at: NOW,
-        window_key: newWindowKey(),
         ...extra,
       })
       out.push((await ctx.db.get(_id)) as Doc<'projects'>)

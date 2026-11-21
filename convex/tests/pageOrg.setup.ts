@@ -10,7 +10,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { rosterNames } from '../lib/archivedTasks'
 import { accessFlags, asMachineCaller, loadCatalogue } from '../lib/core'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import { listIssues as mcpListIssues } from '../machine/mcp'
@@ -297,7 +297,6 @@ const subDoc = (orgId: string, lead: string, top: Doc<'projects'>, i: number) =>
   lead_id: lead,
   track_delay: true,
   created_at: NOW,
-  window_key: newWindowKey(),
   ...(top.archived_at === undefined
     ? { archive_state: 'live' as const }
     : { archive_state: 'under' as const, archived_at: top.archived_at }),
@@ -638,7 +637,6 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
             created_at: new Date(Date.parse('2025-01-01T00:00:00.000Z') + i * 60_000).toISOString(),
             updated_at: NOW,
             status_at: NOW,
-            window_key: newWindowKey(),
           }
           await ctx.db.insert('issues', doc)
           await ctx.db.insert('issue_descriptions', {
@@ -657,7 +655,6 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
                 id: kid,
                 num: num++,
                 parent_id: id,
-                window_key: newWindowKey(),
               })
               await ctx.db.insert('issue_descriptions', {
                 issue_id: kid,

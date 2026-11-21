@@ -18,7 +18,7 @@
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { insertTask } from '../model/descriptions'
 import { covers, ensureInboxState, type ItemFields, itemEdits, itemOf } from '../model/inboxItems'
@@ -160,7 +160,6 @@ export async function plantItems(
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...task,
           },
           'restore',
@@ -312,7 +311,6 @@ export async function plantGroups(
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...o.task?.(i),
           },
           'restore',
@@ -379,7 +377,6 @@ export async function plantRaw(
           paused: false,
           created_at: NOW,
           updated_at: NOW,
-          window_key: newWindowKey(),
           ...o.task?.(i),
         }
         await ctx.db.insert('issues', task)
@@ -452,7 +449,6 @@ export async function everyday(t: T, f: OrgFixture, teams = 3, more = 0, last = 
         num: num++,
         track_delay: false,
         created_at: NOW,
-        window_key: newWindowKey(),
       })
       return (await ctx.db.get(_id)) as Doc<'projects'>
     }

@@ -21,7 +21,6 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { deliveries } from '../invites'
-import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import { NAMED_READ, namedCursor } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
@@ -1065,7 +1064,6 @@ describe('at the design size', () => {
             num: 500 + i,
             track_delay: false,
             created_at: NOW,
-            window_key: newWindowKey(),
           })
           parents.push(parent)
         }
@@ -1082,7 +1080,6 @@ describe('at the design size', () => {
           num: 100 + i,
           track_delay: false,
           created_at: NOW,
-          window_key: newWindowKey(),
         })
         await ctx.db.insert('project_access', {
           project_id: id,

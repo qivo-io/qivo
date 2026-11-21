@@ -27,7 +27,6 @@ import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
 import { orgProjects, projectLevelsForOrg } from '../lib/access'
 import type { RestIssueJson } from '../lib/core'
-import { newWindowKey } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
@@ -551,7 +550,6 @@ export async function withOrg(t: T) {
       num,
       track_delay: false,
       created_at: NOW,
-      window_key: newWindowKey(),
       ...extra,
     })
 
@@ -802,7 +800,6 @@ export async function plantProject(
       num,
       track_delay: false,
       created_at: NOW,
-      window_key: newWindowKey(),
       ...proj,
     })
     return (await ctx.db.get(_id)) as Doc<'projects'>
@@ -832,7 +829,6 @@ export async function plantIssue(
         paused: false,
         created_at: NOW,
         updated_at: NOW,
-        window_key: newWindowKey(),
         ...issue,
       },
       // records the id in used_ids without refusing one used before, so a
@@ -1321,8 +1317,8 @@ export async function workingSetOf(
   return { ...snap, ...tasks }
 }
 
-/* A stored row as the app would receive it, without Convex's system fields
- * and the name key, which only serve index reads. */
+/* A stored row in the app's row shape (src/store/rows.ts Row), without
+ * Convex's system fields and the server-only name key. */
 function appRow<R extends { _id: unknown; _creationTime: number; name_key?: string }>(row: R) {
   const { _id, _creationTime, name_key: _key, ...rest } = row
   return rest

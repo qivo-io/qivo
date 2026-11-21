@@ -18,7 +18,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { PAGE, RUN } from '../internal/descriptionsBackfill'
 import { ARCHIVE_LIMITS } from '../jobs'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
 import { clearOrgTrash, startPurge, TRASH_BUDGET } from '../model/deletedItems'
@@ -108,7 +108,6 @@ const plantOldTask = (t: T, f: OrgFixture, description: string, project_id = f.s
       paused: false,
       created_at: NOW,
       updated_at: NOW,
-      window_key: newWindowKey(),
     })
     return id
   })
@@ -332,7 +331,6 @@ describe('the writers keep one equal row per task', () => {
       paused: false,
       created_at: NOW,
       updated_at: NOW,
-      window_key: newWindowKey(),
     })
     const large = '0123456789'.repeat(100_000)
     for (let from = 0; from < 20; from += 5)
@@ -1080,7 +1078,6 @@ async function plantLong(
             paused: false,
             created_at: NOW,
             updated_at: NOW,
-            window_key: newWindowKey(),
             ...task,
           },
           'restore',

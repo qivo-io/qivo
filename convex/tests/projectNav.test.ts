@@ -14,7 +14,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_UNCHECKED, accessOf, OWN_READS, projectLevel } from '../lib/access'
-import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import {
   indexAfter,
@@ -1082,7 +1081,6 @@ describe('tasks', () => {
               paused: false,
               created_at: NOW,
               updated_at: NOW,
-              window_key: newWindowKey(),
             },
             'restore',
           )

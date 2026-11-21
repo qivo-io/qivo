@@ -22,7 +22,7 @@ import type { QueryCtx } from '../_generated/server'
 import { accessOf, OWN_READS, type OwnReads } from '../lib/access'
 
 /** A project as the app's stand-ins hold it: without Convex's system fields
- * and the fields that only serve index reads. */
+ * and the server-only fields the app does not receive. */
 export type OracleProject = Omit<
   Doc<'projects'>,
   '_id' | '_creationTime' | 'window_key' | 'name_key' | 'archive_state'

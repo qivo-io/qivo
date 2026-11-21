@@ -61,7 +61,6 @@ async function link(
       type: o.type ?? 'blocks',
       pair_key: `${a}:${b}`,
       created_at: o.created_at ?? NOW,
-      task_key: source.window_key,
     })
     return (await ctx.db.get(_id)) as Doc<'issue_links'>
   })
