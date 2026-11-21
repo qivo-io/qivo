@@ -5,23 +5,17 @@
  * only this file writes issue_descriptions. scripts/check-task-writes.mjs
  * fails on any other such write.
  *
- * In this release, the third and last of the move, the description row is
- * the only source of a task's text. Every reader takes it from the task's
- * first description row in creation order that holds the task's copies,
- * else from its first row (descriptionOf, withText, descriptionsOf), and
- * only a task without a row, which internal/descriptionsBackfill has not
- * reached, reads issues.description. Only this file reads either copy for
- * a reader, and scripts/check-task-reads.mjs fails on any other read of
+ * The description row holds a task's text. Readers fall back to
+ * issues.description for a task without a row, which
+ * internal/descriptionsBackfill has not reached (descriptionOf). Only this
+ * file reads either copy for a reader, and
+ * scripts/check-task-reads.mjs fails on any other read of
  * issues.description. Writers write the text to the row alone. A create
  * inserts the task row without it (insertTask), a description write unsets
  * the copy the task row may still hold (patchTask), and a move or an
  * archive gives the row the text readers showed before it. No other write
- * unsets the copy. The backfill's clear unsets the copies the releases
- * before wrote, only where the task's one row holds the same text
- * (clearTaskCopy). The second release, v0.1.98, is the rollback floor. It
- * reads the rows too, and its writers write copies equal to the rows
- * again, which the next clear unsets. A release before it reads only issues.description, so it
- * shows no text for a task this release wrote, edited or cleared.
+ * unsets the copy. The backfill's clear unsets the copy a task row still
+ * holds, only where the task's one row holds the same text (clearTaskCopy).
  *
  * A write that changes or checks a task's description passes the task with
  * its text (withText) as its before and after documents, and every other
@@ -89,13 +83,12 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * in creation order, the first that holds the task's copies (holdsCopies),
  * else its first row, or null for a task without one. Every writer keeps
  * the copies on the first row (patchTask), so that is the first row, unless
- * a rollback left the first row's copies stale beside a second row; then
- * this is the row the active range of the task's project holds too
- * (projectTextReader), so every reader takes the same one. It reads two rows at
- * most, so TEXT_READ.documents is a true bound. A task with three or more
- * rows, which repeated rollbacks leave and internal/descriptionsBackfill
- * reports as a duplicate, may read differently there when only a later row
- * holds the copies. */
+ * the first row's copies are stale beside a second row; then this is the
+ * row the active range of the task's project holds too (projectTextReader),
+ * so every reader takes the same one. It reads two rows at most, so
+ * TEXT_READ.documents is a true bound. A task with three or more rows,
+ * which internal/descriptionsBackfill reports as a duplicate, may read
+ * differently there when only a later row holds the copies. */
 async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
   return shownOf(await firstRows(db, task.id), task)
 }
@@ -118,8 +111,8 @@ export const firstRows = (db: Reader, issueId: string): Promise<Doc<'issue_descr
 
 /** The text of task `task` as readers show it: the text of its description
  * row (shownRow), else issues.description for a task the backfill has not
- * given a row, else ''. One by_issue range and one document, two when a
- * rollback left the first row's copies stale. */
+ * given a row, else ''. One by_issue range and up to two description
+ * rows. */
 export async function descriptionOf(db: Reader, task: TextOwner): Promise<string> {
   return (await shownRow(db, task))?.description ?? task.description ?? ''
 }
@@ -136,11 +129,10 @@ export async function descriptionAndRows(
 }
 
 /** The text readers show for `task` (descriptionOf), and whether its task
- * row holds a different one, which only a rollback leaves: a release from
- * before the table that changed issues.description without the row. Only
- * internal/descriptionsBackfill's repair then takes the task row's text, so
- * a tool that rewrites the text it read from the row would lose that edit;
- * it leaves such a task to the repair. It reads as descriptionOf does. */
+ * row holds a different one, which can hold an edit made without the row.
+ * A tool that rewrites the text it read from the row would lose that edit,
+ * so it leaves such a task to internal/descriptionsBackfill's repair. It
+ * reads as descriptionOf does. */
 export async function textCopiesOf(
   db: Reader,
   task: TextOwner,
@@ -161,7 +153,7 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
 }
 
 /** What descriptionsOf charges one task's text besides its index range.
- * `documents` is its first row and, when that row's copies are stale, the
+ * `documents` is its first row and, when the task has a second row, the
  * next (shownRow), and `bytes` is both at Convex's 1 MiB document size
  * limit (model/comments.ts DOCUMENT_MAX_BYTES). projectTextReader charges
  * each row it may read one document's share of it, `bytes` over
@@ -266,8 +258,8 @@ export type RangeStep = 'read' | 'missing' | 'done' | 'full'
  * (schema.ts issue_descriptions), or a second row a Deleted items step left
  * (withDescription), if a restore took it. A task whose project's range
  * ends without a row holding its copies, such as those, one without a row
- * or one whose rows' copies are stale, which only a rollback leaves, is
- * `missing`, for the caller to read on its own.
+ * or one whose rows' copies are stale, is `missing`, for the caller to read
+ * on its own.
  *
  * A step is one index range, read a row at a time, and it checks `room`
  * before the range and as its rows add up, charging each row it may read
@@ -419,8 +411,8 @@ export const holdsCopies = (row: Doc<'issue_descriptions'>, task: Owner): boolea
   row.project_id === task.project_id &&
   row.archived_at === task.archived_at
 
-/** The description row of task `issueId`, or null for a task stored
- * before the table that the backfill has not reached. */
+/** The description row of task `issueId`, or null for a task the backfill
+ * has not given a row. */
 export async function descriptionRow(
   db: Reader,
   issueId: string,
@@ -493,15 +485,15 @@ export async function insertTask(
 
 /** Patches task row `issue` with `fields`, and its description row in the
  * same transaction. A description among them goes to the row alone, '' when
- * it is cleared, and a task without a row gets one; the task row loses the
- * copy an earlier release left in it. A new project or archived state goes
+ * it is cleared, and a task without a row gets one; the task row loses any
+ * copy of the text it still holds. A new project or archived state goes
  * to the copies of the task's first row, in creation order, with the text
  * readers showed before the change (shownText), which a second row holding
  * the copies may hold, so the change never shows another text. A copy the
  * task row still holds stays for the backfill's clear, and a task without a
- * row gets none (the backfill inserts it). A second row, which no writer of
- * this release leaves, keeps its copies until the backfill's repair deletes
- * it, so it never stops a move, an archive or the nightly archive. Either
+ * row gets none (the backfill inserts it). A second row keeps its copies
+ * until the backfill's repair deletes it, so it never stops a move, an
+ * archive or the nightly archive. Either
  * reads the task's first two rows (firstRows), which a write of the first
  * reads again, unless the caller passes them as `rows`, as a subtree change
  * does to price each patch first (model/issues.ts patchCost). The overview
@@ -567,10 +559,10 @@ export async function patchTaskRow(
 export const shownText = (rows: readonly Doc<'issue_descriptions'>[], task: Owner): string =>
   shownOf(rows, task)?.description ?? ''
 
-/** Unsets the copy of its text that task row `task` holds, which a release
- * before this one wrote, when `rows`, the task's first two description rows
- * (firstRows), are one row that holds the task's copies and the same text,
- * so no text is lost; internal/descriptionsBackfill's clear calls it.
+/** Unsets the copy of its text that task row `task` holds when `rows`, the
+ * task's first two description rows (firstRows), are one row that holds
+ * the task's copies and the same text, so no text is lost;
+ * internal/descriptionsBackfill's clear calls it.
  * Answers whether it did. It changes no other field and writes no
  * updated_at, event or activity, because readers show the same text
  * before and after. */
@@ -605,7 +597,7 @@ export async function dropDescription(
  * reports no `differ` the copy equals the row, and taking it saves a
  * person's delete its row reads until the backfill's clear unsets the
  * copies. Reads the rows only without a copy, and answers `read`, every row
- * it read, for the caller's budget: two when a rollback left a second row.
+ * it read, for the caller's budget: two when the task has a second row.
  * `row` is the one it took the text from. A caller that deletes it as
  * `known` (model/deletedItems.ts clearTask) leaves the other to the
  * backfill, which counts it `waiting` while the task's item is in its

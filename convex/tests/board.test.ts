@@ -225,7 +225,7 @@ describe('access', () => {
 /* -------------------------------------------------------------------- rows */
 
 describe('rows', () => {
-  it("sends no text, even from a task row that holds a rollback's copy, whose real bytes count", async () => {
+  it('sends no text, even from a task row that holds a copy of its text, whose real bytes count', async () => {
     const t = newT()
     const f = await withOrg(t)
     const copied = await plantCopiedIssue(t, {
@@ -751,7 +751,7 @@ describe('reads', () => {
  * subtask whose parent is in the sibling, and 30 tasks one search word finds
  * by their texts and a label. `wide` makes the hidden rows larger, with
  * ordinary text: the subtask's and the parent's titles and texts, each with
- * the copy a rollback writes on its row, and the sibling's description, and
+ * a copy of its text on its row, and the sibling's description, and
  * gives the hidden tasks the label. A hidden row counted at its own size
  * moves the least budget only where the read takes it before its last
  * decision that keeps the most room: a search's text read, which keeps

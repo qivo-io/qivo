@@ -5,22 +5,6 @@
  * written before those copies lack, and unsets issues.description where
  * the task's row holds the same text.
  *
- * The move takes three releases. In the first every writer wrote the text
- * to both places, and this backfill gave the tasks stored before it their
- * rows. In the second every reader takes a task's text from its first row
- * in creation order that holds its copies, else from its first row, and
- * only a task without a row reads issues.description (model/descriptions.ts
- * descriptionOf). In the third, this one, writers write the text to the
- * row alone. A create writes no copy to the task row, and a description
- * write unsets the copy the task row holds (model/descriptions.ts
- * insertTask, patchTask). Every other task row keeps the copy an earlier
- * release wrote until a clear run unsets it. The second release, v0.1.98,
- * is the rollback floor. It reads the rows, and its writers write copies
- * equal to the rows again, which a clear after the roll forward unsets. A
- * release before it reads only issues.description, so it shows no text for
- * a task this release wrote, edited or cleared
- * (qivo-internal docs/deployment.md).
- *
  * A call walks two phases in creation order, each page its own
  * transaction. `tasks` reads every live task and its first two description
  * rows. A task without a row is `missing`, with or without a copy, and a
@@ -40,15 +24,13 @@
  * wipe deletes tasks before their rows, so a dry run during a wipe counts
  * its rows as orphans for a moment.
  *
- * From this release `skipped` counts the tasks without a copy, the normal
- * state, which grows with every create and description edit. A deployment
- * is clean when `missing`, `differ`, `duplicates` and `orphans` are zero,
- * and `waiting` only while a teardown runs, and it is cleared once `held` is
+ * `skipped` counts the tasks that have a description row and no copy, the
+ * normal state, since a create writes no copy and a description write
+ * unsets it (model/descriptions.ts insertTask, patchTask). A deployment is
+ * clean when `missing`, `differ`, `duplicates` and `orphans` are zero, and
+ * `waiting` only while a teardown runs, and it is cleared once `held` is
  * zero too. Main Search's palette relies on a clean dry run on each
- * deployment that serves it (search.ts). The backfill of the releases
- * from v0.1.98 up to this one skips a task without a copy before it looks
- * for a second row, so after a rollback to one of them only this release's
- * dry run counts such duplicates.
+ * deployment that serves it (search.ts).
  *
  * Every document a page reads counts toward PAGE.bytes, those a patch or a
  * delete reads again included. A task row and a description row can each
@@ -62,8 +44,9 @@
  * reports the counts with the first ids of each kind, never the text. A
  * call stops after RUN.ms, well inside Convex's action time limit, and then
  * answers `done: false` with a `cursor`; call it again with the same
- * arguments and `"cursor"` set to it until it answers `done: true`. With
- * the private helper:
+ * arguments and `"cursor"` set to it until it answers `done: true`. Each
+ * call counts from zero, so the counts of a dry run or a run are the sums
+ * over its calls. With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/descriptionsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/descriptionsBackfill:run '{"dry_run": false}'
@@ -71,22 +54,19 @@
  *   "$H" staging npx convex run internal/descriptionsBackfill:run '{"dry_run": false, "clear": true}'
  * A run inserts the missing rows, with the task's copy, or '' for a task
  * without one, which is the text readers show for it. `"repair": true` also
- * rewrites each differing row, from the task row's copy, which only a
- * release from before the table leaves different and which then holds the
- * later edit, or for a task without a copy with the text readers showed
- * (model/descriptions.ts shownText) and the task's copies. It gives the
- * first row of a duplicate that text and deletes the second, and deletes
- * orphans; a task with a third row needs a second repair. None of those
- * happens while every writer keeps the rows' copies. Rows written before the
- * project and archived copies hold none, as do rows restored from an older
- * backup, and differ until a repair stamps them. Code that lists the table
- * without the copies deploys only while no row holds them
- * (qivo-internal docs/deployment.md). A release from before the table still
- * deploys, and writes tasks without rows and changes descriptions and moves
- * and archives tasks without them. A repair after the roll forward mends
- * what either leaves, and since this release shows a row such a release left
- * stale, run a dry run and that repair before anyone relies on the text.
- * No call writes a waiting row, which its step or teardown deletes.
+ * rewrites each differing row. For a task with a copy it writes the task
+ * row's copy, because a copy that differs from its row can hold an edit
+ * made without the row (model/descriptions.ts textCopiesOf). For a task
+ * without a copy it writes the text readers showed (model/descriptions.ts
+ * shownText) and the task's copies. It writes the first row of a duplicate
+ * the same way and deletes the second, and deletes orphans; a task with a
+ * third row needs a second repair. None of those happens while every
+ * writer keeps the rows' copies. Rows written before the project and
+ * archived copies hold none, as do rows restored from an older backup, and
+ * differ until a repair stamps them. Code that lists the table without the
+ * copies deploys only while no row holds them (qivo-internal
+ * docs/deployment.md). No call writes a waiting row, which its step or
+ * teardown deletes.
  *
  * `"clear": true` unsets the copy of each `held` task (model/descriptions.ts
  * clearTaskCopy) and never one of any other kind, so it removes no text the
@@ -94,18 +74,17 @@
  * repairs nothing, and a call with `repair` too is refused, so run the
  * repair, read a dry run, then clear. A dry run already reports as `held` what a
  * clear would unset, so a dry run with `clear` is refused as well. Clear a
- * deployment once it serves this release and a dry run reports it clean:
- * the dry run, then the clear with its `cursor` until `done`, then a second
- * dry run, which reports `held` 0. Each clear patches every held task row
- * once, without updated_at, an event or activity, so readers show the same
- * text, and every open tab's task parts run again as their rows change.
+ * deployment whose dry run is clean and reports `held` above 0: the dry
+ * run, then the clear with its `cursor` until `done`, then a second dry
+ * run, which reports `held` 0. With `held` 0 there is nothing to clear.
+ * Each clear patches every held task row once, without updated_at, an
+ * event or activity, so readers show the same text, and every open tab's
+ * task parts run again as their rows change.
  *
- * Run it only after the deployment serves this release, and only with
- * approval. On production, take and verify a backup first
- * (qivo-internal docs/deployment.md); the clear is the step a rollback past
- * this release cannot undo for the tasks it clears. On the demo, whose
- * stored key cannot run internal functions, the private with-temp-deploy-key
- * helper runs each command with a short-lived key. `run`, an internal
+ * Run it only with approval. On production, take and verify a backup first
+ * (qivo-internal docs/deployment.md). On the demo, whose stored key cannot
+ * run internal functions, the private with-temp-deploy-key helper runs
+ * each command with a short-lived key. `run`, an internal
  * action, needs deployment:functions:runInternalActions, and its dry run's
  * queries deployment:functions:runInternalQueries as well.
  *

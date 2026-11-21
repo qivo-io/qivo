@@ -1,15 +1,3 @@
-/* Task descriptions in issue_descriptions (schema.ts, model/descriptions.ts),
- * the third of three releases. Every writer keeps exactly one row per live
- * task, with copies of the task's project and archived state that every
- * move and archive keeps, and writes the text to the row alone: a task row
- * keeps the copy of its text an earlier release or a rollback to the
- * second release wrote only until a description write or
- * internal/descriptionsBackfill's clear unsets it.
- * The backfill gives older tasks their rows, reports what differs, mends
- * it and clears the copies. Each case also checks a write that must leave
- * the rows as they were. scripts/check-task-writes.test.mjs covers the
- * check that no other code writes them. */
-
 import type { WithoutSystemFields } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -128,12 +116,12 @@ const edit = (
   patch: { description?: string | null; title?: string },
 ) => as(t, f.user).mutation(api.issues.update, { org_id: f.org.id, id, patch })
 
-/** The copy of its text that task `id`'s row in issues still holds, which
- * only an earlier release writes, or undefined. */
+/** The copy of its text that task `id`'s row in issues still holds, or
+ * undefined. */
 const copyOf = async (t: T, id: string) => (await taskRow(t, id))?.description
 
-/** Expects the rows in issues of tasks `ids` to hold no copy of their text,
- * as every writer of this release leaves them. */
+/** Expects the rows in issues of tasks `ids` to hold no copy of their
+ * text. */
 async function expectNoCopy(t: T, ids: readonly string[]) {
   for (const id of ids) expect(await copyOf(t, id), id).toBeUndefined()
 }
@@ -189,7 +177,7 @@ describe('the writers keep one equal row per task', () => {
       project_id: f.sub.id,
       description: 'Planted',
     })
-    // the task row holds the copy a rollback to the second release writes
+    // the task row holds a copy of its text
     const recopy = () => copyTaskTexts(t, f.org.id, [task.id])
     await recopy()
     const [before] = await rowsOf(t, task.id)
@@ -314,10 +302,10 @@ describe('the writers keep one equal row per task', () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     // 20 rows near Convex's 1 MiB document limit beside task rows without
-    // text, as the third release leaves them, planted first, then 80
-    // untrimmed descriptions of 20,000 three-byte characters in both
-    // copies, about 4.6 MiB a copy. A page of the first tasks by their own
-    // bytes, which are small, that read each one's row would pass 16 MiB.
+    // text, planted first, then 80 untrimmed descriptions of 20,000
+    // three-byte characters in both copies, about 4.6 MiB a copy. A page of
+    // the first tasks by their own bytes, which are small, that read each
+    // one's row would pass 16 MiB.
     const text = '中'.repeat(LIMITS.description.max)
     const task = (i: number, description?: string) => ({
       id: uuid(),
@@ -355,8 +343,7 @@ describe('the writers keep one equal row per task', () => {
           trimmed.push(doc.id)
         }
       })
-    // with the copy a rollback to the second release writes, the heaviest
-    // case
+    // with a copy of the text on the task rows, the heaviest case
     await copyTaskTexts(t, f.org.id, trimmed)
     const { counts } = await t.action(internal.internal.overCapRows.fix, { dry_run: false })
     expect(counts['issues.description fixed']).toBe(80)
@@ -519,7 +506,7 @@ describe('a task row that still holds a copy of its text', () => {
     const moved = await plantIssue(t, base)
     const archived = await plantIssue(t, base)
     const nightly = await plantIssue(t, { ...base, status: 'done', done_at })
-    // copies that differ from the rows, as only a rollback leaves them
+    // copies that differ from the rows
     await t.run(async (ctx) => {
       for (const task of [moved, archived, nightly])
         await ctx.db.patch(task._id, { description: 'Copy text' })
@@ -549,8 +536,7 @@ describe('a task row that still holds a copy of its text', () => {
   })
 })
 
-/** Gives the description row of task `id` the text `description`, as an
- * earlier release that changed the task row alone leaves it. */
+/** Gives the description row of task `id` the text `description`. */
 const staleRow = (t: T, id: string, description: string) =>
   t.run(async (ctx) => {
     const [row] = await ctx.db
@@ -575,8 +561,8 @@ describe('Deleted items', () => {
       parent_id: root.id,
       description: 'Child',
     })
-    // the root holds the copy a rollback to the second release writes, and
-    // the child, as this release writes it, the text only in the row
+    // the root's task row holds a copy of its text, and the child has the
+    // text only in its row
     await copyTaskTexts(t, f.org.id, [root.id])
     const old = await plantOldTask(t, f, 'Before the table')
     await deleteTask(t, f, root.id, { subtask_ids: [child.id] })
@@ -599,7 +585,7 @@ describe('Deleted items', () => {
     await assertNoDanglingRefs(t, 'after a restore')
   })
 
-  it('keeps issues.description over a row an earlier release left behind, in a task and a project item', async () => {
+  it('keeps issues.description over a description row with a different text, in a task and a project item', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
@@ -612,7 +598,7 @@ describe('Deleted items', () => {
       project_id: f.sub2.id,
       description: 'In the project',
     })
-    // an earlier release edited both tasks without their rows
+    // the task rows hold copies that differ from their rows
     await copyTaskTexts(t, f.org.id)
     await staleRow(t, task.id, 'Stale task')
     await staleRow(t, inProject.id, 'Stale project task')
@@ -643,8 +629,8 @@ describe('Deleted items', () => {
     const ids: string[] = []
     for (const description of ['One', 'Two', 'Three'])
       ids.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })).id)
-    // the first has the text only in the row, as this release writes it,
-    // and the others hold the copy a rollback to the second release writes
+    // the first has the text only in the row, and the others' task rows
+    // hold a copy of their text too
     await copyTaskTexts(t, f.org.id, ids.slice(1))
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
@@ -747,8 +733,7 @@ describe('Deleted items', () => {
 
 /** A task in project `projectId` with no copy of its text, whose first
  * description row has a stale archived copy and the text `old`, and whose
- * second holds its copies and `current`, which readers show, as repeated
- * rollbacks can leave it. */
+ * second holds its copies and `current`, which readers show. */
 async function twoRows(t: T, f: OrgFixture, projectId: string, old: string, current: string) {
   const task = await plantIssue(t, { org_id: f.org.id, project_id: projectId, description: old })
   await t.run(async (ctx) => {
@@ -891,7 +876,7 @@ describe('a task id that comes back', () => {
     })
     await runSteps(t)
     expect(await liveTask(t, first.id)).toBeNull()
-    // a row the purged task kept, as an earlier release leaves one
+    // a row the purged task kept
     await t.run((ctx) =>
       ctx.db.insert('issue_descriptions', {
         issue_id: first.id,
@@ -1052,8 +1037,8 @@ const LONG = '中'.repeat(6_000)
 const SUBTREE_READ = { bytesRead: 6 * 1024 * 1024 }
 
 /** `count` tasks with descriptions of `text`, by default LONG, in their
- * rows, ten a transaction. `copied` gives their task rows the copy too, as
- * a rollback to the second release writes it, the heaviest case. */
+ * rows, ten a transaction. `copied` gives their task rows the copy too, the
+ * heaviest case. */
 async function plantLong(
   t: T,
   count: number,
@@ -1303,7 +1288,7 @@ describe('the project and archived copies', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // as an earlier release archives it, without its row
+    // the task is archived without its description row
     await t.run((ctx) => ctx.db.patch(task._id, { archived_at: NOW }))
     await expect(expectDescriptions(t, f.org.id)).rejects.toThrow()
   })
@@ -1318,7 +1303,6 @@ describe('the project and archived copies', () => {
       status: 'done',
       done_at: new Date(Date.now() - 60 * 86_400_000).toISOString(),
     })
-    // as no writer of this release leaves it
     await t.run((ctx) =>
       ctx.db.insert('issue_descriptions', {
         issue_id: task.id,
@@ -1460,7 +1444,7 @@ describe("the copies at Convex's limits", () => {
           })
         ).id,
       )
-    // a rollback left the second task a second row with its copies
+    // the second task has a second row with its copies
     await t.run((ctx) =>
       ctx.db.insert('issue_descriptions', {
         issue_id: ids[1],
@@ -1505,8 +1489,7 @@ describe("the copies at Convex's limits", () => {
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const small = await plantIssue(t, base)
     const large = await plantIssue(t, base)
-    // the task rows hold the text too, as a rollback to the second release
-    // writes it, the heaviest case
+    // the task rows hold the text too, the heaviest case
     await plantLong(t, 30, { ...base, parent_id: small.id }, { copied: true })
     await plantLong(t, LIMITS.subtasks.max, { ...base, parent_id: large.id }, { copied: true })
     const before = await snapshot(t)
@@ -1686,8 +1669,7 @@ describe("the copies at Convex's limits", () => {
       // each subtask's task row is that large too, so five read about 5 MiB
       // in the walk, and each patch about 2 MiB more, its task again and its
       // row. With the task rows cleared each subtask costs its row twice,
-      // about 2 MiB, so ten pass 16 MiB; one of them has a second such row,
-      // as a rollback can leave.
+      // about 2 MiB, so ten pass 16 MiB; one of them has a second such row.
       const legacy = 'x'.repeat(1_040_000)
       const plant = copied ? plantCopiedIssue : plantIssue
       const root = await plantIssue(t, base)
@@ -1771,8 +1753,8 @@ async function plantKinds(t: T, f: OrgFixture) {
     (await plantCopiedIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })).id
   const task = async (description: string) =>
     (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })).id
-  // the copy a rollback to the second release writes, equal to the row,
-  // which a clear unsets
+  // a copy of the text on the task row, equal to the row, which a clear
+  // unsets
   const held = await copied('Held')
   const missing = await plantOldTask(t, f, 'Missing')
   const differs = await copied('Truth')
@@ -1780,7 +1762,7 @@ async function plantKinds(t: T, f: OrgFixture) {
   const doubled = await copied('Twice')
   // a duplicate whose first row is the stale one
   const staleFirst = await copied('Truth')
-  // this release's state, with no copy and the text in the row
+  // no copy, the text in the row
   const skipped = await task('Kept')
   // a task without a copy whose row is gone, and one with a second row
   const blank = await task('Gone')
@@ -1963,9 +1945,9 @@ describe('the backfill', () => {
     const unstamped = await task()
     const archived = await task()
     const moved = await task()
-    // this release's state, whose row keeps the text
+    // without a copy, whose row keeps the text
     const skipped = await task()
-    // the others hold the copy a rollback to the second release writes
+    // the others' task rows hold a copy of their text
     await copyTaskTexts(t, f.org.id, [fine, unstamped, archived, moved])
     await t.run(async (ctx) => {
       const rowOf = async (id: string) =>
@@ -1980,7 +1962,7 @@ describe('the backfill', () => {
           .unique())!
       // a row written before the copies
       await ctx.db.patch((await rowOf(unstamped))._id, { project_id: undefined })
-      // an earlier release archived and moved these tasks without their rows
+      // these tasks are archived and moved without their rows
       await ctx.db.patch((await taskOf(archived))._id, { archived_at: NOW })
       await ctx.db.patch((await taskOf(moved))._id, { project_id: f.sub2.id })
       await ctx.db.patch((await taskOf(skipped))._id, { archived_at: NOW })

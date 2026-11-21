@@ -1901,14 +1901,12 @@ export const moveSubtreeHolderRule = (
  * through the app, REST and MCP (convex/tests/taskLimits.test.ts). What a
  * move reads follows the bytes of its rows, so long descriptions, or the
  * same text in a script that takes three bytes a character, make a smaller
- * family too large. A task row that holds a copy of its text, which a
- * rollback to the second release of the description move writes again
- * until the next clear, is read with that copy each time, so a family of
- * long descriptions reads about twice as much
- * (convex/tests/descriptions.test.ts, under a lowered read limit). A family
- * too large for one request, descriptions stored before the caps near
- * Convex's document size limit included, is refused with MOVE_TOO_LARGE
- * and changes nothing. */
+ * family too large. A task row that holds a copy of its text is read with
+ * that copy each time, so a family of long descriptions reads about twice
+ * as much (convex/tests/descriptions.test.ts, under a lowered read limit).
+ * A family too large for one request, descriptions stored before the caps
+ * near Convex's document size limit included, is refused with
+ * MOVE_TOO_LARGE and changes nothing. */
 
 /* The subtasks of the task `rootId`, active or archived, at most
  * LIMITS.moveSubtree.max + 1 of them, so a caller can tell a task with more than

@@ -1,20 +1,3 @@
-/* Task descriptions in issue_descriptions. Since the second of three
- * releases every reader takes a task's text from its first description row
- * in creation order that holds the task's copies, else from its first row,
- * and only a task without a row reads issues.description
- * (model/descriptions.ts). In the third, writers leave issues.description
- * unset and internal/descriptionsBackfill's clear unsets the copies earlier
- * releases wrote. After the clear, only a rollback to the second release
- * writes a copy again. These cases clear issues.description
- * as the backfill does, plant copies that differ from the rows, leave a
- * task without a row and give one a second row, and check what each reader
- * answers and what each writer narrates, notifies and sends. The real-limit
- * cases run under Convex's transaction limits, some with an active page's
- * budget lowered so that 300 tasks with ordinary text pass it, and check
- * the reads they bound.
- * scripts/check-task-reads.test.mjs covers the check that no other code
- * reads issues.description. */
-
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -65,9 +48,9 @@ async function machineOrg(t: T): Promise<OrgFixture> {
   return f
 }
 
-/** Unsets issues.description on every task of organization `orgId`, as the
- * third release leaves task rows, while their description rows keep the
- * text. It patches `each` tasks a transaction, in creation order. */
+/** Unsets issues.description on every task of organization `orgId`, while
+ * their description rows keep the text. It patches `each` tasks a
+ * transaction, in creation order. */
 async function clearTaskText(t: T, orgId: string, each = 50): Promise<void> {
   for (let after = 0; ; ) {
     const from = after
@@ -96,8 +79,6 @@ const setRowText = (t: T, id: string, text: string) =>
     await ctx.db.patch(row._id, { description: text })
   })
 
-/** Deletes every description row of task `id`, as a task stored before the
- * first release has none. */
 const dropRows = (t: T, id: string) =>
   t.run(async (ctx) => {
     const rows = await ctx.db
@@ -107,8 +88,7 @@ const dropRows = (t: T, id: string) =>
     for (const row of rows) await ctx.db.delete(row._id)
   })
 
-/** Gives task `task` a second description row holding `text`, as a
- * rollback can leave one. */
+/** Gives task `task` a second description row holding `text`. */
 const secondRow = (t: T, task: Doc<'issues'>, text: string) =>
   t.run((ctx) =>
     ctx.db.insert('issue_descriptions', {
@@ -296,8 +276,7 @@ for (const [way, reads] of [
       const f = await machineOrg(t)
       const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
       const pair = await plantPair(t, f, texts)
-      // the copies a rollback to the second release writes, which the clear
-      // unsets
+      // copies of the text on the task rows, which the clear unsets
       await copyTaskTexts(t, f.org.id)
       expect(
         await t.action(internal.internal.descriptionsBackfill.run, { dry_run: false, clear: true }),
@@ -311,7 +290,7 @@ for (const [way, reads] of [
       const t = newT()
       const f = await machineOrg(t)
       const pair = await plantPair(t, f, ['Stale walrus text', 'Stale narwhal text'])
-      // the task rows hold the stale texts, as only a rollback leaves them
+      // the task rows hold the stale texts
       await copyTaskTexts(t, f.org.id)
       await setRowText(t, pair.active.id, 'Calibrate the zephyr sensor')
       await setRowText(t, pair.archived.id, 'Archive the quokka notes')
@@ -370,7 +349,7 @@ for (const [way, reads] of [
       expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
     })
 
-    it('reads the row of an active task whose archived copy is stale, which only a rollback leaves', async () => {
+    it('reads the row of an active task whose archived copy is stale', async () => {
       const t = newT()
       const f = await machineOrg(t)
       const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
@@ -621,8 +600,8 @@ describe('the writers compare the text of the description row', () => {
           project_id: f.sub.id,
           description: old,
         })
-        // the copy a rollback to the second release writes, which a
-        // description save unsets
+        // a copy of the text on the task row, which a description save
+        // unsets
         if (copied) await copyTaskTexts(t, f.org.id)
         const copy = async () => (await t.run((ctx) => ctx.db.get(task._id)))?.description
 
@@ -877,8 +856,8 @@ describe('real limits', () => {
       expect(pages.sizes[0]).toBeLessThan(200)
       expect(pages.rows).toHaveLength(200)
       expect(pages.rows.map((row) => row.description)).toEqual(Array(200).fill(text))
-      // as the third release leaves the task rows, a page reads less for
-      // each task, so it holds more of them
+      // with the task rows' copies unset, a page reads less for each task,
+      // so it holds more of them
       await clearTaskText(t, f.org.id)
       const cleared = await restPage(t, { ...agent, limit: '200' })
       console.info('a REST page of 200 ordinary tasks under a lowered budget', {
@@ -1207,8 +1186,8 @@ describe('real limits', () => {
   it('a REST search whose descriptions pass one page pages on to the end, and a request without room for a page is refused', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // 300 rows beside task rows without text, as the third release leaves
-    // them, more than a lowered page's budget reads
+    // 300 rows beside task rows without text, more than a lowered page's
+    // budget reads
     const ids = await plantMany(
       t,
       f,
@@ -1288,7 +1267,7 @@ describe('real limits', () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     // 12 tasks with two rows of 900 KiB each, the first with a stale
-    // archived copy, as a rollback leaves them, so each text reads both
+    // archived copy, so each text reads both
     const shown = (i: number) => `${i} shown `.padEnd(900 * 1024, 's')
     const ids: string[] = []
     for (let from = 0; from < 12; from += 2)
@@ -1326,8 +1305,8 @@ describe('real limits', () => {
   it('a task with many rows reads two of them at most, within the limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // 20 rows of 900 KiB, as repeated rollbacks could leave them: the first
-    // 19 with a stale archived copy, the last with the task's copies
+    // 20 rows of 900 KiB, the first 19 with a stale archived copy, the last
+    // with the task's copies
     const task = await t.run(async (ctx) => {
       const doc = taskDoc(f, 50_000)
       await ctx.db.insert('issues', doc)

@@ -39,9 +39,9 @@
  * apart from whether more pages follow (next_cursor).
  *
  * Description rows hold copies of their task's project and archived state
- * (model/descriptions.ts), which ranking may use. A rollback can leave them
- * stale, so a description match goes out only after its live task row is
- * judged again. */
+ * (model/descriptions.ts), which ranking may use. They can be stale, so a
+ * description match goes out only after its live task row is judged
+ * again. */
 
 import type { TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -185,14 +185,13 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
  * such a lookup reads at the sizes rows have under the caps: the task row,
  * the project and top-level project the verdict reads, and their access
  * rows. With both projects at lib/limits.ts PROJECT_ROW_MAX_BYTES and a
- * task row as the third release of the description move writes it,
- * without its text, a lookup by a seat without team access reads about 13
- * KB (measured). A task row with the copy of its text a rollback to the
- * second release writes, about 61 KB at the cap in a three-byte script,
- * makes it about 73 KB, and a seat in teams that share the projects
- * reads about 9 KB more a share at the name caps; that difference falls to
- * the real limit, as coverageOf says of a lookup that reads more than
- * LOOKUP holds. Tests read it. */
+ * task row as model/descriptions.ts insertTask writes it, without its
+ * text, a lookup by a seat without team access reads about 13 KB
+ * (measured). A task row that still holds a copy of its text, about 61
+ * KB at the cap in a three-byte script, makes it about 73 KB, and a seat
+ * in teams that share the projects reads about 9 KB more a share at the
+ * name caps; that difference falls to the real limit, as coverageOf says
+ * of a lookup that reads more than LOOKUP holds. Tests read it. */
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
@@ -464,10 +463,10 @@ type Stops = {
  *   lookup that reads more than LOOKUP holds (a hidden task or project row
  *   over the caps), or an access check that reads many rows, for a person
  *   in many teams or a project shared with many.
- * - A description row a rollback left with stale copies, which name a
- *   project the seat sees while the row's live task is hidden. The seat
- *   reads and parses the row as one of its candidates, and the seat or the
- *   page reads the live task to judge it, each in its own allowances.
+ * - A description row with stale copies, which name a project the seat
+ *   sees while the row's live task is hidden. The seat reads and parses
+ *   the row as one of its candidates, and the seat or the page reads the
+ *   live task to judge it, each in its own allowances.
  * Planning reads hidden projects, never tasks, in one case: whether a
  * top-level project of the scope shows only for navigation reads the reach
  * rows of the seat and its teams under it and the sub-projects those name,
@@ -1494,10 +1493,10 @@ async function projectRowOf(m: NameMatch, reads: ReadBudget): Promise<ProjectRes
  * The task result row of task match `m`, or null when its live task no
  * longer shows. A match only in a description reads its task row now and is
  * judged again from it and from the text readers show (descriptionOf), as
- * a rollback can leave the copies of the row it matched by stale, and a
- * second row can hold another text: its organization, archived state,
- * project, access and terms (`matched`, the gathering's matchedText under
- * the page's parse allowance). Every read goes through `reads`, which
+ * the copies of the row it matched by can be stale, and a second row can
+ * hold another text: its organization, archived state, project, access
+ * and terms (`matched`, the gathering's matchedText under the page's parse
+ * allowance). Every read goes through `reads`, which
  * throws OutOfRoom when the row does not fit.
  */
 async function rowOf(
