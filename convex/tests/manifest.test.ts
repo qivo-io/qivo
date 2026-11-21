@@ -398,10 +398,6 @@ internal/teamCountsBackfill:run action internal {"type":"object","value":{"dry_r
 internal/teamCountsBackfill:state query internal {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/teamCountsBackfill:step mutation internal {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"restart":{"fieldType":{"type":"boolean"},"optional":true}}}
 internal/teamCountsBackfill:teamPage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
-internal/unreadFieldsRemoval:audit mutation internal {"type":"object","value":{"live":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"number"},"optional":false}},"optional":false},"stored":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"number"},"optional":false}},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_subscriptions"},{"type":"literal","value":"organizations"},{"type":"literal","value":"attachment_uploads"}]},"optional":false},"stored":{"fieldType":{"type":"boolean"},"optional":false},"page":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},{"type":"null"}]},"optional":false},"error":{"fieldType":{"type":"string"},"optional":true}}}
-internal/unreadFieldsRemoval:check query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_subscriptions"},{"type":"literal","value":"organizations"},{"type":"literal","value":"attachment_uploads"}]},"optional":false},"stored":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
-internal/unreadFieldsRemoval:run action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_subscriptions"},{"type":"literal","value":"organizations"},{"type":"literal","value":"attachment_uploads"}]},"optional":false},"stored":{"fieldType":{"type":"boolean"},"optional":false},"page":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
-internal/unreadFieldsRemoval:step mutation internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_subscriptions"},{"type":"literal","value":"organizations"},{"type":"literal","value":"attachment_uploads"}]},"optional":false},"stored":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
 internal/usageRanksBackfill:accountsPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"period":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 internal/usageRanksBackfill:audit mutation internal {"type":"object","value":{"rows":{"fieldType":{"type":"number"},"optional":false},"calls":{"fieldType":{"type":"number"},"optional":false}}}
 internal/usageRanksBackfill:bucketState query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"period":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1535,37 +1531,5 @@ describe('the wrapper rule', () => {
         `${r.module}:${r.name} kind disagrees with its ${wrapper} wrapper`,
       ).toBe(r.kind)
     }
-  })
-})
-
-/* ------------------------------------------- stored fields the schema keeps */
-
-/* Fields stored rows may still hold that no module outside the tests names
- * but schema.ts and the one-time internal/unreadFieldsRemoval, which unsets
- * them. Each stays in schema.ts, which says why, until that function has
- * run, because Convex refuses a deploy whose schema drops a field stored
- * rows hold. */
-const UNREAD_FIELDS = ['last_export_at', 'up_to']
-const REMOVAL = '../internal/unreadFieldsRemoval.ts'
-
-describe('the stored fields the schema keeps unread', () => {
-  const names = (source: string, field: string) => new RegExp(`\\b${field}\\b`).test(source)
-
-  it('positive control: schema.ts still declares each of them, and the removal names each', () => {
-    for (const path of ['../schema.ts', REMOVAL]) {
-      const source = sources[path]
-      expect(source, path).toBeDefined()
-      for (const field of UNREAD_FIELDS) expect(names(source, field), `${path} ${field}`).toBe(true)
-    }
-  })
-
-  it('are named by no module but schema.ts and the removal', () => {
-    const named: string[] = []
-    for (const [path, source] of Object.entries(sources)) {
-      if (path === '../schema.ts' || path === REMOVAL) continue
-      for (const field of UNREAD_FIELDS)
-        if (names(source, field)) named.push(`${path.replace(/^\.\.\//, '')} names ${field}`)
-    }
-    expect(named).toEqual([])
   })
 })

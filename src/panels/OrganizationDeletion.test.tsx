@@ -121,11 +121,7 @@ async function askAndConfirm() {
 
 describe('the Delete organization question', () => {
   it('says whether a saved export was confirmed, never that an export was made', async () => {
-    // an export recorded before confirmed saves, which a backend from before
-    // them answers alone, is no confirmed save
     const before = server.state
-    server.state = Object.assign({ ...before }, { last_export_at: '2026-11-05T10:00:00.000Z' })
-    for (const listener of server.listeners) listener()
     await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
     expect(dialog()?.textContent).toContain('No saved export has been confirmed yet.')
     await act(async () => button('Cancel').click())

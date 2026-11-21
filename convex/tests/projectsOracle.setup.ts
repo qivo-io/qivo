@@ -25,7 +25,7 @@ import { accessOf, OWN_READS, type OwnReads } from '../lib/access'
  * and the server-only fields the app does not receive. */
 export type OracleProject = Omit<
   Doc<'projects'>,
-  '_id' | '_creationTime' | 'window_key' | 'name_key' | 'archive_state'
+  '_id' | '_creationTime' | 'name_key' | 'archive_state'
 >
 /** A grant as the stand-ins hold it, without its name key. */
 export type OracleGrant = Omit<Doc<'project_access'>, '_id' | '_creationTime' | 'name_key'>
@@ -72,14 +72,7 @@ export async function projectsOracle(
     const caller = accessOf(ctx, me, rows, UNBOUNDED)
     for (const p of rows) {
       if (!(await caller.visible(p.id))) continue
-      const {
-        _id,
-        _creationTime,
-        window_key: _window,
-        name_key: _key,
-        archive_state: _state,
-        ...row
-      } = p
+      const { _id, _creationTime, name_key: _key, archive_state: _state, ...row } = p
       out.projects.push(row)
       for (const g of await ctx.db
         .query('project_access')

@@ -304,13 +304,6 @@ describe('the job', () => {
 
   it('says how each way saves in the record line, counting only confirmed saves', async () => {
     serve()
-    // an export recorded before confirmed saves, which a backend from before
-    // them answers alone, is no confirmed save
-    const query = server.query
-    server.query = (name) =>
-      name === 'orgRemovals:state'
-        ? { ...(query(name) as object), last_export_at: '2026-11-05T10:00:00.000Z' }
-        : query(name)
     await mount()
     expect(container.querySelector('[data-org-last-export]')?.textContent).toBe(
       "No saved export has been confirmed yet. This browser can't tell Qivo when a download finishes. Chrome and Edge on a computer can. Deletion reminders count only confirmed saves.",

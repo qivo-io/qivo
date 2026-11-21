@@ -852,7 +852,7 @@ const counted = (room: RowRoom): boolean => --room.rows >= 0
  * is a group. */
 export type ArchivedPageRow = Omit<
   Doc<'issues'>,
-  '_id' | '_creationTime' | 'description' | 'parent_id' | 'relations_marked' | 'window_key'
+  '_id' | '_creationTime' | 'description' | 'parent_id' | 'relations_marked'
 > & { archived_at: string; is_group: boolean }
 
 /** An archived task as the app's Archived tasks page lists it: its row
@@ -1218,7 +1218,6 @@ async function pageRow(task: ArchivedTask, facts: TaskFacts): Promise<ArchivedPa
     description: _description,
     parent_id: _parent,
     relations_marked: _marks,
-    window_key: _window,
     ...row
   } = task
   return { ...row, is_group: await facts.isGroup() }

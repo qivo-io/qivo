@@ -37,7 +37,7 @@ import { descriptionOf } from '../model/descriptions'
  * relationRow). */
 type Relation<
   T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions',
-> = Omit<Doc<T>, '_id' | '_creationTime' | 'org_id' | 'task_archived' | 'task_key'>
+> = Omit<Doc<T>, '_id' | '_creationTime' | 'org_id' | 'task_archived'>
 
 /** A caller's tasks with their relation rows and the load of the tasks
  * they are not shown, the sections the tasks part sent. */

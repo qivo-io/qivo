@@ -199,21 +199,6 @@ describe('the Deleted items section', () => {
     await settle(t)
     const item = await itemFor(t, task.id)
     expect(item.state).toBe('ready')
-    // keys in the stored copies of the task and its label assignment, as
-    // earlier releases stored them
-    await t.run(async (ctx) => {
-      for (const stored of await ctx.db.query('deleted_rows').collect()) {
-        const { row } = stored
-        if (row.table === 'issues' && row.doc.id === task.id)
-          await ctx.db.patch(stored._id, {
-            row: { table: 'issues', doc: { ...row.doc, window_key: 'aaaaaaaa' } },
-          })
-        else if (row.table === 'issue_labels' && row.doc.issue_id === task.id)
-          await ctx.db.patch(stored._id, {
-            row: { table: 'issue_labels', doc: { ...row.doc, task_key: 'aaaaaaaa' } },
-          })
-      }
-    })
     // no step reads a file: the attachment's bytes may be gone
     await t.run((ctx) => ctx.storage.delete(planted.attachment.storage_id))
     later()
@@ -228,7 +213,6 @@ describe('the Deleted items section', () => {
     // the live tasks' exclusions, and none of the search and item copies
     // deleted_tasks keeps
     for (const field of [
-      'window_key',
       'relations_marked',
       '_id',
       '_creationTime',
@@ -248,7 +232,6 @@ describe('the Deleted items section', () => {
       expect.objectContaining({ task_id: task.id, label_id: planted.labelId }),
     ])
     expect(archive.tables['deleted/task_labels'][0]).not.toHaveProperty('org_id')
-    expect(archive.tables['deleted/task_labels'][0]).not.toHaveProperty('task_key')
     expect(
       archive.tables['deleted/task_links'].map((row) => [row.source_id, row.target_id]).sort(),
     ).toEqual(

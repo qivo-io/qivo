@@ -303,9 +303,6 @@ export function exportRow(
   delete row.gravatar_avatars
   // a task's archive-mark flag is the archive steps' bookkeeping
   delete row.relations_marked
-  // a task's or project's window key only placed it in the app's former
-  // windows
-  delete row.window_key
   // a name key, or its copy on a membership, grant or team share, and a
   // project's archive state are server-only fields
   delete row.name_key
@@ -319,9 +316,6 @@ export function exportRow(
     delete row.org_id
     delete row.task_archived
   }
-  // a relation row's copy of its task's window key, which earlier releases
-  // stored (schema.ts taskKey)
-  delete row.task_key
   // An agent key's organization and name key only serve API access's
   // name-ordered index reads.
   if (section === 'agent_keys') {

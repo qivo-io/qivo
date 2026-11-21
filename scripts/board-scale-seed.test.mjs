@@ -1337,16 +1337,14 @@ describe('board-scale-seed --relations', () => {
     )
   })
 
-  it('ends the relations run with what the task holds, and names no window key, which no read uses', async () => {
+  it('ends the relations run with what the task holds', async () => {
     fake.projects = KEYS.map((key) => ({
       id: `project-${key}`,
       key,
       org_id: 'org',
       type: 'project',
     }))
-    fake.issues = [
-      { id: relationId('family'), org_id: 'org', project_id: 'project-FW', window_key: 'c0000000' },
-    ]
+    fake.issues = [{ id: relationId('family'), org_id: 'org', project_id: 'project-FW' }]
     fake.calls = []
     const lines = []
     try {
@@ -1360,7 +1358,6 @@ describe('board-scale-seed --relations', () => {
     }
     expect(fake.calls.filter(([name]) => name === 'issues:create')).toHaveLength(205)
     expect(lines.at(-1)).toMatch(/^Done: the task /)
-    expect(lines.join('\n')).not.toMatch(/window key|c0000000|first stage/)
   })
 })
 

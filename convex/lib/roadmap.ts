@@ -181,10 +181,10 @@ export const DEPENDENCIES = {
 
 /** The most a link row takes, as Convex counts a document. It holds an
  * organization, a link, a source and a target id, the type, the pair key,
- * the creation time, the archive mark and the source's window key, 414
- * bytes measured (tests/rowBounds.test.ts). The dependency read counts
- * each link row it reads at this size, so a link to a task the reader is
- * not shown moves no answer by its contents. */
+ * the creation time and the archive mark (tests/rowBounds.test.ts checks
+ * the bound). The dependency read counts each link row it reads at
+ * LINK_ROW_BYTES, so a link to a task the reader is not shown moves no
+ * answer by its contents. */
 export const LINK_ROW_BYTES = 512
 
 /** One link row read in a task's range. */

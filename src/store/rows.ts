@@ -10,7 +10,6 @@ type InternalFields<T extends TableNames> =
       ? 'task_archived'
       : never)
   | (T extends 'issues' ? 'relations_marked' : never)
-  | (T extends 'issues' | 'projects' ? 'window_key' : never)
   | (T extends 'projects' ? 'archive_state' : never)
   | (T extends
       | 'profiles'
@@ -20,9 +19,6 @@ type InternalFields<T extends TableNames> =
       | 'project_access'
       | 'project_team_access'
       ? 'name_key'
-      : never)
-  | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions'
-      ? 'task_key'
       : never)
 
 // The root part adds each organization's next task number, which lives in
