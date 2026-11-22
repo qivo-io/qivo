@@ -503,8 +503,8 @@ async function rebuild(
  * (`step`), how many tasks one step visits at most (`tasks`), and the
  * bytes of tasks a step reads before it leaves the rest to the next
  * (`bytes`). A task followed by hundreds of people has as many rows, a move
- * carries its subtasks too, and a task can be about 60 KB within TEXT_MAX.
- * Tests lower them. */
+ * carries its subtasks too, and a task row stored before the caps can be
+ * far larger than lib/limits.ts TASK_ROW_MAX_BYTES. Tests lower them. */
 export const REKEY = {
   inline: 128,
   inlineTasks: 8,

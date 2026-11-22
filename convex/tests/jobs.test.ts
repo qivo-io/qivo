@@ -33,7 +33,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
-import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
+import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask } from '../model/descriptions'
 import { ITEM_UNREAD_CAP, postMessage, wakeSnoozedItem } from '../model/messages'
@@ -46,7 +46,6 @@ import {
   messagesFor,
   NOW,
   newT,
-  plantCopiedIssue,
   plantIssue,
   plantMessage,
   plantProject,
@@ -444,18 +443,16 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     for (const task of tasks) expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
   })
 
-  it('ends a leg at ARCHIVE_LIMITS.bytes, so large descriptions take several legs', async () => {
-    ARCHIVE_LIMITS.bytes = 200_000
-    // One leg reads about 400 KB, its candidates and the rows it patches.
-    // The 40 tasks together are about 800 KB.
-    const t = limitedT({ bytesRead: 600_000 })
+  it('ends a leg at ARCHIVE_LIMITS.bytes, so many candidates take several legs', async () => {
+    // a leg's candidates lowered to 4 KB, which the 40 task rows pass
+    ARCHIVE_LIMITS.bytes = 4_000
+    const t = newT()
     const f = await withReadingAdmin(t)
     await plantTasks(t, 40, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done',
       done_at: ago(40),
-      description: 'x'.repeat(20_000),
     })
 
     expect(await runArchive(t)).toBe(40)
@@ -513,9 +510,11 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
   })
 
   it('splits a page whose leaf guard reads too many child bytes, and still archives the leaves after it', async () => {
-    ARCHIVE_LIMITS.bytes = 100_000
-    // The active children are about 400 KB together, more than one leg may read.
-    const t = limitedT({ bytesRead: 300_000 })
+    // The active children, with titles at the cap in a script that takes
+    // three bytes a character, are about 20 KB together, more than one leg
+    // may read, and their Done parents about 10 KB.
+    ARCHIVE_LIMITS.bytes = 15_000
+    const t = newT()
     const f = await withReadingAdmin(t)
     const done = {
       org_id: f.org.id,
@@ -525,12 +524,11 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     const parents: Doc<'issues'>[] = []
     for (let n = 0; n < 20; n++) {
       const parent = await plantIssue(t, { ...done, done_at: ago(50) })
-      // its text in the task row too
-      await plantCopiedIssue(t, {
+      await plantIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
         parent_id: parent.id,
-        description: 'x'.repeat(20_000),
+        title: '漢'.repeat(LIMITS.title.max),
       })
       parents.push(parent)
     }
@@ -974,19 +972,15 @@ describe('archiveDoneIssues runs one chain per organization', () => {
 
 describe('archiveDoneIssues bounds each dispatcher step', () => {
   it('stops a step once the due tasks it read pass ARCHIVE_LIMITS.bytes, and the next checks the rest of its page', async () => {
-    ARCHIVE_LIMITS.bytes = 150_000
-    // Each due task holds a description of 20,000 CJK characters, about
-    // 60 KB, in its task row too. The 12 together are about 720 KB, more
-    // than one step may read.
-    const t = limitedT({ bytesRead: 400_000 })
-    const description = '漢'.repeat(20_000)
+    // A step's due tasks lowered to 2 KB, which the 12 due task rows pass.
+    ARCHIVE_LIMITS.bytes = 2_000
+    const t = newT()
     for (let n = 0; n < 3; n++) {
       const org_id = uuid()
       const first = await plantOrg(t, org_id)
       for (let p = 0; p < 4; p++) {
         const project = p === 0 ? first : await plantProject(t, { org_id })
-        const done = { status: 'done' as const, done_at: ago(40), description }
-        await plantCopiedIssue(t, { org_id, project_id: project.id, ...done })
+        await plantIssue(t, { org_id, project_id: project.id, status: 'done', done_at: ago(40) })
       }
     }
 
@@ -1019,17 +1013,16 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
   })
 
   it('stops a flagged step once the tasks it read pass ARCHIVE_LIMITS.bytes', async () => {
-    ARCHIVE_LIMITS.bytes = 150_000
-    // Ten flagged tasks of about 60 KB each, their text in the task row too,
-    // more than one step may read.
-    const t = limitedT({ bytesRead: 400_000 })
-    const description = '漢'.repeat(20_000)
+    // A step's flagged tasks lowered to 500 bytes, which two flagged task
+    // rows pass.
+    ARCHIVE_LIMITS.bytes = 500
+    const t = newT()
     const flagged: string[] = []
     for (let n = 0; n < 10; n++) {
       const org_id = uuid()
       const project = await plantOrg(t, org_id)
-      const task = { org_id, project_id: project.id, relations_marked: true as const, description }
-      flagged.push((await plantCopiedIssue(t, task)).id)
+      const task = { org_id, project_id: project.id, relations_marked: true as const }
+      flagged.push((await plantIssue(t, task)).id)
     }
 
     expect(await runArchive(t)).toBe(0)
@@ -2292,14 +2285,12 @@ describe('archiveDoneIssues within Convex limits', () => {
     const description = 'Checked against the bench results and signed off by the reviewer.'
     const done_at = new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString()
     const projects = await plantLiveProjects(t, 10, 10)
-    // a task row and its description row each hold the text, the heaviest
-    // case. The window takes three steps, two of them a full
-    // ARCHIVE_LIMITS.tasks.
+    // The window takes three steps, two of them a full ARCHIVE_LIMITS.tasks.
     for (let from = 0; from < 1100; from += 550)
       await t.run(async (ctx) => {
         for (let n = from; n < from + 550; n++) {
           const project = projects[n % projects.length]
-          const _id = await insertTask(
+          await insertTask(
             ctx.db,
             {
               id: uuid(),
@@ -2317,7 +2308,6 @@ describe('archiveDoneIssues within Convex limits', () => {
             },
             'restore',
           )
-          await ctx.db.patch(_id, { description })
         }
       })
 

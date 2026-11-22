@@ -50,7 +50,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantHiddenSibling,
   plantIssue,
   plantProject,
@@ -1376,24 +1375,21 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
     expect(await pausedIds(fx, fx.user2, fx.user.id)).toEqual([])
   })
 
-  it('stops at the read’s room on task rows that still hold their text, never failing on a Convex limit', async () => {
-    // a call's room of 32 KB under a request limit of 96 KB, past which
-    // Convex fails the read, and 40 rows that hold an ordinary
-    // description of about 4 KB, about 160 KB in all
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 96 * 1024 } }))
-    const line = 'Check the supplier quotes against the budget and note any change for the team. '
-    const text = line.repeat(50)
+  it('stops at the read’s room, never failing on a Convex limit', async () => {
+    // a call's room of 4 KiB under a request limit of 16 KiB, past which
+    // Convex fails the read, and 40 open tasks the read takes about 20 KB
+    // for
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 16 * 1024 } }))
     for (let i = 0; i < 40; i++)
-      await plantCopiedIssue(fx.t, {
+      await plantIssue(fx.t, {
         org_id: fx.org.id,
         project_id: fx.sub.id,
         assignee_id: fx.user.id,
-        description: text,
         ...plan(1),
       })
     // with the call's own room of 8 MiB the rows pass the request's limit
     await expect(loads(fx.t, fx, fx.admin, [fx.user.id])).rejects.toThrow(/Read too much data/)
-    Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, bytes: 32 * 1024 } })
+    Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, bytes: 4 * 1024 } })
     expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
     const refused = await expectRefusal(
       as(fx.t, fx.admin).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),

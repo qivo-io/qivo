@@ -187,11 +187,10 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
  * rows. With both projects at lib/limits.ts PROJECT_ROW_MAX_BYTES and a
  * task row as model/descriptions.ts insertTask writes it, without its
  * text, a lookup by a seat without team access reads about 13 KB
- * (measured). A task row that still holds a copy of its text, about 61
- * KB at the cap in a three-byte script, makes it about 73 KB, and a seat
- * in teams that share the projects reads about 9 KB more a share at the
- * name caps; that difference falls to the real limit, as coverageOf says
- * of a lookup that reads more than LOOKUP holds. Tests read it. */
+ * (measured). A seat in teams that share the projects reads about 9 KB
+ * more a share at the name caps; what passes LOOKUP falls to the real
+ * limit, as coverageOf says of a lookup that reads more than LOOKUP holds.
+ * Tests read it. */
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget

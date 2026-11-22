@@ -4,13 +4,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { MARKETING_DEMO, resolveMentions } from '../internal/marketingDemoData'
 import { ACTIVE_PAGE, listActiveIssuesCore, TASK_LIST_UNREADABLE } from '../lib/activeTaskPage'
-import {
-  accessFlags,
-  asMachineCaller,
-  loadCatalogue,
-  TASK_READ_RESERVE,
-  TEXT_TASK_READS,
-} from '../lib/core'
+import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '../lib/core'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
 import { MIB } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
@@ -53,46 +47,6 @@ async function machineOrg(t: T): Promise<OrgFixture> {
   )
   return f
 }
-
-/** Unsets issues.description on every task of organization `orgId`, while
- * their description rows keep the text. It patches `each` tasks a
- * transaction, in creation order. */
-async function clearTaskText(t: T, orgId: string, each = 50): Promise<void> {
-  for (let after = 0; ; ) {
-    const from = after
-    const last = await t.run(async (ctx) => {
-      const tasks = await ctx.db
-        .query('issues')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId).gt('_creationTime', from))
-        .take(each)
-      for (const task of tasks) await ctx.db.patch(task._id, { description: undefined })
-      return tasks.at(-1)?._creationTime ?? null
-    })
-    if (last === null) return
-    after = last
-  }
-}
-
-/** Sets the text of task `id`'s first description row to `text`, leaving
- * issues.description as it is. */
-const setRowText = (t: T, id: string, text: string) =>
-  t.run(async (ctx) => {
-    const row = await ctx.db
-      .query('issue_descriptions')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .first()
-    if (row === null) throw new Error('the task has no description row')
-    await ctx.db.patch(row._id, { description: text })
-  })
-
-const dropRows = (t: T, id: string) =>
-  t.run(async (ctx) => {
-    const rows = await ctx.db
-      .query('issue_descriptions')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect()
-    for (const row of rows) await ctx.db.delete(row._id)
-  })
 
 /** Gives task `task` a second description row holding `text`. */
 const secondRow = (t: T, task: Doc<'issues'>, text: string) =>
@@ -277,54 +231,6 @@ for (const [way, reads] of [
       TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
     })
 
-    it("answers the row text once the backfill's clear unsets the copies", async () => {
-      const t = newT()
-      const f = await machineOrg(t)
-      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
-      const pair = await plantPair(t, f, texts)
-      // copies of the text on the task rows, which the clear unsets
-      await copyTaskTexts(t, f.org.id)
-      expect(
-        await t.action(internal.internal.descriptionsBackfill.run, { dry_run: false, clear: true }),
-      ).toMatchObject({ cleared: 2, held: 0 })
-      for (const task of [pair.active, pair.archived])
-        expect((await t.run((ctx) => ctx.db.get(task._id)))?.description).toBeUndefined()
-      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
-    })
-
-    it('answers a planted row whose text differs from issues.description, and searches only the row', async () => {
-      const t = newT()
-      const f = await machineOrg(t)
-      const pair = await plantPair(t, f, ['Stale walrus text', 'Stale narwhal text'])
-      // the task rows hold the stale texts
-      await copyTaskTexts(t, f.org.id)
-      await setRowText(t, pair.active.id, 'Calibrate the zephyr sensor')
-      await setRowText(t, pair.archived.id, 'Archive the quokka notes')
-      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(
-        everywhere('Calibrate the zephyr sensor', 'Archive the quokka notes'),
-      )
-      // the stale text in the task row finds nothing
-      expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
-    })
-
-    it('falls back to issues.description for a task without a row', async () => {
-      const t = newT()
-      const f = await machineOrg(t)
-      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
-      const pair = await plantPair(t, f, texts)
-      await copyTaskTexts(t, f.org.id)
-      await dropRows(t, pair.active.id)
-      await dropRows(t, pair.archived.id)
-      // main Search matches a description through its row, so it finds a
-      // task without one by its title or number only, until the backfill
-      // gives it its row
-      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual({
-        ...everywhere(...texts),
-        mainSearchFound: false,
-        mainArchivedSearchFound: false,
-      })
-    })
-
     it('reads the first of two rows in creation order and never throws over the second', async () => {
       const t = newT()
       const f = await machineOrg(t)
@@ -392,7 +298,6 @@ describe('a search reads descriptions only up to its page', () => {
       f,
       300,
       (i) => (i % 10 === 3 ? `Wire the zephyr ${i}` : `Wire the board ${i}`),
-      () => undefined,
       100,
     )
     const labelled = [ids[5], ids[155]]
@@ -459,10 +364,10 @@ describe('an active page whose own reads fill its budget', () => {
   })
 })
 
-describe('a write that stamps new copies without issues.description', () => {
+describe('a write that stamps new copies', () => {
   /** A task whose first row has a stale archived copy and the text "Old
-   * text", and whose second row holds its copies and "Current text", with
-   * issues.description cleared, so readers show "Current text". */
+   * text", and whose second row holds its copies and "Current text", so
+   * readers show "Current text". */
   async function duplicate(t: T, f: OrgFixture) {
     const task = await plantIssue(t, {
       org_id: f.org.id,
@@ -477,7 +382,6 @@ describe('a write that stamps new copies without issues.description', () => {
       if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
     })
     await secondRow(t, task, 'Current text')
-    await clearTaskText(t, f.org.id)
     return task
   }
   const shown = (t: T, f: OrgFixture, id: string) =>
@@ -737,23 +641,16 @@ describe('Northstar', () => {
 
 /* ------------------------------------------------------------ real limits */
 
-/** A task row for planting by hand: `text` in issues.description, or none
- * when it is undefined. Each is created `num` milliseconds after NOW, so the
- * active list's order is the number's and no two tasks share an instant,
- * which a page reads again past its cursor (lib/activeTaskPage.ts
- * ACTIVE_PAGE.ties). */
-const taskDoc = (
-  f: OrgFixture,
-  num: number,
-  text?: string,
-  extra: Partial<Doc<'issues'>> = {},
-) => ({
+/** A task row for planting by hand, without its description row. Each is
+ * created `num` milliseconds after NOW, so the active list's order is the
+ * number's and no two tasks share an instant, which a page reads again past
+ * its cursor (lib/activeTaskPage.ts ACTIVE_PAGE.ties). */
+const taskDoc = (f: OrgFixture, num: number, extra: Partial<Doc<'issues'>> = {}) => ({
   id: uuid(),
   org_id: f.org.id,
   project_id: f.sub.id,
   num,
   title: `Task ${num}`,
-  ...(text === undefined ? {} : { description: text }),
   status: 'todo' as const,
   priority: 'low' as const,
   paused: false,
@@ -763,21 +660,19 @@ const taskDoc = (
 })
 
 /** Plants `count` tasks in the fixture's sub-project, each with a
- * description row holding `rowText` and issues.description holding
- * `taskText`, or none, `each` tasks a transaction. */
+ * description row holding `rowText`, `each` tasks a transaction. */
 async function plantMany(
   t: T,
   f: OrgFixture,
   count: number,
   rowText: (i: number) => string,
-  taskText: (i: number) => string | undefined,
   each: number,
 ): Promise<string[]> {
   const ids: string[] = []
   for (let from = 0; from < count; from += each)
     await t.run(async (ctx) => {
       for (let i = from; i < Math.min(count, from + each); i++) {
-        const doc = taskDoc(f, 10_000 + i, taskText(i))
+        const doc = taskDoc(f, 10_000 + i)
         await ctx.db.insert('issues', doc)
         await ctx.db.insert('issue_descriptions', {
           issue_id: doc.id,
@@ -837,47 +732,29 @@ const smallPage = (documents: number) => ({
 const ORDINARY_TEXT = 'Check the bracket fit and the cable route before the next build. '.repeat(6)
 
 describe('real limits', () => {
-  it('a REST page of 200 tasks with both copies ends early with a cursor under a lowered page budget, pages on to every task, and holds more once the copies are cleared', async () => {
+  it('a REST page of 200 tasks with ordinary text ends early with a cursor under a lowered page budget and pages on to every task', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // both copies of an ordinary text, about 240 KB in all, under a page of
-    // about 128 KiB for its rows, as 200 at the cap in a three-byte script
-    // passed the real 3.5 MiB
+    // an ordinary text in each description row, under a page of about
+    // 128 KiB for its rows, as 200 at the cap in a three-byte script pass
+    // the real 3.5 MiB
     const text = ORDINARY_TEXT
-    await plantMany(
-      t,
-      f,
-      200,
-      () => text,
-      () => text,
-      200,
-    )
+    await plantMany(t, f, 200, () => text, 200)
     const agent = { callerId: f.agent.id, access: 'read' as const }
     const small = {
       page: { bytes: 136 * 1024, delays: { ...ACTIVE_PAGE.delays, bytes: 8 * 1024 } },
     }
     await lowered(small, async () => {
       const pages = await restPages(t, { ...agent, limit: '200' })
+      console.info('a REST page of 200 ordinary tasks under a lowered budget', pages.sizes)
       expect(pages.sizes[0]).toBeGreaterThan(0)
       expect(pages.sizes[0]).toBeLessThan(200)
       expect(pages.rows).toHaveLength(200)
       expect(pages.rows.map((row) => row.description)).toEqual(Array(200).fill(text))
-      // with the task rows' copies unset, a page reads less for each task,
-      // so it holds more of them
-      await clearTaskText(t, f.org.id)
-      const cleared = await restPage(t, { ...agent, limit: '200' })
-      console.info('a REST page of 200 ordinary tasks under a lowered budget', {
-        sizes: pages.sizes,
-        cleared: cleared.tasks.length,
-      })
-      expect(cleared.tasks.length).toBeGreaterThan(pages.sizes[0])
-      expect(cleared.tasks.map((row) => row.description)).toEqual(
-        Array(cleared.tasks.length).fill(text),
-      )
     })
   })
 
-  it('a task ID search over 300 active tasks with both copies pages to its match past a lowered page budget, never refused', async () => {
+  it('a task ID search over 300 active tasks pages to its match past a lowered page budget, never refused', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     // descriptions of about 390 characters, "a few hundred" in the docs
@@ -885,7 +762,7 @@ describe('real limits', () => {
       `Notes ${i}: ${'Check the bracket fit and the cable route before the next build. '.repeat(6)}`
     await t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
-        const doc = taskDoc(f, 10_000 + i, text(i))
+        const doc = taskDoc(f, 10_000 + i)
         await ctx.db.insert('issues', doc)
         await ctx.db.insert('issue_descriptions', {
           issue_id: doc.id,
@@ -913,14 +790,7 @@ describe('real limits', () => {
   it('a REST search over 300 active tasks answers a key and a description word, reading only up to its page', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    const ids = await plantMany(
-      t,
-      f,
-      300,
-      (i) => `Notes ${i} on the zephyr`,
-      () => undefined,
-      300,
-    )
+    const ids = await plantMany(t, f, 300, (i) => `Notes ${i} on the zephyr`, 300)
     await lowered(smallPage(200), async () => {
       const agent = { callerId: f.agent.id, access: 'read' as const }
       // a key matches one task, so every other task's text is read, a page's
@@ -955,7 +825,6 @@ describe('real limits', () => {
       f,
       300,
       (i) => `Wire the ${i === 95 ? 'zephyr' : i === 150 ? 'quokka' : 'board'} ${i}`,
-      () => undefined,
       300,
     )
     await lowered(smallPage(100), async () => {
@@ -989,14 +858,7 @@ describe('real limits', () => {
     const f = await machineOrg(t)
     // 300 rows, none of which says zephyr, and the first task carries the
     // label Zephyr
-    const ids = await plantMany(
-      t,
-      f,
-      300,
-      (i) => `Wire the board ${i}`,
-      () => undefined,
-      300,
-    )
+    const ids = await plantMany(t, f, 300, (i) => `Wire the board ${i}`, 300)
     await t.run(async (ctx) => {
       const id = uuid()
       await ctx.db.insert('labels', {
@@ -1034,14 +896,7 @@ describe('real limits', () => {
   it('a REST search of a rare label reads each task’s own assignments, one range a task more than a search of a task ID', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    const ids = await plantMany(
-      t,
-      f,
-      300,
-      (i) => `Notes ${i} on the board`,
-      () => undefined,
-      300,
-    )
+    const ids = await plantMany(t, f, 300, (i) => `Notes ${i} on the board`, 300)
     // only the second task carries the label Walrus
     await t.run(async (ctx) => {
       const id = uuid()
@@ -1073,14 +928,7 @@ describe('real limits', () => {
   it('a REST search never reads the tasks an archived sub-project keeps active', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    const ids = await plantMany(
-      t,
-      f,
-      300,
-      (i) => `Notes ${i}`,
-      () => undefined,
-      300,
-    )
+    const ids = await plantMany(t, f, 300, (i) => `Notes ${i}`, 300)
     const agent = { callerId: f.agent.id, access: 'read' as const }
     const search = { limit: 20, search: 'QN-10007' }
     const without = await restMetrics(t, f, search)
@@ -1094,7 +942,7 @@ describe('real limits', () => {
     })
     await t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
-        const doc = taskDoc(f, 40_000 + i, undefined, { project_id: shelved.id })
+        const doc = taskDoc(f, 40_000 + i, { project_id: shelved.id })
         await ctx.db.insert('issues', doc)
         await ctx.db.insert('issue_descriptions', {
           issue_id: doc.id,
@@ -1120,7 +968,7 @@ describe('real limits', () => {
     // other project, then 250 tasks back in the first project, which a page
     // that read past its match would read
     const plant = (num: number, project_id: string, text: string) => ({
-      doc: taskDoc(f, num, undefined, { project_id }),
+      doc: taskDoc(f, num, { project_id }),
       text,
     })
     const firstTwo = [
@@ -1164,8 +1012,8 @@ describe('real limits', () => {
       project_id: f.sub.id,
       description,
     })
-    const b = taskDoc(f, 82_001, undefined, { created_at: '2026-01-02T00:00:00.000Z' })
-    const a = taskDoc(f, 82_000, undefined, { created_at: '2026-01-01T00:00:00.000Z' })
+    const b = taskDoc(f, 82_001, { created_at: '2026-01-02T00:00:00.000Z' })
+    const a = taskDoc(f, 82_000, { created_at: '2026-01-01T00:00:00.000Z' })
     await t.run(async (ctx) => {
       await ctx.db.insert('issues', b)
       await ctx.db.insert('issue_descriptions', row(b, 'Wire the walrus'))
@@ -1194,14 +1042,7 @@ describe('real limits', () => {
     const f = await machineOrg(t)
     // 300 rows beside task rows without text, more than a lowered page's
     // budget reads
-    const ids = await plantMany(
-      t,
-      f,
-      300,
-      (i) => `Notes ${i} on the board`,
-      () => undefined,
-      300,
-    )
+    const ids = await plantMany(t, f, 300, (i) => `Notes ${i} on the board`, 300)
     const agent = { callerId: f.agent.id, access: 'read' as const }
     await lowered(smallPage(200), async () => {
       const pages = await restPages(t, { ...agent, search: 'QN-10001' })
@@ -1217,60 +1058,6 @@ describe('real limits', () => {
       const e = await expectRefusal(restTasks(t, { ...agent, search: 'QN-10001' }), 'bad_request')
       expect((e.data as { message: string }).message).toBe(TASK_LIST_UNREADABLE)
     })
-  })
-
-  it("a single-task read of an archived task with large legacy rows reads its text before its walk, within Convex's limits", async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await machineOrg(t)
-    const big = (c: string) => c.repeat(1000 * 1000)
-    // an archived task with a description row and a newest comment near
-    // 1 MiB, and 200 archived subtasks of 100 KB that fill the walk's room.
-    // The reserve, lowered to 1.5 MiB as the other single-task reads of an
-    // archived group lower it (taskLists.test.ts), holds the reads after
-    // the walk with room to spare, but not the description row as well
-    const id = await t.run(async (ctx) => {
-      const task = taskDoc(f, 30_001, undefined, { archived_at: NOW })
-      await ctx.db.insert('issues', task)
-      await ctx.db.insert('issue_descriptions', {
-        issue_id: task.id,
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        archived_at: NOW,
-        description: big('d'),
-      })
-      await ctx.db.insert('comments', {
-        id: uuid(),
-        issue_id: task.id,
-        body: big('c'),
-        created_at: NOW,
-      })
-      return task.id
-    })
-    for (let from = 0; from < 200; from += 5)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 5; i++)
-          await ctx.db.insert(
-            'issues',
-            taskDoc(f, 30_100 + i, 's'.repeat(100 * 1024), {
-              archived_at: NOW,
-              parent_id: id,
-            }),
-          )
-      })
-    const reserve = { ...TASK_READ_RESERVE }
-    Object.assign(TASK_READ_RESERVE, { bytes: 1.5 * (1 << 20) })
-    try {
-      const got = await t.query(internal.machine.rest.getIssue, {
-        callerId: f.agent.id,
-        access: 'read',
-        today: TODAY,
-        ref: id,
-      })
-      expect(got.description).toBe(big('d'))
-      expect(got.is_group).toBe(true)
-    } finally {
-      Object.assign(TASK_READ_RESERVE, reserve)
-    }
   })
 
   it('an active page and an export page count two description rows a task', async () => {
@@ -1347,7 +1134,7 @@ describe('real limits', () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     const text = (i: number) => `${i} `.padEnd(1000 * 1024, 'x')
-    const ids = await plantMany(t, f, 24, text, () => undefined, 8)
+    const ids = await plantMany(t, f, 24, text, 8)
     const batches = await sectionBatches(t, f.org.id, 'tasks')
     const rows = batches.flatMap((batch) => batch.rows)
     expect(batches.length).toBeGreaterThan(2)

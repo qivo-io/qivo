@@ -583,9 +583,8 @@ type StepCost = { reads: number; writes: number }
  * again, the first row again as its write reads it, and both rows written,
  * the first with the text readers showed, from either row, and copies a
  * few dozen bytes long. Each document is priced at its real size. A task
- * row that still holds a copy of its text is about as large as its row,
- * one without is about 2 KB, and a row stored before the caps can come
- * close to Convex's document size limit. */
+ * row is at most about 2 KB (lib/limits.ts TASK_ROW_MAX_BYTES), and a row
+ * stored before the caps can come close to Convex's document size limit. */
 const patchCost = (task: Doc<'issues'>, rows: readonly Doc<'issue_descriptions'>[]): StepCost => {
   const own = getDocumentSize(task)
   const [first] = rows
@@ -1901,11 +1900,9 @@ export const moveSubtreeHolderRule = (
  * through the app, REST and MCP (convex/tests/taskLimits.test.ts). What a
  * move reads follows the bytes of its rows, so long descriptions, or the
  * same text in a script that takes three bytes a character, make a smaller
- * family too large. A task row that holds a copy of its text is read with
- * that copy each time, so a family of long descriptions reads about twice
- * as much (convex/tests/descriptions.test.ts, under a lowered read limit).
- * A family too large for one request, descriptions stored before the caps
- * near Convex's document size limit included, is refused with
+ * family too large (convex/tests/descriptions.test.ts, under a lowered read
+ * limit). A family too large for one request, descriptions stored before
+ * the caps near Convex's document size limit included, is refused with
  * MOVE_TOO_LARGE and changes nothing. */
 
 /* The subtasks of the task `rootId`, active or archived, at most
@@ -2101,10 +2098,7 @@ export async function moveIssueCore(
     }
   }
   // the subtasks come along. They are read once, for the carry and the
-  // answer's room below: a subtask's row is about 2 KB without its text,
-  // but about 60 KB within TEXT_MAX while it still holds a copy of it, and
-  // then LIMITS.moveSubtree.max of them take most of what one transaction
-  // may read
+  // answer's room below
   const below = await subtasksOf(ctx, issue.id)
   const carried = await subtreeToCarry(ctx, { below, target })
   // A caller that answers with the task's full read, which reads its

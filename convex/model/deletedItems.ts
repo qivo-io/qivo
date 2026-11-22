@@ -779,8 +779,8 @@ async function dropTaskDescription(
 /** Deletes the description rows a task item's stored task `taskId` still
  * has (model/descriptions.ts), in the step's budget, which counts each
  * row's read and its delete's. The person's delete leaves them to the
- * steps, so that it reads only those it takes the stored text from once the
- * task row holds no copy, two a task at most (moveTasksToTrash). A purge
+ * steps, so that it reads only those it takes the stored text from, two a
+ * task at most (moveTasksToTrash). A purge
  * or a split that an earlier release left part done can have deleted the
  * stored task row, which frees the id, so the rows of a live task that took
  * it since, and those of another organization, stay (ownDescription). */
@@ -903,7 +903,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   let row: Doc<'issue_descriptions'> | null | undefined
   if (mode === 'keep') {
     const described = await withDescription(run.ctx.db, task)
-    if (described.row !== null) row = described.row
+    row = described.row
     for (const read of described.read) chargeRead(run.budget, read)
     await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, described.task))
   } else await discard(run.ctx, { table: 'issues', doc: task })
@@ -2971,9 +2971,9 @@ async function keptParent(
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
- * A subtask within TEXT_MAX stores up to about 120 KB as JSON
- * (chargeRead), so a parent's 100 active subtasks can pass what a step can
- * read. A count past it stops, counts the parent as full, with a warning,
+ * A subtask row takes a few KB at most as JSON (chargeRead) at the caps,
+ * so only subtasks stored over the caps can pass what a step can read. A
+ * count past it stops, counts the parent as full, with a warning,
  * and its task comes back without it. Someone with Edit can still give the
  * task that parent by hand. A mutable object, so tests can lower it. */
 export const COUNT_READ = { bytes: 8 * 1024 * 1024 }
@@ -3969,8 +3969,8 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
 /** How many children of a deleted task one step of detachArchivedChildren
  * detaches, and the share of any of Convex's limits for one transaction it
  * may use before it leaves the rest to the next step. A child is a task
- * row, up to about 120 KB within TEXT_MAX, and each detach also notifies
- * and sends task.updated, whose costs have no fixed bound. Each restart by
+ * row, a few KB at most at the caps, and each detach also notifies and
+ * sends task.updated, whose costs have no fixed bound. Each restart by
  * recoverArchivedDetaches halves the page, down to one child. Tests lower
  * them. */
 export const ARCHIVED_DETACH = { page: 100, room: 0.5 }
@@ -4110,9 +4110,9 @@ export async function moveTasksToTrash(
   const counted = metered(ctx, budget)
   // the caller read them, and the steps' reads come on top
   for (const task of [...a.subtasks, a.root]) chargeRead(budget, task)
-  // each task as it is stored (model/descriptions.ts withDescription),
-  // which reads its description row only once the task row holds no copy
-  // of the text; the steps delete the rows (moveDrain)
+  // each task as it is stored, with the text of its description row
+  // (model/descriptions.ts withDescription); the steps delete the rows
+  // (moveDrain)
   const described = async (task: Doc<'issues'>) => {
     const { task: doc, read } = await withDescription(counted.db, task)
     for (const row of read) chargeRead(budget, row)

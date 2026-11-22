@@ -18,7 +18,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantIssue,
   type T,
   uuid,
@@ -218,24 +217,16 @@ describe('live counts', () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    Object.assign(COUNT_PAGE, { bytes: 100_000 })
-    // descriptions over what the app takes now, as releases before the caps
-    // stored them, in the task rows too, the heaviest case
-    const long = []
-    for (let i = 0; i < 3; i++)
-      long.push(
-        await plantCopiedIssue(t, {
-          org_id,
-          project_id: f.sub.id,
-          description: 'x'.repeat(60_000),
-        }),
-      )
+    // a page's bytes lowered below two task rows
+    Object.assign(COUNT_PAGE, { bytes: 500 })
+    const tasks = []
+    for (let i = 0; i < 3; i++) tasks.push(await plantIssue(t, { org_id, project_id: f.sub.id }))
     const step = () =>
       t.mutation(internal.internal.liveCountsBackfill.step, { org_id, recount: false })
     // the first task, read twice to find any that share its number, fills
     // the bytes
     expect(await step()).toBeNull()
-    expect((await countersOf(t, org_id))?.counted?.tasks).toBe(long[0].num)
+    expect((await countersOf(t, org_id))?.counted?.tasks).toBe(tasks[0].num)
     let done = null
     for (let n = 0; done === null && n < 10; n++) done = await step()
     expect(done).toEqual(await expectLiveCounts(t, org_id))

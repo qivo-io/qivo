@@ -713,7 +713,7 @@ describe("the Reassign picker's states", () => {
     // pastTheRoom of tests/accessRemovalPreview.test.ts: Mia, a member of
     // Hardware, which shares TBED, holds one of Firmware's 300 open tasks
     // under a lowered limit on the bytes one transaction reads
-    const t = newT({ transactionLimits: { bytesRead: 144 * 1024 } })
+    const t = newT({ transactionLimits: { bytesRead: 96 * 1024 } })
     const f = await withReadingAdmin(t)
     const mia = await plantSeat(t, { org_id: f.org.id, name: 'Mia', accepted_at: NOW })
     await t.run(async (ctx) => {
@@ -729,10 +729,6 @@ describe("the Reassign picker's states", () => {
       })
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: mia.id })
-    const description =
-      'Check the sensor calibration on the new boards, compare it with the last batch and note any drift above the tolerance. '.repeat(
-        2,
-      )
     await t.run(async (ctx) => {
       for (let i = 0; i < 299; i++)
         await ctx.db.insert('issues', {
@@ -741,7 +737,6 @@ describe("the Reassign picker's states", () => {
           project_id: f.sub.id,
           num: 5000 + i,
           title: `Calibration check ${i}`,
-          description,
           status: 'todo',
           priority: 'medium',
           paused: false,

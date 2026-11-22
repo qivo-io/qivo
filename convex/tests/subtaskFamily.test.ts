@@ -27,7 +27,6 @@ import {
   messagesFor,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantIssue,
   plantProject,
   plantSeat,
@@ -575,18 +574,18 @@ describe('a move, archive or parent change too large for one transaction', () =>
     expect(await activeUnder()).toBe(0)
   })
 
-  it("checks sooner after a subtask with a long description, as it counts the parent's subtasks", async () => {
+  it("checks sooner after a subtask with a long title, as it counts the parent's subtasks", async () => {
     const t = newT({ transactionLimits: true })
     const { f } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const short = await plantIssue(t, base)
-    await plantIssue(t, { ...base, parent_id: short.id, description: 'Notes.' })
+    await plantIssue(t, { ...base, parent_id: short.id, title: 'Notes' })
     const long = await plantIssue(t, base)
-    // its task row holds the text
-    await plantCopiedIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(7000) })
+    // a title at the cap in a script that takes three bytes a character
+    await plantIssue(t, { ...base, parent_id: long.id, title: '漢'.repeat(LIMITS.title.max) })
     const [one, two] = [await plantIssue(t, base), await plantIssue(t, base)]
-    // no check by count, only by size: 6 KiB is past the long subtask's
-    // task row alone, and short of the short one's
+    // no check by count, only by size: 800 bytes is past the long
+    // subtask's task row alone, and short of the short one's
     await crowdedRoom(
       1e9,
       async () => {
@@ -594,43 +593,10 @@ describe('a move, archive or parent change too large for one transaction', () =>
         expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
         await appUpdate(t, f, two.id, { parent_id: short.id })
       },
-      6 * 1024,
+      800,
     )
     expect((await row(t, one.id)).parent_id).toBeUndefined()
     expect((await row(t, two.id)).parent_id).toBe(short.id)
-  })
-})
-
-describe('a parent whose subtasks are too large to count', () => {
-  it('refuses with the plain sentence under a real read limit, and changes nothing', async () => {
-    // ten subtasks of about 6 KB, each description an ordinary text of 6,000
-    // characters in the task row too, read within a limit of 66 KB with
-    // SUBTREE_ROOM.bytes at a tenth: the count asks once the nine rows
-    // before it may hold those bytes, and is past the room by then
-    const t = newT({ transactionLimits: { bytesRead: 66_000 } })
-    const { f } = await scene(t)
-    const base = { org_id: f.org.id, project_id: f.sub.id }
-    const heavy = await plantIssue(t, base)
-    for (let i = 0; i < 10; i++)
-      await plantCopiedIssue(t, {
-        ...base,
-        parent_id: heavy.id,
-        description: 'Check the bracket fit and the cable route before the next build. '.repeat(91),
-      })
-    const light = await plantIssue(t, base)
-    await plantIssue(t, { ...base, parent_id: light.id })
-    const other = await plantIssue(t, base)
-    const saved = { ...SUBTREE_ROOM }
-    Object.assign(SUBTREE_ROOM, { bytes: 51_200 })
-    try {
-      const r = await expectRefusal(appUpdate(t, f, other.id, { parent_id: heavy.id }), 'rule')
-      expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
-      expect(await row(t, other.id)).toEqual(other)
-      await appUpdate(t, f, other.id, { parent_id: light.id })
-    } finally {
-      Object.assign(SUBTREE_ROOM, saved)
-    }
-    expect((await row(t, other.id)).parent_id).toBe(light.id)
   })
 })
 

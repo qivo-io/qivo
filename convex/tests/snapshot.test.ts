@@ -1491,15 +1491,12 @@ describe('the task window history pages', () => {
 
 describe('the task window history near the read limits', () => {
   it("stops looking up named tasks before Convex's limits and leaves their rows out", async () => {
-    // a limit of 256 KiB on the bytes a transaction reads, which 40 tasks of
-    // about 8 KB pass as 40 tasks of 500 KB passed the real 16 MiB
-    const big = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
+    // a limit of 36 KiB on the bytes a transaction reads, lowered so that
+    // the reads of the 40 tasks the rows name pass its room
+    const big = newT({ transactionLimits: { bytesRead: 36 * 1024 } })
     const g = await withReadingAdmin(big)
     const task = await plantIssue(big, { org_id: g.org.id, project_id: g.sub.id })
-    const description = 'Notes from the review of the board layout and the open questions. '.repeat(
-      120,
-    )
-    // 40 tasks of about 8 KB each, more than one read may hold, 20 to a write
+    // 40 tasks, more than one read may hold, 20 to a write
     const named: Doc<'issues'>[] = []
     for (let from = 0; from < 40; from += 20)
       named.push(
@@ -1511,8 +1508,7 @@ describe('the task window history near the read limits', () => {
               org_id: g.org.id,
               project_id: g.sub2.id,
               num: 5_000 + i,
-              title: `Long ${i}`,
-              description,
+              title: `Named ${i}`,
               status: 'todo',
               priority: 'medium',
               paused: false,
@@ -1524,7 +1520,7 @@ describe('the task window history near the read limits', () => {
           return out
         })),
       )
-    // the task's rows: a link to each long task, and after every tenth a row
+    // the task's rows: a link to each named task, and after every tenth a row
     // that names none
     const rows = await big.run(async (ctx) => {
       const base = Date.parse(NOW)

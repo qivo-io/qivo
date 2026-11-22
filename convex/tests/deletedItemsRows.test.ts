@@ -26,7 +26,6 @@ import type { DeletedRow } from '../model/deletedItemsRows'
 import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,
-  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
@@ -736,18 +735,12 @@ describe('projects.removalSummary', () => {
     await expectRefusal(summary(f.user, uuid()), 'not_found', /^project not found$/)
   })
 
-  it('stops counting before long task descriptions pass the read limit', async () => {
-    // REMOVAL_COUNT.bytes and Convex's 16 MiB read limit lowered alike to
-    // a 32nd: 256 KiB and 512 KiB
-    const t = newT({ transactionLimits: { bytesRead: 512 * 1024 } })
-    REMOVAL_COUNT.bytes = DEFAULT_REMOVAL.bytes / 32
+  it('stops counting once the tasks it read pass its bytes, and says more follow', async () => {
+    const t = newT({ transactionLimits: true })
+    // REMOVAL_COUNT.bytes lowered to 4 KiB, which 30 tasks pass
+    REMOVAL_COUNT.bytes = 4 * 1024
     const f = await withReadingAdmin(t)
-    // 30 tasks at the 20,000-character description cap pass 512 KiB,
-    // their text in the task rows too
-    const description = 'Measured on site. '.repeat(1112).slice(0, 20_000)
-    for (let i = 0; i < 30; i++)
-      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
-    await copyTaskTexts(t, f.org.id)
+    for (let i = 0; i < 30; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
 
     const summary = await as(t, f.user).query(api.projects.removalSummary, {
       org_id: f.org.id,

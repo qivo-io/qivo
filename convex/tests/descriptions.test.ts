@@ -298,11 +298,10 @@ describe('the writers keep one equal row per task', () => {
   it("the over-cap fix's pages read each task's description row, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    // 20 rows near Convex's 1 MiB document limit beside task rows without
-    // text, planted first, then 80 untrimmed descriptions of 20,000
-    // three-byte characters in both copies, about 4.6 MiB a copy. A page of
-    // the first tasks by their own bytes, which are small, that read each
-    // one's row would pass 16 MiB.
+    // 20 rows near Convex's 1 MiB document limit, planted first, then 80
+    // untrimmed descriptions of 20,000 three-byte characters, about
+    // 4.6 MiB. A page of the first tasks by their own bytes, which are
+    // small, that read each one's row would pass 16 MiB.
     const text = '中'.repeat(LIMITS.description.max)
     const task = (i: number, description?: string) => ({
       id: uuid(),
@@ -340,15 +339,12 @@ describe('the writers keep one equal row per task', () => {
           trimmed.push(doc.id)
         }
       })
-    // with a copy of the text on the task rows, the heaviest case
-    await copyTaskTexts(t, f.org.id, trimmed)
     const { counts } = await t.action(internal.internal.overCapRows.fix, { dry_run: false })
     expect(counts['issues.description fixed']).toBe(80)
     // a trim leaves those over TEXT_MAX, for a person to shorten
     expect(counts['issues.description reported']).toBe(20)
     for (const id of trimmed)
       expect((await rowsOf(t, id)).map((row) => row.description)).toEqual([text])
-    await expectNoCopy(t, trimmed)
   })
 })
 
@@ -533,18 +529,8 @@ describe('a task row that still holds a copy of its text', () => {
   })
 })
 
-/** Gives the description row of task `id` the text `description`. */
-const staleRow = (t: T, id: string, description: string) =>
-  t.run(async (ctx) => {
-    const [row] = await ctx.db
-      .query('issue_descriptions')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect()
-    await ctx.db.patch(row._id, { description })
-  })
-
 describe('Deleted items', () => {
-  it("stores the task row's text, else the row's, its steps drop the row, and a restore writes it back", async () => {
+  it("stores each task's row text, its steps drop the rows, and a restore writes them back", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const root = await plantIssue(t, {
@@ -558,61 +544,21 @@ describe('Deleted items', () => {
       parent_id: root.id,
       description: 'Child',
     })
-    // the root's task row holds a copy of its text, and the child has the
-    // text only in its row
-    await copyTaskTexts(t, f.org.id, [root.id])
-    const old = await plantOldTask(t, f, 'Before the table')
     await deleteTask(t, f, root.id, { subtask_ids: [child.id] })
-    await deleteTask(t, f, old)
     await runSteps(t)
-    for (const id of [root.id, child.id, old]) expect(await rowsOf(t, id)).toEqual([])
+    for (const id of [root.id, child.id]) expect(await rowsOf(t, id)).toEqual([])
     expect((await storedIssue(t, root.id))?.description).toBe('Root')
     expect((await storedIssue(t, child.id))?.description).toBe('Child')
-    expect((await storedIssue(t, old))?.description).toBe('Before the table')
 
-    const items = [(await itemFor(t, root.id)).id, (await itemFor(t, old)).id]
-    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: items })
+    const item = await itemFor(t, root.id)
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
     await runSteps(t)
     // a restore writes the stored text to the row alone
     expect((await rowsOf(t, root.id))[0].description).toBe('Root')
     expect((await rowsOf(t, child.id))[0].description).toBe('Child')
-    expect((await rowsOf(t, old))[0].description).toBe('Before the table')
-    await expectNoCopy(t, [root.id, child.id, old])
-    expect(await expectDescriptions(t, f.org.id)).toBe(3)
-    await assertNoDanglingRefs(t, 'after a restore')
-  })
-
-  it('keeps issues.description over a description row with a different text, in a task and a project item', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const task = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      description: 'Task',
-    })
-    const inProject = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      description: 'In the project',
-    })
-    // the task rows hold copies that differ from their rows
-    await copyTaskTexts(t, f.org.id)
-    await staleRow(t, task.id, 'Stale task')
-    await staleRow(t, inProject.id, 'Stale project task')
-    await deleteTask(t, f, task.id)
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    expect((await storedIssue(t, task.id))?.description).toBe('Task')
-    expect((await storedIssue(t, inProject.id))?.description).toBe('In the project')
-    for (const id of [task.id, inProject.id]) expect(await rowsOf(t, id)).toEqual([])
-
-    const items = [(await itemFor(t, task.id)).id, (await itemFor(t, f.sub2.id)).id]
-    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: items })
-    await runSteps(t)
-    expect((await rowsOf(t, task.id))[0].description).toBe('Task')
-    expect((await rowsOf(t, inProject.id))[0].description).toBe('In the project')
-    await expectNoCopy(t, [task.id, inProject.id])
+    await expectNoCopy(t, [root.id, child.id])
     expect(await expectDescriptions(t, f.org.id)).toBe(2)
+    await assertNoDanglingRefs(t, 'after a restore')
   })
 
   it("takes a project's tasks with their rows and brings them back, and a purge leaves none", async () => {
@@ -626,9 +572,6 @@ describe('Deleted items', () => {
     const ids: string[] = []
     for (const description of ['One', 'Two', 'Three'])
       ids.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })).id)
-    // the first has the text only in the row, and the others' task rows
-    // hold a copy of their text too
-    await copyTaskTexts(t, f.org.id, ids.slice(1))
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     // the other project's task keeps its row
@@ -653,7 +596,7 @@ describe('Deleted items', () => {
     await assertNoDanglingRefs(t, 'after a purge')
   })
 
-  it('stores the shown text of a task without a copy whose first row is stale, as a task item and in a project item, and restores it', async () => {
+  it('stores the shown text of a task whose first row is stale, as a task item and in a project item, and restores it', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const alone = await twoRows(t, f, f.sub.id, 'Old text', 'Current text')
@@ -705,7 +648,7 @@ describe('Deleted items', () => {
     })
   })
 
-  it('charges a move for both rows it reads of a task without a copy whose first row is stale', async () => {
+  it('charges a move for both rows it reads of a task whose first row is stale', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const filler = 'x'.repeat(15_000)
@@ -728,9 +671,9 @@ describe('Deleted items', () => {
   })
 })
 
-/** A task in project `projectId` with no copy of its text, whose first
- * description row has a stale archived copy and the text `old`, and whose
- * second holds its copies and `current`, which readers show. */
+/** A task in project `projectId` whose first description row has a stale
+ * archived copy and the text `old`, and whose second holds its copies and
+ * `current`, which readers show. */
 async function twoRows(t: T, f: OrgFixture, projectId: string, old: string, current: string) {
   const task = await plantIssue(t, { org_id: f.org.id, project_id: projectId, description: old })
   await t.run(async (ctx) => {
@@ -927,13 +870,12 @@ const LONG = '中'.repeat(6_000)
 const SUBTREE_READ = { bytesRead: 6 * 1024 * 1024 }
 
 /** `count` tasks with descriptions of `text`, by default LONG, in their
- * rows, ten a transaction. `copied` gives their task rows the copy too, the
- * heaviest case. */
+ * rows, ten a transaction. */
 async function plantLong(
   t: T,
   count: number,
   task: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
-  how: { text?: string; copied?: boolean } = {},
+  how: { text?: string } = {},
 ) {
   const text = how.text ?? LONG
   const ids: string[] = []
@@ -941,7 +883,7 @@ async function plantLong(
     await t.run(async (ctx) => {
       for (let i = from; i < Math.min(count, from + 10); i++) {
         const id = uuid()
-        const _id = await insertTask(
+        await insertTask(
           ctx.db,
           {
             id,
@@ -957,7 +899,6 @@ async function plantLong(
           },
           'restore',
         )
-        if (how.copied) await ctx.db.patch(_id, { description: text })
         ids.push(id)
       }
     })
@@ -1281,38 +1222,10 @@ describe('the project and archived copies', () => {
   })
 })
 
-describe("the copies at Convex's limits", () => {
-  it('the nightly archive takes long descriptions in both copies in more, smaller legs', async () => {
-    // a read limit lowered with the bytes a leg reads, so 30 Done tasks with
-    // 1,000 three-byte characters in both copies fill each leg's room, as
-    // the largest descriptions fill it under Convex's own limits
-    Object.assign(ARCHIVE_LIMITS, { bytes: 60_000 })
-    const t = newT({ transactionLimits: { bytesRead: 230_000 } })
-    const f = await withReadingAdmin(t)
-    const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
-    await plantLong(
-      t,
-      30,
-      { org_id: f.org.id, project_id: f.sub.id, status: 'done', done_at },
-      { copied: true, text: '中'.repeat(1_000) },
-    )
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.spyOn(console, 'info').mockImplementation(() => {})
-    await t.mutation(internal.jobs.archiveDoneIssues, {})
-    await runSteps(t)
-    expect(errors).not.toHaveBeenCalled()
-    const legs = (
-      await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    ).filter((job) => job.name.includes('archiveProject'))
-    expect(legs.length).toBeGreaterThan(3)
-    const rows = await t.run((ctx) => ctx.db.query('issue_descriptions').collect())
-    expect(rows.every((row) => row.archived_at !== undefined)).toBe(true)
-    expect(await expectDescriptions(t, f.org.id)).toBe(30)
-  })
-
-  it('the nightly archive takes cleared tasks with long rows in several legs, one with a second such row', async () => {
-    // descriptions from before the caps, in the rows alone, as the clear
-    // leaves them, each about a sixteenth of the lowered read limit, as a
+describe("long descriptions at Convex's limits", () => {
+  it('the nightly archive takes tasks with long rows in several legs, one with a second such row', async () => {
+    // descriptions from before the caps, each about a sixteenth of the
+    // lowered read limit, as a
     // row near Convex's 1 MiB document limit is of its 16 MiB; each
     // archived task reads its rows and writes one. The backfill's pages
     // are lowered too, to stay inside the limit.
@@ -1368,65 +1281,7 @@ describe("the copies at Convex's limits", () => {
     await expectNoCopy(t, ids)
   })
 
-  it('with both copies, a subtree archive or move of long descriptions finishes, or refuses and changes nothing', async () => {
-    const t = newT({ transactionLimits: SUBTREE_READ })
-    const f = await withReadingAdmin(t)
-    const away = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const base = { org_id: f.org.id, project_id: f.sub.id }
-    const small = await plantIssue(t, base)
-    const large = await plantIssue(t, base)
-    // the task rows hold the text too, the heaviest case
-    await plantLong(t, 30, { ...base, parent_id: small.id }, { copied: true })
-    await plantLong(t, LIMITS.subtasks.max, { ...base, parent_id: large.id }, { copied: true })
-    const before = await snapshot(t)
-    // each subtask reads its task row and its row twice, so the room check
-    // refuses the largest subtree before a Convex limit could stop it. Once
-    // the task rows are cleared the same number fit (below), so the copies
-    // about halve what fits.
-    const move = await expectRefusal(
-      as(t, f.admin).mutation(api.issues.move, {
-        org_id: f.org.id,
-        id: large.id,
-        project_id: away.id,
-      }),
-      'rule',
-    )
-    expect(move.data.message).toBe(MOVE_TOO_LARGE)
-    const archive = await expectRefusal(
-      as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: large.id }),
-      'rule',
-    )
-    expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
-    expect(await snapshot(t)).toEqual(before)
-    // a smaller one moves and archives, with its rows
-    const smallMove = await measured(
-      t,
-      (ctx, issue) => moveIssueCore(ctx, { ...core(f, issue), project_id: away.id }),
-      small.id,
-    )
-    console.info('with both copies, 30 subtasks of LONG move', smallMove)
-    // the move read each subtask's task row and its row, both holding LONG,
-    // twice: four times LONG a subtask, where one read of each is two
-    const longBytes = new TextEncoder().encode(LONG).length
-    expect(smallMove.bytesRead).toBeGreaterThan(4 * 30 * longBytes)
-    expect(smallMove.bytesRead).toBeLessThan(5 * 30 * longBytes)
-    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: small.id })
-    const moved = await t.run((ctx) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', small.id))
-        .collect(),
-    )
-    expect(moved).toHaveLength(30)
-    for (const kid of moved) expect(kid.project_id).toBe(away.id)
-    expect(await expectDescriptions(t, f.org.id)).toBe(2 + 30 + LIMITS.subtasks.max)
-  })
-
-  it(`with cleared task rows, ${LIMITS.subtasks.max} active subtasks of long descriptions move through the app and REST, and archive`, async () => {
+  it(`${LIMITS.subtasks.max} active subtasks of long descriptions move through the app and REST, and archive`, async () => {
     const t = newT({ transactionLimits: SUBTREE_READ })
     const f = await machineOrg(t)
     const away = await awayProject(t, f)
@@ -1440,7 +1295,7 @@ describe("the copies at Convex's limits", () => {
       (ctx, issue) => moveIssueCore(ctx, { ...core(f, issue), project_id: away.id }),
       family.id,
     )
-    console.info(`cleared, ${LIMITS.subtasks.max} active subtasks of LONG move`, move)
+    console.info(`${LIMITS.subtasks.max} active subtasks of LONG move`, move)
     for (const id of kids) expect((await rowOf(t, id)).project_id).toBe(away.id)
     // REST moves them back, and its answer reads them again
     const answer = await t.mutation(internal.machine.rest.updateIssue, {
@@ -1457,13 +1312,13 @@ describe("the copies at Convex's limits", () => {
       (ctx, issue) => archiveIssueCore(ctx, core(f, issue)),
       archived.id,
     )
-    console.info(`cleared, ${LIMITS.subtasks.max} active subtasks of LONG archive`, archive)
+    console.info(`${LIMITS.subtasks.max} active subtasks of LONG archive`, archive)
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: family.id })
     for (const id of kids) expect((await rowOf(t, id)).archived_at).toBeDefined()
     expect(await expectDescriptions(t, f.org.id)).toBe(2 + 2 * LIMITS.subtasks.max)
   })
 
-  it(`with cleared task rows, ${LIMITS.moveSubtree.max} subtasks of 6,000 characters, half of them archived, move in ASCII and are refused in a three-byte script, changing nothing`, async () => {
+  it(`${LIMITS.moveSubtree.max} subtasks of 6,000 characters, half of them archived, move in ASCII and are refused in a three-byte script, changing nothing`, async () => {
     const t = newT({ transactionLimits: SUBTREE_READ })
     const f = await withReadingAdmin(t)
     const away = await plantProject(t, {
@@ -1487,7 +1342,7 @@ describe("the copies at Convex's limits", () => {
       (ctx, issue) => moveIssueCore(ctx, { ...core(f, issue), project_id: away.id }),
       ascii.id,
     )
-    console.info(`cleared, ${LIMITS.moveSubtree.max} ASCII subtasks move`, fits)
+    console.info(`${LIMITS.moveSubtree.max} ASCII subtasks move`, fits)
     const before = await snapshot(t)
     const refused = await expectRefusal(
       as(t, f.admin).mutation(api.issues.move, {
@@ -1545,62 +1400,58 @@ describe("the copies at Convex's limits", () => {
         })
   })
 
-  for (const copied of [true, false])
-    it(`refuses a subtree of descriptions stored before the caps before one patch could pass the read limit, ${copied ? 'with both copies' : 'with cleared task rows'}`, async () => {
-      const t = newT({ transactionLimits: true })
-      const f = await withReadingAdmin(t)
-      const away = await plantProject(t, {
-        org_id: f.org.id,
-        type: 'project',
-        parent_id: f.hidden.id,
-      })
-      const base = { org_id: f.org.id, project_id: f.sub.id }
-      // descriptions of about 1 MiB from before the caps. With both copies
-      // each subtask's task row is that large too, so five read about 5 MiB
-      // in the walk, and each patch about 2 MiB more, its task again and its
-      // row. With the task rows cleared each subtask costs its row twice,
-      // about 2 MiB, so ten pass 16 MiB; one of them has a second such row.
-      const legacy = 'x'.repeat(1_040_000)
-      const plant = copied ? plantCopiedIssue : plantIssue
-      const root = await plantIssue(t, base)
-      const kids: Doc<'issues'>[] = []
-      for (let i = 0; i < (copied ? 5 : 10); i++)
-        kids.push(await plant(t, { ...base, parent_id: root.id, description: legacy }))
-      await t.run((ctx) =>
-        ctx.db.insert('issue_descriptions', {
-          issue_id: kids[0].id,
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          description: legacy,
-        }),
-      )
-      const before = await snapshot(t)
-      const archive = await expectRefusal(
-        as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: root.id }),
-        'rule',
-      )
-      expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
-      const move = await expectRefusal(
-        as(t, f.admin).mutation(api.issues.move, {
-          org_id: f.org.id,
-          id: root.id,
-          project_id: away.id,
-        }),
-        'rule',
-      )
-      expect(move.data.message).toBe(MOVE_TOO_LARGE)
-      expect(await snapshot(t)).toEqual(before)
-      // two such subtasks archive with their rows
-      const small = await plantIssue(t, base)
-      const ids: string[] = []
-      for (let i = 0; i < 2; i++)
-        ids.push((await plant(t, { ...base, parent_id: small.id, description: legacy })).id)
-      console.info(
-        `two subtasks of 1 MiB archive, ${copied ? 'with both copies' : 'cleared'}`,
-        await measured(t, (ctx, issue) => archiveIssueCore(ctx, core(f, issue)), small.id),
-      )
-      for (const id of ids) expect((await rowOf(t, id)).archived_at).toBeDefined()
+  it('refuses a subtree of descriptions stored before the caps before one patch could pass the read limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
+    const away = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
     })
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    // descriptions of about 1 MiB from before the caps. Each subtask costs
+    // its row twice, about 2 MiB, so ten pass 16 MiB; one of them has a
+    // second such row.
+    const legacy = 'x'.repeat(1_040_000)
+    const root = await plantIssue(t, base)
+    const kids: Doc<'issues'>[] = []
+    for (let i = 0; i < 10; i++)
+      kids.push(await plantIssue(t, { ...base, parent_id: root.id, description: legacy }))
+    await t.run((ctx) =>
+      ctx.db.insert('issue_descriptions', {
+        issue_id: kids[0].id,
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        description: legacy,
+      }),
+    )
+    const before = await snapshot(t)
+    const archive = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: root.id }),
+      'rule',
+    )
+    expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
+    const move = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.move, {
+        org_id: f.org.id,
+        id: root.id,
+        project_id: away.id,
+      }),
+      'rule',
+    )
+    expect(move.data.message).toBe(MOVE_TOO_LARGE)
+    expect(await snapshot(t)).toEqual(before)
+    // two such subtasks archive with their rows
+    const small = await plantIssue(t, base)
+    const ids: string[] = []
+    for (let i = 0; i < 2; i++)
+      ids.push((await plantIssue(t, { ...base, parent_id: small.id, description: legacy })).id)
+    console.info(
+      'two subtasks of 1 MiB archive',
+      await measured(t, (ctx, issue) => archiveIssueCore(ctx, core(f, issue)), small.id),
+    )
+    for (const id of ids) expect((await rowOf(t, id)).archived_at).toBeDefined()
+  })
 })
 
 /* ------------------------------------------------------------- backfill */

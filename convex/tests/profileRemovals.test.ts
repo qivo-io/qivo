@@ -287,10 +287,7 @@ describe('the removal transaction under real limits', () => {
     const f = await withReadingAdmin(t)
     const agent = f.agent.id
     // The agent created, reports and is assigned every task, 300 open tasks
-    // in one sub-project, the design size. Clearing all 900 fields in one
-    // transaction reads each 2 KB task twice per field, about 3.6 MB
-    // against the lowered 2 MiB limit, as 3,000 tasks passed the real one.
-    const description = 'Imported from the old tracker with its notes and checklists. '.repeat(34)
+    // in one sub-project, the design size, 900 fields to clear.
     await t.run(async (ctx) => {
       for (let i = 0; i < 300; i++)
         await ctx.db.insert('issues', {
@@ -299,7 +296,6 @@ describe('the removal transaction under real limits', () => {
           project_id: f.sub.id,
           num: nextNum++,
           title: `Imported ${i}`,
-          description,
           status: 'todo',
           priority: 'medium',
           paused: false,

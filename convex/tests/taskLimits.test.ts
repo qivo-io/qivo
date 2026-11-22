@@ -35,7 +35,6 @@ import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE, SUBTREE_TOO_LARGE } from '../mode
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
-  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
@@ -562,10 +561,7 @@ describe('a move that carries archived subtasks', () => {
   }
 
   /* Plants `active` and `archived` subtasks of `parent` with ordinary text,
-   * an 80-character title and `description`, one line unless given. Every
-   * task row holds a copy of the text (helpers.setup.ts copyTaskTexts), the
-   * heaviest case the fixtures plant, so each read of a task row reads the
-   * text too.
+   * an 80-character title and `description`, one line unless given.
    * convex/tests/descriptions.test.ts checks long descriptions under a
    * lowered read limit. */
   const plantFamily = async (
@@ -583,11 +579,6 @@ describe('a move that carries archived subtasks', () => {
       ...(await plantSubtasks(fx, parent, count.archived, { ...text, archived_at: NOW })),
       ...(await plantSubtasks(fx, parent, count.active, text)),
     ]
-    await copyTaskTexts(
-      fx.t,
-      fx.org.id,
-      kids.map((kid) => kid.id),
-    )
     // the planted rows counted, as a deployment's are
     await countOrg(fx.t, fx.org.id)
     return kids
@@ -660,9 +651,8 @@ describe('a move that carries archived subtasks', () => {
   })
 
   it('refuses a move too large for one transaction with what to do, on every surface, and changes nothing', async () => {
-    // fifty active and fifty archived subtasks read more than 90 KiB before
-    // their patches, past the 48 KiB left here; a task alone reads less
-    // than 10 KiB
+    // fifty active and fifty archived subtasks read more before their
+    // patches than the 48 KiB left here; a task alone reads far less
     const fx = await setup(roomFor(48 * 1024))
     const parent = await task(fx, { title: 'Long family' })
     const kids = await plantFamily(fx, parent, { active: 50, archived: 50 })
@@ -699,9 +689,9 @@ describe('a move that carries archived subtasks', () => {
   })
 
   it('refuses a REST move whose answer could not read its active subtasks again, which MCP and the app move', async () => {
-    // the move of the most active subtasks reads about 90 KiB before their
-    // patches, which fits the 120 KiB left here, but REST's answer reads
-    // them again (lib/core.ts taskOut), about 55 KiB more
+    // the move of the most active subtasks reads less before their patches
+    // than the 120 KiB left here, but REST's answer reads them again
+    // (lib/core.ts taskOut), which passes it
     const fx = await setup(roomFor(120 * 1024))
     const parent = await task(fx, { title: 'Long family' })
     const kids = await plantFamily(fx, parent, { active: LIMITS.subtasks.max, archived: 0 })
@@ -769,21 +759,16 @@ describe('deleting a task with archived subtasks', () => {
   })
 
   it('resumes a step that failed halfway with a smaller page', async () => {
-    Object.assign(ARCHIVED_DETACH, { page: 4, room: 0.99 })
-    // each subtask's description of 5,000 characters is written again in
-    // its task row too, so a page of four detaches passes this lowered write
-    // limit and the step fails; the delete itself fits
-    const fx = await setup(newT({ transactionLimits: { bytesWritten: 12 * 1024 } }))
+    Object.assign(ARCHIVED_DETACH, { page: 40, room: 0.99 })
+    // a page of forty detaches writes more documents than this lowered
+    // limit, so the step fails; the delete itself fits
+    const fx = await setup(newT({ transactionLimits: { documentsWritten: 32 } }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const parent = await task(fx, { title: 'Long subtasks' })
+    const parent = await task(fx, { title: 'Many subtasks' })
     const kids: Doc<'issues'>[] = []
-    const description = 'Compare the new dates with the plan. '.repeat(140).slice(0, 5_000)
-    for (let i = 0; i < 5; i++) {
-      const [kid] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, description })
-      await fx.t.run((ctx) => ctx.db.patch(kid._id, { description }))
-      kids.push(kid)
-    }
+    for (let i = 0; i < 50; i++)
+      kids.push(...(await plantSubtasks(fx, parent, 1, { archived_at: NOW })))
     await deleteTask(fx.t, fx, parent.id)
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     // the failed step committed nothing and left its job

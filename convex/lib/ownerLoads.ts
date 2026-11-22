@@ -51,8 +51,8 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * - `open`: the most rows an owner's five open-task ranges may read,
  *   duplicates, Backlog, unscheduled and paused tasks and the open tasks of
  *   archived projects included. Each range is read one row at a time and
- *   stops at the row past it. A task row without its text copy takes up to
- *   about 1.8 KB at the title cap, so the rows take up to about 3.6 MB.
+ *   stops at the row past it. A task row takes up to about 1.8 KB at the
+ *   title cap, so the rows take up to about 3.6 MB.
  * - `checks`: the most tasks of one owner checked for subtasks, one index
  *   range each, once the fence and the caller's sight have left them. With
  *   the `paused` option the paused tasks in projects the caller can see

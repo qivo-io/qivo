@@ -1346,13 +1346,13 @@ describe("the removal preview inside Convex's limits", () => {
 
   /* withOrg with a second team, Platform, beside Hardware, which shares
    * TBED; Mia, a member of Hardware, holds one task in Firmware beside 299
-   * open tasks of ordinary text, the sub-project's 300, under a limit of ROOM_BYTES on the bytes
-   * one transaction reads, which those tasks pass as 320 descriptions at the
-   * cap passed the 16 MiB a deployment allows. The scan for held work checks
-   * its room every 10 tasks (model/projectAccess.ts TASK_GUARD_ROWS), so the
-   * limit holds 10 tasks past the 95% the removal keeps, and about 200 tasks
-   * reach that share. */
-  const ROOM_BYTES = 144 * 1024
+   * open tasks, the sub-project's 300, under a limit of ROOM_BYTES on the
+   * bytes one transaction reads, lowered so that those tasks pass the room
+   * the removal keeps. The scan for held work checks its room every 10
+   * tasks (model/projectAccess.ts TASK_GUARD_ROWS), so the limit holds 10
+   * tasks past the 95% the removal keeps, and about 200 tasks reach that
+   * share. */
+  const ROOM_BYTES = 96 * 1024
   async function pastTheRoom() {
     const t = newT({ transactionLimits: { bytesRead: ROOM_BYTES } })
     const f = await withReadingAdmin(t)
@@ -1377,10 +1377,6 @@ describe("the removal preview inside Convex's limits", () => {
       })
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: mia.id })
-    const description =
-      'Check the sensor calibration on the new boards, compare it with the last batch and note any drift above the tolerance. '.repeat(
-        2,
-      )
     await t.run(async (ctx) => {
       // 299 beside Mia's, FW's 300 open tasks
       for (let i = 0; i < 299; i++)
@@ -1390,7 +1386,6 @@ describe("the removal preview inside Convex's limits", () => {
           project_id: f.sub.id,
           num: 5000 + i,
           title: `Calibration check ${i}`,
-          description,
           status: 'todo',
           priority: 'medium',
           paused: false,

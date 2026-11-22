@@ -56,7 +56,7 @@
  * without one, which is the text readers show for it. `"repair": true` also
  * rewrites each differing row. For a task with a copy it writes the task
  * row's copy, because a copy that differs from its row can hold an edit
- * made without the row (model/descriptions.ts textCopiesOf). For a task
+ * made without the row. For a task
  * without a copy it writes the text readers showed (model/descriptions.ts
  * shownText) and the task's copies. It writes the first row of a duplicate
  * the same way and deletes the second, and deletes orphans; a task with a

@@ -750,9 +750,8 @@ describe('reads', () => {
  * guest cannot see, and in FW a group whose subtask is in the sibling, a
  * subtask whose parent is in the sibling, and 30 tasks one search word finds
  * by their texts and a label. `wide` makes the hidden rows larger, with
- * ordinary text: the subtask's and the parent's titles and texts, each with
- * a copy of its text on its row, and the sibling's description, and
- * gives the hidden tasks the label. A hidden row counted at its own size
+ * ordinary text: the subtask's and the parent's titles and texts, and the
+ * sibling's description, and gives the hidden tasks the label. A hidden row counted at its own size
  * moves the least budget only where the read takes it before its last
  * decision that keeps the most room: a search's text read, which keeps
  * room for a text at Convex's document limit, or without a search a
@@ -787,7 +786,7 @@ async function hiddenOrg(wide: boolean) {
     title: 'Quartz group',
     assignee_id,
   })
-  const kid = await (wide ? plantCopiedIssue : plantIssue)(t, {
+  const kid = await plantIssue(t, {
     org_id: f.org.id,
     project_id: sibling.id,
     parent_id: group.id,
@@ -795,7 +794,7 @@ async function hiddenOrg(wide: boolean) {
     description: wide ? textOf(2) : '',
     assignee_id,
   })
-  const parent = await (wide ? plantCopiedIssue : plantIssue)(t, {
+  const parent = await plantIssue(t, {
     org_id: f.org.id,
     project_id: sibling.id,
     title: wide ? titleOf(3) : 'p',
@@ -937,7 +936,7 @@ describe('hidden data, past a step of sub-projects and own tasks', () => {
     const f = await withOrg(t)
     // assigned to and reviewed by the guest, read in the assignee's review
     // range and again in the reviewer range, a step later
-    const task = await plantCopiedIssue(t, {
+    const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'review',

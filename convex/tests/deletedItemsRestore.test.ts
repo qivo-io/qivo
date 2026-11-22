@@ -40,7 +40,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantHiddenSibling,
   plantIssue,
   plantProject,
@@ -602,16 +601,10 @@ describe('restoring a task item', () => {
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, task.id)
-    // three subtasks of about 6 KB each, the text in their task rows too,
-    // past a count bound of 10 KB
+    // three subtasks, past a count bound lowered to 500 bytes
     for (let i = 0; i < 3; i++)
-      await plantCopiedIssue(t, {
-        org_id,
-        project_id: f.sub.id,
-        parent_id: parent.id,
-        description: 'x'.repeat(6000),
-      })
-    COUNT_READ.bytes = 10_000
+      await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    COUNT_READ.bytes = 500
     const item = await itemFor(t, task.id)
     await restore(t, f.user, [item.id])
     expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
@@ -771,20 +764,15 @@ describe('restoring a task item', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    // a parent of about 14 KB, its text in its task row too
-    const parent = await plantCopiedIssue(t, {
-      org_id,
-      project_id: f.sub.id,
-      description: 'Field note. '.repeat(1_190),
-    })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     // a subtask with a stored row, which the call writes back before its
     // reveal; the next case restores one without
     await comment(t, task)
     await deleteTask(t, f, task.id)
     // the call, a quarter of a step, has bytes left after the fill for the
-    // reveal and not for reading the parent and counting its subtasks
-    TRASH_BUDGET.bytes = 32_000
+    // reveal and not for counting the subtasks of the parent
+    TRASH_BUDGET.bytes = 8_000
 
     const item = await itemFor(t, task.id)
     expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
@@ -796,21 +784,16 @@ describe('restoring a task item', () => {
     expect((await liveTask(t, task.id))?.parent_id).toBe(parent.id)
   })
 
-  it('reveals a subtask without rows in a step of its own when reading its parent spends the call, before it counts the subtasks of the parent', async () => {
+  it('reveals a subtask without rows in a step of its own when the restore call runs out of reads before it counts the subtasks of the parent', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
-    // a parent of about 14 KB, its text in its task row too, with two other
-    // active subtasks
-    const parent = await plantCopiedIssue(t, {
-      org_id,
-      project_id: f.sub.id,
-      description: 'Field note. '.repeat(1_190),
-    })
+    // a parent with two other active subtasks
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantSubtasks(t, f, parent.id, 2)
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, task.id)
-    TRASH_BUDGET.bytes = 32_000
+    TRASH_BUDGET.bytes = 8_000
 
     const item = await itemFor(t, task.id)
     expect(await restore(t, f.user, [item.id])).toMatchObject({
