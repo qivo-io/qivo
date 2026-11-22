@@ -912,7 +912,7 @@ describe('real limits', () => {
       f,
       300,
       (i) => `Notes ${i} on the zephyr`,
-      (i) => `Notes ${i} on the zephyr`,
+      () => undefined,
       300,
     )
     await lowered(smallPage(200), async () => {

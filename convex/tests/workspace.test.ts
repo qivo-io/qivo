@@ -449,7 +449,6 @@ describe('many projects', () => {
             project_id,
             num: 1,
             title: kind,
-            description: '',
             status: 'todo',
             priority: 'medium',
             paused: false,

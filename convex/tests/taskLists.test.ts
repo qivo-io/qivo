@@ -88,7 +88,6 @@ const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { proje
         org_id: fx.org.id,
         num: bulkNum++,
         title: `Bulk ${i}`,
-        description: '',
         status: 'done',
         priority: 'medium',
         paused: false,

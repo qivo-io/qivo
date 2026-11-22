@@ -799,8 +799,9 @@ describe('attachments', () => {
 let nextNum = 50_000
 
 /** Plants `n` tasks with `fields(i)` in the fixture's FW, `each` a
- * transaction, through raw inserts: with a description row when `rows`,
- * else as older code stored them, with the text only on the task row. */
+ * transaction, through raw inserts: with the text only in a description row
+ * when `rows`, else as older code stored them, with the text only on the
+ * task row. */
 async function plantMany(
   t: T,
   f: OrgFixture,
@@ -828,13 +829,15 @@ async function plantMany(
             updated_at: NOW,
             ...fields(i),
           }
-          const _id = await ctx.db.insert('issues', doc)
+          const { description, ...task } = doc
+          const _id = await ctx.db.insert('issues', o.rows ? task : doc)
           if (o.rows)
             await ctx.db.insert('issue_descriptions', {
               issue_id: doc.id,
-              description: doc.description,
+              description,
               org_id: doc.org_id,
               project_id: doc.project_id,
+              archived_at: doc.archived_at,
             })
           out.push((await ctx.db.get(_id)) as Doc<'issues'>)
         }

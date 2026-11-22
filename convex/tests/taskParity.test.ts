@@ -383,7 +383,6 @@ describe('a single-task read walks only the subtasks that can count', () => {
           project_id: fx.sub.id,
           num: firstNum + i,
           title: `Planted ${i}`,
-          description: '',
           status: 'todo',
           priority: 'low',
           paused: false,

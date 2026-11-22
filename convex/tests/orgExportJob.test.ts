@@ -1097,13 +1097,10 @@ describe('organization export job', () => {
   it('keeps each read of tasks with texts near 1 MiB under the limits, its answer at six texts at most', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // texts from before the cap, 900 KiB each, in description rows whose
-    // task rows hold no copy, as once descriptions release 3 clears them
+    // texts from before the cap, 900 KiB each, in description rows
     const description = 'Field notes. '.repeat(80_000).slice(0, 900 * 1024)
-    for (let i = 0; i < 9; i++) {
-      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
-      await t.run((ctx) => ctx.db.patch(task._id, { description: undefined }))
-    }
+    for (let i = 0; i < 9; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
     const issues = ORG_EXPORT_ORDER.indexOf('issues')
     let at: Parameters<typeof readBatch>[2] = { section: issues, cursor: null }
     const reads: (number | 'narrow')[] = []

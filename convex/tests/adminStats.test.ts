@@ -432,7 +432,6 @@ describe('listOrgs', () => {
             project_id: f.sub.id,
             num: batch * 500 + i + 1,
             title: 'Bulk task',
-            description: '',
             status: 'todo',
             priority: 'medium',
             paused: false,

@@ -92,7 +92,6 @@ async function planted(
             project_id: f.sub.id,
             num: 1000 + i,
             title: `Task ${i}`,
-            description: '',
             status: 'todo',
             priority: 'medium',
             paused: false,
