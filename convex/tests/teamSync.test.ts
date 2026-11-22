@@ -484,7 +484,6 @@ describe('teamSync.lastComments', () => {
           id: uuid(),
           num: 10_000 + n,
           title: 'Bulk task',
-          description: '',
           status: n < 5000 ? 'progress' : n % 2 ? 'done' : 'backlog',
           priority: 'medium',
           paused: false,

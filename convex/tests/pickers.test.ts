@@ -855,7 +855,6 @@ describe("the pickers inside Convex's limits", () => {
           project_id: project.id,
           num: num++,
           title: 'Replace the fan controller on the bench rig and log the readings for the review',
-          description: '',
           status: 'todo',
           priority: 'medium',
           paused: false,

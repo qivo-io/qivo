@@ -339,7 +339,6 @@ describe('Northstar wipe', () => {
           project_id: project.id,
           num: 10_000 + i,
           title: `Manual task ${i}`,
-          description: '',
           status: 'todo',
           priority: 'medium',
           paused: false,

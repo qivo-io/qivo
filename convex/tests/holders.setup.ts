@@ -66,7 +66,6 @@ export async function manyHolders(n: number, limits: Parameters<typeof newT>[0] 
           project_id: subs[Math.floor(i / TASKS_PER_SUB)].id,
           num: 2000 + i,
           title: `Task ${i}`,
-          description: '',
           status: 'todo',
           priority: 'medium',
           paused: false,

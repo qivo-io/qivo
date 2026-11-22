@@ -291,7 +291,6 @@ describe("the Assignee menu's states", () => {
           project_id: f.sub.id,
           num: 50_000 + i,
           title: 'Replace the fan controller on the bench rig',
-          description: '',
           status: 'todo',
           priority: 'medium',
           paused: false,
@@ -381,7 +380,6 @@ describe("the Assignee menu inside Convex's limits", () => {
             num: num++,
             title:
               'Replace the fan controller on the bench rig and log the readings for the review',
-            description: '',
             status: i < 800 ? 'todo' : 'done',
             priority: 'medium',
             paused: false,

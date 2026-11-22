@@ -535,8 +535,8 @@ describe('MCP', () => {
     // a description stored over the cap is refused when it is sent back
     await t.run(async (ctx) => {
       const row = await ctx.db
-        .query('issues')
-        .withIndex('by_uuid', (q) => q.eq('id', taskId))
+        .query('issue_descriptions')
+        .withIndex('by_issue', (q) => q.eq('issue_id', taskId))
         .unique()
       await ctx.db.patch(row!._id, { description: OVER })
     })

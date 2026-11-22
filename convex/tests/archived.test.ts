@@ -29,7 +29,7 @@ import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { issueKey } from '../lib/taskRefs'
-import { insertTask } from '../model/descriptions'
+import { insertTask, patchTask } from '../model/descriptions'
 import {
   as,
   copyTaskTexts,
@@ -126,7 +126,9 @@ let bulkNum = 200_000
 const ORDINARY =
   'Check the sensor calibration on the new boards and note any drift above the tolerance. '
 
-/* `count` archived tasks in one transaction, without reading anything. */
+/* `count` archived tasks in one transaction, without reading anything, each
+ * with its description row, as a write stores a task: the description
+ * `over` gives, else ''. */
 const plantMany = (
   t: T,
   f: OrgFixture,
@@ -138,19 +140,27 @@ const plantMany = (
     for (let i = 0; i < count; i++) {
       const id = uuid()
       ids.push(id)
-      await ctx.db.insert('issues', {
+      const { description, ...fields } = over(i)
+      const task = {
         id,
         org_id: f.org.id,
         num: bulkNum++,
         title: `Bulk ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
+        status: 'done' as const,
+        priority: 'medium' as const,
         paused: false,
         created_at: NOW,
         updated_at: NOW,
         archived_at: NOW,
-        ...over(i),
+        ...fields,
+      }
+      await ctx.db.insert('issues', task)
+      await ctx.db.insert('issue_descriptions', {
+        issue_id: id,
+        description: description ?? '',
+        org_id: task.org_id,
+        project_id: task.project_id,
+        archived_at: task.archived_at,
       })
     }
     return ids
@@ -184,7 +194,7 @@ const unarchive = (t: T, ids: readonly string[]) =>
         .query('issues')
         .withIndex('by_uuid', (q) => q.eq('id', id))
         .unique()
-      if (row !== null) await ctx.db.patch(row._id, { archived_at: undefined })
+      if (row !== null) await patchTask(ctx.db, row, { archived_at: undefined })
     }
   })
 
@@ -618,9 +628,9 @@ describe('issues.archivedPage', () => {
     expect(byTask.ids).toEqual([ids[7]])
     expect(byTask.next).toBeNull()
     // the scan's 101 labels, which tells it there are more, then 30 tasks,
-    // their 30 assignees, one label row and one label each, and the project:
-    // never the roster or every label
-    expect(byTask.read).toBeLessThan(101 + 150)
+    // their 30 description rows and 30 assignees, one label row and one
+    // label each, and the project: never the roster or every label
+    expect(byTask.read).toBeLessThan(101 + 5 * 30 + 10)
     // an assignee's name finds its task through that one profile
     expect((await measured('quentin')).ids).toEqual([ids[29]])
     ARCHIVE_LABELS.scan = 1000
@@ -745,13 +755,7 @@ describe('issues.archivedPage', () => {
         added = (
           await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(28) })
         ).id
-        await t.run(async (ctx) => {
-          const row = await ctx.db
-            .query('issues')
-            .withIndex('by_uuid', (q) => q.eq('id', restore))
-            .unique()
-          if (row !== null) await ctx.db.patch(row._id, { archived_at: undefined })
-        })
+        await unarchive(t, [restore])
       })
       expect(all.ids).toEqual(expected.filter((id) => id !== restore))
       expect(all.ids).not.toContain(added)

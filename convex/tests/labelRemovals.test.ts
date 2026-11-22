@@ -84,7 +84,6 @@ const plantLabelledTasks = (
         project_id: f.sub.id,
         num: nextNum++,
         title: `Labelled ${n}`,
-        description: '',
         status: archived ? 'done' : 'todo',
         priority: 'medium',
         paused: false,
