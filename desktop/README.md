@@ -344,6 +344,24 @@ Local HTTPS proxy tests also verify trusted certificates and reject untrusted
 certificates and hostname mismatches without disabling TLS verification.
 Remove the override once electron-builder's dependency tree no longer needs it.
 
+The root package also overrides `minimatch` to `11.0.9` for every package
+that asks for a version from 7.0.0 up to 11.0.0, the versions open to
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249).
+`app-builder-lib` asks for `^10.2.5` and `@electron/universal` for `^9.0.3`,
+and no electron-builder 26 release asks for version 11. Version 11 removes
+`makeRe()`, the `AST` class and the regular expressions in `Minimatch.set`.
+Neither package uses them. `app-builder-lib` builds `Minimatch` objects with
+`dot: true`, calls `match()` with and without `partial`, and tells a literal
+pattern from a glob by the strings in `set`, which version 11 keeps for
+literal path portions. `@electron/universal` calls `minimatch()` with
+`matchBase: true` and runs only for macOS universal builds, which Qivo does
+not make. The minimatch 3 and 5 copies of other build packages are older than
+the advisory's range and stay. Remove the override once no package in
+the root package's dependency tree asks for a minimatch version from 7.0.0 up
+to 11.0.0. `app-builder-lib` 26.15.3 pins `@electron/universal` 2.0.3, which
+asks for `^9.0.3`, so an `app-builder-lib` that asks for version 11 is not
+enough by itself.
+
 This affects build tooling, not the installed desktop runtime.
 
 ## Test builds and release plan
