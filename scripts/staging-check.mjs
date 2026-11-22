@@ -11440,10 +11440,10 @@ async function deletedItemsCheck() {
     const holds = await typeSearch(app.locator(`[${m.search}]`), words, "Deleted items' search")
     const end = app.locator(`[${m.end}]`)
     const none = DELETED_ITEMS_EXPECTED.none(words)
-    // the end line shows only once a search is answered, so its text is
-    // read without a wait of its own
-    const ended = async () =>
-      (await end.count()) > 0 ? ((await end.first().textContent()) ?? '').trim() : ''
+    // the end line comes and goes as the list loads (a page of rows that
+    // ends the list has none), so its text is read in one look that does
+    // not wait for it
+    const ended = async () => ((await end.allTextContents())[0] ?? '').trim()
     expect(
       await until(async () => (await holds()) && (await ended()) === none, 60_000),
       `the page without projects ends "${await ended()}", not "${none}"`,
@@ -12177,7 +12177,13 @@ async function startupSelectionCheck() {
     const opens = async (p) => {
       const seen = new Set()
       const shown = await until(async () => {
-        if (await chooser.count()) seen.add(await chooser.getAttribute(m.state))
+        // one look that does not wait, since the chooser goes as the
+        // project opens and a read that waits for it then times out
+        const states = await chooser.evaluateAll(
+          (els, name) => els.map((el) => el.getAttribute(name)),
+          m.state,
+        )
+        for (const state of states) seen.add(state)
         return atProject(path(), p.num) && (await heading.textContent())?.trim() === p.name
       }, 60_000)
       expect(shown, `${p.name}'s view did not open, at ${path()}`)
