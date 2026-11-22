@@ -707,11 +707,6 @@ describe('organization export job', () => {
       parent_id: f.meta.id,
     })
     const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: stranded.id,
-    })
     // more tasks than one page of parents holds while an item is in
     // flight (JOINED_PAGE_SIZE), so the comments go on across pages
     const more: string[] = []
@@ -726,8 +721,7 @@ describe('organization export job', () => {
     const exportId = await exportAs(t, f.admin, f.org.id)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready', skipped: 1 })
     const archive = await archiveOf(t, exportId)
-    expect(archive.tables.tasks.map((row) => row.id)).toEqual([kept.id, child.id, ...more])
-    expect(archive.tables.tasks[1]).not.toHaveProperty('parent_id')
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual([kept.id, ...more])
     expect(archive.tables.comments.map((row) => row.task_id)).toEqual([kept.id, ...more])
     expect(archive.manifest.skipped.tasks).toBe(1)
     // an empty table has one file holding []

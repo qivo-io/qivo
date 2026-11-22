@@ -225,15 +225,13 @@ describe('an admin without ordinary access', () => {
     const f = await withOrg(t)
     const dana = await person(t, f.org.id, 'Dana')
     const lena = await person(t, f.org.id, 'Lena')
-    const ops = await tree(t, f, 'Operations', undefined, [{ name: 'Infra' }])
     const trial = await tree(t, f, 'Field trial', lena, [{ name: 'Site' }, { name: 'Lab' }])
     await grant(t, f.meta.id, dana.id, 'user')
-    await grant(t, ops.top.id, dana.id, 'user')
     // a delete of the guest's own, with a reason
     const own = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Own alpha' })
     await deleteTask(t, f.guest, own.id, { reason: 'wrong board' })
     later()
-    // a family a member sees redacted, its subtask in another top-level project
+    // a family deleted with its subtask, with a reason
     const root = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -241,7 +239,7 @@ describe('an admin without ordinary access', () => {
     })
     const sub = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: ops.subs[0].id,
+      project_id: f.sub.id,
       title: 'Family alpha subtask',
       parent_id: root.id,
     })
@@ -448,63 +446,6 @@ describe('an admin by ordinary access', () => {
 
     await grant(t, f.meta.id, f.admin.id, 'viewer')
     expect(await titleOf(own.id)).toBe('Order the parts')
-  })
-
-  it("names a hidden item's root by key alone in a hit on a subtask the admin can read", async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const dana = await person(t, f.org.id, 'Dana')
-    const ops = await tree(t, f, 'Operations', undefined, [{ name: 'Infra' }])
-    const infra = ops.subs[0]
-    await grant(t, f.meta.id, dana.id, 'user')
-    await grant(t, ops.top.id, dana.id, 'user')
-    await grant(t, ops.top.id, f.admin.id, 'user')
-    const root = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'Contoso acquisition due diligence',
-    })
-    const sub = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: infra.id,
-      title: 'Provision the data room',
-      parent_id: root.id,
-    })
-    await deleteTask(t, dana, root.id, { subtask_ids: [sub.id] })
-    const item = await itemFor(t, root.id)
-    const row = await rowOf(t, f.admin, item.id)
-    expect(row).toMatchObject({
-      key: `QN-${root.num}`,
-      title: '',
-      hidden: true,
-      counts: { tasks: 2, subtasks: 1 },
-    })
-    expect(row?.projects.map((p) => p.id)).toEqual([f.sub.id, infra.id])
-    const scope = { org_id: f.org.id, all: true as const }
-    const found = await page(t, f.admin, { scope, search: 'Provision' })
-    expect(found.entries).toEqual([
-      {
-        item_id: item.id,
-        task: {
-          key: `QN-${sub.num}`,
-          title: 'Provision the data room',
-          root_key: `QN-${root.num}`,
-          archived: false,
-          path: ['Operations', 'Infra'],
-        },
-      },
-    ])
-    expect(found.missing).toBe('matches')
-    expect(found.entries[0].task).not.toHaveProperty('root_title')
-    expect(JSON.stringify(found)).not.toContain('Contoso')
-    expect((await page(t, f.admin, { scope, search: 'Contoso' })).entries).toEqual([])
-    // a scope of a project they cannot read names nothing
-    const fwScope = { org_id: f.org.id, project_ids: [f.meta.id] }
-    expect(await page(t, f.admin, { scope: fwScope })).toEqual({
-      entries: [],
-      items: [],
-      next_cursor: null,
-    })
   })
 
   it('hides a task item waiting for its deleted project and one whose project is gone, and keeps the project item whole', async () => {

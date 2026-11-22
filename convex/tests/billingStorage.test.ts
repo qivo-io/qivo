@@ -847,21 +847,6 @@ describe('Storage by project, where each project is now', () => {
     await attach(t, f, await plantIssue(t, { org_id: f.org.id, project_id: goneSub.id }), 600)
     await deleteProject(t, f, goneTop.id)
     await runSteps(t)
-    // removed: PCB deleted for good while a task item keeps a subtask's file there
-    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const kid = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: root.id,
-    })
-    await attach(t, f, kid, 500)
-    await deleteTask(t, f, root.id, { subtask_ids: [kid.id] })
-    await runSteps(t)
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    const pcb = await itemFor(t, f.sub2.id)
-    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [pcb.id] })
-    await runSteps(t)
     // a row without a copy of its project, and one whose id a live project
     // of another number holds now
     const nameless = uuid()
@@ -891,7 +876,6 @@ describe('Storage by project, where each project is now', () => {
       { key: 'OLDS', name: 'Old sub', status: 'archived', bytes: 800 },
       { key: 'DROP', name: 'Dropped', status: 'deleted', bytes: 700 },
       { key: 'GNS', name: 'Gone sub', status: 'deleted', bytes: 600 },
-      { key: null, name: 'Board rev', status: 'removed', bytes: 500 },
       { key: null, name: null, status: 'removed', bytes: 400 },
       { key: null, name: 'Earlier dropped', status: 'removed', bytes: 350 },
       { key: null, name: 'Earlier owner', status: 'removed', bytes: 300 },

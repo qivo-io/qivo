@@ -236,18 +236,16 @@ const repairOrgRef = makeFunctionReference<'mutation', RepairLeg, null>('jobs:re
  *   - its OWN sub-project is live — "the nightly sweep leaves an archived
  *     project alone: its done tasks are already out of every client's sight,
  *     and archiving them would silently change what a restore brings back"
- *   - status 'done' with done_at at least DEFAULT_ARCHIVE_DAYS old. A
- *     dangling parent drops the row rather than aborting the sweep.
+ *   - status 'done' with done_at at least DEFAULT_ARCHIVE_DAYS old.
  *   - "leaf-up: never drag an active child along — a done parent waits until
  *     its children have been archived themselves"
  *
  * Semantics pin — SINGLE SNAPSHOT, not fixpoint: the SQL is one UPDATE whose
  * child sub-select reads the pre-statement state, so a child archived in THIS
  * run still counts as unarchived and its done parent goes the NEXT night. A
- * child counts as unarchived when it has no archived_at or carries this
- * run's stamp, in any project of the organization, archived ones included.
- * That holds inside one leg and across legs and chains. A leg marks the
- * project of each Done parent it may have freed for the next run
+ * child counts as unarchived when it has no archived_at or carries this run's
+ * stamp. That holds inside one leg and across legs and chains. A leg marks
+ * the project of each Done parent it may have freed for the next run
  * (archive_rechecks with from_run, which this run's hand phase leaves). No
  * activity rows, because the SQL wrote none.
  *

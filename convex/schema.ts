@@ -2252,8 +2252,8 @@ export default defineSchema({
     // display names at deletion: [top, sub] for a task, [parent] for a
     // sub-project, [] for a top-level project. Readers prefer live names.
     path: v.array(v.string()),
-    // The projects whose tasks are in the item: a task item's root project
-    // and each cross-project subtask's, a project item's root and each
+    // The projects whose tasks are in the item: a task item's root project,
+    // which holds its subtasks too, and a project item's root and each
     // sub-project. Bounded by the sub-project count.
     projects: v.array(
       v.object({
@@ -2283,12 +2283,12 @@ export default defineSchema({
     // rows may be back in the live tables under its stored tasks until then.
     restore_by: v.optional(v.string()),
     dropped_rows: v.optional(v.number()), // rows too large to store, deleted instead
-    // when another item's restore last handed this item stored rows: a
-    // subtask with its rows (model/deletedItems.ts splitOff) or a link
-    // (placeLinkBy). An organization export that began before then and
-    // reads the item later calls the item partial, since rows it read
-    // elsewhere or missed can be the item's now (model/orgExportRead.ts
-    // itemStatus). Bookkeeping, which the export leaves out.
+    // when another item's restore last handed this item a stored link
+    // (model/deletedItems.ts placeLinkBy). An organization export that
+    // began before then and reads the item later calls the item partial,
+    // since a link it read elsewhere or missed can be the item's now
+    // (model/orgExportRead.ts itemStatus). Bookkeeping, which the export
+    // leaves out.
     received_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -2447,8 +2447,8 @@ export default defineSchema({
     .index('by_item_table_grantee', ['item_id', 'table', 'grantee'])
     .index('by_row', ['table', 'row_id'])
     // one task's stored rows of a table, whichever item holds them. A
-    // project item can store them before the task, and a split moves them
-    // between items one at a time (internal/storageTotalsBackfill.ts)
+    // project item can store them before the task
+    // (internal/storageTotalsBackfill.ts)
     .index('by_table_org_owner', ['table', 'org_id', 'owner_id'])
     .index('by_storage', ['storage_id'])
     .index('by_org_key', ['org_id', 'project_key'])
@@ -2515,10 +2515,10 @@ export default defineSchema({
    * (model/deletedItemsPage.ts) searches, which includes the readable text
    * of the task's description, so a row is not light, and the task's
    * assignee and copies of its item's fields, which the page's search and
-   * assignee sources filter on. Both writes (model/deletedItems.ts
-   * storeTask and splitOff) set search_text, deleted_at and
-   * item_project_id; assignee_id, deleted_by and item_parent_id are absent
-   * where the task or its item has none. */
+   * assignee sources filter on. Its write (model/deletedItems.ts storeTask)
+   * sets search_text, deleted_at and item_project_id; assignee_id,
+   * deleted_by and item_parent_id are absent where the task or its item has
+   * none. */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),
@@ -2537,8 +2537,7 @@ export default defineSchema({
     assignee_id: v.optional(v.string()), // the task's assignee when it was deleted
     // Copies of the item's deleted_at, deleted_by, project_id and
     // parent_project_id, which never change while the row stays with its
-    // item. A split (model/deletedItems.ts splitOff) writes them again for
-    // the item the task moves to.
+    // item.
     deleted_at: v.optional(v.string()),
     deleted_by: v.optional(v.string()),
     item_project_id: v.optional(v.string()),

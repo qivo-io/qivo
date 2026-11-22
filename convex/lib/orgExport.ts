@@ -207,12 +207,12 @@ before the export read their table and were deleted only after it, when no
 item was on its way to or from Deleted items while that table was read. A
 record whose deleted_item_id deleted/items does not list belongs to an item
 restored or deleted for good while the export ran. An item restored while
-the export ran can be in neither part. A restore can also move a subtask or
-a link to another item while the export runs; each record is under the item
-that held it when its table was read, and a link moved while
-deleted/task_links was read can appear twice or not at all. An item that
-took such a record after the export began, and before the export read
-the item in deleted/items, is partial, changed during export.
+the export ran can be in neither part. A restore can also move a link to
+another item while the export runs; the link is under the item that held it
+when deleted/task_links was read, and a link moved while that table was read
+can appear twice or not at all. An item that took such a link after the
+export began, and before the export read the item in deleted/items, is
+partial, changed during export.
 manifest.json counts the items the archive holds completely and
 partially (deleted_items.items) and the records left out because they named
 another organization or nothing they belong to (deleted_items.left_out).

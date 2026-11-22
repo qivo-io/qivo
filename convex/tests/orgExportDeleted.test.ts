@@ -57,7 +57,6 @@ import {
   jobFor,
   plantRows,
   step,
-  storedTasks,
 } from './trash.setup'
 
 installTrashTimers()
@@ -851,45 +850,6 @@ describe('Deleted items that change while the export runs', () => {
       deleted_during_export: false,
     })
     expect(itemRow(archive, itemB.id)).not.toHaveProperty('received_at')
-  })
-
-  it("calls an item partial once a restore's split hands it a subtask while the export runs", async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const org_id = f.org.id
-    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
-    await comment(t, sub)
-    await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
-    await deleteProject(t, f, f.sub2.id)
-    await settle(t)
-    const [taskItem, projectItem] = [await itemFor(t, root.id), await itemFor(t, f.sub2.id)]
-    later()
-    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id })
-    // every stored table is read; the items come next
-    await exportUntil(t, export_id, sectionOf('deleted/items'))
-    later()
-    // the subtask's project is in Deleted items, so the restore moves the
-    // subtask with its rows to the item that holds it
-    await restore(t, f.user, [taskItem.id])
-    for (let guard = 0; guard < 50 && (await itemById(t, taskItem.id)) !== null; guard++) {
-      await hold(t, taskItem.id)
-      await step(t, taskItem.id)
-    }
-    expect(await itemById(t, taskItem.id)).toBeNull()
-    expect((await storedTasks(t, projectItem.id)).map((task) => task.task_id)).toEqual([sub.id])
-    await settle(t)
-    const archive = await archiveOf(t, export_id)
-    // read under the item that held it then, which deleted/items no longer lists
-    expect(archive.tables['deleted/tasks'].find((row) => row.id === sub.id)).toMatchObject({
-      deleted_item_id: taskItem.id,
-    })
-    expect(itemRow(archive, projectItem.id)).toMatchObject({
-      state: 'ready',
-      export_rows: 'partial',
-      export_reason: 'changed_during_export',
-      deleted_during_export: false,
-    })
   })
 
   it('fails with deleted_changing once more items change than EXPORT_LIMITS.unsettled names, erasing its parts', async () => {

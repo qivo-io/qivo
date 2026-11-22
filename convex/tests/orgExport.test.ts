@@ -605,9 +605,21 @@ describe('organization export', () => {
     const blocked = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const liveLink = await link(kept.id, blocked.id)
     const trashed = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await t.run((ctx) =>
-      moveTasksToTrash(ctx, { actor: f.admin, root: trashed, subtasks: [], now: NOW }),
-    )
+    // an archived subtask keeps the id of its parent in Deleted items until
+    // the steps after the delete detach it; while the project item below is
+    // in flight, the export leaves that reference out
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: trashed.id,
+      archived_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      await moveTasksToTrash(ctx, { actor: f.admin, root: trashed, subtasks: [], now: NOW })
+      // the steps after the delete have not detached it yet
+      for (const job of await ctx.db.query('archived_detaches').collect())
+        await ctx.db.delete(job._id)
+    })
     // a project item hides its project first and moves its tasks in steps,
     // so a task can sit in issues under a project row that is gone
     const moving = await plantProject(t, {
@@ -619,13 +631,6 @@ describe('organization export', () => {
     await comment(stranded.id)
     // a kept task's link to the stranded task stays out with that task
     await link(kept.id, stranded.id)
-    // so does a live task's reference to it as a parent, until the move
-    // detaches that task
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: stranded.id,
-    })
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
 
@@ -640,73 +645,6 @@ describe('organization export', () => {
     expect(links.filter((row) => row.source_id === kept.id).map((row) => row.id)).toEqual([
       liveLink,
     ])
-  })
-
-  it('reads the parents of a batch of tasks only while a deleted item is in flight, two tasks a batch then', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    // 10 parents, then a child under each
-    const parents: Doc<'issues'>[] = []
-    for (let i = 0; i < 10; i++)
-      parents.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
-    const children: string[] = []
-    for (const parent of parents)
-      children.push(
-        (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })).id,
-      )
-    const childRows = (rows: OrgExportRow[]) =>
-      new Map(rows.filter((row) => children.includes(row.id as string)).map((row) => [row.id, row]))
-    const firstChildBatch = async () => {
-      const batch = (await sectionBatches(t, f.org.id, 'tasks')).find((each) =>
-        each.rows.some((row) => row.id === children[0]),
-      )
-      if (batch === undefined) throw new Error('no batch holds the first child')
-      return batch
-    }
-    // the last child's parent sits under a project whose row is gone
-    const moving = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-    })
-    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
-    await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query('issues')
-        .withIndex('by_uuid', (q) => q.eq('id', children[9]))
-        .unique()
-      if (row === null) throw new Error('the last child vanished')
-      await ctx.db.patch(row._id, { parent_id: stranded.id })
-    })
-    await t.run((ctx) => ctx.db.delete(moving._id))
-
-    // With nothing in flight, as a ready item leaves nothing in the live
-    // tables, no parent is read and every child keeps its own, the last
-    // child too, although its parent's project is gone.
-    const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
-    await plantProjectItem(t, done, 'ready')
-    await t.run((ctx) => ctx.db.delete(done._id))
-    let exported = childRows(await sectionRows(t, f.org.id, 'tasks'))
-    expect(exported.size).toBe(10)
-    for (const [index, id] of children.slice(0, 9).entries())
-      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    expect(exported.get(children[9])).toHaveProperty('parent_id', stranded.id)
-    // one wide batch holds every task, each with its description
-    const wide = await firstChildBatch()
-    expect(wide.rows).toHaveLength(21)
-    expect(wide.done).toBe(true)
-
-    // While a project item is in flight, a batch holds two tasks and reads
-    // their parents, so the one parent under the moving project is left out.
-    await plantProjectItem(t, moving, 'moving')
-    const inFlight = await firstChildBatch()
-    expect(inFlight.rows).toHaveLength(2)
-    expect(inFlight.done).toBe(false)
-    exported = childRows(await sectionRows(t, f.org.id, 'tasks'))
-    expect(exported.size).toBe(10)
-    for (const [index, id] of children.slice(0, 9).entries())
-      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    expect(exported.get(children[9])).not.toHaveProperty('parent_id')
   })
 
   it('reads no task projects while nothing is in flight', async () => {
