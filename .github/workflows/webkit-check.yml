@@ -89,19 +89,23 @@ jobs:
             echo "CONVEX_SELF_HOSTED_ADMIN_KEY=$(cat "$stack/backend/admin-key")"
           } > "$stack/backend/self-hosted.env"
 
+      # What functions print and throw goes to the function log, and
+      # backend.log holds only the backend's own events. Neither is
+      # uploaded, since either can hold a secret: what a function prints,
+      # or a signed upload URL in a request line.
       - name: Start the backend
         run: |
           nohup "$STACK/backend/convex-local-backend" --interface 127.0.0.1 --port 3236 \
             --site-proxy-port 3237 --convex-origin "$BACKEND_URL" --convex-site "$BACKEND_SITE_URL" \
             --instance-name qivo-webkit --instance-secret "$(cat "$STACK/backend/instance-secret")" \
-            --local-storage "$STACK/backend/storage" --disable-beacon "$STACK/backend/db.sqlite3" \
+            --local-storage "$STACK/backend/storage" --disable-beacon \
+            --local-log-sink "$STACK/function-log.jsonl" "$STACK/backend/db.sqlite3" \
             > "$STACK/backend.log" 2>&1 &
           for _ in $(seq 1 60); do
             curl -sf "$BACKEND_URL/version" > /dev/null && break
             sleep 1
           done
-          # the end of its log says why a backend did not start. The whole
-          # log is not kept, since it can hold what functions print.
+          # the end of its log says why a backend did not start
           curl -sf "$BACKEND_URL/version" > /dev/null || { tail -n 40 "$STACK/backend.log"; exit 1; }
 
       - name: Deploy the functions to it
@@ -141,6 +145,7 @@ jobs:
       # The check prints status lines only, never a secret, and takes a
       # screenshot of a failed step unless a secret is on screen.
       - name: Run the end-to-end check in WebKit
+        id: check
         run: |
           export QIVO_FIXTURE_CREDENTIALS_DIR="$STACK/fixtures"
           QIVO_LOCAL_ADMIN_KEY="$(cat "$STACK/backend/admin-key")"
@@ -148,6 +153,22 @@ jobs:
           node scripts/staging-check.mjs --local --browser webkit --app-url "$APP_URL" \
             --convex-url "$BACKEND_URL" --api-url "$BACKEND_SITE_URL" --deployment "$DEPLOYMENT" \
             --shots "$STACK/out/shots" 2>&1 | tee "$STACK/out/staging-check.log"
+
+      # Workflow commands stay off while the logs' text is printed, so that
+      # no line of it can run one.
+      - name: Print the backend's errors
+        if: failure() && steps.check.outcome == 'failure'
+        run: |
+          # the backend writes the function log in batches every 5 seconds,
+          # so the check's last errors reach the file up to 5 seconds late;
+          # twice that leaves room for a busy runner
+          sleep 10
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"
+          trap 'echo "::$stop::"' EXIT
+          node scripts/backend-errors.mjs --function-log "$STACK/function-log.jsonl" \
+            --backend-log "$STACK/backend.log" --secret-file "$STACK/backend/instance-secret" \
+            --secret-file "$STACK/backend/admin-key"
 
       - name: Summarize
         if: always()
