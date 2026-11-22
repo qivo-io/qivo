@@ -6,16 +6,16 @@
  *   1. An attach counts its file once, in the app, over REST and over MCP,
  *      a description image included. A refused attach counts nothing.
  *   2. A delete for good takes the file out, whether a removal, the reap of a
- *      dropped description image, a purge step by step, a restore that
- *      drops a subtask whose project is gone, an organization's deletion
- *      and deleteOrgDeep. A dropped image counts until its reap.
+ *      dropped description image, a purge step by step, an organization's
+ *      deletion and deleteOrgDeep. A dropped image counts until its reap.
  *   3. A move between projects moves the bytes, with every subtask the
  *      move carries. A move to Deleted items and a
  *      restore change nothing, step by step. A rename renames the
  *      project's row.
- *   4. A task or project id stays taken while its totals row holds it, in
- *      every organization, and every writer leaves alone a row that is not
- *      the task's or project's it writes for, which a recount takes over.
+ *   4. Every writer leaves alone a totals row that is not the task's or
+ *      project's it writes for, such as one another organization or an
+ *      earlier task of the same id left, and a recount deletes such rows of
+ *      its own organization only.
  *   5. The backfill counts an organization exactly while attaches,
  *      removals, moves, purges and reaps land between its steps, reads each
  *      task once a step, and goes on from its cursor one step a call. Its
@@ -972,37 +972,6 @@ describe('Deleted items', () => {
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
     expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 1, files: 1 })
   })
-
-  it('takes out the files of a subtask whose project is gone when a restore deletes it', async () => {
-    const { t, f } = await setup()
-    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const kid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
-    await attach(t, f, root, 10)
-    await attach(t, f, kid, 300)
-    await deleteTask(t, f, root.id, { subtask_ids: [kid.id] })
-    await runSteps(t)
-    const taskItem = await itemFor(t, root.id)
-    // the subtask's project goes to Deleted items and for good, and its
-    // row still holds the subtask's files, which the task item keeps
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    const projectItem = await itemFor(t, f.sub2.id)
-    await as(t, f.admin).mutation(api.deletedItems.purge, {
-      org_id: f.org.id,
-      ids: [projectItem.id],
-    })
-    await runSteps(t)
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 310, files: 2 })
-    expect((await rowsOf(t, f.org.id)).projects).toContainEqual({
-      project_id: f.sub2.id,
-      name: 'Board rev',
-      bytes: 300,
-      files: 1,
-    })
-    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [taskItem.id] })
-    await runSteps(t)
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 10, files: 1 })
-  })
 })
 
 describe('an id that comes back', () => {
@@ -1097,135 +1066,6 @@ describe('an id that comes back', () => {
     )
     expect((await rowsOf(t, f.org.id)).org).toMatchObject({ bytes: 53, files: 3 })
     expect(await rowsOf(t, f.otherOrg.id)).toEqual(otherRows)
-  })
-
-  it("keeps a project of another organization that takes a purged project's id apart from the files a stored subtask keeps there, before and after a recount", async () => {
-    const { t, f } = await setup()
-    await countStorage(t, f.otherOrg.id)
-    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const kid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
-    await attach(t, f, root, 10)
-    await attach(t, f, kid, 300)
-    await deleteTask(t, f, root.id, { subtask_ids: [kid.id] })
-    await runSteps(t)
-    const taskItem = await itemFor(t, root.id)
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    await as(t, f.admin).mutation(api.deletedItems.purge, {
-      org_id: f.org.id,
-      ids: [(await itemFor(t, f.sub2.id)).id],
-    })
-    await runSteps(t)
-    // PCB is gone for good while the stored subtask's files still count
-    // there, and the other organization takes its id
-    await as(t, f.otherAdmin).mutation(api.projects.create, {
-      org_id: f.otherOrg.id,
-      id: f.sub2.id,
-      type: 'project',
-      parent_id: f.otherProject.id,
-      key: 'PCB2',
-      name: 'The same id',
-      sort_order: 9,
-    })
-    const there = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.sub2.id })
-    await attach(t, f, there, 77, { by: f.otherAdmin })
-    await as(t, f.otherAdmin).mutation(api.projects.update, {
-      org_id: f.otherOrg.id,
-      id: f.sub2.id,
-      patch: { name: 'Renamed there' },
-    })
-    const both = async () => {
-      expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 310, files: 2 })
-      expect((await rowsOf(t, f.org.id)).projects).toContainEqual(
-        expect.objectContaining({ project_id: f.sub2.id, bytes: 300, files: 1 }),
-      )
-      expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 77, files: 1 })
-      expect((await rowsOf(t, f.otherOrg.id)).projects).toEqual([
-        { project_id: f.sub2.id, name: 'Renamed there', bytes: 77, files: 1 },
-      ])
-    }
-    await both()
-    expect((await rowsOf(t, f.org.id)).projects).toContainEqual({
-      project_id: f.sub2.id,
-      name: 'Board rev',
-      bytes: 300,
-      files: 1,
-    })
-    // a recount of each rebuilds its own rows only
-    await countStorage(t, f.org.id, true)
-    await both()
-    await countStorage(t, f.otherOrg.id, true)
-    await both()
-    // the restore deletes the subtask with its files from its own rows
-    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [taskItem.id] })
-    await runSteps(t)
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 10, files: 1 })
-    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 77, files: 1 })
-  })
-
-  it("counts a project of the same organization that takes a purged project's id in a row of its own, apart from a stored subtask's files", async () => {
-    const { t, f } = await setup()
-    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const kid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
-    await attach(t, f, root, 10)
-    await attach(t, f, kid, 300)
-    await deleteTask(t, f, root.id, { subtask_ids: [kid.id] })
-    await runSteps(t)
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    await as(t, f.admin).mutation(api.deletedItems.purge, {
-      org_id: f.org.id,
-      ids: [(await itemFor(t, f.sub2.id)).id],
-    })
-    await runSteps(t)
-    // a minute after the purge, a new project takes the id
-    vi.advanceTimersByTime(60_000)
-    await as(t, f.admin).mutation(api.projects.create, {
-      org_id: f.org.id,
-      id: f.sub2.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      key: 'PCB2',
-      name: 'The same id',
-      sort_order: 9,
-    })
-    const reborn = (await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))) as Doc<'projects'>
-    expect(reborn.num).not.toBe(f.sub2.num)
-    await attach(t, f, await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }), 77, {
-      by: f.admin,
-    })
-    await as(t, f.admin).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.sub2.id,
-      patch: { name: 'Renamed' },
-    })
-    const rows = () =>
-      t.run(async (ctx) =>
-        (
-          await ctx.db
-            .query('storage_project_totals')
-            .withIndex('by_org_project', (q) =>
-              q.eq('org_id', f.org.id).eq('project_id', f.sub2.id),
-            )
-            .collect()
-        ).map(({ num, name, bytes, files }) => ({ num, name, bytes, files })),
-      )
-    expect(await rows()).toEqual([
-      { num: f.sub2.num, name: 'Board rev', bytes: 300, files: 1 },
-      { num: reborn.num, name: 'Renamed', bytes: 77, files: 1 },
-    ])
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 387, files: 3 })
-    // a dry count finds the rows as the writers keep them
-    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 0, unsettled: 0 })
-    // a recount keeps the stored subtask's files apart from the new
-    // project's, under the id without a number, as a project gone for good
-    expect(await countStorage(t, f.org.id, true)).toEqual({ bytes: 387, files: 3 })
-    expect(await rows()).toEqual([
-      { num: undefined, name: undefined, bytes: 300, files: 1 },
-      { num: reborn.num, name: 'Renamed', bytes: 77, files: 1 },
-    ])
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 387, files: 3 })
-    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 0, unsettled: 0 })
   })
 
   it('leaves the rows another organization or another task number left under an id alone, and a recount deletes its own', async () => {

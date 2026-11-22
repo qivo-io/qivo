@@ -15,9 +15,8 @@
  * LIMITS.projectDeleteSubProjects.max + 1, which hides every task, milestone and grant
  * in them, and steps then move the milestones and grants, and each task:
  * relation rows, messages, then the task row. A task of a project item has
- * its parent and subtasks in its own sub-project, so inside the item. While
- * an item drains, its leftover rows name a task or project that is absent,
- * so readers skip them.
+ * its parent and subtasks in its own sub-project. While an item drains, its
+ * leftover rows name a task or project that is absent, so readers skip them.
  *
  * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
  * write the rows back while what they name is still absent, a project
@@ -33,15 +32,13 @@
  * (model/projectFavorites.ts), which keep naming the stored project, so a
  * restore keeps every star, and a purge deletes them with the rest
  * (purgeLive, clearOrgTrash). A project item's task whose parent is not in
- * the item, which only a parent deleted or restored on its own in the
- * meantime leaves, goes back without it. A task
- * item first hands each subtask whose project is no longer live to the item
- * that holds that project. References that no longer name what the item stored
- * are dropped (sameReference). A task item's root keeps a parent outside the
- * item only by the parent table (keptParent). No restore leaves a subtask
- * under a parent in another sub-project (model/issues.ts sameSubProject),
- * inside the item or outside it. A reveal whose checks fail sends the item
- * back to moving, and the move takes the rows back.
+ * the item goes back without it (restoreTasks). References that no longer
+ * name what the item stored are dropped (sameReference). A task item's root
+ * keeps a parent outside the item only by the parent table (keptParent). No
+ * restore leaves a subtask under a parent in another sub-project
+ * (model/issues.ts sameSubProject), inside the item or outside it. A reveal
+ * whose checks fail sends the item back to moving, and the move takes the
+ * rows back.
  *
  * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
  * seat sees of an item, restoreBlock why that seat cannot restore it, and
@@ -57,21 +54,20 @@
  *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
- * ranges read. `metered` counts the ranges of every read a step makes,
- * notifications included. The parent checks of a restore (keptParent) also
- * count the bytes they read, and a check that runs out of the step's reads
- * waits for the next step, where it comes first and runs whole within
- * COUNT_READ. Progress is counted in rows. A
- * step always moves at least one row, and most phases read a range from
- * its start, in one pass (drain), rather than keep a cursor, because moving
- * a row takes it out of the range. The person's own mutation spends a
- * quarter of a step's budget itself (CALL), so most small deletes never
- * schedule a step. Convex drops what a failed step scheduled,
- * so `recoverJobs` restarts a stalled job at half the budget, and an item
- * whose step still fails RETRY.atFloor times at the smallest budget becomes
- * stuck, for an admin's Delete now; a restore that fails that often before
- * its reveal goes back to moving instead, as a failed reveal does. A step
- * that commits resets the job to the full budget and no retries.
+ * ranges read. The parent checks of a restore (keptParent) also count the
+ * bytes they read, and a check that runs out of the step's reads waits for
+ * the next step, where it comes first and runs whole within COUNT_READ. A
+ * step always makes progress (Budget.moved), such as a row moved or a task
+ * scanned, and most phases read a range from its start, in one pass (drain),
+ * rather than keep a cursor, because moving a row takes it out of the range.
+ * The person's own mutation spends a quarter of a step's budget itself
+ * (CALL), so most small deletes never schedule a step. Convex drops what a
+ * failed step scheduled, so `recoverJobs` restarts a stalled job at half the
+ * budget, and an item whose step still fails RETRY.atFloor times at the
+ * smallest budget becomes stuck, for an admin's Delete now; a restore that
+ * fails that often before its reveal goes back to moving instead, as a failed
+ * reveal does, and one past its reveal keeps being restarted. A step that
+ * commits resets the job to the full budget and no retries.
  *
  * Steps need neither the deleter's nor the restorer's profile: notices and
  * events then go out without an actor. Only a reveal needs the restorer,
@@ -103,10 +99,8 @@
  *
  * The organization export (model/orgExportRead.ts storedBatch) relies on a
  * row being live or stored, never both, apart from a restoring project
- * item's grants and team grants between restoreAccess and restoreGrants,
- * and on a split moving stored rows to another item by item_id alone,
- * leaving their table, organization and owner as they are; a change to the
- * moves must keep both. */
+ * item's grants and team grants between restoreAccess and restoreGrants; a
+ * change to the moves must keep that. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -303,7 +297,9 @@ type Budget = {
   bytes: number
   tasks: number
   ranges: number
-  /** Set once the step moved a row or scanned a task; until then it never stops. */
+  /** Set once the transaction has made progress, such as a row moved, a
+   * task scanned or a task item marked restoring; until then it never
+   * stops. */
   moved: boolean
 }
 
@@ -318,8 +314,8 @@ function budgetFor(scale: number): Budget {
   }
 }
 
-/** Whether a step must stop. Never before its first row, so every step
- * makes progress whatever its budget. */
+/** Whether a step must stop. Never before it has made progress (moved),
+ * so every step makes progress whatever its budget. */
 const spent = (b: Budget): boolean =>
   b.moved && (b.rows <= 0 || b.bytes <= 0 || b.tasks <= 0 || b.ranges <= 0)
 
@@ -339,9 +335,9 @@ function chargeRead(b: Budget, doc: unknown): number {
   return bytes
 }
 
-/** Whether a step has no reads left, once it has moved a row and spent its
- * index ranges or bytes. A parent check that would read past them waits
- * for the next step (liveSubtasks). */
+/** Whether a step has no reads left, once it has made progress (moved)
+ * and spent its index ranges or bytes. A parent check that would read past
+ * them waits for the next step (liveSubtasks). */
 const readsSpent = (b: Budget): boolean => b.moved && (b.ranges <= 0 || b.bytes <= 0)
 
 /** Clears the rows of `rows`, an index range read in one pass, until it
@@ -465,8 +461,6 @@ export function meterDb<C extends QueryCtx>(ctx: C, meter: Meter): C {
   return { ...ctx, db }
 }
 
-/** `ctx` whose database reads each spend one range of `budget`, wherever in
- * the step they happen. */
 const metered = (ctx: MutationCtx, budget: Budget): MutationCtx =>
   meterDb(ctx, {
     range: () => {
@@ -882,10 +876,10 @@ async function dropTaskDescription(
  * has (model/descriptions.ts), in the step's budget, which counts each
  * row's read and its delete's. The person's delete leaves them to the
  * steps, so that it reads only those it takes the stored text from once the
- * task row holds no copy, two a task at most (moveTasksToTrash). A split or
- * a purge can stop after the stored task row is gone, which frees the id,
- * so the rows of a live task that took it since, and those of another
- * organization, stay (ownDescription). */
+ * task row holds no copy, two a task at most (moveTasksToTrash). A purge
+ * or a split that an earlier release left part done can have deleted the
+ * stored task row, which frees the id, so the rows of a live task that took
+ * it since, and those of another organization, stay (ownDescription). */
 async function dropDescriptions(run: Run, taskId: string): Promise<boolean> {
   const live = await byId(run.ctx, 'issues', taskId)
   if (live !== null) {
@@ -965,9 +959,9 @@ const holdsMessages = async (run: Run, taskId: string): Promise<boolean> =>
     .first()) !== null || (await taskItems(run.ctx, taskId).first()) !== null
 
 /** Whether another task now holds the id of task `taskId` of this item: a
- * live task, or one another item stores. Only a purge the release before
- * left part done can free such an id, by deleting the stored task row
- * before the rest (purgeRows, splitOff). */
+ * live task, or one another item stores. Only a purge or a split that an
+ * earlier release left part done can free such an id, by deleting the
+ * stored task row before the rest (purgeRows). */
 async function idTaken(run: Run, taskId: string): Promise<boolean> {
   if ((await byId(run.ctx, 'issues', taskId)) !== null) return true
   const stored = await run.ctx.db
@@ -1426,7 +1420,6 @@ export type RestoreBlock =
   | 'no_access'
   | 'view_only'
   | 'not_lead'
-  | 'subtask_project'
   | 'project_archived'
   | 'parent_archived'
   | 'conflict'
@@ -1775,20 +1768,14 @@ async function blockOf(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | nu
 }
 
 /* A task item goes back into its root's project, which must be live and
- * not archived, and the person needs Edit on every live project its tasks
- * go back to. A subtask project that is no longer live does not block: the
- * restore moves that subtask to the item that holds its project. */
+ * not archived, and the person needs Edit there. A subtask shares its
+ * parent's sub-project, so the item's tasks all go back there. */
 async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const project = await namedProject(s, s.item.project_id, 'project')
   if (project === null) return 'project_deleted'
   const level = await liveLevel(s, me, project)
   if (level === null) return 'no_access'
   if (levelRank(level) < LEVEL_RANK.user) return 'view_only'
-  for (const { id } of s.item.projects) {
-    const other = id === project.id ? null : await namedProject(s, id, 'project')
-    if (other !== null && levelRank(await liveLevel(s, me, other)) < LEVEL_RANK.user)
-      return 'subtask_project'
-  }
   if (project.archived_at !== undefined) return 'project_archived'
   if (s.memo.conflicts && (await byId(s.ctx, 'issues', s.item.target_id)) !== null)
     return 'conflict'
@@ -2124,9 +2111,9 @@ const holdingItem = (s: Scope, projectId: string) =>
  * once it is back: their level there by the item's stored rows
  * (storedLevels), which its restore writes back, is User or Lead. A task
  * item's restore needs that Edit (taskItemBlock), so only then can one
- * waiting for `holder` follow it; its other checks, such as a subtask's
- * project, run when it is sent. It reads what an admin's view of the
- * project item reads (adminView), once per list for each item and person. */
+ * waiting for `holder` follow it; its other checks run when it is sent. It
+ * reads what an admin's view of the project item reads (adminView), once
+ * per list for each item and person. */
 async function editsOnceBack(s: Scope, me: Doc<'profiles'>, holder: Item, projectId: string) {
   const levels = await storedLevels({ ...s, item: holder }, me)
   return levelRank(levels.levelOf({ id: projectId, org_id: holder.org_id })) >= LEVEL_RANK.user
@@ -2161,162 +2148,16 @@ function tallyTask(
 
 /* ------------------------------------------------------------- the fill */
 
-/* A task item's subtasks whose project is no longer live leave the item
- * before anything is written back (design 5.2): to the item that holds
- * their project, which brings them back with it, or for good when their
- * project is gone. */
-const restoreSplit = (run: Run): Promise<boolean> =>
-  run.item.kind === 'project'
-    ? Promise.resolve(true)
-    : eachStoredTask(run, async (task) => {
-        if (task.task_id === run.item.target_id) return true
-        if ((await namedProject(run, task.project_id, 'project')) !== null) return true
-        return await splitOff(run, task)
-      })
-
-/** Moves subtask `task` with every row it owns to the item that holds its
- * project, keeping its parent; when no item that is not purging holds the
- * project, deletes them for good with their bytes and its history. Its rows the restore
- * already wrote back to the live tables go first, the same way: a split the
- * reveal sends back here (its project left after restore_rows) finds the
- * subtask's comments, labels, follows, attachments and links live, naming a
- * task that will not come back with this item. Both items' counts follow. */
-async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> {
-  const held = await run.ctx.db
-    .query('deleted_rows')
-    .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', task.project_id))
-    .first()
-  const holder = held === null ? null : await byId(run.ctx, 'deleted_items', held.item_id)
-  const into =
-    holder !== null && holder.state !== 'purging' && holder.org_id === run.item.org_id
-      ? holder
-      : null
-  // the rows coming in may sit where an organization export already read,
-  // so one that began before now and reads `into` later calls it partial
-  // (received_at)
-  if (into !== null) await noteReceived(run, into)
-  // a description row the move left, whose text the stored copy keeps
-  if (!(await dropDescriptions(run, task.task_id))) return false
-  for (const relation of TASK_ROWS) {
-    const taken = await drain(run.budget, relation(run.ctx, task.task_id), async (live) => {
-      if (into === null) await discard(run.ctx, live, task.num, run.txn)
-      else if (!(await storeRow(run.ctx, into, live, task.task_id, run.txn)))
-        await droppedInto(run.ctx, into)
-    })
-    if (!taken) return false
-  }
-  // deleted for good: its history goes while its stored row still reserves
-  // its uuid. A step that ran out of budget after the stored task row went
-  // has done this already, and the id may be another task's by now.
-  if (into === null && !(await idTaken(run, task.task_id))) {
-    if (!(await purgeHistory(run, task.task_id))) return false
-    for (const row of await deleteCommentRows(run.ctx, task.task_id)) charge(run.budget, row)
-  }
-  const done = await drain(
-    run.budget,
-    run.ctx.db
-      .query('deleted_rows')
-      .withIndex('by_item_owner', (q) => q.eq('item_id', run.item.id).eq('owner_id', task.task_id)),
-    (row) =>
-      into === null
-        ? dropStored(run.ctx, row, task.num)
-        : run.ctx.db.patch(row._id, { item_id: into.id }),
-  )
-  if (!done) return false
-  await run.ctx.db.delete(task._id)
-  await countOut(run, task)
-  if (into === null) {
-    console.warn('A restore deleted a subtask whose project is gone', {
-      item_id: run.item.id,
-      task_id: task.task_id,
-    })
-    return true
-  }
-  const { _id, _creationTime, ...light } = task
-  // a new row, so that a restore of `into` past its cursor still meets it.
-  // It keeps its search text and assignee and copies `into`, so the
-  // Deleted items page finds it with the item that holds it now. The page
-  // then judges its assignee against `into`'s deletion, as every other
-  // reference the split moves.
-  await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
-    ...light,
-    item_id: into.id,
-    ...itemCopies(into),
-  })
-  await countInto(run.ctx, into, task)
-  return true
-}
-
-/** Records on item `into` that `run`'s restore hands it stored rows now
+/** Records on item `into` that `run`'s restore hands it a stored link now
  * (received_at), once a step. An organization export that began before
  * then and reads `into` later calls it partial (model/orgExportRead.ts
- * itemStatus), because those rows keep their place in deleted_rows only
- * when a split moves them (item_id), and a link that moves changes
- * owner_id too, so the export can have read them under the item that held
- * them, or not at all. */
+ * itemStatus), because a link that moves changes its item_id and owner_id
+ * (placeLinkBy), so the export can have read it under the item that held
+ * it, or not at all. */
 async function noteReceived(run: Run, into: Item): Promise<void> {
   const fresh = await run.ctx.db.get(into._id)
   if (fresh !== null && fresh.received_at !== run.now)
     await run.ctx.db.patch(into._id, { received_at: run.now })
-}
-
-/** Takes subtask `task` out of the counts of the item restoring it: from
- * its tally, and on the item row from the subtask count and, once no task
- * of the item is left in the subtask's project, the projects. */
-async function countOut(run: Run, task: Doc<'deleted_tasks'>): Promise<void> {
-  const tally = tallyOf(run)
-  tallyTask(tally, task, -1)
-  const left = tally.projects.find((p) => p.id === task.project_id)?.tasks ?? 0
-  const fields = {
-    counts: { ...run.item.counts, subtasks: Math.max(0, run.item.counts.subtasks - 1) },
-    projects:
-      left > 0 ? run.item.projects : run.item.projects.filter((p) => p.id !== task.project_id),
-  }
-  await run.ctx.db.patch(run.item._id, fields)
-  run.item = { ...run.item, ...fields }
-}
-
-/** Counts `task` into item `into`: into the tally of its job while it moves
- * or restores, else on the item row. */
-async function countInto(
-  ctx: MutationCtx,
-  into: Item,
-  task: Pick<Doc<'deleted_tasks'>, 'project_id' | 'archived'>,
-): Promise<void> {
-  const job = await jobOf(ctx, into.id)
-  if (job !== null && (into.state === 'moving' || into.state === 'restoring')) {
-    const tally = job.tally ?? emptyTally(into)
-    tallyTask(tally, task, 1)
-    await ctx.db.patch(job._id, { tally })
-    return
-  }
-  const archived = task.archived ? 1 : 0
-  await ctx.db.patch(into._id, {
-    counts: {
-      ...into.counts,
-      tasks: into.counts.tasks + 1,
-      archived_tasks: into.counts.archived_tasks + archived,
-    },
-    projects: into.projects.map((p) =>
-      p.id === task.project_id
-        ? { ...p, tasks: p.tasks + 1, archived_tasks: p.archived_tasks + archived }
-        : p,
-    ),
-  })
-}
-
-/** Counts a row too large to store into item `into`, which a split moved
- * it to: into the tally of its job while it moves or restores, else on the
- * item row. */
-async function droppedInto(ctx: MutationCtx, into: Item): Promise<void> {
-  const job = await jobOf(ctx, into.id)
-  if (job !== null && (into.state === 'moving' || into.state === 'restoring')) {
-    const tally = job.tally ?? emptyTally(into)
-    await ctx.db.patch(job._id, { tally: { ...tally, dropped_rows: tally.dropped_rows + 1 } })
-    return
-  }
-  const fresh = await ctx.db.get(into._id)
-  if (fresh !== null) await ctx.db.patch(into._id, { dropped_rows: (fresh.dropped_rows ?? 0) + 1 })
 }
 
 /** Deletes a stored row for good, taking an attachment out of the
@@ -2523,10 +2364,10 @@ type HomedTask = StoredTask & { home: Doc<'projects'> }
  * in the item goes back without it. A subtask shares its parent's
  * sub-project, so its parent is elsewhere only when it went to Deleted
  * items on its own before its delete's steps reached the subtask
- * (detachArchivedChildren), or when a task item's restore handed the
- * subtask to this item (splitOff). A
- * deleted_tasks row whose stored task is gone is deleted, so the reveal,
- * which sends the item back here while the item has one, always moves on. */
+ * (detachArchivedChildren), or when a task item's restore in an earlier
+ * release handed the subtask to this item. A deleted_tasks row whose stored
+ * task is gone is deleted, so the reveal, which sends the item back here
+ * while the item has one, always moves on. */
 const restoreTasks = (run: Run): Promise<boolean> =>
   run.item.kind === 'task'
     ? Promise.resolve(true)
@@ -2633,19 +2474,22 @@ async function writeTask(
 
 /* ----------------------------------------------------------- the reveal */
 
-/** The reveal (design 5.1), one transaction. Relation rows that reached
- * the item after their phase send it back to restore_rows, a task that
- * reached a project item after restore_tasks back there, and a subtask
- * whose project left since restore_split back there. A failed check (design
- * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
- * writes back a task item's tasks, or a project item's own rows, then the
- * links left, and narrates. A task item goes on to restore_clear, which
- * deletes its deleted_tasks rows in steps and then the item
- * (clearTaskRows). A project item has none left, as restore_tasks deletes
- * each with its task and the check above sends one that came later back
- * there; it goes on to restore_grants, which deletes its stored grants
- * (restoreGrants), and then restore_attach, which deletes the item and
- * the deleted_item_parents rows an earlier release left for it.
+/** The reveal (design 5.1), one transaction. Relation rows the item still
+ * stores send it back to restore_rows, and a task a project item still
+ * stores back to restore_tasks, whose cursor can pass over one on a tie of
+ * _creationTime (eachStoredTask). A job an earlier release left can also
+ * hold rows or a task that release's split handed the item after their
+ * phase. A failed check (design 5.3, asked again for the restorer) sends it
+ * back to moving, so a task item whose project left since the restore began
+ * waits in Deleted items with every task it holds. Otherwise it writes back
+ * a task item's tasks, or a project item's own rows, then the links left,
+ * and narrates. A task item goes on to restore_clear, which deletes its
+ * deleted_tasks rows in steps and then the item (clearTaskRows). A project
+ * item has none left, as restore_tasks deletes each with its task and the
+ * check above sends one it left back there; it goes on to restore_grants,
+ * which deletes its stored grants (restoreGrants), and then
+ * restore_attach, which deletes the item and the deleted_item_parents rows
+ * an earlier release left for it.
  *
  * So a project item's reveal reads none of its tasks, however many it has.
  * A task item holds no more tasks than its delete handled in one
@@ -2667,7 +2511,6 @@ async function reveal(run: Run): Promise<JobState | null> {
   if (run.item.kind === 'project') {
     // a job the release before saved here has not written the grants back
     if (!run.state.granted) return { ...run.state, phase: 'restore_access', cursor: undefined }
-    // a subtask another restore's split moved here (splitOff)
     const late = await run.ctx.db
       .query('deleted_tasks')
       .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
@@ -2685,7 +2528,7 @@ async function reveal(run: Run): Promise<JobState | null> {
       const doc = docOf(row, 'issues')
       if ((await byId(run.ctx, 'issues', doc.id)) !== null) return await sendBack(run, 'conflict')
       const home = await namedProject(run, doc.project_id, 'project')
-      if (home === null) return { ...run.state, phase: 'restore_split', cursor: undefined }
+      if (home === null) return await sendBack(run, 'project_deleted')
       tasks.push({ row, doc, home })
     }
     const back = await revealTasks(run, tasks, restorer)
@@ -3448,9 +3291,7 @@ export async function restoreItems(
   const addComing = (item: Item) => {
     if (item.kind === 'project') for (const { id } of item.projects) coming.add(id)
   }
-  for (const given of ordered) {
-    // an earlier item of the call may have counted a subtask into this one
-    const item = (await byId(counted, 'deleted_items', given.id)) ?? given
+  for (const item of ordered) {
     const above = item.kind === 'task' ? item.project_id : item.parent_project_id
     if (above !== undefined && coming.has(above)) {
       result.deferred.push(item.id)
@@ -3467,9 +3308,13 @@ export async function restoreItems(
     addComing(item)
     const fields = { state: 'restoring' as const, restore_by: a.me.id }
     await counted.db.patch(item._id, fields)
+    // progress, so that a reveal whose reads the call has spent leaves the
+    // count of a parent's subtasks to a step (liveSubtasks); a project
+    // item's reveal counts none
+    if (item.kind === 'task') budget.moved = true
     const restoring: Item = { ...item, ...fields }
     const state: JobState = {
-      phase: 'restore_split',
+      phase: 'restore_rows',
       tally: tallyFromItem(item),
       alone: (a.bulk !== true && ordered.length === 1) || undefined,
     }
@@ -3499,7 +3344,11 @@ export async function restoreItems(
  * its projects' tasks again. move_edges does nothing: an earlier release
  * started a project item's move there to move first the tasks with a parent
  * or subtask outside the item, which a family in one sub-project never
- * has, so a job saved there goes straight on to move_tasks. */
+ * has, so a job saved there goes straight on to move_tasks. restore_split
+ * does nothing either: an earlier release started a restore there to hand a
+ * subtask whose project had left to the item that held that project, and a
+ * family in one sub-project comes back whole or waits whole (reveal), so a
+ * job saved there goes straight on to restore_rows. */
 const PHASES: Record<
   Exclude<
     TrashPhase,
@@ -3518,7 +3367,7 @@ const PHASES: Record<
     run: moveDrain,
     next: (item) => (item.kind === 'project' ? 'move_tasks' : 'move_finish'),
   },
-  restore_split: { run: restoreSplit, next: () => 'restore_rows' },
+  restore_split: { run: async () => true, next: () => 'restore_rows' },
   restore_rows: { run: restoreRows, next: () => 'restore_links' },
   restore_links: { run: restoreLinks, next: () => 'restore_tasks' },
   restore_tasks: { run: restoreTasks, next: () => 'restore_access' },

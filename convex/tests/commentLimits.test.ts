@@ -51,7 +51,6 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
-  plantProject,
   plantSubscription,
   type T,
   uuid,
@@ -1448,63 +1447,6 @@ describe('Deleted items, project items and subtasks', () => {
     await runSteps(fx.t)
     for (const task of tasks) expect(await counter(fx.t, task.id)).toBeNull()
     expect(await rateOf(fx.t, fx.user.id, tasks[0].id)).toBeNull()
-  })
-
-  it('keeps the count of a subtask a restore hands to its project item, and deletes it with a purged one', async () => {
-    const fx = await setup()
-    // families stored across sub-projects before the subtask rule: created
-    // under their parent, then in another sub-project, as no write makes
-    // them any more
-    const across = (task: Doc<'issues'>, project_id: string) =>
-      fx.t.run(async (ctx) => {
-        await ctx.db.patch(task._id, { project_id })
-        return (await ctx.db.get(task._id)) as Doc<'issues'>
-      })
-    const root = await createTask(fx.t, fx, 'Root')
-    const sub = await across(await createTask(fx.t, fx, 'Sub', { parent_id: root.id }), fx.sub2.id)
-    await plantComments(fx, 3, { task: sub, counted: true })
-    await deleteTask(fx.t, fx, root.id, { subtask_ids: [sub.id] })
-    await deleteProject(fx.t, fx, fx.sub2.id)
-    await runSteps(fx.t)
-    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
-      org_id: fx.org.id,
-      ids: [(await itemFor(fx.t, root.id)).id],
-    })
-    await runSteps(fx.t)
-    // the subtask waits in the project's item, its comments with it
-    expect(await countOf(fx.t, sub.id)).toBe(0)
-    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
-      org_id: fx.org.id,
-      ids: [(await itemFor(fx.t, fx.sub2.id)).id],
-    })
-    await runSteps(fx.t)
-    expect(await stateOf(fx.t, sub.id)).toEqual({ count: 3, counting: false })
-
-    // a subtask whose project item is purged goes for good with its count
-    const third = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      type: 'project',
-      parent_id: fx.meta.id,
-    })
-    const root2 = await createTask(fx.t, fx, 'Root 2')
-    const lost = await across(await createTask(fx.t, fx, 'Lost', { parent_id: root2.id }), third.id)
-    await appPost(fx, fx.user, lost)
-    await deleteTask(fx.t, fx, root2.id, { subtask_ids: [lost.id] })
-    await deleteProject(fx.t, fx, third.id)
-    await runSteps(fx.t)
-    await as(fx.t, fx.admin).mutation(api.deletedItems.purge, {
-      org_id: fx.org.id,
-      ids: [(await itemFor(fx.t, third.id)).id],
-    })
-    await runSteps(fx.t)
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
-      org_id: fx.org.id,
-      ids: [(await itemFor(fx.t, root2.id)).id],
-    })
-    await runSteps(fx.t)
-    expect(await counter(fx.t, lost.id)).toBeNull()
-    expect(await rateOf(fx.t, fx.user.id, lost.id)).toBeNull()
   })
 })
 

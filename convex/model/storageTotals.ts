@@ -7,7 +7,7 @@
  *   (model/attachments.ts attachFileCore, for the app, REST and MCP).
  * - uncountFile and uncountStored take a file out in the transaction that
  *   deletes its last row for good, such as a removal, a dropped description
- *   image's deletion, a purge or split of Deleted items, or a teardown.
+ *   image's deletion, a purge from Deleted items, or a teardown.
  * - moveTaskFiles shifts tasks' files to the project a move takes them to
  *   (model/issues.ts moveIssueCore).
  * Nothing else changes a total. A move to Deleted items stores a file's row

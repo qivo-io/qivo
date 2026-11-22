@@ -12,7 +12,7 @@
  * `stored_projects`, deleted_rows), each stored task's row
  * (`deleted_tasks`) and the projects each project item names
  * (`project_items`, deleted_items). The last two can name an id after its
- * stored copy is gone. A split of a task item that stopped partway can
+ * stored copy is gone. A split an earlier release stopped partway can
  * leave a subtask's deleted_tasks row, with some of its other stored rows,
  * once its stored copy is gone, as can a purge that a release before this
  * one left partway; this release's purge deletes the deleted_tasks row

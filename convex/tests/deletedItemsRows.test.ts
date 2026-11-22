@@ -377,71 +377,18 @@ describe('who sees an item (design 6.1)', () => {
     expect(await idsOf(t, f.user)).toEqual([item.id])
   })
 
-  it('redacts a task item for the lead of a subtask project who cannot see the root', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const omar = await person(t, f.org.id, 'Omar')
-    const dana = await person(t, f.org.id, 'Dana')
-    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
-    const infra = ops.subs[0]
-    await grant(t, f.meta.id, dana.id, 'user')
-    await grant(t, ops.top.id, dana.id, 'user')
-    const root = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'Contoso acquisition due diligence',
-    })
-    const sub = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: infra.id,
-      title: 'Provision the data room',
-      parent_id: root.id,
-    })
-    await deleteTask(t, dana, root.id, { subtask_ids: [sub.id], reason: 'confidential' })
-    const item = await itemFor(t, root.id)
-
-    const row = await rowOf(t, omar, item.id)
-    expect(row).toMatchObject({
-      key: `QN-${sub.num}`,
-      title: 'Provision the data room',
-      path: [],
-      redacted: true,
-      counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
-      can_restore: false,
-      blocked: { reason: 'no_access' },
-      deleter: { name: 'Dana' },
-    })
-    expect(row?.projects.map((p) => p.id)).toEqual([infra.id])
-    expect(row).not.toHaveProperty('reason')
-    expect(JSON.stringify(row)).not.toContain('Contoso')
-    expect((await restore(t, omar, [item.id])).refused).toEqual([
-      { id: item.id, reason: 'no_access' },
-    ])
-    // the root's lead sees the root, not the subtask in a project hidden from them
-    expect(await rowOf(t, f.user, item.id)).toMatchObject({
-      title: 'Contoso acquisition due diligence',
-      reason: 'confidential',
-      counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
-      blocked: { reason: 'subtask_project' },
-    })
-    expect((await rowOf(t, dana, item.id))?.counts).toMatchObject({ tasks: 2, subtasks: 1 })
-  })
-
   it('shows items whose project is in Deleted items, and stuck items, to admins only', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const omar = await person(t, f.org.id, 'Omar')
-    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
-    await grant(t, ops.top.id, f.guest.id, 'user')
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const sub = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: ops.subs[0].id,
+      project_id: f.sub.id,
       parent_id: task.id,
     })
     await deleteTask(t, f.guest, task.id, { subtask_ids: [sub.id] })
     const taskItem = await itemFor(t, task.id)
-    expect(await idsOf(t, omar)).toEqual([taskItem.id])
+    expect(await idsOf(t, f.guest)).toEqual([taskItem.id])
     later()
     await deleteProject(t, f.user, f.meta.id)
     const projectItem = await itemFor(t, f.meta.id)
@@ -453,9 +400,8 @@ describe('who sees an item (design 6.1)', () => {
       item_id: projectItem.id,
       with_project: true,
     })
-    // not even to the lead of the subtask's project, which is still live
+    // not even to the person who deleted it
     expect(await idsOf(t, f.guest)).toEqual([])
-    expect(await idsOf(t, omar)).toEqual([])
     // the user led the project, so they see the project item and not the task item
     expect(await idsOf(t, f.user)).toEqual([projectItem.id])
     await patch(t, 'deleted_items', projectItem.id, { state: 'stuck' })
@@ -824,20 +770,13 @@ describe('archiving a task and keeping its subtasks (design 9)', () => {
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Parent' })
     const open = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
-    // in a project the archiver cannot see: a delete detaches such a child too
-    const hidden = await plantIssue(t, {
-      org_id,
-      project_id: (await hiddenSub(t, f)).id,
-      parent_id: parent.id,
-    })
     const done = await plantIssue(t, {
       org_id,
       project_id: f.sub.id,
       parent_id: parent.id,
       archived_at: NOW,
     })
-    for (const kid of [open, hidden])
-      await plantSubscription(t, { issue_id: kid.id, profile_id: f.admin.id })
+    await plantSubscription(t, { issue_id: open.id, profile_id: f.admin.id })
 
     await as(t, f.guest).mutation(api.issues.archive, {
       org_id,
@@ -847,14 +786,12 @@ describe('archiving a task and keeping its subtasks (design 9)', () => {
     })
 
     expect((await liveTask(t, parent.id))?.archived_at).toBe(AT_START)
-    for (const kid of [open, hidden]) {
-      expect(await liveTask(t, kid.id)).toMatchObject({ updated_at: AT_START })
-      expect(await liveTask(t, kid.id)).not.toHaveProperty('parent_id')
-      expect(await liveTask(t, kid.id)).not.toHaveProperty('archived_at')
-      expect((await messagesFor(t, f.admin.id, kid.id)).map((m) => m.detail)).toEqual([
-        'Detached from its parent',
-      ])
-    }
+    expect(await liveTask(t, open.id)).toMatchObject({ updated_at: AT_START })
+    expect(await liveTask(t, open.id)).not.toHaveProperty('parent_id')
+    expect(await liveTask(t, open.id)).not.toHaveProperty('archived_at')
+    expect((await messagesFor(t, f.admin.id, open.id)).map((m) => m.detail)).toEqual([
+      'Detached from its parent',
+    ])
     expect(await liveTask(t, done.id)).toMatchObject({ parent_id: parent.id, archived_at: NOW })
   })
 

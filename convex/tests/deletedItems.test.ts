@@ -276,7 +276,7 @@ describe('moving a task to Deleted items', () => {
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const a = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    const a = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
     const b = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
     const kept = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
     await plantSubscription(t, { issue_id: kept.id, profile_id: f.guest.id })
@@ -285,10 +285,7 @@ describe('moving a task to Deleted items', () => {
 
     const item = await itemFor(t, root.id)
     expect(item.counts).toEqual({ tasks: 3, archived_tasks: 0, subtasks: 2, sub_projects: 0 })
-    expect(item.projects.map((p) => [p.id, p.tasks])).toEqual([
-      [f.sub.id, 2],
-      [f.sub2.id, 1],
-    ])
+    expect(item.projects.map((p) => [p.id, p.tasks])).toEqual([[f.sub.id, 3]])
     expect((await storedIssue(t, root.id))?.parent_id).toBeUndefined()
     expect((await storedIssue(t, a.id))?.parent_id).toBe(root.id)
     expect((await storedIssue(t, b.id))?.parent_id).toBe(root.id)
@@ -520,7 +517,7 @@ describe('moving a task to Deleted items', () => {
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const huge = await plantIssue(t, {
       org_id,
-      project_id: f.sub2.id,
+      project_id: f.sub.id,
       parent_id: root.id,
       description: 'x'.repeat(STORED_ROW_MAX_BYTES),
     })
@@ -532,7 +529,7 @@ describe('moving a task to Deleted items', () => {
       counts: { tasks: 2, archived_tasks: 0, subtasks: 1, sub_projects: 0 },
     })
     expect(item.dropped_rows).toBeUndefined()
-    expect(item.projects.map((p) => p.id)).toEqual([f.sub.id, f.sub2.id])
+    expect(item.projects.map((p) => p.id)).toEqual([f.sub.id])
     expect((await storedTasks(t, item.id)).map((x) => x.task_id)).toEqual([huge.id, root.id])
     expect((await storedIssue(t, huge.id))?.parent_id).toBe(root.id)
   })

@@ -297,8 +297,6 @@ export function blockedText(blocked: BlockDetail, holder?: string): string | nul
       return blocked.lead
         ? `${blocked.project ?? 'This project'} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
         : `${blocked.project ?? 'This project'} has no lead now. Ask an organization admin to restore it.`
-    case 'subtask_project':
-      return "A subtask is in a project you can't edit. Ask someone who can edit it to restore it."
     case 'project_archived':
     case 'parent_archived':
       return `Restore ${project} from Archived projects first.`
@@ -325,8 +323,6 @@ export function refusalText(reason: RestoreRefusal | PurgeRefusal | 'not_found')
       return 'You can only view its project now.'
     case 'not_lead':
       return "Only the project's lead or an organization admin can restore it."
-    case 'subtask_project':
-      return "A subtask is in a project you can't edit. Ask someone who can edit it to restore it."
     case 'project_archived':
       return 'Restore its project from Archived projects first.'
     case 'parent_archived':

@@ -303,27 +303,6 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
   })
 
-  it.each([
-    ["the parent's project first", 'sub', 'sub2'],
-    ["the child's project first", 'sub2', 'sub'],
-  ] as const)(
-    'a due parent and its due child in two live projects, %s: the child goes this run and the parent the next',
-    async (_, parentIn, childIn) => {
-      const t = newT()
-      const f = await withReadingAdmin(t)
-      const due = { org_id: f.org.id, status: 'done' as const, done_at: ago(40) }
-      const parent = await plantIssue(t, { ...due, project_id: f[parentIn].id })
-      const child = await plantIssue(t, { ...due, project_id: f[childIn].id, parent_id: parent.id })
-
-      expect(await runArchive(t)).toBe(1)
-      expect((await issueRow(t, child.id))?.archived_at).toBeDefined()
-      expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
-
-      expect(await runArchive(t)).toBe(1)
-      expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
-    },
-  )
-
   it('an archived project is left alone — its done tasks stay as the restore left them', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -344,28 +323,15 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, done.id))?.archived_at).toBeUndefined()
   })
 
-  it('a done parent waits for an active child in any project, an archived one included', async () => {
+  it('a done parent waits for an active child', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const archivedSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: ago(1),
-    })
     const due = {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done' as const,
       done_at: ago(40),
     }
-    const shelvedParent = await plantIssue(t, due)
-    // its only active child sits in an archived sub-project, which the sweep leaves alone
-    await plantIssue(t, {
-      ...due,
-      project_id: archivedSub.id,
-      parent_id: shelvedParent.id,
-    })
     const busyParent = await plantIssue(t, due)
     await plantIssue(t, {
       org_id: f.org.id,
@@ -376,7 +342,6 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
     expect(await runArchive(t)).toBe(0)
     expect(await runArchive(t)).toBe(0)
-    expect((await issueRow(t, shelvedParent.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, busyParent.id))?.archived_at).toBeUndefined()
   })
 
@@ -1528,7 +1493,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
     const f = await withReadingAdmin(t)
     const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
     const parent = await plantIssue(t, { ...due, project_id: f.sub.id })
-    const child = await plantIssue(t, { ...due, project_id: f.sub2.id, parent_id: parent.id })
+    const child = await plantIssue(t, { ...due, project_id: f.sub.id, parent_id: parent.id })
 
     expect(await runArchive(t, night(0))).toBe(1)
     expect((await issueRow(t, child.id))?.archived_at).toBe(night(0))
@@ -1627,7 +1592,7 @@ describe('archiveDoneIssues makes a full pass every few weeks', () => {
     })
     const child = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: f.sub2.id,
+      project_id: f.sub.id,
       parent_id: parent.id,
     })
 
@@ -1694,46 +1659,6 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
         for (const row of rows) await ctx.db.delete(row._id)
       })
   }
-
-  it("a row one of the run's legs writes waits for the next run, also when the hand phase reads it later", async () => {
-    // one row a hand step and one project a chain, so the hand phase is
-    // still paging when the child's leg marks the parent's project
-    ARCHIVE_LIMITS.projects = 1
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    // the child's project sorts before the parent's, and a third after both
-    const [first, second, third] = [uuid(), uuid(), uuid()].sort()
-    const sub = (id: string) =>
-      plantProject(t, { id, org_id: f.org.id, type: 'project', parent_id: f.meta.id })
-    const childHome = await sub(first)
-    const parentHome = await sub(second)
-    const after = await sub(third)
-    const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
-    const parent = await plantIssue(t, { ...due, project_id: parentHome.id })
-    const child = await plantIssue(t, { ...due, project_id: childHome.id, parent_id: parent.id })
-    await plantIssue(t, { ...due, project_id: after.id })
-
-    const calls = await nightByHand(t, night(0))
-    expect((await issueRow(t, child.id))?.archived_at).toBe(night(0))
-    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
-    // the child's leg ran before the hand phase's last step, which read the
-    // mark it wrote and left it
-    const leg = calls.findIndex(
-      (c) => c.name === 'jobs:archiveProject' && c.args.project_id === childHome.id,
-    )
-    const lastHand = calls.findLastIndex(
-      (c) => c.name === 'jobs:archiveDoneIssues' && c.args.phase === 'hand',
-    )
-    expect(leg).toBeGreaterThan(0)
-    expect(leg).toBeLessThan(lastHand)
-    expect(await rechecks(t)).toEqual([
-      expect.objectContaining({ project_id: parentHome.id, from_run: night(0) }),
-    ])
-
-    expect(await runArchive(t, night(1))).toBe(1)
-    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
-    expect(await rechecks(t)).toEqual([])
-  })
 
   it('a row a person writes before the hand phase reads its range is handed, and its project is checked after the write', async () => {
     const t = newT()
@@ -1901,8 +1826,8 @@ describe('archiveDoneIssues and two runs that overlap', () => {
       ctx.runMutation(makeFunctionReference<'mutation'>('jobs:archiveDoneIssues'), { now }),
     )
 
-  /* withOrg with three sub-projects whose ids sort in the order given, and
-   * one row a hand step, after night 0's full pass. */
+  /* withReadingAdmin with four sub-projects whose ids sort in the order
+   * given, and one row a hand step, after night 0's full pass. */
   async function overlapScene() {
     ARCHIVE_LIMITS.projects = 1
     const t = newT()
@@ -1960,13 +1885,13 @@ describe('archiveDoneIssues and two runs that overlap', () => {
 
   it("an older run's hand phase leaves the row a newer run's leg wrote", async () => {
     const { t, subs, pastCutoff, done } = await overlapScene()
-    const [first, childHome, parentHome, last] = subs
+    const [first, , home, last] = subs
     await done(first, pastCutoff(0))
     await done(last, pastCutoff(0))
-    // in run B's window only: a Done parent and its Done child, which B's
-    // leg archives and so marks the parent's project for the next run
-    const parent = await done(parentHome, pastCutoff(1))
-    const child = await done(childHome, pastCutoff(1), parent.id)
+    // in run B's window only: a Done parent and its Done child, whose
+    // project B's leg marks for the next run once it archives the child
+    const parent = await done(home, pastCutoff(1))
+    const child = await done(home, pastCutoff(1), parent.id)
     const [a, b] = [night(1), night(2)]
     const ran = new Set<string>()
     vi.useFakeTimers()
@@ -1974,7 +1899,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
       await start(t, a)
       await runOf(t, a, ran, (_, args) => args.phase === 'hand' && args.cursor !== undefined)
       await start(t, b)
-      // B runs until its child's leg has marked the parent's project
+      // B runs until its leg has marked the family's project
       await runOf(t, b, ran, async () => (await rechecks(t)).some((row) => row.from_run === b))
       expect((await issueRow(t, child.id))?.archived_at).toBe(b)
       // A finishes first, then B, which leaves its leg's row for night 3
@@ -1986,7 +1911,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
     expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
     expect(await rechecks(t)).toEqual([
-      expect.objectContaining({ project_id: parentHome.id, from_run: b }),
+      expect.objectContaining({ project_id: home.id, from_run: b }),
     ])
     expect(await runArchive(t, night(3))).toBe(1)
     expect((await issueRow(t, parent.id))?.archived_at).toBe(night(3))
@@ -2088,60 +2013,6 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
     await runArchive(t, night(3))
     for (const task of tasks) expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
-    expect(await rechecks(t)).toEqual([])
-  })
-
-  it('a run keeps a later duplicate when a newer run took over and deleted the row it kept in its step before', async () => {
-    const { t, subs, pastCutoff, done } = await overlapScene()
-    const [parentHome, childHome] = subs
-    // a Done parent that waits for its child, due at run A's threshold, and
-    // a task beside the parent due only from run B's on
-    const parent = await done(parentHome, night(-40))
-    await done(childHome, pastCutoff(0), parent.id)
-    await done(parentHome, pastCutoff(1))
-    const [a, b, c] = [night(1), night(2), night(3)]
-    const ran = new Set<string>()
-    const dispatcher = (name: string) => name === 'jobs:archiveDoneIssues'
-    vi.useFakeTimers()
-    try {
-      // A hands the child's project to its chain, which runs late
-      await start(t, a)
-      await runOf(t, a, ran, (name) => name === 'jobs:archiveProject')
-      // B keeps the parent's project's row on one page of its hand phase
-      await start(t, b)
-      await runOf(t, b, ran, (_, args) => args.phase === 'hand' && args.cursor !== undefined)
-      // C takes that row over, checks the project while the child is still
-      // open, and deletes the row
-      await start(t, c)
-      await runOf(t, c, ran, (name) => name === 'jobs:archiveProject')
-      await runOf(
-        t,
-        c,
-        ran,
-        (_, args) => args.project_id !== parentHome.id,
-        (name) => name === 'jobs:archiveProject',
-      )
-      expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
-      // A's late leg archives the child and marks the parent's project
-      await runOf(t, a, ran)
-      expect((await rechecks(t)).filter((row) => row.project_id === parentHome.id)).toEqual([
-        expect.objectContaining({ from_run: a }),
-      ])
-      // B's hand phase goes on and finishes last, its chain fails, and C's
-      // other chain finishes
-      await runOf(t, b, ran, undefined, dispatcher)
-      await fail(t, b)
-      await runOf(t, c, ran)
-    } finally {
-      vi.useRealTimers()
-    }
-    // the parent lies behind the window of every later night
-    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
-    expect((await rechecks(t)).map((row) => [row.project_id, row.handed_at])).toEqual([
-      [parentHome.id, b],
-    ])
-    await runArchive(t, night(4))
-    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(4))
     expect(await rechecks(t)).toEqual([])
   })
 

@@ -5,14 +5,12 @@
  * Deleted items out: their rows left the live tables, and a task still in
  * issues under a project that is moving to or back from Deleted items
  * (model/deletedItems.ts) is skipped, with its comments, labels, links and
- * attachments, and a live task's reference to it as a parent is left out.
- * The job reads the retained Deleted items afterwards in a section of
- * their own (storedBatch and itemsBatch at the end of this file). Only a
- * deleted item that
- * is not ready leaves tasks in issues under an absent project, so the
- * issues section reads each task's parent only while the organization has
- * one, on a smaller page still. Each task's text comes from its description
- * rows (model/descriptions.ts), two documents at most a row. The job reads
+ * attachments. The job reads the retained Deleted items afterwards in a
+ * section of their own (storedBatch and itemsBatch at the end of this
+ * file). The issues section reads tasks' projects and parents only while a
+ * deleted item is in flight, on a smaller page still (exportDocs says
+ * why). Each task's text comes from its description rows
+ * (model/descriptions.ts), two documents at most a row. The job reads
  * tasks 100 a page with their texts under TEXT_ROOM (descriptionsOf) while
  * nothing is in flight, and six a page, each text through a range of its
  * own (descriptionOf), when a page's texts do not fit.
@@ -350,12 +348,12 @@ export async function exportDocs(
   live: LiveChecks,
   texts?: ReadonlyMap<string, string>,
 ): Promise<{ rows: OrgExportRow[]; skipped: number }> {
-  // Only an item in flight leaves a task in issues under an absent project,
-  // or a task under a parent whose project is absent (the move detaches it
-  // only when it gets there). The export leaves out such a task, and such
-  // a parent reference, so it reads tasks' projects and parents only then,
-  // on a small page, because a project or a parent can carry a large
-  // description. Otherwise every task's project and parent are live.
+  // Only an item in flight leaves a task in issues under an absent project.
+  // The export leaves out such a task, and while an item is in flight a
+  // parent reference to a task that is not live, such as the one an
+  // archived subtask keeps until the steps after its parent's delete
+  // detach it. It reads tasks' projects and parents only then, on a small
+  // page, because a project or a parent can carry a large description.
   const checkParents = section === 'issues' && inFlight
   const rows: OrgExportRow[] = []
   let skipped = 0
@@ -662,15 +660,13 @@ export async function readBatch(
  * the whole organization, whatever an admin's role reads on the Deleted
  * items page. Each stored table is read on its own from deleted_rows by
  * table and organization (by_table_org_owner) with one cursor, every row's
- * item read once a batch, so a row is read once whichever item holds it
- * then: a restore's split that moves a subtask's rows to another item
- * (model/deletedItems.ts splitOff) patches item_id and leaves them where
- * they are in that index. Only a link a reveal hands to another item
- * (placeLinkBy) changes owner_id, and can then be read twice or missed,
- * which the README says. Both write the receiving item's received_at, so
- * the items section calls an item partial that took rows after collection
- * began and before the section read it. The items come last (`itemsBatch`),
- * each with how much of it the archive holds. */
+ * item read once a batch. A link a restore hands to another item
+ * (model/deletedItems.ts placeLinkBy) changes owner_id, and can then be
+ * read twice or missed, which the README says. The hand-over writes the
+ * receiving item's received_at, so the items section calls an item partial
+ * that took a link after collection began and before the section read it.
+ * The items come last (`itemsBatch`), each with how much of it the archive
+ * holds. */
 
 /** What a Deleted items batch knows of its job: when collection started,
  * when each live section's read ended (step.ended), the live sections any
