@@ -23,6 +23,7 @@ import { logActivity, machineDetail } from '../model/activity'
 import { removeProfile } from '../model/cascade'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
+import { patchTask } from '../model/descriptions'
 import { nameKeysReady } from '../model/nameKeys'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import { countsReady } from '../model/overviewCounts'
@@ -2210,7 +2211,8 @@ describe('marketing demo seed steps', () => {
     const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(apply(t, 'seed'), 'rule', /a seeded task is missing; use reset/)
     expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
-    // the same parent moved to another project instead
+    // the same parent moved to another project instead, with the subtasks
+    // written before it, as a move carries them
     await reset(t)
     await wipe(t)
     await toSetup(t)
@@ -2227,7 +2229,12 @@ describe('marketing demo seed steps', () => {
         .query('issues')
         .withIndex('by_uuid', (q) => q.eq('id', parentId))
         .unique()
-      await ctx.db.patch(parent!._id, { project_id: elsewhereId })
+      const kids = await ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+        .collect()
+      for (const row of [parent!, ...kids])
+        await patchTask(ctx.db, row, { project_id: elsewhereId })
     })
     const written = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(apply(t, 'seed'), 'rule', /parent task moved to another project; use reset/)

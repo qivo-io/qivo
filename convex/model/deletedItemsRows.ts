@@ -76,8 +76,7 @@ export type Deleter = {
 
 /** One Deleted items row, projected for its viewer. `key` is a task item's
  * task key or a project item's project key. `counts`, `projects` and `path`
- * show only what the viewer may see; a redacted row shows one task the
- * viewer can see instead of the root. An organization admin's row shows the
+ * show only what the viewer may see. An organization admin's row shows the
  * whole item, and a hidden one, a task item whose root's project the admin
  * cannot read, its key with an empty title and no status or reason.
  * `blocked` explains a ready row that cannot be restored by the viewer;
@@ -98,7 +97,6 @@ export type DeletedRow = {
   deleter: Deleter
   reason?: string
   state: Exclude<Item['state'], 'purging'>
-  redacted?: true
   /** an admin's task item whose root they cannot read, with an empty
    * `title` and no `status` or `reason` (model/deletedItems.ts ItemView) */
   hidden?: true
@@ -112,44 +110,22 @@ export type DeletedRow = {
  * An organization admin's row is the whole item, and a task item whose
  * root's project they cannot read is a hidden row, with its key, path,
  * counts and deleter and no title, status or reason (model/deletedItems.ts
- * ItemView). With `out`, the caller's
- * check of its read budget, a redacted task item's row checks it after
- * each of the item's tasks it reads to find the one it shows, and answers
- * 'unread' when the budget ran out first, as each task's row holds its
- * searchable text, so the row is not built.
+ * ItemView).
  */
 export async function rowOf(
   ctx: QueryCtx,
   sight: Sight,
   orgName: string,
   item: Item,
-): Promise<DeletedRow | null>
-export async function rowOf(
-  ctx: QueryCtx,
-  sight: Sight,
-  orgName: string,
-  item: Item,
-  out: () => boolean,
-): Promise<DeletedRow | null | 'unread'>
-export async function rowOf(
-  ctx: QueryCtx,
-  sight: Sight,
-  orgName: string,
-  item: Item,
-  out?: () => boolean,
-): Promise<DeletedRow | null | 'unread'> {
+): Promise<DeletedRow | null> {
   const { me, memo } = sight
   const view = await viewOf(ctx, memo, me, item)
   // viewOf never shows a purging item; the check narrows the state
   if (view === null || item.state === 'purging') return null
-  const shown = view.redacted ? await shownTask(ctx, item, view, out) : null
-  if (shown === 'unread') return shown
-  if (view.redacted && shown === null) return null
   const ready = item.state === 'ready'
-  const block = view.redacted ? 'no_access' : await restoreBlock(ctx, me, item, memo)
+  const block = await restoreBlock(ctx, me, item, memo)
   let blocked: BlockDetail | undefined
-  if (ready && block !== null)
-    blocked = view.redacted ? { reason: block } : await blockDetail(ctx, memo, me, item, block)
+  if (ready && block !== null) blocked = await blockDetail(ctx, memo, me, item, block)
   const base = {
     id: item.id,
     org_id: item.org_id,
@@ -171,15 +147,6 @@ export async function rowOf(
       (ready || item.state === 'stuck') &&
       !(await orgReadOnly(ctx, memo, item.org_id)),
   }
-  if (shown !== null)
-    return {
-      ...base,
-      key: issueKey(shown.num),
-      title: shown.title,
-      path: [],
-      archived: shown.archived,
-      redacted: true,
-    }
   if (view.hidden)
     return {
       ...base,
@@ -221,32 +188,17 @@ export async function rowFor(
   return null
 }
 
-/** The task a redacted row shows: one of its tasks in a project the viewer
- * can see. It checks the item's tasks itself rather than filter the range,
- * so a metered ctx (the page's rows) counts every task it passes over, as
- * Convex does, and answers 'unread' once `out` says the reads ran out
- * before it found one. */
-async function shownTask(ctx: QueryCtx, item: Item, view: ItemView, out?: () => boolean) {
-  const seen = new Set(view.projects.map((p) => p.id))
-  const tasks = ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', item.id))
-  for await (const task of tasks) {
-    if (seen.has(task.project_id)) return task
-    if (out?.() === true) return 'unread'
-  }
-  return null
-}
-
 /** What the row counts: everything when the viewer sees all the item's
- * projects, else only the tasks and sub-projects in the projects they see. */
+ * projects, else only the tasks and sub-projects in the projects they see.
+ * A task item has one project, its root's, so only a project item's view
+ * leaves projects out. */
 function countsOf(item: Item, view: ItemView): Item['counts'] {
   if (view.projects.length === item.projects.length) return item.counts
-  const tasks = view.projects.reduce((n, p) => n + p.tasks, 0)
   return {
-    tasks,
+    tasks: view.projects.reduce((n, p) => n + p.tasks, 0),
     archived_tasks: view.projects.reduce((n, p) => n + p.archived_tasks, 0),
-    subtasks: item.kind === 'task' ? Math.max(0, tasks - 1) : 0,
-    sub_projects:
-      item.kind === 'project' ? view.projects.filter((p) => p.id !== item.target_id).length : 0,
+    subtasks: 0,
+    sub_projects: view.projects.filter((p) => p.id !== item.target_id).length,
   }
 }
 
@@ -306,18 +258,13 @@ export function deleterOf(sight: Sight, item: Item): Deleter {
 
 /** Where a task of `item` in its project `project` sat. A project item's
  * task: the parent of the item's root project, or the item's root, then
- * the task's project. A task item's task in the root's project: the
- * item's path; in another project, that project after its top-level
- * project, with the names they carry now. */
+ * the task's project. A task item's task: the item's path, as every task
+ * of a task item is in its root's project. */
 export function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
   if (item.kind === 'project')
     return [
       project.id === item.target_id ? (pathOf(sight, item)[0] ?? '') : item.name,
       project.name,
     ]
-  if (project.id === item.project_id) return pathOf(sight, item)
-  const live = sight.projects.get(project.id)
-  if (!sameReference(live, item)) return [project.name]
-  const top = live.parent_id === undefined ? undefined : sight.projects.get(live.parent_id)
-  return sameReference(top, item) ? [top.name, live.name] : [live.name]
+  return pathOf(sight, item)
 }

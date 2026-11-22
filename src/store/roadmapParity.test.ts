@@ -453,8 +453,8 @@ const weekDay = (w: number) =>
 
 /** The tasks every access case plants over the withOrg fixture for
  * `subject`, dated around the fixture's NOW. In FW, PCB and a sub-project
- * of SKNK, the review hand-off cases; in FW a group with a subtask in a
- * sibling sub-project, a group stored in Backlog with a To do subtask, a
+ * of SKNK, the review hand-off cases; in FW a group with a dated subtask
+ * and a Done one, a group stored in Backlog with a To do subtask, a
  * group stored To do whose leaves are Done, Done leaves at and past the
  * narrow window's edges, leaves with hours and priorities, a chain of
  * blocks links from FW through PCB into the sibling with dates that
@@ -496,10 +496,10 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     })
   }
   const group = await task(f.sub, {
-    title: 'Group with a sibling subtask',
+    title: 'Group with a dated subtask',
     assignee_id: subject.id,
   })
-  await task(sibling, { title: 'Sibling subtask', parent_id: group.id, ...dated(0, 2) })
+  await task(f.sub, { title: 'Dated subtask', parent_id: group.id, ...dated(0, 2) })
   await task(f.sub, { title: 'Done subtask', parent_id: group.id, status: 'done', ...dated(-1) })
   const backlog = await task(f.sub, { title: 'Group stored in Backlog', status: 'backlog' })
   await task(f.sub, { title: 'Its To do subtask', parent_id: backlog.id, assignee_id: subject.id })

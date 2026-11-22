@@ -14,6 +14,7 @@ import {
   deletedStandIn,
   type ForcedDeleted,
   isDeletedRead,
+  waitingBlock,
 } from '../../store/deletedItemsStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from '../../store/projectNavStandIn.setup'
@@ -86,12 +87,21 @@ let MIRA: string
 let PARTNER: string
 let LUMA: string
 let FW: string
-let EL: string
 
 /** Testbed Labs with Luma Sensor's Firmware and Electronics, `tasks`
     Electronics tasks, Daniel Berg, Mira (invited, never joined) and the
-    agent Relay, and with `partner` a seat in Partner Co too. */
-function world(o: { tasks?: number; role?: 'admin' | 'user'; partner?: boolean } = {}) {
+    agent Relay, and with `partner` a seat in Partner Co too. The person
+    holds `level`, User unless given, on Luma Sensor, and leads Luma Sensor
+    and its sub-projects unless `lead` is false. */
+function world(
+  o: {
+    tasks?: number
+    role?: 'admin' | 'user'
+    partner?: boolean
+    level?: 'user' | 'viewer'
+    lead?: boolean
+  } = {},
+) {
   const next = plannerFixture()
   ORG = next.orgs[0].id
   ME = next.profiles[0].id
@@ -135,12 +145,13 @@ function world(o: { tasks?: number; role?: 'admin' | 'user'; partner?: boolean }
     name: 'Electronics',
     parent_id: luma.id,
   }
-  next.projects = [luma, firmware, electronics]
+  next.projects = [luma, firmware, electronics].map((p) =>
+    o.lead === false ? { ...p, lead_id: undefined } : p,
+  )
   LUMA = luma.id
   FW = firmware.id
-  EL = electronics.id
   // the picker judges by ordinary access, so the person holds a grant
-  next.access.push({ project_id: luma.id, profile_id: ME, level: 'user' })
+  next.access.push({ project_id: luma.id, profile_id: ME, level: o.level ?? 'user' })
   const task = (project: string, num: number, title: string, extra: object = {}) =>
     next.issues.push({
       id: crypto.randomUUID(),
@@ -205,6 +216,15 @@ async function load(next: Snapshot, fixture?: DeletedFixture) {
   vi.resetModules()
   snap = next
   fx = fixture ?? deletedFixtureOf(snap, { tasks: 60, at: NOW.toISOString() })
+  // the projects the fixture holds in Deleted items, and their tasks, are
+  // not in the workspace, so the picker offers none of them
+  const orgs = new Set(fx.seats.map((s) => s.org_id))
+  const live = new Set(fx.projects.map((p) => p.id))
+  const gone = new Set(
+    snap.projects.filter((p) => orgs.has(p.org_id) && !live.has(p.id)).map((p) => p.id),
+  )
+  snap.projects = snap.projects.filter((p) => !gone.has(p.id))
+  snap.issues = snap.issues.filter((t) => !gone.has(t.project_id))
   force = {}
   subs = []
   calls = []
@@ -419,6 +439,30 @@ async function choose(value: string) {
 }
 
 const PROJECT_ITEM = () => `deleted-${FW}`
+
+/** `fixture`'s task item QN-10, moved into Firmware and planted as an
+    admin's row of it once QN-10 and then Firmware were deleted: hidden,
+    which the stand-in shows without its title and status, and waiting for
+    Firmware's item, whose block says what the admin holds on Firmware once
+    it is back (waitingBlock). A scope reaches it through Luma Sensor, as
+    the picker offers no project in Deleted items. */
+function waitingInFirmware(fixture: DeletedFixture) {
+  const task = fixture.items.find((i) => i.row.kind === 'task')
+  const firmware = fixture.items.find((i) => i.row.id === PROJECT_ITEM())?.row
+  if (!task || !firmware) throw new Error('no task item or Firmware item')
+  const path = [...firmware.path, firmware.title]
+  task.row = {
+    ...task.row,
+    hidden: true,
+    path,
+    projects: firmware.projects.map((p) => ({ ...p, tasks: 1, archived_tasks: 0 })),
+    can_restore: false,
+    blocked: waitingBlock(fixture, PROJECT_ITEM(), FW),
+  }
+  task.scope = [FW, LUMA]
+  task.tasks = task.tasks.map((t) => ({ ...t, project_id: FW, path }))
+  return task
+}
 const taskItem = (num: number) => {
   const issue = snap.issues.find((t) => t.num === num)
   if (!issue) throw new Error(`no task ${num}`)
@@ -811,7 +855,8 @@ describe('the filters', () => {
     expect(row.textContent).toContain(
       "You can't open this task's project, so its title isn't shown.",
     )
-    expect(row.querySelector('[data-restore]')).not.toBeNull()
+    // nor restore it, as the server says
+    expect(row.querySelector('[data-restore]')).toBeNull()
   })
 })
 
@@ -934,6 +979,31 @@ describe('restoring', () => {
     expect(text('[data-deleted-progress]')).toBe('')
   })
 
+  it('restores a subtask search found with the whole task item it was deleted with', async () => {
+    const next = world({ tasks: 1 })
+    const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
+    const task = fixture.items.find((i) => i.row.kind === 'task')
+    if (!task) throw new Error('no task item')
+    // QN-10 was deleted with its subtask QN-99, beside it in its project
+    task.tasks.push({ ...task.tasks[0], num: 99, title: 'Seal the enclosure gasket' })
+    task.row = {
+      ...task.row,
+      counts: { ...task.row.counts, tasks: 2, subtasks: 1 },
+      projects: task.row.projects.map((p) => ({ ...p, tasks: 2 })),
+    }
+    await load(next, fixture)
+    await open(undefined, undefined, true)
+    await choose(`all:${ORG}`)
+    await type('[data-deleted-search]', 'gasket')
+    const hit = `${task.row.id}:QN-99`
+    expect(lineKeys()).toEqual([hit])
+    await click(find(`[data-line="${hit}"] [data-restore]`))
+    expect(text('[role="dialog"]')).toContain('QN-99 is a subtask of a deleted task')
+    expect(text('[data-task-first]')).toContain('QN-10 and its subtasks come back.')
+    await click(button('Restore QN-10 and QN-99'))
+    expect(restores().map((c) => c.args.ids)).toEqual([[task.row.id]])
+  })
+
   it('opens the whole item window for a single item selected through its hit alone', async () => {
     await open()
     await choose(LUMA)
@@ -947,24 +1017,16 @@ describe('restoring', () => {
   it('restores an item deleted before its project with that project, and the store sends it once it is back', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
-    const task = fixture.items.find((i) => i.row.kind === 'task')
-    if (!task) throw new Error('no task item')
     // QN-10 was deleted before Firmware, so the admin cannot read it now,
     // and Firmware's item gives them Edit on it once it is back
-    task.row = {
-      ...task.row,
-      title: '',
-      hidden: true,
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}`, with_project: true },
-    }
+    const task = waitingInFirmware(fixture)
     // the page that shows the task holds no project item
     fixture.items = fixture.items.filter((i) => i.row.kind === 'task')
     const held = deletedFixtureOf(next, { tasks: 0, at: NOW.toISOString() }).items
     await load(next, fixture)
     force.deferred = true
     await open(undefined, undefined, true)
-    await choose(EL)
+    await choose(LUMA)
     fx.items.push(...held)
     await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
     // the window reads the project item it waits for
@@ -981,19 +1043,12 @@ describe('restoring', () => {
   })
 
   it('restores only the project of a task the admin will not edit once that project is back, which stays in Deleted items', async () => {
-    const next = world({ tasks: 1 })
+    // the admin only views Luma Sensor and leads none of it, so Firmware's
+    // item gives them no Edit on Firmware once it is back
+    const next = world({ tasks: 1, level: 'viewer', lead: false })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
-    const task = fixture.items.find((i) => i.row.kind === 'task')
-    if (!task) throw new Error('no task item')
-    // QN-10 was deleted before Firmware, and Firmware's item gives the
-    // admin no Edit on it once it is back
-    task.row = {
-      ...task.row,
-      title: '',
-      hidden: true,
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
-    }
+    // QN-10 was deleted before Firmware
+    const task = waitingInFirmware(fixture)
     await load(next, fixture)
     force.deferred = true
     await open(undefined, undefined, true)
@@ -1014,20 +1069,14 @@ describe('restoring', () => {
   it('says a failed read of the project an item waits for with Try again, and one it cannot see, apart from loading', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
-    const task = fixture.items.find((i) => i.row.kind === 'task')
-    if (!task) throw new Error('no task item')
-    task.row = {
-      ...task.row,
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
-    }
+    const task = waitingInFirmware(fixture)
     // the page that shows the task holds no project item
     const projects = fixture.items.filter((i) => i.row.kind === 'project')
     fixture.items = fixture.items.filter((i) => i.row.kind === 'task')
     await load(next, fixture)
     holdReads = (sub) => sub.name === 'deletedItems:item'
     await open(undefined, undefined, true)
-    await choose(EL)
+    await choose(LUMA)
     await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
     const dialog = () => find('[role="dialog"]')
     const restore = () => button('Restore the project and QN-10')
@@ -1059,65 +1108,10 @@ describe('restoring', () => {
     expect(button('Restore Firmware and QN-10').hasAttribute('disabled')).toBe(false)
   })
 
-  it('restores a subtask search found in a task deleted before its project, sending that project first', async () => {
-    const next = world({ tasks: 1 })
-    const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
-    const task = fixture.items.find((i) => i.row.kind === 'task')
-    if (!task) throw new Error('no task item')
-    // QN-10 was deleted with its subtask QN-99, then their project Firmware
-    task.row = {
-      ...task.row,
-      path: ['Luma Sensor', 'Firmware'],
-      counts: { ...task.row.counts, subtasks: 1 },
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
-    }
-    task.scope = [FW]
-    task.tasks.push({
-      num: 99,
-      title: 'Seal the enclosure gasket',
-      description: '',
-      project_id: FW,
-      archived: false,
-      path: ['Luma Sensor', 'Firmware'],
-    })
-    await load(next, fixture)
-    force.deferred = true
-    await open(undefined, undefined, true)
-    await choose(LUMA)
-    await type('[data-deleted-search]', 'gasket')
-    const hit = `${task.row.id}:QN-99`
-    expect(lineKeys()).toEqual([hit])
-    await click(find(`[data-line="${hit}"] [data-restore]`))
-    // the page holds no Firmware row, so the window reads it
-    expect(subs.filter((s) => s.open && s.name === 'deletedItems:item').map((s) => s.args)).toEqual(
-      [{ id: `deleted-${FW}` }],
-    )
-    expect(text('[role="dialog"]')).toContain('QN-99 is a subtask of a deleted task')
-    expect(text('[data-task-first]')).toContain(
-      'QN-10 was deleted before its project Firmware, which is in Deleted items too.',
-    )
-    expect(text('[data-task-first]')).toContain(
-      'QN-10 and its subtasks follow once the project is back.',
-    )
-    await click(button('Restore Firmware, QN-10 and QN-99'))
-    expect(restores().map((c) => c.args.ids)).toEqual([
-      [`deleted-${FW}`, task.row.id],
-      [task.row.id],
-    ])
-    expect(toasts()).toContain('Restored “Firmware”. QN-10 follows once its project is back.')
-  })
-
   it('keeps sending a deferred item after the page is left', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
-    const task = fixture.items.find((i) => i.row.kind === 'task')
-    if (!task) throw new Error('no task item')
-    task.row = {
-      ...task.row,
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
-    }
+    const task = waitingInFirmware(fixture)
     await load(next, fixture)
     force.deferred = true
     holding = true
@@ -1125,9 +1119,18 @@ describe('restoring', () => {
     await choose(LUMA)
     await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
     await click(button('Restore Firmware and QN-10'))
+    // QN-10's row, which the store watches once the server defers QN-10
+    const watched = (sub: Sub) =>
+      sub.open && sub.name === 'deletedItems:item' && sub.args.id === task.row.id
+    holdReads = watched
     await release(restores()[0])
+    expect(restores().map((c) => c.args.ids)).toEqual([[`deleted-${FW}`, task.row.id]])
     await leave()
     // the watch lives in the store, so the item goes once its row says so
+    const held = subs.filter(watched)
+    expect(held).toHaveLength(1)
+    await act(async () => answer(held[0]))
+    await settle()
     expect(restores().map((c) => c.args.ids)).toEqual([
       [`deleted-${FW}`, task.row.id],
       [task.row.id],

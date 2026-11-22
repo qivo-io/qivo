@@ -55,6 +55,9 @@ import type {
   PageArgs,
 } from '../../convex/model/deletedItemsPage'
 import type { DeletedRow } from '../../convex/model/deletedItemsRows'
+import { type NavWorkspace, seatSight } from './projectNavStandIn.setup'
+
+type BlockDetail = NonNullable<DeletedRow['blocked']>
 
 /** The reads the stand-in answers, by their function names. */
 export const DELETED_READS = [
@@ -70,7 +73,8 @@ export const isDeletedRead = (name: string): boolean =>
   (DELETED_READS as readonly string[]).includes(name)
 
 /** A task an item stores, as the search and the assignee filter read it:
-    only the tasks of projects the seat may read. `path` is where its hit
+    the tasks of projects the seat may read, and a hidden task item's, which
+    the stand-in leaves out of both (hiddenItem). `path` is where its hit
     says it sat. */
 export type DeletedTask = {
   num: number
@@ -83,7 +87,10 @@ export type DeletedTask = {
 }
 
 /** One deleted item as one seat sees it: its row, what the filters read
-    beside it, and its stored tasks. */
+    beside it, and its stored tasks. A hidden task row (`row.hidden`, or
+    every task row of an admin's seat under `force.hidden`) may keep the
+    item's title, status and reason, which the stand-in leaves out while
+    it is hidden (shownRow) and shows once it is not. */
 export type DeletedFixtureItem = {
   row: DeletedRow
   /** newer first among equal deletion times, as the server's _creationTime */
@@ -99,6 +106,26 @@ export type DeletedFixtureItem = {
   tasks: DeletedTask[]
   /** what Delete now deletes with it, null for no admin's seat */
   purge?: PurgeSummary | null
+  /** a project item's projects as the seat holds them once a restore
+      brings them back, its root first, which a project item must have
+      for the stand-in to restore it */
+  back?: ProjectBack[]
+}
+
+/** One project of a project item once a restore brings it back, as its
+    seat holds it: the seat's level there by the stored grants and leads
+    and its parent's live ones (model/deletedItems.ts storedLevels), `none`
+    without one and `edit` for User or Lead, whether it comes back archived,
+    and the lead a view-only block names (blockDetail). The restore decides
+    from it alone what the seat reads after it, and a task item that waits
+    for it takes its block from it (waitingBlock). */
+export type ProjectBack = {
+  id: string
+  name: string
+  parent_id?: string
+  level: 'none' | 'viewer' | 'edit'
+  archived: boolean
+  lead?: string
 }
 
 /** One seat of the login. */
@@ -184,6 +211,37 @@ function newerFirst(a: Found, b: Found): number {
   return a.num - b.num
 }
 
+/** Whether `item` is a task item whose project its seat's admin cannot
+    read (model/deletedItems.ts adminView): a row the fixture hides, or with
+    `force.hidden` any task row of an admin's seat. Its tasks are none of
+    the seat's to find or name (model/deletedItemsPage.ts shows,
+    model/deletedItemsChoices.ts assigneesOf). */
+function hiddenItem(fx: DeletedFixture, item: DeletedFixtureItem, force: ForcedDeleted): boolean {
+  if (item.row.kind !== 'task') return false
+  if (item.row.hidden === true) return true
+  const seat = fx.seats.find((s) => s.org_id === item.row.org_id)
+  return force.hidden === true && seat?.role === 'admin'
+}
+
+/** `item`'s row as the server sends it (model/deletedItemsRows.ts rowOf):
+    a hidden task row without its title, status or reason. One that
+    `force.hidden` hides also takes the block the server would give it: the
+    organization's read-only state or a project in Deleted items where the
+    row has them, else no_access, so it cannot be restored. */
+function shownRow(fx: DeletedFixture, item: DeletedFixtureItem, force: ForcedDeleted): DeletedRow {
+  const { row } = item
+  if (!hiddenItem(fx, item, force)) return row
+  const { status: _status, reason: _reason, ...rest } = row
+  const shown: DeletedRow = { ...rest, title: '', hidden: true }
+  if (row.hidden === true) return shown
+  const kept = row.blocked?.reason === 'read_only' || row.blocked?.reason === 'project_deleted'
+  return {
+    ...shown,
+    can_restore: false,
+    blocked: row.state !== 'ready' ? undefined : kept ? row.blocked : { reason: 'no_access' },
+  }
+}
+
 /** What a project entry's search reads: its names and keys. */
 const projectNames = (item: DeletedFixtureItem) =>
   [item.row.title, item.row.key, ...item.row.projects.map((p) => `${p.name} ${p.key}`)].join(' ')
@@ -195,14 +253,12 @@ function hitOf(found: Found, row: DeletedRow): DeletedHit | undefined {
   if (found.tasks.length === 0) return undefined
   if (row.kind === 'task' && found.tasks.some((t) => issueKey(t.num) === row.key)) return undefined
   const task = [...found.tasks].sort((x, y) => x.num - y.num)[0]
-  const subtask = row.kind === 'task' && !row.redacted
   return {
     key: issueKey(task.num),
     title: task.title,
-    ...(subtask ? { root_key: row.key, ...(row.hidden ? {} : { root_title: row.title }) } : {}),
+    ...(row.kind === 'task' ? { root_key: row.key, root_title: row.title } : {}),
     archived: task.archived,
-    path: row.redacted ? [] : task.path,
-    ...(row.redacted ? { redacted: true as const } : {}),
+    path: task.path,
   }
 }
 
@@ -292,6 +348,7 @@ export function deletedPageOf(
   /** The entries of the tasks `item` holds that `keep` keeps: a task item
       once, a project item once a task. */
   const entriesOf = (item: DeletedFixtureItem, keep: (task: DeletedTask) => boolean) => {
+    if (hiddenItem(fx, item, force)) return
     const hits = item.tasks.filter((task) => assigned(task) && keep(task))
     if (hits.length === 0) return
     if (item.row.kind === 'task') found.push({ item, part: 1, num: 0, tasks: hits })
@@ -322,12 +379,7 @@ export function deletedPageOf(
   const entries: DeletedEntry[] = []
   const rows = new Map<string, DeletedRow>()
   for (const f of shown) {
-    const seat = seats.find((s) => s.org_id === f.item.row.org_id)
-    let row = f.item.row
-    if (force.hidden && seat?.role === 'admin' && row.kind === 'task') {
-      const { status: _status, reason: _reason, ...rest } = row
-      row = { ...rest, title: '', hidden: true }
-    }
+    const row = shownRow(fx, f.item, force)
     rows.set(row.id, row)
     const hit = hitOf(f, row)
     entries.push(hit === undefined ? { item_id: row.id } : { item_id: row.id, task: hit })
@@ -375,7 +427,7 @@ export function deletedPeopleOf(
     if (item.row.org_id !== args.org_id || item.row.state === ('purging' as string)) continue
     if (args.of === 'deleters') {
       if (item.deleted_by !== undefined) named.add(item.deleted_by)
-    } else
+    } else if (!hiddenItem(fx, item, force))
       for (const task of item.tasks) if (task.assignee_id !== undefined) named.add(task.assignee_id)
   }
   const matches = allWordsMatcher(nameKey(search))
@@ -424,8 +476,14 @@ export function deletedPurgeSummaryOf(fx: DeletedFixture, id: string): PurgeSumm
 }
 
 /** deletedItems.item over `fx`. */
-export const deletedItemOf = (fx: DeletedFixture, id: string): DeletedRow | null =>
-  fx.items.find((i) => i.row.id === id)?.row ?? null
+export function deletedItemOf(
+  fx: DeletedFixture,
+  id: string,
+  force: ForcedDeleted = {},
+): DeletedRow | null {
+  const item = fx.items.find((i) => i.row.id === id)
+  return item === undefined ? null : shownRow(fx, item, force)
+}
 
 /** What read `name` answers for `args`, or throws its refusal or a forced
     failure. */
@@ -452,13 +510,13 @@ export function deletedStandIn(
       if (force.purge === 'failed') throw new Error('deletedItems.purgeSummary failed')
       const summary = deletedPurgeSummaryOf(fx, String(args.id))
       // a task item takes nothing along, whatever the bound
-      const project = deletedItemOf(fx, String(args.id))?.kind === 'project'
+      const project = deletedItemOf(fx, String(args.id), force)?.kind === 'project'
       return force.purge === 'at-least' && summary !== null && project
         ? { along: 1000, exact: false }
         : summary
     }
     case 'deletedItems:item':
-      return deletedItemOf(fx, String(args.id))
+      return deletedItemOf(fx, String(args.id), force)
   }
   throw new Error(`not a Deleted items read: ${name}`)
 }
@@ -489,14 +547,75 @@ function forcedRefusal(
   return null
 }
 
-/** Takes item `id` out of `fx`, and lets the items that waited for it be
-    restored. */
+/** The block of a task item that waits for project `projectId` of
+    project item `holderId` (model/deletedItems.ts blockDetail), with
+    `with_project` where the holder's restore gives the seat Edit there
+    (editsOnceBack). */
+export function waitingBlock(fx: DeletedFixture, holderId: string, projectId: string): BlockDetail {
+  const back = fx.items.find((i) => i.row.id === holderId)?.back?.find((p) => p.id === projectId)
+  return {
+    reason: 'project_deleted',
+    item_id: holderId,
+    ...(back?.level === 'edit' ? { with_project: true as const } : {}),
+  }
+}
+
+/** Task item row `row` once the project it waits for is back as `back`
+    says (model/deletedItems.ts adminView, taskItemBlock and blockDetail):
+    hidden with no_access without a level there, whole and view-only with
+    Viewer, whole and blocked while the project comes back archived, and
+    whole and restorable otherwise. */
+function onceBack(row: DeletedRow, back: ProjectBack | undefined): DeletedRow {
+  const { blocked: _blocked, hidden: _hidden, ...whole } = row
+  const ready = row.state === 'ready'
+  if (back === undefined || back.level === 'none')
+    return {
+      ...row,
+      hidden: true,
+      can_restore: false,
+      blocked: ready ? { reason: 'no_access' } : undefined,
+    }
+  const project = back.name
+  const blocked: BlockDetail | undefined =
+    back.level === 'viewer'
+      ? { reason: 'view_only', project, ...(back.lead ? { lead: back.lead } : {}) }
+      : back.archived
+        ? { reason: 'project_archived', project }
+        : undefined
+  return blocked === undefined
+    ? { ...whole, can_restore: ready }
+    : { ...whole, can_restore: false, ...(ready ? { blocked } : {}) }
+}
+
+/** Takes item `id` out of `fx` and lets the items that waited for it be
+    restored. A project item's projects that the seat reads once they are
+    back join the projects a scope can name. */
 function takeOut(fx: DeletedFixture, id: string) {
+  const out = fx.items.find((i) => i.row.id === id)
   fx.items = fx.items.filter((i) => i.row.id !== id)
+  if (out?.row.kind === 'project') {
+    if (out.back === undefined)
+      throw new Error(`the fixture holds no projects of ${id} to bring back`)
+    for (const p of out.back)
+      if (p.level !== 'none' && !fx.projects.some((x) => x.id === p.id))
+        fx.projects.push({
+          id: p.id,
+          org_id: out.row.org_id,
+          ...(p.parent_id === undefined ? {} : { parent_id: p.parent_id }),
+        })
+  }
   for (const item of fx.items) {
     if (item.row.blocked?.item_id !== id) continue
-    const { blocked: _gone, ...row } = item.row
-    item.row = { ...row, can_restore: true }
+    if (item.row.kind === 'task') {
+      const projectId = item.row.projects[0]?.id
+      item.row = onceBack(
+        item.row,
+        out?.back?.find((p) => p.id === projectId),
+      )
+    } else {
+      const { blocked: _blocked, ...row } = item.row
+      item.row = { ...row, can_restore: row.state === 'ready' }
+    }
   }
 }
 
@@ -524,14 +643,14 @@ export function deletedRestore(
       out.refused.push({ id, reason: 'not_found' })
       continue
     }
-    const holder = item.row.blocked?.item_id
+    const row = shownRow(fx, item, force)
+    const holder = row.blocked?.item_id
     if (force.deferred && holder !== undefined && args.ids.includes(holder)) {
       out.deferred.push(id)
       continue
     }
-    if (item.row.state !== 'ready') out.refused.push({ id, reason: item.row.state })
-    else if (!item.row.can_restore)
-      out.refused.push({ id, reason: item.row.blocked?.reason ?? 'no_access' })
+    if (row.state !== 'ready') out.refused.push({ id, reason: row.state })
+    else if (!row.can_restore) out.refused.push({ id, reason: row.blocked?.reason ?? 'no_access' })
     else out.restored.push(id)
   }
   for (const id of out.restored) takeOut(fx, id)
@@ -567,29 +686,10 @@ export function deletedPurge(
 /* --------------------------------------------- a fixture from a workspace */
 
 /** The parts of a workspace deletedFixtureOf reads (convex/lib/
-    workspaceJoin.ts Workspace). */
-export type DeletedSource = {
+    workspaceJoin.ts Workspace): the grants and teams too, which give the
+    seat its level on a project item's projects once they are back. */
+export type DeletedSource = NavWorkspace & {
   orgs: readonly { id: string; name: string }[]
-  myProfileIds: readonly string[]
-  profiles: readonly {
-    id: string
-    org_id: string
-    name: string
-    kind: 'person' | 'agent'
-    org_role: string
-    active: boolean
-    auth_user_id?: string
-  }[]
-  projects: readonly {
-    id: string
-    org_id: string
-    type: string
-    key: string
-    name: string
-    parent_id?: string
-    lead_id?: string
-    archived_at?: string
-  }[]
   issues: readonly {
     id: string
     org_id: string
@@ -613,7 +713,9 @@ export type DeletedSource = {
  * an agent through its key, named "agent key". An admin's seat sees every
  * item, anyone else's its own deletes. Each other organization of the
  * login gets a project item of its first sub-project, for a page whose
- * rows span several.
+ * rows span several. A project item's projects are in Deleted items, so
+ * no scope names them until a restore brings them back, and the item
+ * records how the seat holds them then (ProjectBack).
  */
 export function deletedFixtureOf(
   ws: DeletedSource,
@@ -679,6 +781,28 @@ export function deletedFixtureOf(
   const projectsOf = (p: DeletedSource['projects'][number], tasks: number) => [
     { id: p.id, name: p.name, key: p.key, type: 'project' as const, tasks, archived_tasks: 0 },
   ]
+  const sight = seatSight(ws)
+  /** Project `p` as `org`'s seat holds it once a restore brings it back
+      (ProjectBack), by the workspace's grants and leads, which a project
+      item stores, and a lead who may lead projects (lib/access.ts
+      canLeadProjects). */
+  const backOf = (org: string, p: DeletedSource['projects'][number]): ProjectBack => {
+    const level = sight.level(org, p.id)
+    const top = p.parent_id === undefined ? undefined : projectById.get(p.parent_id)
+    const lead = ws.profiles.find((x) => x.id === (p.lead_id ?? top?.lead_id))
+    const leads =
+      lead?.org_role === 'admin' || lead?.org_role === 'user' || lead?.org_role === 'guest'
+    return {
+      id: p.id,
+      name: p.name,
+      ...(p.parent_id === undefined ? {} : { parent_id: p.parent_id }),
+      level: level === null ? 'none' : level === 'viewer' ? 'viewer' : 'edit',
+      archived: p.archived_at !== undefined,
+      ...(lead && leads ? { lead: lead.name } : {}),
+    }
+  }
+  // the projects in Deleted items, which no scope can name
+  const deleted = new Set<string>()
   const items: DeletedFixtureItem[] = []
   /** Item `id` of organization `org`, deleted at `when` by the `i`th
       deleter, when the seat sees it. */
@@ -688,7 +812,7 @@ export function deletedFixtureOf(
     when: number,
     fields: Pick<DeletedRow, 'id' | 'kind' | 'key' | 'title' | 'counts' | 'projects' | 'path'> &
       Partial<DeletedRow>,
-    rest: Pick<DeletedFixtureItem, 'scope' | 'tasks'> & { parent?: string },
+    rest: Pick<DeletedFixtureItem, 'scope' | 'tasks' | 'back'> & { parent?: string },
   ) => {
     const seat = seatOf(org)
     const who = deleterOf(org, i)
@@ -721,6 +845,7 @@ export function deletedFixtureOf(
   )
   const [first, ...rest] = subs
   if (o.projectItem !== false && first !== undefined) {
+    deleted.add(first.id)
     const inside = ws.issues.filter((t) => t.project_id === first.id)
     add(
       home.id,
@@ -735,7 +860,12 @@ export function deletedFixtureOf(
         projects: projectsOf(first, inside.length),
         path: [projectById.get(first.parent_id ?? '')?.name ?? ''],
       },
-      { scope: [first.id], parent: first.parent_id, tasks: inside.map(stored) },
+      {
+        scope: [first.id],
+        parent: first.parent_id,
+        tasks: inside.map(stored),
+        back: [backOf(home.id, first)],
+      },
     )
   }
   ws.issues
@@ -765,6 +895,7 @@ export function deletedFixtureOf(
     if (seat.org_id === home.id) continue
     const p = ws.projects.find((x) => x.org_id === seat.org_id && x.parent_id !== undefined)
     if (!p) continue
+    deleted.add(p.id)
     add(
       seat.org_id,
       0,
@@ -778,14 +909,14 @@ export function deletedFixtureOf(
         projects: projectsOf(p, 0),
         path: [projectById.get(p.parent_id ?? '')?.name ?? ''],
       },
-      { scope: [p.id], parent: p.parent_id, tasks: [] },
+      { scope: [p.id], parent: p.parent_id, tasks: [], back: [backOf(seat.org_id, p)] },
     )
   }
   return {
     seats,
     items,
     projects: ws.projects
-      .filter((p) => seats.some((s) => s.org_id === p.org_id))
+      .filter((p) => seats.some((s) => s.org_id === p.org_id) && !deleted.has(p.id))
       .map((p) => ({
         id: p.id,
         org_id: p.org_id,

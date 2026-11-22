@@ -1713,11 +1713,10 @@ function followerLine(notice: FollowerNotice, profileId: string): string | null 
     // project then. Every write that sets a parent keeps the subtask in the
     // parent's own sub-project (model/issues.ts sameSubProject), and a
     // reader is told only while they see the task's project then and now,
-    // so they could see that parent when it was set. A step scheduled
-    // before that rule can record a parent in another sub-project, which
-    // the reader may never have seen, so it stays anonymous without a
-    // lookup of who sees it. Messages stored before the earlier rule of
-    // one top-level project keep "a task in another project".
+    // so they could see that parent when it was set. A parent recorded in
+    // any other project stays anonymous, without a lookup of who sees it.
+    // Messages stored before the earlier rule of one top-level project keep
+    // "a task in another project".
     const key =
       note.parent.project_id === notice.project_id
         ? note.parent.key

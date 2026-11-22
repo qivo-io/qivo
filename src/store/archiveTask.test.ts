@@ -21,11 +21,11 @@ vi.mock('../lib/auth', () => ({
 const NOW = '2026-09-14T08:00:00.000Z'
 
 /* What the Archive or delete window asks of the store. The signed-in member
- * edits Work under Plan. The root task in Work has subtasks a (with aa under
- * it) and b; c is a task of its own. The server's answer to each write is
- * set per test, and no new delivery arrives, so the snapshot the store holds
- * stays the one from before the write, as when a write is accepted but its
- * delivery has not landed yet. */
+ * edits Work under Plan. The root task in Work has subtasks a and b; c is a
+ * task of its own. The server's answer to each write is set per test, and
+ * no new delivery arrives, so the snapshot the store holds stays the one
+ * from before the write, as when a write is accepted but its delivery has
+ * not landed yet. */
 describe('archiving and deleting from the Archive or delete window', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
@@ -87,13 +87,7 @@ describe('archiving and deleting from the Archive or delete window', () => {
       created_at: NOW,
       updated_at: NOW,
     })
-    snap.issues.push(
-      task('root', 1),
-      task('a', 2, 'root'),
-      task('b', 3, 'root'),
-      task('aa', 4, 'a'),
-      task('c', 5),
-    )
+    snap.issues.push(task('root', 1), task('a', 2, 'root'), task('b', 3, 'root'), task('c', 4))
     network.onUpdate.mockImplementation((ref, _args, next) => {
       if (getFunctionName(ref) === 'workspace:whole') {
         next(structuredClone(snap))

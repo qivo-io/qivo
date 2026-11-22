@@ -901,8 +901,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     await as(t, f.user).mutation(api.issues.removeLink, { org_id: f.org.id, a: id, b: other.id })
     expect(await activityFor(t, f.org.id)).toHaveLength(0)
 
-    // archived without a subtask count (subtasks can sit in projects some
-    // readers cannot access), then restored
+    // archived without a subtask count, then restored
     const p2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: p2.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: p2.id })

@@ -68,12 +68,10 @@
  * Stops. A browse or scan that spends its budget ends the page with
  * next_cursor at the last item it looked at, also with no entries. A page
  * whose rows run out of their own budget ends before the first entry whose
- * row it could not build, and past it with `reads` when that is its first
- * entry (answerOf).
+ * row it could not build (answerOf).
  * `missing` says that entries sorting before the page's last one may be
  * missing: `reads` when the budget cut an unordered range or the opening of
- * a seat's sources, or the page went past an entry whose row its budget
- * could not build, and `matches` on every search page, an admin's
+ * a seat's sources, and `matches` on every search page, an admin's
  * included, never computed from a stop, since every seat's search sources
  * hold tasks hidden from it (as main Search). */
 
@@ -141,17 +139,15 @@ type Profile = Doc<'profiles'>
  * covers every read of the call but the rows of the page's entries and
  * takes five eighths of each: 10 MiB, 20,000 documents and 2,560 ranges.
  * `build` covers those rows (answerOf) and takes two eighths more: 4 MiB,
- * 8,000 documents and 1,024 ranges. Its check comes before each row and
- * after each task a redacted row passes over to find the one it shows,
- * whose rows hold their searchable text, so the page ends before the first
- * entry whose row it ran out of reads for (answerOf). The last eighth
- * holds what runs past the last checks: the sight of the seat the call
- * opened last, a document past each other check, and the reads
- * authedQuery makes for the login. The assignee filter reads one task
- * item's assigned tasks whole past its check (scanEntry, assigneeEntries),
- * at most LIMITS.subtasks.max + 1 rows, whose searchable text at the
- * description cap in a three-byte script can pass that eighth; with
- * ordinary text it is a few dozen KB.
+ * 8,000 documents and 1,024 ranges. Its check comes before each row, so
+ * the page ends before the first entry whose row it ran out of reads for
+ * (answerOf). The last eighth holds what runs past the last checks: the
+ * sight of the seat the call opened last, a document past each other
+ * check, and the reads authedQuery makes for the login. The assignee
+ * filter reads one task item's assigned tasks whole past its check
+ * (scanEntry, assigneeEntries), at most LIMITS.subtasks.max + 1 rows, whose
+ * searchable text at the description cap in a three-byte script can pass
+ * that eighth; with ordinary text it is a few dozen KB.
  * `find` is the share of `call` the ranges that find items may spend:
  * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges hold the widest
  * browse inside the design size: a member who leads the 700 sub-projects
@@ -212,13 +208,10 @@ const LOOKUP: Reads = { ranges: 16, rows: 128, bytes: 256 << 10 }
 /** A task the search or the assignee filter found, where its item's row
  * does not show it: a subtask of a task item, or a task of a project item.
  * `key`, `title`, `archived` and `path` are the task's own; `path` is where
- * it sat, its project after the top-level or parent project, empty for a
- * redacted task item as on its row. `root_key` and `root_title` name a task
- * item's root when the task found is one of its subtasks, as the item's row
- * would, so the page can say that the root and its other subtasks come back
- * too. A redacted item's hit has neither, since its row never names the
- * root, and a hidden item's has `root_key` without `root_title`, as its row
- * shows the key without the title (hitOf). */
+ * it sat, its project after the top-level or parent project. `root_key` and
+ * `root_title` name a task item's root when the task found is one of its
+ * subtasks, as the item's row would, so the page can say that the root and
+ * its other subtasks come back too (hitOf). */
 export type DeletedHit = {
   key: string
   title: string
@@ -226,7 +219,6 @@ export type DeletedHit = {
   root_title?: string
   archived: boolean
   path: string[]
-  redacted?: true
 }
 
 /** One line of the page: an item, or a task found inside one. */
@@ -464,7 +456,7 @@ const holdsProject = (scope: Scoped | null, item: Item): boolean =>
 function holdsTasks(scope: Scoped, item: Item): boolean {
   if (scope.all) return true
   if (item.kind === 'project') return holdsProject(scope, item)
-  const ids = [item.project_id, item.parent_project_id, ...item.projects.map((p) => p.id)]
+  const ids = [item.project_id, item.parent_project_id]
   return ids.some((id) => id !== undefined && scope.ids.has(id))
 }
 
@@ -474,7 +466,7 @@ function holdsTasks(scope: Scoped, item: Item): boolean {
  * deleted project included, and a scoped browse lists a hidden item there.
  * For anyone else a task item counts only through a project its view
  * holds, so a scope never lists an item through a project hidden from
- * them, such as a redacted item's root. */
+ * them. */
 const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean =>
   scope.all ||
   seat.admin ||
@@ -554,8 +546,7 @@ type Run = {
   seats: Map<string, Seat>
   entries: Placed[]
   next: Place | null
-  /** an unordered range or a seat's opening was cut, or the page went
-   * past an entry whose row it could not build */
+  /** an unordered range or a seat's opening was cut */
   reads: boolean
   /** the page has search terms, so matches may be missing */
   matches: boolean
@@ -1585,12 +1576,9 @@ const notThisPath = () => badRequest('cursor must be the next_cursor of an earli
 
 /** The page `run` gathered: its entries with their hits, each item's row
  * once, and the cursor and notes. The rows spend `build`, checked before
- * each row and inside a redacted row's search for the task it shows
- * (deletedItemsRows.ts rowOf). Once it runs out the page ends before the
+ * each row after the first. Once it runs out the page ends before the
  * entry whose row it could not build, with next_cursor at the entry
- * before. When that is the page's first entry, whose row alone needs more
- * than `build`, the page goes past it with `reads`, rather than answer the
- * same page again on every call. */
+ * before. */
 async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Promise<DeletedPage> {
   if (head.too_wide === true)
     return {
@@ -1605,16 +1593,12 @@ async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Prom
   for (const [i, p] of run.entries.entries()) {
     let row = rows.get(p.item.id)
     if (row === undefined) {
-      const built = out()
-        ? 'unread'
-        : await rowOf(reader, p.seat.sight, p.seat.orgName, p.item, out)
-      if (built === 'unread') {
-        const last = i === 0 ? p : run.entries[i - 1]
+      if (i > 0 && out()) {
+        const last = run.entries[i - 1]
         run.next = { part: last.part, at: last.at }
-        if (i === 0) run.reads = true
         break
       }
-      row = built
+      row = await rowOf(reader, p.seat.sight, p.seat.orgName, p.item)
       rows.set(p.item.id, row)
     }
     if (row === null) continue
@@ -1634,26 +1618,21 @@ async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Prom
 }
 
 /** What an entry says of the task it found: a project item's task, or the
- * first of a task item's matches by number when its row does not show one
- * of them already (the root, or the task a redacted row shows). The root's
- * key and title come with a subtask unless the item is redacted, as its
- * row never names the root then, and a hidden item's key alone, as its row
- * shows no title. */
+ * first of a task item's matches by number when its row does not show the
+ * root among them. The root's key and title come with a subtask. */
 function hitOf(p: Pending, row: DeletedRow): DeletedHit | undefined {
   if (p.tasks.length === 0) return undefined
   if (p.item.kind === 'task' && p.tasks.some((t) => issueKey(t.num) === row.key)) return undefined
   const task = [...p.tasks].sort((x, y) => x.num - y.num)[0]
   const project = p.view.readable.find((x) => x.id === task.project_id)
   if (project === undefined) return undefined
-  const { item, view } = p
-  const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id
-  const root = view.hidden ? {} : { root_title: item.name }
+  const { item } = p
+  const subtask = item.kind === 'task' && task.task_id !== item.target_id
   return {
     key: issueKey(task.num),
     title: task.title,
-    ...(subtask ? { root_key: issueKey(item.num), ...root } : {}),
+    ...(subtask ? { root_key: issueKey(item.num), root_title: item.name } : {}),
     archived: task.archived,
-    path: view.redacted ? [] : hitPath(p.seat.sight, item, project),
-    ...(view.redacted ? { redacted: true as const } : {}),
+    path: hitPath(p.seat.sight, item, project),
   }
 }
