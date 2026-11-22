@@ -77,8 +77,9 @@ npm run verify:local
 This sequential gate checks that the installed packages match the lockfiles,
 formatting, lint, UI conventions, that every TypeScript file is in a
 typecheck, the types of the frontend, backend, desktop app, tests and tooling,
-production build and hermetic tests on four workers, as CI and the pre-push
-hook run them. The build
+production build and hermetic tests on four workers, as the pre-push hook
+runs them. CI runs the same checks, with the tests split over four jobs that
+run at the same time. The build
 typechecks the frontend before it bundles, and `biome ci` runs every Biome
 lint rule, so the gate runs neither check a second time. `npm run typecheck`
 and `npm run lint` still run them alone.
