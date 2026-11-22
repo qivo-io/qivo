@@ -1372,9 +1372,7 @@ export async function projectLevelsForOrg(
  * readers are the REST and MCP task routes' access flags (lib/core.ts
  * accessFlags), through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
- * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
- * Deleted items' steps with the step budget, which counts the ranges of
- * every read a step makes (model/deletedItems.ts TRASH_BUDGET). */
+ * once keep their own bounds: projectLevelsForPeople with LEVELS_READ. */
 export async function accessRowsOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
