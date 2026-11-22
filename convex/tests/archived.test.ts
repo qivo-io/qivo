@@ -32,7 +32,6 @@ import { issueKey } from '../lib/taskRefs'
 import { insertTask, patchTask } from '../model/descriptions'
 import {
   as,
-  copyTaskTexts,
   expectRefusal,
   NOW,
   newT,
@@ -1477,7 +1476,7 @@ describe('issues.archivedPage', () => {
     expect(await pageOf(t, member, allOf(f.org.id))).toEqual(TOO_WIDE)
   })
 
-  it('refuses a scope whose projects’ newest tasks with long text do not fit one page side by side', async () => {
+  it('refuses a scope whose projects’ newest tasks do not fit one page side by side', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     // 28 more sub-projects of TBED, 30 in all, as many as the design size
@@ -1503,11 +1502,9 @@ describe('issues.archivedPage', () => {
       }
     })
     // each holds one archived task with a description of 2,000 characters
-    // on its description row; the page's bytes are lowered to 48 KiB, which
-    // copies of the text on the task rows pass as 200 descriptions at the
-    // cap in a three-byte script passed the real 8 MiB
+    // on its description row, which no head reads, and the page's bytes are
+    // lowered to 8 KiB, which the 30 newest task rows pass
     const text = ORDINARY.repeat(25).slice(0, 2_000)
-    ARCHIVE_PAGE.bytes = 48 * 1024
     const tasks: string[] = []
     for (let batch = 0; batch < subs.length; batch += 25) {
       await t.run(async (ctx) => {
@@ -1553,23 +1550,18 @@ describe('issues.archivedPage', () => {
           bytes: m.bytesRead.used,
         }
       })
-    // with the task rows as the backfill's clear leaves them, without the
-    // text, the newest tasks of TBED's 30 sub-projects read side by side
-    // well inside the page
-    const cleared = await measured()
-    expect(cleared).toMatchObject({ rows: 25, tooWide: false })
-    expect(cleared.bytes).toBeLessThan(2 << 20)
-    // a copy of the text on each task row, the heaviest case
-    await copyTaskTexts(t, f.org.id, tasks)
+    // the newest tasks of TBED's 30 sub-projects read side by side well
+    // inside the real page
+    expect(await measured()).toMatchObject({ rows: 25, tooWide: false })
+    // 30 task rows of about 350 bytes pass the lowered page, so the page is
+    // refused
+    ARCHIVE_PAGE.bytes = 8 * 1024
     const full = await measured()
-    // 30 newest tasks of about 2.3 KB pass the page's 48 KiB, so the page
-    // is refused
     expect(full.tooWide).toBe(true)
-    expect(full.bytes).toBeLessThan(16 << 20)
     // with 18 of them archived it opens them side by side and lists
     await unarchive(t, tasks.slice(18))
     const fits = await measured()
-    console.info('archived projects side by side', { cleared, full, fits })
+    console.info('archived projects side by side', { full, fits })
     expect(fits).toMatchObject({ rows: 18, tooWide: false })
   })
 

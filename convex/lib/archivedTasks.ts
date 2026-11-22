@@ -820,16 +820,13 @@ export const ARCHIVED_PAGE_ROWS = 25
  * `subProjects` is the 200 live sub-projects one person can read, so such a
  * person's All projects merges side by side, one page, whether their grants
  * and team shares are on those sub-projects or on the top-level projects
- * above them. A task row without its text is at most lib/limits.ts
- * TASK_ROW_MAX_BYTES, so 200 heads read about 400 KB of a page's bytes
- * (ARCHIVE_PAGE.bytes), and the 267 heads of 200 sub-projects found through
- * their 67 top-level projects, merged with those top-level projects, about
- * 530 KB. With a copy of its text, at the description cap in a three-byte
- * script, a row is about 61 KB, and the heads of about 130 such projects
- * fill those bytes (convex/tests/archived.test.ts reaches that stop with
- * ordinary texts and the page's bytes lowered); 200 keeps ordinary scopes
- * whole and leaves the
- * rest to that budget. `rows` counts rows by number only, and a read takes
+ * above them. A task row is at most lib/limits.ts TASK_ROW_MAX_BYTES, so
+ * 200 heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes), and
+ * the 267 heads of 200 sub-projects found through their 67 top-level
+ * projects, merged with those top-level projects, about 530 KB, far inside
+ * those bytes, which only rows stored over the caps can fill
+ * (convex/tests/archived.test.ts reaches that stop with the page's bytes
+ * lowered). `rows` counts rows by number only, and a read takes
  * one row past it before it stops (counted): each is at most lib/limits.ts
  * PROJECT_ROW_MAX_BYTES, so 1,001 of them are at most about 6.2 MB, about
  * 4.9 MB at the largest project row the caps allow, which the page's budget

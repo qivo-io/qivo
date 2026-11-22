@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS } from '../lib/access'
+import { LIMITS } from '../lib/limits'
 import {
   firstSittingDay,
   firstSittingSince,
@@ -24,7 +25,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantIssue,
   plantProject,
   plantSeat,
@@ -458,15 +458,10 @@ describe('teamSync.lastComments', () => {
     expect(cut.rows).toHaveLength(3)
     expect(cut.rows.every((r) => r.at === NOW)).toBe(true)
 
-    // the tasks read spend the same budget, so long ones, whose task rows
-    // hold the text too, leave no comment read at all
-    for (let n = 0; n < 3; n++) {
-      await plantCopiedIssue(t, {
-        ...base,
-        assignee_id: f.admin.id,
-        description: 'x'.repeat(20_000),
-      })
-    }
+    // the tasks read spend the same budget, so tasks that pass it leave no
+    // comment read at all
+    for (let n = 0; n < 3; n++) await plantIssue(t, { ...base, assignee_id: f.admin.id })
+    LAST_COMMENTS.bytes = 1_000
     const spent = await lastComments(t, f.admin, f.org.id, [f.admin.id])
     expect(spent).toEqual({ rows: [], complete: false })
   })
@@ -504,7 +499,7 @@ describe('teamSync.lastComments', () => {
   })
 
   it('counts every task it reads toward LAST_COMMENTS.taskBytes, kept or not', async () => {
-    LAST_COMMENTS.taskBytes = 50_000
+    LAST_COMMENTS.taskBytes = 5_000
     const t = newT()
     const f = await withReadingAdmin(t)
     const hiddenSub = await plantProject(t, {
@@ -513,34 +508,30 @@ describe('teamSync.lastComments', () => {
       parent_id: f.hidden.id,
     })
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
-    // read first (index order), and not the viewer's to see, their text in
-    // the task rows too
-    for (let n = 0; n < 3; n++) {
-      await plantCopiedIssue(t, {
-        ...base,
-        project_id: hiddenSub.id,
-        status: 'todo',
-        description: 'x'.repeat(20_000),
-      })
-    }
+    // read first (index order), and not the viewer's to see
+    const hidden: string[] = []
+    for (let n = 0; n < 3; n++)
+      hidden.push((await plantIssue(t, { ...base, project_id: hiddenSub.id, status: 'todo' })).id)
     const shown = await plantIssue(t, { ...base, status: 'todo' })
-    // the hidden tasks count at their fixed size for the viewer, so their
-    // text moves nothing and the scan reaches the shown task
+    // the hidden tasks, which it leaves out, count at their fixed size for
+    // the viewer, lib/limits.ts TASK_ROW_MAX_BYTES each, which pass the
+    // budget before the scan reaches the shown task
     const viewer = await lastComments(t, f.viewer, f.org.id, [f.user.id])
-    expect(viewer).toEqual({ rows: [{ issue_id: shown.id, at: null }], complete: true })
-    // the hidden project's lead keeps the tasks the budget let it read
+    expect(viewer).toEqual({ rows: [], complete: false })
+    // the hidden project's lead reads them at their own size and reaches it
     const lead = await lastComments(t, f.user, f.org.id, [f.user.id])
-    expect(lead.complete).toBe(false)
-    expect(lead.rows).toHaveLength(3)
-    expect(lead.rows.map((r) => r.issue_id)).not.toContain(shown.id)
+    expect(lead.complete).toBe(true)
+    expect(lead.rows.map((r) => r.issue_id).sort()).toEqual([...hidden, shown.id].sort())
   })
 
-  it("stays under Convex's read limit with long tasks and comments, cut short", async () => {
+  it("stays under Convex's read limit with long comments, cut short", async () => {
     const t = newT({ transactionLimits: { bytesRead: 16 * 2 ** 20 } })
+    // the comment reads lowered to 6 MiB, which the comments pass
+    LAST_COMMENTS.bytes = 6 * 2 ** 20
     const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
-    // 430 open tasks with 20,000 characters each in their description and
-    // their latest comment, about 17 MB together
+    // 430 open tasks whose latest comment holds 20,000 characters, about
+    // 8.6 MB together
     for (let chunk = 0; chunk < 430; chunk += 86) {
       await t.run(async (ctx) => {
         for (let n = chunk; n < chunk + 86; n++) {
@@ -549,7 +540,6 @@ describe('teamSync.lastComments', () => {
             id,
             num: 10_000 + n,
             title: 'Long task',
-            description: 'd'.repeat(20_000),
             status: 'progress',
             priority: 'medium',
             paused: false,
@@ -635,9 +625,11 @@ describe('teamSync.lastComments', () => {
   })
 
   it('answers the same whatever the size of tasks in projects the caller cannot see', async () => {
-    LAST_COMMENTS.taskBytes = 50_000
+    // between three hidden tasks at their real size, short or long, and at
+    // their fixed size
+    LAST_COMMENTS.taskBytes = 3_000
     const answers: unknown[] = []
-    for (const copied of [false, true]) {
+    for (const long of [false, true]) {
       const t = newT()
       const f = await withReadingAdmin(t)
       const hiddenSub = await plantProject(t, {
@@ -647,16 +639,16 @@ describe('teamSync.lastComments', () => {
       })
       const base = { org_id: f.org.id, assignee_id: f.user.id, status: 'todo' as const }
       for (let n = 0; n < 3; n++) {
-        const hidden = { ...base, project_id: hiddenSub.id, num: 100 + n }
-        if (copied) await plantCopiedIssue(t, { ...hidden, description: 'x'.repeat(20_000) })
-        else await plantIssue(t, hidden)
+        // a title at the cap in a script that takes three bytes a character
+        const title = long ? '漢'.repeat(LIMITS.title.max) : 'Hidden'
+        await plantIssue(t, { ...base, project_id: hiddenSub.id, num: 100 + n, title })
       }
       await plantIssue(t, { ...base, project_id: f.sub.id, num: 200 })
       const got = await lastComments(t, f.viewer, f.org.id, [f.user.id])
       answers.push({ rows: got.rows.length, complete: got.complete })
     }
     expect(answers[1]).toEqual(answers[0])
-    expect(answers[0]).toEqual({ rows: 1, complete: true })
+    expect(answers[0]).toEqual({ rows: 0, complete: false })
   })
 
   it('cuts the answer short past LAST_COMMENTS.projects, the tasks of projects past it without a row', async () => {

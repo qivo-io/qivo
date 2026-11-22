@@ -88,12 +88,11 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * 16 MiB with few of those rows; a person with thousands of those rows near
  * the name caps can still make a read of links pass it. The shared reads and
  * the instance's own (at most 193 ranges and 705 documents) count past
- * `ranges` and `documents` too, under 4,096 and 32,000. At the
- * 20,000-character description cap in a three-byte script, 100 subtasks fit
- * in `bytes` with the task, its text and its parent, and 100 linked groups,
- * which also read their first counting subtask (groupsOf), fit in
- * `linkBytes`. convex/tests/taskWindow.test.ts ("real limits") checks these
- * budgets with ordinary text.
+ * `ranges` and `documents` too, under 4,096 and 32,000. At the text and
+ * title caps, 100 subtasks fit in `bytes` with the task, its text and its
+ * parent, and 100 linked groups, which also read their first counting
+ * subtask (groupsOf), fit in `linkBytes`. convex/tests/taskWindow.test.ts
+ * ("real limits") checks these budgets with ordinary text.
  *
  * `attachments` stops the attachment read: three times
  * LIMITS.attachments.max, for the counted rows, the description images a

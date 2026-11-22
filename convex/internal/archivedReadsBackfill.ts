@@ -67,9 +67,10 @@ import { audit as writeAudit } from '../model/admin'
 import { scheduleTaskReads } from '../model/messages'
 
 /** Archived tasks one page reads, the bytes it may read, and how many of
- * the tasks found a result lists. A page reads each task, up to about
- * 60 KB with a long description, and one index range for each, so 200
- * stay far inside Convex's 4,096 ranges. Tests lower them. */
+ * the tasks found a result lists. A page reads each task, at most
+ * lib/limits.ts TASK_ROW_MAX_BYTES unless stored before the caps, and one
+ * index range for each, so 200 stay far inside Convex's 4,096 ranges.
+ * Tests lower them. */
 export const PAGE = { tasks: 200, bytes: 4 * MIB, listed: 20 }
 
 /** How long one call of run goes on before it answers where to go on from.

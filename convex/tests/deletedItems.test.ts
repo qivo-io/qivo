@@ -94,9 +94,8 @@ declare class Blob {
 installTrashTimers()
 
 /** The uuids of `n` subtasks of `parent` in project `projectId`, each with
- * `description` in its description row and in its task row, planted 100 to
- * a transaction so a large set stays within the write limits, in the order
- * planted. */
+ * `description` in its description row, planted 100 to a transaction so a
+ * large set stays within the write limits, in the order planted. */
 async function plantChildren(
   t: T,
   parent: Doc<'issues'>,
@@ -108,7 +107,7 @@ async function plantChildren(
   for (let from = 0; from < n; from += 100)
     await t.run(async (ctx) => {
       for (const [i, id] of ids.slice(from, from + 100).entries()) {
-        const _id = await insertTask(
+        await insertTask(
           ctx.db,
           {
             id,
@@ -126,8 +125,6 @@ async function plantChildren(
           },
           'restore',
         )
-        // a copy of the text on the task row, the heaviest case
-        await ctx.db.patch(_id, { description })
       }
     })
   return ids
@@ -432,14 +429,15 @@ describe('moving a task to Deleted items', () => {
   })
 
   it("leaves the subtasks' rows to steps once the tasks it read have spent the delete's bytes", async () => {
-    // a read limit lowered with the step's bytes, so the delete must read no
-    // description row, because each of the 100 is as large as its task and
-    // its delete reads it again
+    // a read limit lowered with the step's bytes, so the delete must leave
+    // the description rows to its steps, because it reads each of the 100
+    // to store its text, and its delete would read it again
     const t = newT({ transactionLimits: { bytesRead: 700 * 1024 } })
     TRASH_BUDGET.bytes = 300 * 1024
     const f = await withReadingAdmin(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // 100 subtasks of about 2 KB pass the bytes the delete's own call reads
+    // 100 subtasks with texts of about 2 KB pass the bytes the delete's own
+    // call reads
     const description = 'Spec line. '.repeat(180)
     const ids = await plantChildren(t, root, f.sub.id, LIMITS.subtasks.max, description)
     const notes = await t.run(async (ctx) => {

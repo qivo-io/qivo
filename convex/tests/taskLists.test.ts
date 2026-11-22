@@ -32,7 +32,6 @@ import {
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantIssue,
   plantProject,
   plantSeat,
@@ -857,26 +856,21 @@ describe('archived task lists page one project with a cursor', () => {
 
   it('ends a page before a group whose subtasks would pass its bytes', async () => {
     const fx = await setup(newT({ transactionLimits: { bytesRead: 1 << 20 } }))
-    ARCHIVE_PAGE.bytes = 512 << 10
-    ARCHIVE_RESERVE.bytes = 64 << 10
-    const text = 'x'.repeat(10_000)
-    const tasks = await plantMany(fx, 45, {
-      project_id: fx.sub.id,
-      archived_at: day(9),
-      description: text,
-    })
+    ARCHIVE_PAGE.bytes = 32 << 10
+    ARCHIVE_RESERVE.bytes = 4 << 10
+    const tasks = await plantMany(fx, 45, { project_id: fx.sub.id, archived_at: day(9) })
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
       archived_at: day(8),
       title: 'Group',
     })
-    // 600 KB under one group, which the 45 tasks before it leave no room for
+    // 60 subtasks under one group, which the 45 tasks before it leave no
+    // room for
     const kids = await plantMany(fx, 60, {
       project_id: fx.sub.id,
       archived_at: day(7),
       parent_id: group.id,
-      description: text,
       start_week: '2026-03-02',
       end_week: '2026-03-09',
     })
@@ -967,8 +961,7 @@ describe('archived task lists page one project with a cursor', () => {
   })
 
   it('refuses a scope too wide to open project by project, for an admin as for anyone', async () => {
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 100 << 10 } }))
-    ARCHIVE_RESERVE.bytes = 16 << 10
+    const fx = await setup()
     const subs = [fx.sub.id, fx.sub2.id]
     for (let i = 0; i < 10; i++) {
       const sub = await plantProject(fx.t, {
@@ -979,22 +972,16 @@ describe('archived task lists page one project with a cursor', () => {
       })
       subs.push(sub.id)
     }
-    // one 10 KB task per sub-project, 120 KB in all, a day apart, its text
-    // in the task row too
+    // one task per sub-project, a day apart
     const tasks = []
-    for (const [i, project_id] of subs.entries()) {
+    for (const [i, project_id] of subs.entries())
       tasks.push(
-        await plantCopiedIssue(fx.t, {
-          org_id: fx.org.id,
-          project_id,
-          archived_at: day(10 + i),
-          description: 'x'.repeat(10_000),
-        }),
+        await plantIssue(fx.t, { org_id: fx.org.id, project_id, archived_at: day(10 + i) }),
       )
-    }
-    // the whole page fits seven of the 10 KB tasks side by side, not twelve,
-    // so the agent and the admin, who both read TBED and neither the
+    // a page lowered to 2 KiB fits a few of the tasks side by side, not
+    // twelve, so the agent and the admin, who both read TBED and neither the
     // organization's archive, are refused
+    ARCHIVE_PAGE.bytes = 2 * 1024
     for (const callerId of [fx.agent.id, fx.admin.id])
       for (const surface of ['rest', 'mcp'] as const)
         await refused(
@@ -1470,27 +1457,21 @@ describe('a single-task read of an archived group', () => {
     ).toEqual({ next_cursor: null, subtasks: [] })
   })
 
-  it('reads and archives a group whose long subtasks pass what a request may read', async () => {
-    // a request may read 3 MiB, room for the archive's patch of each active
-    // subtask, which needs two rows at Convex's document size limit, and
-    // the walk keeps 1 MiB of it back for the reads after it
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 3 << 20 } }))
-    TASK_READ_RESERVE.bytes = 1 << 20
+  it('reads and archives a group whose subtasks pass what a request may read', async () => {
+    // a request may read 2 MiB and 160 KiB, room for the archive's patch of
+    // each active subtask, which needs two rows at Convex's document size
+    // limit, and the walk keeps 2 MiB and 64 KiB of it back for the reads
+    // after it
+    const fx = await setup(newT({ transactionLimits: { bytesRead: (2 << 20) + (160 << 10) } }))
+    TASK_READ_RESERVE.bytes = (2 << 20) + (64 << 10)
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
-      title: 'Long group',
+      title: 'Large group',
     })
-    // 30 active and 300 archived subtasks of 10 KB, 3.3 MB in all, more
-    // than the request may read
-    const long = 'x'.repeat(10_000)
-    await plantMany(fx, 30, { project_id: fx.sub.id, parent_id: group.id, description: long })
-    await plantMany(fx, 300, {
-      project_id: fx.sub.id,
-      parent_id: group.id,
-      archived_at: day(9),
-      description: long,
-    })
+    // 30 active and 300 archived subtasks, more than the walk may read
+    await plantMany(fx, 30, { project_id: fx.sub.id, parent_id: group.id })
+    await plantMany(fx, 300, { project_id: fx.sub.id, parent_id: group.id, archived_at: day(9) })
     const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
       callerId: fx.agent.id,
       access: 'write',

@@ -87,10 +87,11 @@ import { type TaskRow, taskFields } from './workspaceParts'
 export type Reads = { bytes: number; documents: number; ranges: number }
 
 /** What a read keeps back for each document it may take before it looks at
- * the request's reads again: a task row that still holds a copy of its
- * text, at the description cap in a three-byte script (about 62 KB). Other
- * documents a view reads by the row are smaller; only a row stored over
- * the caps is larger. */
+ * the request's reads again: a description row or a comment at the text cap
+ * in a three-byte script, about 61 KB. A task row a write makes takes at
+ * most lib/limits.ts TASK_ROW_MAX_BYTES, and the other documents a view
+ * reads by the row are smaller too; only a row stored over the caps is
+ * larger. */
 export const ROW_BYTES = 64 * 1024
 
 /** One task row, as a read keeps room for it. */
@@ -111,9 +112,8 @@ const rangesOf = (n: number): Reads => ({ bytes: 0, documents: 0, ranges: n })
 /** The real bytes a view's reads stop at, whatever the fixed charges say:
  * Convex's 16 MiB less 2 MiB for what one step can read past its last look,
  * an access question past PROJECT_ASK or a row stored over the caps. Only a
- * row past the caps, a hidden task's copy of its text and a task the
- * relation pickers read again that grew since a batch weighed it
- * (lib/relationPicker.ts scanScope) can make the
+ * row past the caps and a task the relation pickers read again that grew
+ * since a batch weighed it (lib/relationPicker.ts scanScope) can make the
  * real bytes pass a view's budget first, so only those reach this stop.
  * The last, far past ordinary text, can also pass Convex's own limit
  * within one step. */

@@ -479,32 +479,6 @@ describe('internal/overCapRows', () => {
     ).rejects.toThrow(/takes the cursor a page of it answered/)
   })
 
-  it('skips a task whose task row holds a different text, and keeps that fresher text', async () => {
-    const t = newT()
-    const f = await setup(t)
-    // the task row alone holds an untrimmed edit
-    const task = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      description: 'Stale row  ',
-    })
-    await t.run((ctx) => ctx.db.patch(task._id, { description: 'Fresh edit  ' }))
-    expect(summary((await fix(t, true)).rows)).toEqual(['issues.description skipped'])
-    expect(summary((await fix(t, false)).rows)).toEqual(['issues.description skipped'])
-    // describe on its own leaves it too
-    await t.mutation(internal.internal.overCapRows.describe, { id: task._id })
-    const stored = await t.run(async (ctx) => ({
-      task: (await ctx.db.get(task._id))?.description,
-      row: (
-        await ctx.db
-          .query('issue_descriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-          .first()
-      )?.description,
-    }))
-    expect(stored).toEqual({ task: 'Fresh edit  ', row: 'Stale row  ' })
-  })
-
   it('walks every page of a phase', async () => {
     const t = newT()
     const f = await setup(t)

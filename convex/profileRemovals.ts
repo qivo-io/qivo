@@ -17,8 +17,8 @@
  * one twice. A step stops when it has
  * cleared REMOVAL_BUDGET.rows rows or about REMOVAL_BUDGET.bytes of
  * documents, but always clears at least one row. The byte budget matters
- * because comment bodies and task descriptions are large. They hold up to
- * TEXT_MAX characters (lib/limits.ts, at most about 60 KB stored). The finish
+ * because comment bodies are large. They hold up to TEXT_MAX characters
+ * (lib/limits.ts, at most about 60 KB stored). The finish
  * phase checks every range once more and starts again from the first phase
  * if a row is left.
  *

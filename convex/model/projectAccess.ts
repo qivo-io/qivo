@@ -383,8 +383,8 @@ export async function withinRoom<T>(step: () => Promise<T>): Promise<T> {
 }
 
 /* How many tasks the scan for held work reads between two room checks: ten
- * descriptions at their cap (lib/limits.ts TEXT_MAX) stay well under the
- * 5% of Convex's 16 MiB a removal keeps. */
+ * task rows, each at most lib/limits.ts TASK_ROW_MAX_BYTES, stay well under
+ * the 5% of Convex's 16 MiB a removal keeps. */
 const TASK_GUARD_ROWS = 10
 
 /* How many small rows (projects, memberships, profiles) a removal reads

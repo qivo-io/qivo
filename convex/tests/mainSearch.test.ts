@@ -33,12 +33,10 @@ import { PROJECT_SIGHT } from '../model/projectNav'
 import { SHAPES, type Shape } from './accessShapes.setup'
 import {
   as,
-  copyTaskTexts,
   expectRefusal,
   NOW,
   newT,
   type OrgFixture,
-  plantCopiedIssue,
   plantHiddenSibling,
   plantIssue,
   plantLogin,
@@ -201,10 +199,9 @@ async function broadSeats(t: T, login: string, n: number) {
   return built.sort((a, b) => (a.org < b.org ? -1 : 1))
 }
 
-/** Sets the text of task `task`, on its row and its description row. */
+/** Sets the text of task `task` on its description row. */
 const setText = (t: T, task: Doc<'issues'>, description: string) =>
   t.run(async (ctx) => {
-    await ctx.db.patch(task._id, { description })
     const row = await ctx.db
       .query('issue_descriptions')
       .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
@@ -570,8 +567,7 @@ describe('seats', () => {
       await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })
     }
     const without = await searchRun(t, seats, { text: 'gearbox' })
-    // hidden matches in the first six organizations in seat order, with
-    // their text in the task rows too, the heaviest case
+    // hidden matches in the first six organizations in seat order
     for (const org of [...orgs].sort().slice(0, 6)) {
       const root = await plantProject(t, { org_id: org })
       const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
@@ -581,7 +577,6 @@ describe('seats', () => {
         (i) => ({ org_id: org, project_id: hidden.id, description: `${prose(300 + i)} gearbox` }),
         8,
       )
-      await copyTaskTexts(t, org)
     }
     const withHidden = await searchRun(t, seats, { text: 'gearbox' })
     expect(withHidden.page).toEqual(without.page)
@@ -732,54 +727,6 @@ describe('main Search across seats', () => {
     })
     expect(await answer()).toEqual(absent)
     expect(absent).toEqual({ rows: [], coverage: COMPLETE, more: false })
-  })
-
-  it('counts a seat whose first number lookup the real limit refuses only when it matched the names of projects it sees', async () => {
-    const t = newT()
-    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
-    const orgs: string[] = []
-    const seats: Doc<'profiles'>[] = []
-    for (let i = 0; i < 8; i++) {
-      const org = await plantOrg(t, i)
-      orgs.push(org)
-      seats.push(
-        await plantSeat(t, {
-          org_id: org,
-          auth_user_id: login,
-          org_role: 'guest',
-          accepted_at: NOW,
-        }),
-      )
-    }
-    // the first seat's numbers name legacy rows near 1 MiB in a project none
-    // of them sees, which spend the real limit while each lookup counts as
-    // LOOKUP, so no later seat's first lookup fits. The task rows hold the
-    // text, the heaviest case.
-    // Ranges for the ten or so lookups that spend the real limit, more than
-    // the default budget gives each of eight seats.
-    MAIN_SEARCH.ranges = 2_000
-    const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
-    const [first, ...later] = [...orgs].sort()
-    const root = await plantProject(t, { org_id: first })
-    const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
-    for (const num of nums)
-      await plantCopiedIssue(t, {
-        org_id: first,
-        project_id: hidden.id,
-        num,
-        description: 'x'.repeat(900_000),
-      })
-    const text = nums.map((num) => `QN-${num}`).join(' ')
-    expect((await searchRun(t, seats, { text })).page.coverage).toEqual(stopped('reads', 1, 8))
-    // the next three seats see a project each, whose names they match with
-    // no read, so they count as searched although no read of theirs fits
-    for (const org of later.slice(0, 3)) {
-      const shared = await plantProject(t, { org_id: org })
-      const seat = seats.find((s) => s.org_id === org)
-      if (seat === undefined) throw new Error('no seat')
-      await grant(t, shared, seat)
-    }
-    expect((await searchRun(t, seats, { text })).page.coverage).toEqual(stopped('reads', 4, 8))
   })
 
   it('keeps later seats and coverage alike whatever hidden tasks earlier organizations hold', async () => {
@@ -1409,8 +1356,6 @@ describe('main Search at Convex’s limits', () => {
       num: 60_000 + i,
       description: `${notes} gearbox`,
     }))
-    // with the text in the task rows too, which reads the most
-    await copyTaskTexts(t, f.org.id)
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
       console.log('300 matches', who.name, run.read, run.searches, run.page.rows.length)
@@ -1446,9 +1391,6 @@ describe('main Search at Convex’s limits', () => {
         }),
         1,
       )
-    // the task rows hold the text too, the heaviest case the fixtures plant
-    // (helpers.setup.ts copyTaskTexts)
-    await copyTaskTexts(t, f.org.id)
     const run = await searchRun(t, [f.admin], { text: 'zebra' })
     console.log('24 rows near 1 MiB', run.read, run.searches, run.page.rows.length)
     expect(run.page.coverage).toEqual(stopped('reads'))

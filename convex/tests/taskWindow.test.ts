@@ -718,42 +718,6 @@ describe('what a read reveals', () => {
   })
 })
 
-describe('the text', () => {
-  it('comes from the description row, and from the task row only for a task without one', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const task = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      description: 'Shown text',
-    })
-    const ask = async () => {
-      const answer = await as(t, f.guest).query(api.taskWindow.task, {
-        org_id: f.org.id,
-        ref: task.id,
-      })
-      if (answer.state !== 'ok') throw new Error(answer.state)
-      return answer.task.description
-    }
-    // the task row holds a text that differs from its description row
-    await t.run((ctx) => ctx.db.patch(task._id, { description: 'Stale copy' }))
-    expect(await ask()).toBe('Shown text')
-    // with the task row's copy unset
-    await t.run((ctx) => ctx.db.patch(task._id, { description: undefined }))
-    expect(await ask()).toBe('Shown text')
-    // a task the backfill has not given a row
-    await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query('issue_descriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-        .unique()
-      if (row !== null) await ctx.db.delete(row._id)
-      await ctx.db.patch(task._id, { description: 'Task row text' })
-    })
-    expect(await ask()).toBe('Task row text')
-  })
-})
-
 describe('attachments', () => {
   it('lists files and description images, those taken out within the day too, and counts the rest', async () => {
     const t = newT()
@@ -799,15 +763,13 @@ describe('attachments', () => {
 let nextNum = 50_000
 
 /** Plants `n` tasks with `fields(i)` in the fixture's FW, `each` a
- * transaction, through raw inserts: with the text only in a description row
- * when `rows`, else as older code stored them, with the text only on the
- * task row. */
+ * transaction, through raw inserts, with the text in a description row. */
 async function plantMany(
   t: T,
   f: OrgFixture,
   n: number,
   fields: (i: number) => Partial<Doc<'issues'>>,
-  o: { each: number; rows: boolean },
+  o: { each: number },
 ): Promise<Doc<'issues'>[]> {
   const planted: Doc<'issues'>[] = []
   for (let from = 0; from < n; from += o.each)
@@ -830,15 +792,14 @@ async function plantMany(
             ...fields(i),
           }
           const { description, ...task } = doc
-          const _id = await ctx.db.insert('issues', o.rows ? task : doc)
-          if (o.rows)
-            await ctx.db.insert('issue_descriptions', {
-              issue_id: doc.id,
-              description,
-              org_id: doc.org_id,
-              project_id: doc.project_id,
-              archived_at: doc.archived_at,
-            })
+          const _id = await ctx.db.insert('issues', task)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            description,
+            org_id: doc.org_id,
+            project_id: doc.project_id,
+            archived_at: doc.archived_at,
+          })
           out.push((await ctx.db.get(_id)) as Doc<'issues'>)
         }
         return out
@@ -887,7 +848,6 @@ describe('real limits', () => {
     const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST, archived_at: NOW }), {
       each: 1,
-      rows: true,
     })
     await t.run(async (ctx) => {
       for (let i = 0; i < LIMITS.labels.max; i++)
@@ -910,10 +870,9 @@ describe('real limits', () => {
   it('reads 100 subtasks, the most a task holds, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1 })
     await plantMany(t, f, LIMITS.subtasks.max, (i) => ({ ...ordinary(i), parent_id: task.id }), {
       each: 100,
-      rows: true,
     })
     const { answer, read } = await taskRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
@@ -926,8 +885,8 @@ describe('real limits', () => {
   it('reads 100 links to leaves, the most a task holds, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
-    const leaves = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1 })
+    const leaves = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100 })
     await linkAll(t, f, task, leaves)
     const { answer, read } = await linksRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
@@ -940,11 +899,10 @@ describe('real limits', () => {
   it('reads 100 links to groups, each with a subtask, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
-    const groups = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1 })
+    const groups = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100 })
     await plantMany(t, f, groups.length, (i) => ({ ...ordinary(i), parent_id: groups[i].id }), {
       each: 100,
-      rows: true,
     })
     await linkAll(t, f, task, groups)
     const { answer, read } = await linksRead(t, f, task.id)
@@ -1004,13 +962,13 @@ describe('real limits', () => {
               level: 'viewer',
             })
       })
-    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1 })
     const ends = await plantMany(
       t,
       f,
       projects.length,
       (i) => ({ ...ordinary(i), project_id: projects[i].id }),
-      { each: 3, rows: true },
+      { each: 3 },
     )
     await linkAll(t, f, task, ends)
     await share(0, OWN_READS.projectShares + 1)
@@ -1032,34 +990,12 @@ describe('real limits', () => {
     expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
   })
 
-  it('stops at older link ends near 900 KB with complete false, the links read, and no error', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const legacy = 'o'.repeat(900 * 1024)
-    const ends = await plantMany(t, f, 5, () => ({ description: legacy }), {
-      each: 5,
-      rows: false,
-    })
-    await linkAll(t, f, task, ends)
-    // room for three bodies near 900 KB whole and about half a MiB left
-    TASK_WINDOW.linkBytes = 3.2 * MIB
-    const { answer, read } = await linksRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.complete).toBe(false)
-    expect(answer.links.length).toBeGreaterThan(1)
-    expect(answer.links.length).toBeLessThan(5)
-    expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
-    // past the budget by one row at most
-    expect(read).toBeLessThanOrEqual(TASK_WINDOW.linkBytes / MIB + 1)
-  })
-
   it('answers n subtasks and n links complete at TASK_WINDOW.rows = n, and n + 1 incomplete', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     TASK_WINDOW.rows = 3
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const kids = await plantMany(t, f, 3, () => ({ parent_id: task.id }), { each: 4, rows: true })
+    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1 })
+    const kids = await plantMany(t, f, 3, () => ({ parent_id: task.id }), { each: 4 })
     await linkAll(t, f, task, kids)
     const subtasks = async () => {
       const answer = await taskRead(t, f, task.id)
@@ -1075,37 +1011,10 @@ describe('real limits', () => {
     expect(await links()).toMatchObject({ complete: true, links: { length: 3 } })
     const [fourth] = await plantMany(t, f, 1, () => ({ parent_id: task.id }), {
       each: 1,
-      rows: true,
     })
     await linkAll(t, f, task, [fourth])
     expect(await subtasks()).toMatchObject({ complete: false, rows: { length: 3 } })
     expect(await links()).toMatchObject({ complete: false, links: { length: 3 } })
-  })
-
-  it('leaves out a link end whose group fact the budget leaves unread, and says so', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const groups = await plantMany(t, f, 3, () => ({}), { each: 3, rows: true })
-    // each group's subtask is an older row near 900 KB, so the first two
-    // read spend the budget
-    const legacy = 'o'.repeat(900 * 1024)
-    await plantMany(t, f, 3, (i) => ({ description: legacy, parent_id: groups[i].id }), {
-      each: 1,
-      rows: false,
-    })
-    await linkAll(t, f, task, groups)
-    // room for the three small ends, and for one group check while any
-    // bytes are unspent
-    TASK_WINDOW.linkBytes = MIB + 200 * 1024
-    const { answer } = await linksRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.complete).toBe(false)
-    expect(answer.tasks).toEqual([
-      expect.objectContaining({ has_subtasks: true }),
-      expect.objectContaining({ has_subtasks: true }),
-    ])
-    expect(answer.links.map((link) => link.target_id)).toEqual(answer.tasks.map((row) => row.id))
   })
 
   it('answers an archived task under a parent of 70 sub-projects within the index ranges', async () => {
@@ -1151,40 +1060,11 @@ describe('real limits', () => {
     ).toMatchObject({ state: 'archived', task: { id: task.id, is_group: false } })
   })
 
-  it('answers complete for exactly the subtasks the budget holds, and incomplete for one more', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const legacy = 'o'.repeat(900 * 1024)
-    await plantMany(t, f, 3, () => ({ description: legacy, parent_id: task.id }), {
-      each: 1,
-      rows: false,
-    })
-    // room for three bodies near 900 KB whole and about half a MiB left,
-    // so the room for whole bodies runs out on the third subtask
-    TASK_WINDOW.bytes = 3.2 * MIB
-    const three = await taskRead(t, f, task.id)
-    if (three.answer.state !== 'ok') throw new Error(three.answer.state)
-    expect(three.answer.subtasks).toMatchObject({ complete: true, rows: { length: 3 } })
-    await plantMany(t, f, 1, () => ({ description: legacy, parent_id: task.id }), {
-      each: 1,
-      rows: false,
-    })
-    const four = await taskRead(t, f, task.id)
-    if (four.answer.state !== 'ok') throw new Error(four.answer.state)
-    expect(four.answer.subtasks).toMatchObject({ complete: false, rows: { length: 3 } })
-    expect(four.answer.task.has_subtasks).toBe(true)
-    // the list's own complete says so, and the task row no more
-    expect(four.answer.task).not.toHaveProperty('has_hidden_subtasks')
-    // the look for a fourth reads it whole, one body past the budget at most
-    expect(four.read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
-  })
-
   it('stops the subtask read at TASK_WINDOW.documents', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    await plantMany(t, f, 100, () => ({ parent_id: task.id }), { each: 50, rows: true })
+    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1 })
+    await plantMany(t, f, 100, () => ({ parent_id: task.id }), { each: 50 })
     TASK_WINDOW.documents = 60
     const { answer, documents } = await taskRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)

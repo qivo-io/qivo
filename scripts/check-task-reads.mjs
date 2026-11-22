@@ -4,8 +4,8 @@
  * convex/internal/descriptionsBackfill.ts. Task descriptions are stored
  * in issue_descriptions (schema.ts), and every reader takes a task's text
  * from model/descriptions.ts (descriptionOf, withText, descriptionsOf,
- * textsOf), which falls back to issues.description only for a task without
- * a row. Writers do not set issues.description, and the backfill's clear
+ * textsOf), which reads the description row alone. Writers do not set
+ * issues.description, and the backfill's clear
  * unsets copies that task rows still hold (model/descriptions.ts
  * clearTaskCopy), so a direct read would silently read nothing.
  *
@@ -37,8 +37,8 @@
  * check cannot tell such a type from any other with a `description`, and a
  * test for the task's other fields would also catch a write's fields
  * (model/descriptions.ts TaskFields), which hold the text the write sets.
- * The readers' tests clear issues.description and check what those paths
- * send (convex/tests/descriptionReaders.test.ts).
+ * The readers' tests plant the text in the description rows alone and check
+ * what those paths send (convex/tests/descriptionReaders.test.ts).
  *
  * It prints nothing when it passes. It fails when it finds no read in
  * model/descriptions.ts, which would mean it reads none. Pass the path of a
