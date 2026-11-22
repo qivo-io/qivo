@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* Fails when this checkout tracks AGENTS.md or CLAUDE.md at its root, because
  * the maintainers' agent instructions must stay out of this public repository
- * (agent-files.mjs). CI's quality job and verify:static run it. It checks
+ * (agent-files.mjs). CI and verify:static run it. It checks
  * whenever it runs, with no test for being the entry module, so no way of
  * starting it can skip the check. */
 import { trackedAgentFiles } from './agent-files.mjs'

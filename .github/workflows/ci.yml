@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: ['**']
+    branches: [main]
 
 # One in-flight run per ref; a new push supersedes the previous run.
 concurrency:
@@ -14,9 +14,12 @@ permissions:
   contents: read
 
 jobs:
-  # Keep the published check name stable.
-  quality:
-    runs-on: ubuntu-latest
+  static:
+    # The repository variable CI_RUNNER names the runner, such as boat-large
+    # for a Boat sandbox (https://docs.boat.dev/ci). Without it, the jobs
+    # run on GitHub's runner. A pull request from a fork always does, since
+    # Boat refuses a run by a user who is not on the account's list.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     # A slow runner can run every test file several times slower than
     # usual, and a job stopped at its limit cancels main CI and skips the
     # staging deploy. 25 minutes lets such a runner finish and still stops a
@@ -88,6 +91,53 @@ jobs:
       - name: Typecheck frontend and build
         run: npm run build
 
+  tests:
+    name: tests (${{ matrix.shard }}/4)
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          check-latest: true
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Install desktop runtime dependencies
+        run: npm run desktop:install
+
+      # scripts/vercel-routing.test.mjs checks the built pages only when
+      # dist/ exists.
+      - name: Build
+        run: npm run build
+
       # Includes the Convex function-surface manifest and wrapper checks.
       - name: Test
-        run: npm test -- --maxWorkers=4
+        run: npm test -- --maxWorkers=4 --shard=${{ matrix.shard }}/4
+
+  # Keep the published check name stable.
+  quality:
+    # A required check that is skipped counts as passed, so this job also
+    # runs, and fails, when a part failed or the run was cancelled.
+    if: ${{ always() }}
+    needs: [static, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every part passed
+        if: ${{ needs.static.result != 'success' || needs.tests.result != 'success' }}
+        run: exit 1
