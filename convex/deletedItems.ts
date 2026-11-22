@@ -26,11 +26,7 @@
  * per item and never throw for one item's problem.
  *
  * step runs one bounded step of an item's job, whatever its phase (moving,
- * restoring or purging), and schedules the next. recover (every minute,
- * crons.ts) restarts a job whose step stopped, at half the budget each
- * time, and after its last retry makes an item stuck, or sends a restore
- * back to moving so the item is ready again, or, once a restored project is
- * live, leaves the tasks still waiting for their parent without it. expire
+ * restoring or purging), and schedules the next. expire
  * (daily at 03:45 UTC) starts purging the ready items whose 30 days are
  * over, one bounded page per run, and schedules the next page while more
  * are due. Items keep expiring while their organization is read-only

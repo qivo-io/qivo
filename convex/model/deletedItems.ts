@@ -1,106 +1,10 @@
-/* Deleted items, the trash of tasks and projects.
- *
- * Deleting a task or a project moves it, with every row that travels with
- * it, out of the live tables into deleted_rows (schema.ts), so every reader
- * already treats it as gone. One deleted_items row describes the deletion.
- * Messages are deleted, not stored. Restore writes the rows back; the
- * nightly expiry (TRASH_DAYS after the deletion) and an admin's Delete now
- * purge them for good.
- *
- * Hide first, then drain. A task item's user transaction stores every task
- * row at once (moveTasksToTrash); the tasks' messages, comments, label
- * assignments, follows, attachments and links follow in the same
- * transaction when they fit, otherwise in steps. A project item's user
- * transaction stores the project rows (moveProjectToTrash), at most
- * LIMITS.projectDeleteSubProjects.max + 1, which hides every task, milestone and grant
- * in them, and steps then move the milestones and grants, and each task:
- * relation rows, messages, then the task row. A task of a project item has
- * its parent and subtasks in its own sub-project. While an item drains, its
- * leftover rows name a task or project that is absent, so readers skip them.
- *
- * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
- * write the rows back while what they name is still absent, a project
- * item's milestones among them, and one transaction at the end, the reveal,
- * writes the item's root rows (a task item's tasks; a project item's
- * projects), so the work appears complete in one delivery. A project item's
- * grants and team grants, with the reach rows of its grants, shares and
- * leads (model/projectNav.ts), are written back before the reveal too
- * (restoreAccess), and their stored rows go after it (restoreGrants), so
- * everyone who had access sees the projects at once. A move deletes the
- * reach rows of its projects with their grants (clearProjectRows); nothing
- * stores them. It leaves the favorites of its top-level project
- * (model/projectFavorites.ts), which keep naming the stored project, so a
- * restore keeps every star, and a purge deletes them with the rest
- * (purgeLive, clearOrgTrash). A project item's task whose parent is not in
- * the item goes back without it (restoreTasks). References that no longer
- * name what the item stored are dropped (sameReference). A task item's root
- * keeps a parent outside the item only by the parent table (keptParent). No
- * restore leaves a subtask under a parent in another sub-project
- * (model/issues.ts sameSubProject), inside the item or outside it. A reveal
- * whose checks fail sends the item back to moving, and the move takes the
- * rows back.
- *
- * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
- * seat sees of an item, restoreBlock why that seat cannot restore it, and
- * myItem fences every public load with seesItem, viewOf's answer without
- * a level read for an organization admin. A task item is judged over the
- * live projects it goes back to, a project item over its stored rows
- * (storedLevels), each with the seat in the item's organization. An
- * organization admin keeps every item that is not purging, with its
- * metadata and Delete now, and reads only the tasks their ordinary access
- * reaches (adminView), with no shortcut for the role, so no title, hit or
- * count comes from a project they cannot read. A Memo keeps the reads
- * they repeat; a page read seeds one per seat (sightOf).
- *
- * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
- * job's budget_scale: rows moved, their bytes, task rows moved and index
- * ranges read. The parent checks of a restore (keptParent) also count the
- * bytes they read, and a check that runs out of the step's reads waits for
- * the next step, where it comes first and runs whole within COUNT_READ. A
- * step always makes progress (Budget.moved), such as a row moved or a task
- * scanned, and most phases read a range from its start, in one pass (drain),
- * rather than keep a cursor, because moving a row takes it out of the range.
- * The person's own mutation spends a quarter of a step's budget itself
- * (CALL), so most small deletes never schedule a step. Convex drops what a
- * failed step scheduled, so `recoverJobs` restarts a stalled job at half the
- * budget, and an item whose step still fails RETRY.atFloor times at the
- * smallest budget becomes stuck, for an admin's Delete now; a restore that
- * fails that often before its reveal goes back to moving instead, as a failed
- * reveal does, and one past its reveal keeps being restarted. A step that
- * commits resets the job to the full budget and no retries.
- *
- * Steps need neither the deleter's nor the restorer's profile: notices and
- * events then go out without an actor. Only a reveal needs the restorer,
- * whose permission it checks again; without them it sends the item back.
- * A step returns without work when its item or job is gone,
- * or once its organization is being deleted: a demo organization whose
- * cleanup has begun, or any organization whose deletion has begun
- * (orgRemovals.ts). Recovery and the expiry leave such an organization's
- * items and jobs alone too. Before its deletion begins, while the
- * organization is read-only, restores are refused as other writes are
- * (orgReadOnly), but steps, recovery and the expiry go on.
- *
- * In a public demo, the rows a move or restore carries between the live
- * tables and Deleted items, with the bookkeeping rows that go with them,
- * spend none of the visitor's record limit and skip its payload check
- * (lib/demo.ts uncountedWriter): the number of records stays as it was. The
- * item row, activity rows and notices count as any write does, and each user
- * transaction counts as one demo change.
- *
- * The stored-byte totals (model/storageTotals.ts) count an attachment once,
- * live or stored, so moves and restores leave them as they are, retries
- * included. Each delete of an attachment row for good (discard, dropStored
- * and the teardowns below) takes it out in the same transaction.
- *
- * Teardowns that delete an organization's work outright (deleteOrgDeep, an
- * organization's deletion in steps, the public demo's cleanup, the
- * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
- * state the items are in.
- *
- * The organization export (model/orgExportRead.ts storedBatch) relies on a
- * row being live or stored, never both, apart from a restoring project
- * item's grants and team grants between restoreAccess and restoreGrants; a
- * change to the moves must keep that. */
+/* The organization export (model/orgExportRead.ts itemReads) relies on
+ * each row of a stored table (lib/enums.ts STORED_TABLES) being in its live
+ * table or in deleted_rows, never both, except a project item's grants and
+ * team grants from restoreAccess, which writes them back before the reveal
+ * and keeps their stored rows, until one of the two copies is deleted. A
+ * change to the moves or restores must keep that, or change the export with
+ * it. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -973,8 +877,9 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
 
 /** Moves (keep) or deletes (purge) task `task` of a project item with what
  * travels with it, in order: its rows, its messages, on a purge its history
- * (purgeHistory), then the task row. Its parent and subtasks are in its own
- * sub-project, so in the item, and stay as they are. True once the task row
+ * (purgeHistory), then the task row. It changes no parent link, because
+ * its parent and subtasks are in its own sub-project, which the item holds,
+ * so none of them is live. True once the task row
  * is gone. A task left half done stays hidden, because its project is
  * absent, and the next step picks it up. A task too large to store goes in
  * cut to the caps (fitToStore). Tasks of a deleted project emit no
@@ -3342,9 +3247,10 @@ export async function restoreItems(
  * project item's restore are handled in `work`. A project item drains its
  * stored tasks' rows only after a failed restore (sendBack), and then moves
  * its projects' tasks again. move_edges does nothing: an earlier release
- * started a project item's move there to move first the tasks with a parent
- * or subtask outside the item, which a family in one sub-project never
- * has, so a job saved there goes straight on to move_tasks. restore_split
+ * started a project item's move there to move first the open tasks with a
+ * parent or subtask in issues outside the item's projects. A task's parent
+ * and subtasks are in its own sub-project, so there are none, and a job
+ * saved there goes straight on to move_tasks. restore_split
  * does nothing either: an earlier release started a restore there to hand a
  * subtask whose project had left to the item that held that project, and a
  * family in one sub-project comes back whole or waits whole (reveal), so a
@@ -3587,8 +3493,8 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
 
 /** Restarts jobs whose last step committed more than STALLED_MS ago and
  * whose next step neither waits nor runs, as profileRemovals.ts recover
- * does, at half the budget each time. A job that already failed
- * RETRY.atFloor times at the smallest budget makes its item stuck instead:
+ * does, at half the budget each time down to RETRY.floor. A job whose step
+ * failed RETRY.atFloor + 1 times at RETRY.floor makes its item stuck instead:
  * it leaves the steps and waits for an admin's Delete now. A restore that
  * fails that often before its reveal goes back to moving, as a failed
  * reveal does (sendBack): the move takes back what it wrote, and the item
@@ -4368,8 +4274,9 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
  * in steps (moveProjectTasks). The budget is a quarter of a person's call's
  * share (CALL), so the person's call stores the project rows and moves
  * little more, and steps move the tasks. Tasks of the item emit no
- * task.deleted, and their families are inside the item. Returns the
- * item.
+ * task.deleted and keep their parent links, because a task's parent and
+ * subtasks are in its own sub-project, which the item holds, so none of
+ * them stays live. Returns the item.
  */
 export async function moveProjectToTrash(
   ctx: MutationCtx,
