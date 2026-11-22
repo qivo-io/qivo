@@ -68,7 +68,10 @@ afterEach(() => {
 
 const secret = (prefix: string) => `${prefix}${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
 
-/* A personal token of `profile`, keyed as tokens.ts createMcpToken stores it. */
+/* A personal token of `profile`, keyed as tokens.ts createMcpToken stores it.
+ * The search matches its prefix, `qvt_` and the first seven hex digits of
+ * `id`, which most tests make random, so a search for a few hex digits can
+ * match any token by chance. */
 const plantToken = async (
   ctx: MutationCtx,
   id: string,
@@ -775,15 +778,14 @@ describe('apiAccess.page', () => {
   it('filters by kind, state, person and search on the server across every page', async () => {
     const t = newT()
     const f = await fixture(t)
-    const cafe = uuid()
-    await t.run((ctx) => plantToken(ctx, cafe, f.viewer, 'Café sync'))
+    await t.run((ctx) => plantToken(ctx, uuid(), f.viewer, 'Crème sync'))
     expect(await names(t, f, { kind: 'agent_keys' })).toEqual(['Night job', 'GitHub Actions'])
     expect(await names(t, f, { kind: 'oauth_connections' })).toEqual(['Claude', 'ChatGPT'])
     expect(await names(t, f, { state: 'active' })).toEqual([
       'Cursor',
       'Claude',
       'GitHub Actions',
-      'Café sync',
+      'Crème sync',
     ])
     expect(await names(t, f, { person: f.user.id })).toEqual(['Cursor', 'Zapier', 'Cursor, old'])
     // the name, the token prefix, the client id, the person's name, and an
@@ -794,8 +796,8 @@ describe('apiAccess.page', () => {
     expect(await names(t, f, { search: 'client-claude' })).toEqual(['Claude'])
     expect(await names(t, f, { search: 'sand' })).toEqual(['Raycast'])
     expect(await names(t, f, { search: 'removed' })).toEqual(['Night job'])
-    expect(await names(t, f, { search: 'CAFE' })).toEqual(['Café sync'])
-    expect(await names(t, f, { search: '  café   SYNC ' })).toEqual(['Café sync'])
+    expect(await names(t, f, { search: 'CREME' })).toEqual(['Crème sync'])
+    expect(await names(t, f, { search: '  crème   SYNC ' })).toEqual(['Crème sync'])
     // every fragment must match, in any order
     expect(await names(t, f, { search: 'old cursor' })).toEqual(['Cursor, old'])
     expect(await names(t, f, { search: 'nothing like it' })).toEqual([])
@@ -805,22 +807,21 @@ describe('apiAccess.page', () => {
         kind: 'mcp_tokens',
         state: 'active',
         person: f.viewer.id,
-        search: 'caf',
+        search: 'crem',
       }),
-    ).toEqual(['Café sync'])
+    ).toEqual(['Crème sync'])
   })
 
   it('finds a connected app by the client id its row shows, as well as by the full id', async () => {
     const t = newT()
     const f = await fixture(t)
-    await t.run((ctx) =>
-      plantConnection(ctx, uuid(), f.viewer, 'Linear', { client_id: '4f1c2b7d9e0a1c3fa90e' }),
-    )
-    await runInAuth(t, (ctx) =>
-      ctx.db.insert('oauthClient', { clientId: '4f1c2b7d9e0a1c3fa90e', redirectUris: [] }),
-    )
-    // the row shows "client 4f1c…a90e" (lib/clientLabel.ts)
-    for (const search of ['4f1c…a90e', 'client 4f1c', '4f1c2b7d9e0a', 'a90e'])
+    // letters, as Better Auth makes a client id, so no token's prefix of hex
+    // digits can hold what this case searches for
+    const clientId = 'ZkQwTnJbVxLpGhYmCdSaUeFoNiRtWqXy'
+    await t.run((ctx) => plantConnection(ctx, uuid(), f.viewer, 'Linear', { client_id: clientId }))
+    await runInAuth(t, (ctx) => ctx.db.insert('oauthClient', { clientId, redirectUris: [] }))
+    // the row shows "client ZkQw…WqXy" (lib/clientLabel.ts)
+    for (const search of ['ZkQw…WqXy', 'client ZkQw', 'ZkQwTnJbVxLp', 'WqXy'])
       expect(await names(t, f, { search })).toEqual(['Linear'])
     // "client" names every connected app the page lists
     expect(await names(t, f, { search: 'client' })).toEqual(['Claude', 'ChatGPT', 'Linear'])
