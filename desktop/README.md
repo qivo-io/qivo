@@ -357,10 +357,10 @@ literal path portions. `@electron/universal` calls `minimatch()` with
 `matchBase: true` and runs only for macOS universal builds, which Qivo does
 not make. The minimatch 3 and 5 copies of other build packages are older than
 the advisory's range and stay. Remove the override once no package in
-electron-builder's dependency tree asks for a minimatch version from 7.0.0 up
-to 11.0.0. `app-builder-lib` 26 pins `@electron/universal` 2.0.3, which asks
-for `^9.0.3`, so an `app-builder-lib` that asks for version 11 is not enough
-by itself.
+the root package's dependency tree asks for a minimatch version from 7.0.0 up
+to 11.0.0. `app-builder-lib` 26.15.3 pins `@electron/universal` 2.0.3, which
+asks for `^9.0.3`, so an `app-builder-lib` that asks for version 11 is not
+enough by itself.
 
 This affects build tooling, not the installed desktop runtime.
 
