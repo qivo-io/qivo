@@ -1,14 +1,12 @@
 /* The scheduling invariants, driven through the PUBLIC issue mutations. A
  * group's dates are calculated from its subtasks, so a date write on a group
- * is refused and no subtask write ever changes an ancestor. Also the
- * hierarchy depth caps (0057/0038), the parent org/archive fences and the
- * week-pair CHECKs. Refusal sentences are asserted byte-for-byte via
+ * is refused and no subtask write ever changes its parent. Also the parent
+ * org/archive fences and the week-pair CHECKs. Refusal sentences are asserted byte-for-byte via
  * err.data.message. */
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import {
   type CreateIssueArgs,
   GROUP_DATES_RULE,
@@ -66,22 +64,6 @@ const createAs = (t: T, f: OrgFixture, extra: Partial<CreateIssueArgs> = {}) =>
 
 const updateAs = (t: T, f: OrgFixture, id: string, patch: IssuePatch) =>
   as(t, f.admin).mutation(api.issues.update, { org_id: f.org.id, id, patch })
-
-/* A parent_id chain of n rows in f.sub, index 0 the root, n-1 the deepest. */
-async function plantChain(t: T, f: OrgFixture, n: number): Promise<Doc<'issues'>[]> {
-  const rows: Doc<'issues'>[] = []
-  for (let i = 0; i < n; i++) {
-    const prev = rows[rows.length - 1]
-    rows.push(
-      await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        ...(prev === undefined ? {} : { parent_id: prev.id }),
-      }),
-    )
-  }
-  return rows
-}
 
 describe('issue scheduling and hierarchy', () => {
   it('a date write on a group is refused for any value, archived groups included; archived-only subtasks make no group', async () => {
@@ -146,81 +128,35 @@ describe('issue scheduling and hierarchy', () => {
     expect((await updateAs(t, f, leaf.id, { paused: true })).paused).toBe(true)
   })
 
-  it('no subtask write changes an ancestor: reschedule, scheduled create and restore leave every ancestor and its followers alone', async () => {
+  it('no subtask write changes its parent: reschedule, scheduled create and restore leave the parent and its followers alone', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const narrow = { start_week: '2026-02-02', end_week: '2026-02-08' }
-    const top = await plantIssue(t, { ...base, title: 'unscheduled top' })
-    const gp = await plantIssue(t, { ...base, parent_id: top.id, ...narrow })
-    const parent = await plantIssue(t, { ...base, parent_id: gp.id, ...narrow })
+    const parent = await plantIssue(t, { ...base, ...narrow })
     const child = await plantIssue(t, { ...base, parent_id: parent.id, ...narrow })
-    const ancestors = [parent, gp, top]
-    for (const a of ancestors) await subscribe(t, a.id, f.user.id)
+    const buried = await plantIssue(t, {
+      ...base,
+      parent_id: parent.id,
+      start_week: '2026-03-02',
+      end_week: '2026-03-08',
+      archived_at: NOW,
+    })
+    await subscribe(t, parent.id, f.user.id)
 
-    // a reschedule and a scheduled create, both far outside every stored span
+    // a reschedule and a scheduled create, both far outside the stored span
     const moved = await updateAs(t, f, child.id, {
       start_week: '2026-01-05',
       end_week: '2026-03-29',
     })
     expect(moved.start_week).toBe('2026-01-05')
     expect(moved.end_week).toBe('2026-03-29')
-    // one level of subtasks: a new subtask goes under the legacy chain's top
-    await createAs(t, f, { parent_id: top.id, start_week: '2026-05-04', end_week: '2026-05-10' })
-    for (const a of ancestors) {
-      expect(await issueRow(t, a.id)).toEqual(a) // dates and updated_at alike
-      expect(await inbox(t, f.user.id, a.id)).toEqual([])
-    }
-
-    // restoring a scheduled subtask under a scheduled parent the caller
-    // cannot edit (f.guest holds User on f.meta and nothing on f.hidden)
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const hiddenParent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      ...narrow,
-    })
-    const buried = await plantIssue(t, {
-      ...base,
-      parent_id: hiddenParent.id,
-      start_week: '2026-03-02',
-      end_week: '2026-03-08',
-      archived_at: NOW,
-    })
-    await subscribe(t, hiddenParent.id, f.admin.id)
+    await createAs(t, f, { parent_id: parent.id, start_week: '2026-05-04', end_week: '2026-05-10' })
+    // restoring a scheduled subtask under its active, scheduled parent
     await as(t, f.guest).mutation(api.issues.unarchive, { org_id: f.org.id, id: buried.id })
     expect((await issueRow(t, buried.id)).archived_at).toBeUndefined()
-    expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
-    expect(await inbox(t, f.admin.id, hiddenParent.id)).toEqual([])
-  })
-
-  it('one level of subtasks: a legacy chain takes no new level, and can still be taken apart', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    // a chain of 21 tasks from before the one level of subtasks
-    const deep = await plantChain(t, f, 21)
-    const under = await expectRefusal(createAs(t, f, { parent_id: deep[20].id }), 'rule')
-    expect(under.data.message).toBe(PARENT_IS_SUBTASK)
-    const head = await expectRefusal(createAs(t, f, { parent_id: deep[1].id }), 'rule')
-    expect(head.data.message).toBe(PARENT_IS_SUBTASK)
-    // a task with subtasks takes no parent, and its own subtask, which
-    // would close a cycle, is a subtask
-    const lone = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const lifted = await expectRefusal(updateAs(t, f, deep[0].id, { parent_id: lone.id }), 'rule')
-    expect(lifted.data.message).toBe(SUBTASK_WITH_SUBTASKS)
-    const cycle = await expectRefusal(updateAs(t, f, deep[0].id, { parent_id: deep[1].id }), 'rule')
-    expect(cycle.data.message).toBe(PARENT_IS_SUBTASK)
-    // the chain still reads and detaches, and a top-level task takes its tail
-    const tail = await updateAs(t, f, deep[20].id, { parent_id: null })
-    expect(tail.parent_id).toBeUndefined()
-    expect((await updateAs(t, f, deep[20].id, { parent_id: deep[0].id })).parent_id).toBe(
-      deep[0].id,
-    )
-    expect((await issueRow(t, deep[10].id)).parent_id).toBe(deep[9].id)
+    expect(await issueRow(t, parent.id)).toEqual(parent) // dates and updated_at alike
+    expect(await inbox(t, f.user.id, parent.id)).toEqual([])
   })
 
   it('the parent fence: foreign-org and missing parents both answer not_found, self is refused', async () => {

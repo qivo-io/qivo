@@ -391,10 +391,10 @@ const NOW_CASE = Date.parse('2026-11-04T19:00:00.000Z')
 
 /** The tasks every access case plants over the withOrg fixture for
  * `subject`, FW tracking delay: an overdue task, a Done task past its due
- * date, a group past its due date whose leaves are all Done, one of them in
- * a sibling sub-project the subject may not see, a paused group, paused
- * tasks dated, undated and Done, a subtask in an archived sub-project, a
- * task stored on the TBED meta, an In Review hand-off and a task the
+ * date, a group past its due date whose leaves are all Done, a task in a
+ * sibling sub-project the subject may not see, a paused group, paused
+ * tasks dated, undated and Done, a group with its subtask in an archived
+ * sub-project, a task stored on the TBED meta, an In Review hand-off and a task the
  * subject reviews, tasks projected late, on track and behind, a group
  * projected late by its span, and a task whose remaining hours were
  * measured near midnight before a week began in New York, so its local and
@@ -424,19 +424,14 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   })
   const late = await task(f.sub, { title: 'Late group', due_date: '2026-10-30', ...mine })
   await task(f.sub, { title: 'Its Done leaf', parent_id: late.id, status: 'done', done_at: NOW })
-  await task(sibling, {
-    title: 'Its hidden Done leaf',
-    parent_id: late.id,
-    status: 'done',
-    done_at: NOW,
-  })
+  await task(sibling, { title: 'Overdue in the sibling', due_date: '2026-10-27', ...mine })
   const pausedGroup = await task(f.sub, { title: 'Paused group', paused: true, ...mine })
   await task(f.sub, { title: 'Its subtask', parent_id: pausedGroup.id, ...mine })
   await task(f.sub, { title: 'Paused, dated', paused: true, due_date: '2026-11-20', ...mine })
   await task(f.sub, { title: 'Paused, undated', paused: true, ...mine })
   await task(f.sub2, { title: 'Paused and Done', paused: true, status: 'done', done_at: NOW })
-  const lone = await task(f.sub, { title: 'Parent of an archived subtask', ...mine })
-  await task(archived, { title: 'In an archived project', parent_id: lone.id })
+  const archivedGroup = await task(archived, { title: 'Group in an archived project', ...mine })
+  await task(archived, { title: 'Its subtask in an archived project', parent_id: archivedGroup.id })
   await task(f.meta, { title: 'Stored on the meta', due_date: '2026-10-01', ...mine })
   await task(f.sub, {
     title: 'Handed to review',

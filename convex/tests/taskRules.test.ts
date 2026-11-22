@@ -230,8 +230,8 @@ describe('postComment', () => {
 })
 
 describe('the working-set rules', () => {
-  /* FW (visible) holds a parent with a visible child and a child in a
-   * SKNK sub-project the guest cannot see; ARCH is an archived sub-project
+  /* FW (visible) holds a parent with a visible child, a SKNK sub-project
+   * the guest cannot see holds a task, and ARCH is an archived sub-project
    * of TBED, visible but outside the working set. */
   async function tree(t: T, f: OrgFixture) {
     const away = await hiddenSub(t, f)

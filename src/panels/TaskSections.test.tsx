@@ -161,7 +161,6 @@ function fixture() {
     task('kid-ro', 30, {
       title: 'Read the manual',
       parent_id: 'fam',
-      project_id: 'manuals',
       status: 'review',
       assignee_id: 'mira',
       reviewer_id: 'leo',
@@ -659,39 +658,26 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('keeps Read-only project access on a held row the person cannot edit', async () => {
+  it('takes a subtask off only while the answer still gives Edit, whatever the workspace says', async () => {
     await load()
     await openTask()
-    await answerAll()
-    const readOnly = section('subtasks').querySelector('[data-related-task="QN-30"]')
-    const remove = readOnly?.querySelector<HTMLButtonElement>('.task-related-remove')
-    expect(remove?.disabled).toBe(true)
-    expect(await hintOf(remove)).toBe('Read-only project access')
-    const held = section('subtasks').querySelector('[data-related-task="QN-28"]')
-    expect(held?.querySelector<HTMLButtonElement>('.task-related-remove')?.disabled).toBe(false)
-  })
-
-  it('takes a subtask off only where its short row and the workspace both say Edit', async () => {
-    await load()
-    await openTask()
-    // rows the workspace does not hold, whose answer's level and the
-    // workspace's level disagree either way, beside one where both say Edit
-    const editable = short(task('far', 39, { title: 'Tune the filter' }))
-    const viewedHere = { ...short(task('far-2', 38, { title: 'Sand the case' })), level: 'viewer' }
-    const viewedThere = {
-      ...short(task('far-3', 37, { title: 'Proof the manual', project_id: 'manuals' })),
-      level: 'lead',
-    }
-    await answer('taskWindow:task', taskAnswer([editable, viewedHere, viewedThere]))
-    const removeOf = (handle: string) =>
+    // a row the workspace does not hold, in Work, which the workspace gives
+    // Mira Edit on throughout
+    const kid = short(task('far', 39, { title: 'Tune the filter' }))
+    const removeOf = () =>
       section('subtasks').querySelector<HTMLButtonElement>(
-        `[data-related-task="${handle}"] .task-related-remove`,
+        '[data-related-task="QN-39"] .task-related-remove',
       )
-    expect(removeOf('QN-39')?.disabled).toBe(false)
-    for (const handle of ['QN-38', 'QN-37']) {
-      expect(removeOf(handle)?.disabled, handle).toBe(true)
-      expect(await hintOf(removeOf(handle)), handle).toBe('Read-only project access')
-    }
+    await answer('taskWindow:task', taskAnswer([kid]))
+    expect(removeOf()?.disabled).toBe(false)
+    // her access to Work drops to Viewer, which the window's read says
+    // before the workspace does
+    await answer('taskWindow:task', {
+      ...taskAnswer([{ ...kid, level: 'viewer' }]),
+      level: 'viewer',
+    })
+    expect(removeOf()?.disabled).toBe(true)
+    expect(await hintOf(removeOf())).toBe('Read-only project access')
   })
 
   it('reads each link from the open task, and in the past tense for a Done task', async () => {
@@ -804,7 +790,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     // the window's current subtasks Mira can edit first, then the batch
     expect(reads.at(-1)?.args).toMatchObject({ issue_id: 'fam', kind: 'subtask' })
     await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
-    expect(offered()).toEqual(['kid-1', 'kid-2', 'other'])
+    expect(offered()).toEqual(['kid-1', 'kid-2', 'kid-ro', 'other'])
     // the server answers the task as full, which the window's own list
     // does not show: no candidate, and the window's sentence
     const search = document.querySelector<HTMLInputElement>('[data-relation-picker] input')

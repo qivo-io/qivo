@@ -10,8 +10,8 @@
  * wholeOf), whose tasks are the tests' tasks oracle's, with the
  * organization's archived tasks beside it as the server holds them
  * (`unheld`), so it answers only a task the person may open: a task the
- * person cannot see, a hidden parent and a hidden subtask leave nothing
- * of their contents in its answers. */
+ * person cannot see, linked or not, leaves nothing of its contents in its
+ * answers. */
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../../convex/_generated/api'
@@ -130,24 +130,24 @@ async function compareAll(t: T, person: Doc<'profiles'>, foreign: Doc<'issues'>)
 }
 
 /* A few tasks over withOrg's projects that the shapes tell apart: a group
-   in FW with subtasks in FW and PCB and one in Skunkworks, a subtask in FW
-   of a parent in Skunkworks, a link from FW to Skunkworks and one from FW
-   to PCB, a label, two attachments and the subject's follow on the group,
-   and an archived task in each sub-project. */
+   in FW with two subtasks, a task in PCB and two in Skunkworks, a link from
+   the group to one in Skunkworks and one to the task in PCB, a label, two
+   attachments and the subject's follow on the group, and an archived task
+   in each sub-project. */
 async function plantWork(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const task = (project: Doc<'projects'>, extra: Partial<Doc<'issues'>> = {}) =>
     plantIssue(t, { org_id: f.org.id, project_id: project.id, ...extra })
   const group = await task(f.sub, { title: 'Bring up the board', remaining_hours: 4 })
   await task(f.sub, { title: 'Solder the headers', parent_id: group.id })
-  const inPcb = await task(f.sub2, { title: 'Route the planes', parent_id: group.id })
-  await task(f.hidden, { title: 'Secret probe', parent_id: group.id })
-  const hiddenParent = await task(f.hidden, { title: 'Hidden parent' })
-  await task(f.sub, { title: 'Orphan in FW', parent_id: hiddenParent.id })
+  await task(f.sub, { title: 'Flash the firmware', parent_id: group.id })
+  const inPcb = await task(f.sub2, { title: 'Route the planes' })
+  await task(f.hidden, { title: 'Secret probe' })
+  const hiddenLinked = await task(f.hidden, { title: 'Hidden linked task' })
   await task(f.sub, { title: 'Archived in FW', archived_at: NOW })
   await task(f.sub2, { title: 'Archived in PCB', archived_at: NOW })
   await t.run(async (ctx) => {
     for (const [target, type] of [
-      [hiddenParent, 'blocks'],
+      [hiddenLinked, 'blocks'],
       [inPcb, 'blocks'],
     ] as const)
       await ctx.db.insert('issue_links', {
@@ -246,47 +246,31 @@ describe('the task window stand-in', () => {
         .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
         .collect(),
     )
-    // with the secret under the group the guest sees, the hidden parent
-    // the group links to, and every link of the organization
-    const hiddenParent = tasks.find((task) => task.title === 'Hidden parent')
+    // with the secret, the hidden task the group links to, and every link
+    // of the organization
+    const hiddenLinked = tasks.find((task) => task.title === 'Hidden linked task')
     const group = tasks.find((task) => task.title === 'Bring up the board')
-    const orphan = tasks.find((task) => task.title === 'Orphan in FW')
-    if (!hiddenParent || !group || !orphan) throw new Error('no hidden parent, group or orphan')
+    if (!hiddenLinked || !group) throw new Error('no hidden linked task or group')
     const links = await t.run((ctx) =>
       ctx.db
         .query('issue_links')
         .withIndex('by_source', (q) => q.eq('source_id', group.id))
         .collect(),
     )
-    const hiddenRow = (task: Doc<'issues'>) => ({
-      ...taskFields(task),
-      ...(task.parent_id ? { parent_id: task.parent_id } : {}),
-      description: '',
-    })
+    const hiddenRow = (task: Doc<'issues'>) => ({ ...taskFields(task), description: '' })
     const leaky = {
       ...whole,
       projects: projects.map(({ _id, _creationTime, ...row }) => row),
-      // the orphan's row with its hidden parent's id, so the stand-in must
-      // leave that id out itself
-      issues: [
-        ...whole.issues.map((row) =>
-          row.id === orphan.id ? { ...row, parent_id: hiddenParent.id } : row,
-        ),
-        hiddenRow(secret),
-        hiddenRow(hiddenParent),
-      ],
+      issues: [...whole.issues, hiddenRow(secret), hiddenRow(hiddenLinked)],
       links: links.map(relationRow),
     } as Whole
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: secret.id }),
     ).toEqual({ state: 'unavailable' })
-    // the group's own answers name neither hidden task, and, as the
-    // server's, say nothing of the secret outside the group's sub-project
+    // the group's own answers name neither hidden task, as the server's
     for (const [name, args] of [
       ['taskWindow:task', { org_id: f.org.id, ref: group.id }],
       ['taskWindow:links', { org_id: f.org.id, issue_id: group.id }],
-      // a child of the hidden parent, which names no parent
-      ['taskWindow:task', { org_id: f.org.id, ref: orphan.id }],
     ] as const) {
       const server =
         name === 'taskWindow:task'
@@ -300,7 +284,7 @@ describe('the task window stand-in', () => {
       expect(standIn, name).toEqual(server)
       const text = JSON.stringify(standIn)
       expect(text).not.toContain(secret.id)
-      expect(text).not.toContain(hiddenParent.id)
+      expect(text).not.toContain(hiddenLinked.id)
     }
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: group.id }),

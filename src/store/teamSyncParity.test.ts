@@ -362,10 +362,10 @@ describe('Northstar', () => {
  * `subject`. FW tracks delay. In FW, PCB, a sibling sub-project and a
  * sub-project of SKNK: rows of the subject and the user, an In Review row
  * the user reviews, scheduled rows with hours, Backlog asks, Done tasks
- * reviewed with and without a hand-off, a group in FW with a subtask in
- * the sibling, and blocks links from tasks in PCB, the sibling and SKNK to
- * a row in FW, and a team of the user that shares TBED and PCB. The
- * subject's sitting runs, and so does the user's, from another point. */
+ * reviewed with and without a hand-off, a group in FW with its subtask,
+ * and blocks links from tasks in PCB, the sibling and SKNK to a row in FW,
+ * and a team of the user that shares TBED and PCB. The subject's sitting
+ * runs, and so does the user's, from another point. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   const skunk = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })

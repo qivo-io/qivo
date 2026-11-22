@@ -4,7 +4,13 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { MARKETING_DEMO, resolveMentions } from '../internal/marketingDemoData'
 import { ACTIVE_PAGE, listActiveIssuesCore, TASK_LIST_UNREADABLE } from '../lib/activeTaskPage'
-import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '../lib/core'
+import {
+  accessFlags,
+  asMachineCaller,
+  loadCatalogue,
+  TASK_READ_RESERVE,
+  TEXT_TASK_READS,
+} from '../lib/core'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
 import { MIB } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
@@ -1218,14 +1224,12 @@ describe('real limits', () => {
     const f = await machineOrg(t)
     const big = (c: string) => c.repeat(1000 * 1000)
     // an archived task with a description row and a newest comment near
-    // 1 MiB, a parent stored before the caps with a text near 1 MiB, and
-    // archived subtasks of 900 KB that fill the walk's room. The reads after
-    // the walk fit the reserve only without the description row, and only
-    // when it counts the subtasks read again
-    const ids = await t.run(async (ctx) => {
-      const parent = taskDoc(f, 30_000, big('p'), { archived_at: NOW })
-      await ctx.db.insert('issues', parent)
-      const task = taskDoc(f, 30_001, undefined, { archived_at: NOW, parent_id: parent.id })
+    // 1 MiB, and 200 archived subtasks of 100 KB that fill the walk's room.
+    // The reserve, lowered to 1.5 MiB as the other single-task reads of an
+    // archived group lower it (taskLists.test.ts), holds the reads after
+    // the walk with room to spare, but not the description row as well
+    const id = await t.run(async (ctx) => {
+      const task = taskDoc(f, 30_001, undefined, { archived_at: NOW })
       await ctx.db.insert('issues', task)
       await ctx.db.insert('issue_descriptions', {
         issue_id: task.id,
@@ -1240,27 +1244,33 @@ describe('real limits', () => {
         body: big('c'),
         created_at: NOW,
       })
-      return { parent: parent.id, task: task.id }
+      return task.id
     })
-    for (let from = 0; from < 20; from += 5)
+    for (let from = 0; from < 200; from += 5)
       await t.run(async (ctx) => {
         for (let i = from; i < from + 5; i++)
           await ctx.db.insert(
             'issues',
-            taskDoc(f, 30_100 + i, 's'.repeat(900 * 1024), {
+            taskDoc(f, 30_100 + i, 's'.repeat(100 * 1024), {
               archived_at: NOW,
-              parent_id: ids.task,
+              parent_id: id,
             }),
           )
       })
-    const got = await t.query(internal.machine.rest.getIssue, {
-      callerId: f.agent.id,
-      access: 'read',
-      today: TODAY,
-      ref: ids.task,
-    })
-    expect(got.description).toBe(big('d'))
-    expect(got.parent_id).toBe(ids.parent)
+    const reserve = { ...TASK_READ_RESERVE }
+    Object.assign(TASK_READ_RESERVE, { bytes: 1.5 * (1 << 20) })
+    try {
+      const got = await t.query(internal.machine.rest.getIssue, {
+        callerId: f.agent.id,
+        access: 'read',
+        today: TODAY,
+        ref: id,
+      })
+      expect(got.description).toBe(big('d'))
+      expect(got.is_group).toBe(true)
+    } finally {
+      Object.assign(TASK_READ_RESERVE, reserve)
+    }
   })
 
   it('an active page and an export page count two description rows a task', async () => {

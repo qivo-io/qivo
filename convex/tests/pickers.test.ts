@@ -392,12 +392,9 @@ describe("the pickers' gate", () => {
     const b = await base()
     const group = await b.task(b.f.sub, { title: 'Bring-up' })
     await b.task(b.f.sub, { parent_id: group.id })
-    // a group whose only active subtask sits in an archived project is no
-    // group
+    // a task whose only subtask is archived is no group
     const lone = await b.task(b.f.sub, { title: 'Lone' })
-    await b.task(b.f.sub2, { parent_id: lone.id })
     await b.task(b.f.sub, { parent_id: lone.id, archived_at: NOW })
-    await b.t.run((ctx) => ctx.db.patch(b.f.sub2._id, { archived_at: NOW }))
     const vera = await b.person('Vera')
     await b.grant(b.f.sub, vera, 'viewer')
     await b.keyed()

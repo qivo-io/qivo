@@ -244,8 +244,7 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
           remaining_hours: 400,
           remaining_set_at: new Date().toISOString(),
         })
-        add('top')
-        add('parent', { parent_id: 'top', due_date: '2026-12-01' })
+        add('parent', { due_date: '2026-12-01' })
         add('child-a', { parent_id: 'parent' })
         add('child-b', { parent_id: 'parent', paused: true })
       })

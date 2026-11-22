@@ -540,7 +540,7 @@ export function DeletedItemsPage() {
     const name = hit ? hit.key : itemName(item)
     const opensWindow =
       hit !== null || blocked?.reason === 'project_deleted' || blocked?.reason === 'parent_deleted'
-    const canRestore = ready && !item.redacted && (item.can_restore || opensWindow)
+    const canRestore = ready && (item.can_restore || opensWindow)
     const holder = blocked?.item_id === undefined ? undefined : onPage.get(blocked.item_id)
     const refused = refusals.get(item.id)
     // what a running action is doing to the row, which its button says
@@ -557,7 +557,7 @@ export function DeletedItemsPage() {
         ),
       })
     const stateLine = stateText(state)
-    const blockedLine = blocked && !item.redacted ? blockedText(blocked, holder?.title) : null
+    const blockedLine = blocked ? blockedText(blocked, holder?.title) : null
     if (stateLine) rowNotes.push({ key: 'state', text: stateLine })
     else if (waiting.has(item.id))
       rowNotes.push({ key: 'waiting', text: 'Qivo restores it once its project is back.' })
@@ -571,10 +571,9 @@ export function DeletedItemsPage() {
     const place = hit ? hit.path.filter(Boolean).join(' › ') : placeText(item)
     const archived = hit ? hit.archived : item.archived
     // a row with no place line puts its deleter there on a phone
-    const placed = !!place || item.redacted === true || archived || namesOrg
+    const placed = !!place || archived || namesOrg
     const time = new Date(item.deleted_at)
-    const status =
-      !hit && !item.redacted && !hidden && item.kind === 'task' ? item.status : undefined
+    const status = !hit && !hidden && item.kind === 'task' ? item.status : undefined
     const selectable = item.can_restore || selected.has(item.id)
     return (
       <div
@@ -640,20 +639,16 @@ export function DeletedItemsPage() {
           {placed && (
             <span data-row-place className="deleted-row-where flex flex-wrap gap-x-3">
               {namesOrg && <span data-row-org>{item.org_name}</span>}
-              {item.redacted && !hit ? (
-                <span>Deleted with a task in a project you can't open</span>
-              ) : (
-                place && (
-                  <span>
-                    {place}
-                    {hit && (
-                      <span className="text-danger">
-                        , deleted with{' '}
-                        {item.kind === 'project' ? 'the project' : (hit.root_key ?? 'its task')}
-                      </span>
-                    )}
-                  </span>
-                )
+              {place && (
+                <span>
+                  {place}
+                  {hit && (
+                    <span className="text-danger">
+                      , deleted with{' '}
+                      {item.kind === 'project' ? 'the project' : (hit.root_key ?? 'its task')}
+                    </span>
+                  )}
+                </span>
               )}
               {archived && <span>archived</span>}
             </span>
@@ -1537,10 +1532,8 @@ function WholeItemWindow({
   // what the store sends once the project waited for is back, or what
   // stays behind
   const follows = stays
-    ? ` ${root?.key ?? itemCalled} stays in Deleted items until you can edit its project.`
-    : root
-      ? ` ${root.key} and its subtasks follow once the project is back.`
-      : ` ${itemCalled} follows once the project is back.`
+    ? ` ${itemCalled} stays in Deleted items until you can edit its project.`
+    : ` ${itemCalled} follows once the project is back.`
   return (
     <ModalShell
       icon="rotateCcw"
@@ -1575,16 +1568,9 @@ function WholeItemWindow({
             </b>
             . It can only come back with that task.
           </p>
-          {waits && before(root.key)}
-          {waits && holderNote}
-          {(!waits || holder) && (
-            <p className="text-sm">
-              {reason ??
-                (waits && holder
-                  ? `${comesBack(holder)}${follows}`
-                  : `${root.key} and its subtasks come back. They keep their keys.`)}
-            </p>
-          )}
+          <p className="text-sm">
+            {reason ?? `${root.key} and its subtasks come back. They keep their keys.`}
+          </p>
         </div>
       ) : (
         <div

@@ -154,9 +154,6 @@ describe('what a row says', () => {
     const sub = { ...top, path: ['Website'], counts: { ...top.counts, tasks: 12, sub_projects: 0 } }
     expect(itemSuffix(sub)).toBe('and its 12 tasks')
     expect(placeText(sub)).toBe('Sub-project in Website')
-    expect(itemSuffix(row('r', { redacted: true, counts: { ...top.counts, subtasks: 2 } }))).toBe(
-      '',
-    )
   })
 
   it('says why a row cannot be restored, with the lead when there is one', () => {
@@ -186,7 +183,6 @@ describe('what a row says', () => {
     expect(blockedText({ reason: 'project_deleted', item_id: 'x' }, 'Field trial Q3')).toBe(
       'Its project, Field trial Q3, is in Deleted items too.',
     )
-    // the redacted row says it in its own words
     expect(blockedText({ reason: 'no_access' })).toBeNull()
   })
 })

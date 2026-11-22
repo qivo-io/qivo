@@ -64,14 +64,15 @@ export type Line =
 export const lineItem = (line: Line): DeletedRow => (line.kind === 'item' ? line.row : line.item)
 
 /** Whether `row`, waiting for the deleted project it was in, goes in the
-    same restore as that project item. A task item the restorer cannot
-    read now, an admin's row without its title, does only when the server
-    says that project item gives them Edit on the task's project once it is
+    same restore as that project item. A task item waits for its project
+    only on an admin's row without its title, as nobody can read a task
+    whose project is in Deleted items. It goes only when the server says
+    that project item gives them Edit on the task's project once it is
     back (`blocked.with_project`), as the project item's right says nothing
     of the task's. Without it the task stays in Deleted items until they
     can edit its project. */
 export const restoresWithProject = (row: DeletedRow): boolean =>
-  row.kind !== 'task' || row.hidden !== true || row.blocked?.with_project === true
+  row.kind !== 'task' || row.blocked?.with_project === true
 
 /** The key of a line, which also names it for focus. */
 export const lineKey = (line: Line): string =>
@@ -261,9 +262,8 @@ export function projectHolds(row: DeletedRow): string {
 }
 
 /** The text after a row's title: "and 2 subtasks" for a task with subtasks,
-    what a project holds for a project. A redacted row says nothing. */
+    what a project holds for a project. */
 export function itemSuffix(row: DeletedRow): string {
-  if (row.redacted) return ''
   if (row.kind === 'task')
     return row.counts.subtasks > 0 ? `and ${plural(row.counts.subtasks, 'subtask')}` : ''
   return projectHolds(row)
@@ -282,8 +282,8 @@ export const itemName = (row: DeletedRow): string => (row.kind === 'task' ? row.
 /**
  * The sentence of a ready row its viewer cannot restore (design 5.3).
  * `holder` names the deleted project that a project_deleted or
- * parent_deleted item waits for, when the list holds it. Null for the
- * redacted row, which says so in its own words.
+ * parent_deleted item waits for, when the list holds it. Null for
+ * no_access.
  */
 export function blockedText(blocked: BlockDetail, holder?: string): string | null {
   const project = blocked.project ?? 'its project'

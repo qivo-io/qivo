@@ -135,7 +135,8 @@ async function answerNext(patch?: Record<string, unknown>) {
   return call
 }
 
-/** A deferred item's row as deletedItems.item answers it. */
+/** A deferred item's row as deletedItems.item answers it once its project
+    is back, restorable while it is ready. */
 const row = (id: string, patch: Partial<DeletedRow> = {}): DeletedRow => ({
   id,
   org_id: A,
@@ -150,10 +151,18 @@ const row = (id: string, patch: Partial<DeletedRow> = {}): DeletedRow => ({
   deleted_at: '2026-10-15T16:40:00.000Z',
   deleter: { you: true, profile_id: 'me', name: 'Planner', kind: 'app', who: 'me|app' },
   state: 'ready',
-  can_restore: false,
-  blocked: { reason: 'project_deleted', item_id: 'trial' },
+  can_restore: (patch.state ?? 'ready') === 'ready',
   can_purge: false,
   ...patch,
+})
+/** A deferred task's row while its project is in Deleted items: an
+    admin's, who cannot read it then, so without its title or status. */
+const waiting = (id: string): DeletedRow => ({
+  ...row(id),
+  title: '',
+  hidden: true,
+  can_restore: false,
+  blocked: { reason: 'project_deleted', item_id: 'trial', with_project: true },
 })
 const watchOf = (id: string) => watches.filter((w) => w.id === id && w.open)
 const toastTexts = () => showToast.mock.calls.map(([text]) => text as string)
@@ -477,14 +486,14 @@ describe('items a restore deferred', () => {
     expect(P.deletedWaiting.has(task.id)).toBe(true)
     expect(watchOf(task.id)).toHaveLength(1)
     // still behind its project, whose restore goes on in steps
-    watchOf(task.id)[0].next(row(task.id))
+    watchOf(task.id)[0].next(waiting(task.id))
     await settle()
     expect(watchOf('trial')).toHaveLength(1)
     watchOf('trial')[0].next(row('trial', { kind: 'project', state: 'restoring' }))
     await settle()
     expect(calls).toEqual([])
     watchOf('trial')[0].next(null)
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     await settle()
     expect(calls[0]).toMatchObject({
       name: 'deletedItems:restore',
@@ -508,7 +517,7 @@ describe('items a restore deferred', () => {
 
   it('says a second send the server refuses, by the item’s key', async () => {
     const { task } = await deferOne()
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     await settle()
     expect(calls[0].args).toEqual({ org_id: A, ids: [task.id] })
     await answerNext({ restored: [], refused: [{ id: task.id, reason: 'view_only' }] })
@@ -522,7 +531,10 @@ describe('items a restore deferred', () => {
   it('ends with the reason when its project is back but it still cannot come back', async () => {
     const { task } = await deferOne()
     watchOf(task.id)[0].next(
-      row(task.id, { blocked: { reason: 'project_archived', project: 'Sites' } }),
+      row(task.id, {
+        can_restore: false,
+        blocked: { reason: 'project_archived', project: 'Sites' },
+      }),
     )
     await settle()
     expect(showToast).toHaveBeenCalledWith(
@@ -534,7 +546,7 @@ describe('items a restore deferred', () => {
 
   it('ends when the project item it waits for went back after a failed restore', async () => {
     const { task } = await deferOne()
-    watchOf(task.id)[0].next(row(task.id))
+    watchOf(task.id)[0].next(waiting(task.id))
     await settle()
     watchOf('trial')[0].next(row('trial', { kind: 'project', state: 'ready' }))
     await settle()
@@ -550,7 +562,7 @@ describe('items a restore deferred', () => {
     // the workspace's read fails, so edits pause
     whole.fail(new Error('[CONVEX Q(workspace:whole)] [Request ID: 1] Server Error'))
     await settle()
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     await settle()
     // nothing went out, nothing was refused, and the watch goes on
     expect(calls).toEqual([])
@@ -574,7 +586,7 @@ describe('items a restore deferred', () => {
     expect(P.editsPaused()).toBe(true)
     // the pause refuses the second send at the press, and edits resume
     // before the store hands the watch that refusal
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     whole.next({ ...structuredClone(whole.snap), delivered_at: '2026-10-16T17:00:00.000Z' })
     expect(P.editsPaused()).toBe(false)
     expect(calls).toEqual([])
@@ -601,7 +613,7 @@ describe('items a restore deferred', () => {
     vi.advanceTimersByTime(sync.OFFLINE_DELAY_MS)
     await settle()
     expect(P.editsPaused()).toBe(true)
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     await settle()
     // nothing went out, nothing was refused, and the watch goes on
     expect(calls).toEqual([])
@@ -622,7 +634,7 @@ describe('items a restore deferred', () => {
 
   it('keeps watching when the pause refuses its second send in flight, and sends it again', async () => {
     const { task } = await deferOne()
-    const ready = row(task.id, { can_restore: true, blocked: undefined })
+    const ready = row(task.id)
     watchOf(task.id)[0].next(ready)
     await settle()
     expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
@@ -647,7 +659,7 @@ describe('items a restore deferred', () => {
     void P.restoreDeletedItems(tasks(B, 30), { bulk: true })
     await settle()
     expect(P.deletedAction?.state).toBe('running')
-    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    watchOf(task.id)[0].next(row(task.id))
     await settle()
     expect(calls.map((c) => c.args.ids)).toContainEqual([task.id])
   })

@@ -1314,7 +1314,7 @@ export const REVEAL_RANGES_PER_PROJECT = 16
  * it is not ready; read_only while billing or a pending deletion makes the
  * organization read-only (orgReadOnly); then the blocked
  * reasons of the design's table. no_access: the person has no level on the
- * project the item goes back to (the list's redacted row). conflict: a live
+ * project the item goes back to. conflict: a live
  * row holds a uuid or key the item needs, which the reservations
  * (lib/db.ts insertUnique, model/projects.ts keyHolder) should prevent. */
 export type RestoreBlock =
@@ -1749,10 +1749,6 @@ export type ItemView = {
    * organization admin, and for an admin the entries their ordinary access
    * reaches (adminView). */
   readable: Item['projects']
-  /** A task item whose root's project the person cannot see. It is listed
-   * only through a task they can see, without the root, its path or the
-   * reason, and cannot be restored by them. Never an admin's. */
-  redacted: boolean
   /** An admin's task item whose root's project they cannot read. Its row
    * keeps the item's key, path, counts, deleter and state, for Delete now,
    * and shows no title, status or reason (model/deletedItemsRows.ts
@@ -1770,10 +1766,9 @@ export type ItemView = {
  * item, or one whose project (a task item) or parent (a sub-project item)
  * is no longer live: those wait for an admin.
  *
- * A task item shows to the person who deleted it and to the lead of one of
- * its projects or of that project's top-level project, while they can see
- * one of its projects. It shows only the tasks in projects they can see, and
- * is redacted when that leaves out the root's project.
+ * A task item shows to the person who deleted it and to the lead of its
+ * project or of that project's top-level project, while they can see its
+ * project, which holds all its tasks.
  *
  * A project item is read over its stored rows (storedLevels). It shows to
  * the effective lead of its root, the lead of a sub-project item's live
@@ -1812,7 +1807,7 @@ export async function viewOf(
  * everyone. */
 async function adminView(s: Scope, me: Doc<'profiles'>): Promise<ItemView> {
   const { item } = s
-  const whole = { projects: item.projects, readable: item.projects, redacted: false, hidden: false }
+  const whole = { projects: item.projects, readable: item.projects, hidden: false }
   if (item.kind === 'project') {
     const levels = await storedLevels(s, me)
     const readable = item.projects.filter(
@@ -1830,20 +1825,12 @@ async function adminView(s: Scope, me: Doc<'profiles'>): Promise<ItemView> {
 
 async function taskItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView | null> {
   const root = await namedProject(s, s.item.project_id, 'project')
-  if (root === null) return null
-  const projects: Item['projects'] = []
-  let leads = false
-  for (const entry of s.item.projects) {
-    const project = await namedProject(s, entry.id, 'project')
-    const level = project === null ? null : await liveLevel(s, me, project)
-    if (project === null || level === null) continue
-    projects.push(entry)
-    if (level === 'lead' || (await leadsTop(s, me, project))) leads = true
-  }
-  if (projects.length === 0) return null
+  const level = root === null ? null : await liveLevel(s, me, root)
+  if (root === null || level === null) return null
+  const leads = level === 'lead' || (await leadsTop(s, me, root))
   if (!leads && !namesProfile(s.item, s.item.deleted_by, me)) return null
-  const redacted = !projects.some((p) => p.id === root.id)
-  return { projects, readable: projects, redacted, hidden: false }
+  const projects = s.item.projects.filter((p) => p.id === root.id)
+  return { projects, readable: projects, hidden: false }
 }
 
 /** Whether `me` leads the top-level project above live project `project`. */
@@ -1865,7 +1852,7 @@ async function projectItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView 
   const deleted = namesProfile(s.item, s.item.deleted_by, me) && levelOf(h.root) !== null
   if (!leads && !deleted) return null
   const projects = s.item.projects.filter((p) => levelOf(p) !== null)
-  return { projects, readable: projects, redacted: false, hidden: false }
+  return { projects, readable: projects, hidden: false }
 }
 
 /** Whether `me` sees `item` at all, as viewOf answers, without reading a

@@ -910,14 +910,7 @@ describe('real limits', () => {
   it('reads 100 subtasks, the most a task holds, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
-    const [grandparent] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
-    const [task] = await plantMany(
-      t,
-      f,
-      1,
-      (i) => ({ ...ordinary(i), parent_id: grandparent.id }),
-      { each: 1, rows: true },
-    )
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     await plantMany(t, f, LIMITS.subtasks.max, (i) => ({ ...ordinary(i), parent_id: task.id }), {
       each: 100,
       rows: true,
@@ -927,7 +920,6 @@ describe('real limits', () => {
     expect(answer.subtasks.complete).toBe(true)
     expect(answer.subtasks.rows).toHaveLength(LIMITS.subtasks.max)
     expect(answer.task.description).toBe(ordinary(0).description)
-    expect(answer.parent?.id).toBe(grandparent.id)
     expect(read).toBeLessThan(TASK_WINDOW.bytes / MIB)
   })
 

@@ -70,7 +70,7 @@ type Crowd = OrgFixture & {
  * Platform, each hold User on TBED, and the crowd is split between them, so
  * every person sees TBED only through a team grant. Emil, in Hardware, holds
  * `n` open tasks in Firmware, each followed by him and `followers` of the
- * crowd. Every third one is a subtask of a task in Board rev, and every fifth
+ * crowd. Every third one is a subtask of a task in Firmware, and every fifth
  * is In Review with Emil as its reviewer. Leo, in Platform, can take them
  * all. */
 async function crowded(
@@ -120,7 +120,7 @@ async function crowded(
     parents.push(
       await plantIssue(t, {
         org_id: f.org.id,
-        project_id: f.sub2.id,
+        project_id: f.sub.id,
         title: `Parent ${i}`,
         assignee_id: f.user.id,
       }),
@@ -941,11 +941,11 @@ describe('a bulk update', () => {
   /* One update of each planted task, with a preload or without, answering
    * every message and follow it wrote. Each task goes to Leo. Of the tasks
    * that are not subtasks yet, one in two is also attached under a task in
-   * Board rev, and the other mentions p50, who sees Firmware but follows
+   * Firmware, and the other mentions p50, who sees Firmware but follows
    * none of them, and Pia, who sees no project. Nora follows every task but
    * sees no project either. Neither must hear anything or follow a task.
-   * Olga follows every task and sees Firmware through her own grant but not
-   * Board rev, so she must read the attach line without the parent's key. */
+   * Olga follows every task and sees Firmware through her own grant, so she
+   * reads the attach line with the parent's key. */
   async function handOver(withBulk: boolean) {
     const fx = await crowded(6, { t: newT() })
     const nora = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Nora', accepted_at: NOW })

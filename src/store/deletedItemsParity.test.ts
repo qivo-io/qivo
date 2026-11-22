@@ -1,24 +1,30 @@
 /* The Deleted items stand-in (store/deletedItemsStandIn.setup.ts), which
  * the page's jsdom tests and the browser benchmark read, held to the real
- * reads (convex/deletedItems.ts page, roles and people) on the trash
+ * reads (convex/deletedItems.ts page, item, roles and people) on the trash
  * fixture of the server's suites (convex/tests/trash.setup.ts). The
  * organization's tasks are deleted through the real mutations, as an
  * admin, a guest who holds a grant on the top-level project and an agent
- * through a personal token, one task item with a subtask, one sub-project
- * item with its tasks, and one item whose deleter is gone; the stand-in's
- * fixture is built from what the server stored and from each viewer's own
- * rows, deletedItems.item over every stored item. For an admin, the project's lead and a member,
- * every shape walks both page by page with limit 5 to the end and
- * compares the entries, the rows and the notes; roles and the first people
- * batches compare too. Everyday values: a handful of items, no figure at
- * its design size. */
+ * through a personal token: one task item with a subtask, one sub-project
+ * item with its tasks, one task item deleted before its sub-project, which
+ * only the admin sees, hidden, and one item whose deleter is gone. The
+ * stand-in's fixture is built from what the server stored and from each
+ * viewer's own rows, deletedItems.item over every stored item. For an
+ * admin, the project's lead and a member, every shape walks both page by
+ * page with limit 5 to the end and compares the entries, the rows and the
+ * notes; roles and the first people batches compare too, and for the
+ * admin the same again once the sub-project is back, restored by the
+ * server and by the stand-in. Everyday values: a handful of items, no
+ * figure at its design size. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
+import { canLeadProjects } from '../../convex/lib/access'
+import { byId } from '../../convex/lib/db'
 import { sightOf } from '../../convex/model/deletedItems'
 import type { DeletedPage, PageArgs } from '../../convex/model/deletedItemsPage'
+import type { DeletedRow } from '../../convex/model/deletedItemsRows'
 import {
   as,
   newT,
@@ -32,9 +38,13 @@ import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { installTrashTimers, itemFor, runSteps } from '../../convex/tests/trash.setup'
 import {
   type DeletedFixture,
+  deletedItemOf,
   deletedPageOf,
   deletedPeopleOf,
+  deletedRestore,
   deletedRolesOf,
+  type ProjectBack,
+  waitingBlock,
 } from './deletedItemsStandIn.setup'
 
 vi.hoisted(() => {
@@ -46,8 +56,9 @@ installTrashTimers()
 
 const later = () => vi.setSystemTime(Date.now() + 60_000)
 
-/** The trash fixture with its deletes: what each test reads. */
-async function world() {
+/** The trash fixture with its deletes: what each test reads. With
+    `archived`, Board rev is archived before it is deleted. */
+async function world(o: { archived?: boolean } = {}) {
   const t = newT()
   const f = await withReadingAdmin(t)
   const org_id = f.org.id
@@ -65,6 +76,8 @@ async function world() {
   const notes = await task(f.sub, 'Write release notes')
   await task(f.sub2, 'Route the power plane', { assignee_id: f.user.id })
   await task(f.sub2, 'Check antenna clearance')
+  // the only deleted task of the viewer's
+  const solder = await task(f.sub2, 'Solder the test points', { assignee_id: f.viewer.id })
   const del = (who: Doc<'profiles'>, id: string, subtask_ids?: string[]) =>
     as(t, who).mutation(api.issues.deleteDeep, {
       org_id,
@@ -77,6 +90,9 @@ async function world() {
   later()
   await del(f.admin, calibrate.id, [log.id])
   later()
+  await del(f.admin, solder.id)
+  later()
+  if (o.archived) await as(t, f.user).mutation(api.projects.archive, { org_id, id: f.sub2.id })
   await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: f.sub2.id })
   later()
   await del(f.admin, notes.id)
@@ -92,7 +108,7 @@ async function world() {
     })
     await ctx.db.patch(gone._id, { deleted_by: uuid() })
   })
-  return { t, f, log }
+  return { t, f, log, solder }
 }
 
 /** The stand-in's fixture for `who`, from what the server stored and the
@@ -133,7 +149,17 @@ async function fixtureFor(t: T, f: OrgFixture, who: Doc<'profiles'>): Promise<De
       const deleter = profiles.find((p) => p.id === doc.deleted_by)
       const names = doc.via !== undefined && (admin || doc.deleted_by === who.id)
       return {
-        row,
+        // a hidden row keeps the item's title, status and reason, which the
+        // stand-in leaves out while it is hidden
+        row:
+          row.hidden === true
+            ? {
+                ...row,
+                title: doc.name,
+                ...(doc.status === undefined ? {} : { status: doc.status }),
+                ...(doc.reason === undefined ? {} : { reason: doc.reason }),
+              }
+            : row,
         order: doc._creationTime,
         ...(deleter ? { deleted_by: deleter.id } : {}),
         how:
@@ -192,6 +218,34 @@ async function fixtureFor(t: T, f: OrgFixture, who: Doc<'profiles'>): Promise<De
   }
 }
 
+/** How `who` holds each project of project item `row` now that the
+    server's restore brought it back (ProjectBack), as the server says: the
+    level its sight gives them, whether it came back archived, and the lead
+    a view-only block names (model/deletedItems.ts blockDetail). */
+function backFrom(t: T, who: Doc<'profiles'>, row: DeletedRow): Promise<ProjectBack[]> {
+  return t.run(async (ctx) => {
+    const sight = await sightOf(ctx, who)
+    const back: ProjectBack[] = []
+    for (const entry of row.projects) {
+      const p = await byId(ctx, 'projects', entry.id)
+      if (p === null) throw new Error(`${entry.name} is not back`)
+      const level = sight.levels.levelOf(p)
+      const top = p.parent_id === undefined ? null : await byId(ctx, 'projects', p.parent_id)
+      const leadId = p.lead_id ?? top?.lead_id
+      const lead = leadId === undefined ? null : await byId(ctx, 'profiles', leadId)
+      back.push({
+        id: p.id,
+        name: p.name,
+        ...(p.parent_id === undefined ? {} : { parent_id: p.parent_id }),
+        level: level === null ? 'none' : level === 'viewer' ? 'viewer' : 'edit',
+        archived: p.archived_at !== undefined,
+        ...(lead !== null && canLeadProjects(lead) ? { lead: lead.name } : {}),
+      })
+    }
+    return back
+  })
+}
+
 /** Every page of `args` from both, limit 5, to the end. */
 async function both(t: T, who: Doc<'profiles'>, fx: DeletedFixture, args: PageArgs) {
   const walk = async (read: (a: PageArgs) => Promise<DeletedPage> | DeletedPage) => {
@@ -212,7 +266,7 @@ async function both(t: T, who: Doc<'profiles'>, fx: DeletedFixture, args: PageAr
 
 describe('the Deleted items stand-in against the real reads', () => {
   it('answers each shape of the page as the server does, for an admin, the lead and a member', async () => {
-    const { t, f, log } = await world()
+    const { t, f, log, solder } = await world()
     const org_id = f.org.id
     const shapes: PageArgs[] = [
       {},
@@ -232,6 +286,9 @@ describe('the Deleted items stand-in against the real reads', () => {
       { scope: { org_id, all: true }, someone: true },
       { scope: { org_id, all: true }, assignee: f.user.id },
       { scope: { org_id, project_ids: [f.meta.id] }, assignee: f.guest.id },
+      { scope: { org_id, all: true }, search: 'solder' },
+      { search: `QN-${solder.num}` },
+      { scope: { org_id, all: true }, assignee: f.viewer.id },
     ]
     // what the admin's pages held, so no shape compares two empty answers
     const held = new Map<number, { entries: number; hits: string[]; notes: string[] }>()
@@ -252,8 +309,9 @@ describe('the Deleted items stand-in against the real reads', () => {
     }
     // without a scope, the sub-project item and the scope note
     expect(held.get(0)).toMatchObject({ entries: 1, notes: ['scope_needed'] })
-    // All projects: the sub-project item, then the four task items
-    expect(held.get(2)?.entries).toBe(5)
+    // All projects: the sub-project item, then the five task items, the one
+    // deleted before its sub-project among them
+    expect(held.get(2)?.entries).toBe(6)
     // a subtask's word finds its task item with the subtask as its hit
     expect(held.get(7)?.hits).toEqual(['Log chamber readings'])
     // a task's word inside the deleted sub-project is an entry of its own
@@ -263,6 +321,10 @@ describe('the Deleted items stand-in against the real reads', () => {
     expect(held.get(14)?.entries).toBe(1)
     // a task item and a task inside the sub-project item
     expect(held.get(15)?.entries).toBe(2)
+    // the hidden item's tasks are not the admin's to read
+    expect(held.get(17)?.entries).toBe(0)
+    expect(held.get(18)?.entries).toBe(0)
+    expect(held.get(19)?.entries).toBe(0)
   })
 
   it('holds the roles and the people of both filters to the server’s', async () => {
@@ -273,7 +335,7 @@ describe('the Deleted items stand-in against the real reads', () => {
         await as(t, who).query(api.deletedItems.roles, {}),
       )
       for (const of of ['deleters', 'assignees'] as const)
-        for (const search of [undefined, 'us', 'relay']) {
+        for (const search of [undefined, 'us', 'relay', 'viewer']) {
           const args = { org_id: f.org.id, of, ...(search === undefined ? {} : { search }) }
           expect(deletedPeopleOf(fx, args), `${who.name} ${of} ${search}`).toEqual(
             await as(t, who).query(api.deletedItems.people, args),
@@ -281,4 +343,105 @@ describe('the Deleted items stand-in against the real reads', () => {
         }
     }
   })
+
+  /* What the admin holds on Board rev once it is back decides how the task
+     deleted before it shows: their grant on Testbed, which a restore does
+     not touch, gives them Edit, Viewer or nothing there, and an archived
+     Board rev comes back archived. */
+  it.each([
+    { name: 'Edit', grant: 'user', archived: false, row: { can_restore: true }, listed: true },
+    {
+      name: 'Viewer only',
+      grant: 'viewer',
+      archived: false,
+      row: { can_restore: false, blocked: { reason: 'view_only' } },
+      listed: true,
+    },
+    {
+      name: 'no access',
+      grant: null,
+      archived: false,
+      row: { hidden: true, can_restore: false, blocked: { reason: 'no_access' } },
+      listed: false,
+    },
+    {
+      name: 'Edit on a sub-project that comes back archived',
+      grant: 'user',
+      archived: true,
+      row: { can_restore: false, blocked: { reason: 'project_archived' } },
+      listed: true,
+    },
+  ] as const)(
+    'shows the admin a task deleted before its sub-project as the server does once the sub-project is back, with $name',
+    async (o) => {
+      const { t, f, solder } = await world({ archived: o.archived })
+      const org_id = f.org.id
+      const admin = f.admin
+      await t.run(async (ctx) => {
+        const grant = await ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', f.meta.id).eq('profile_id', admin.id),
+          )
+          .unique()
+        if (grant === null) throw new Error('the admin holds no grant on Testbed')
+        if (o.grant === null) await ctx.db.delete(grant._id)
+        else await ctx.db.patch(grant._id, { level: o.grant })
+      })
+      // the stand-in's fixture, which its own restore of the sub-project
+      // changes, and one rebuilt from what the server holds after its restore
+      const stand = await fixtureFor(t, f, admin)
+      const project = await itemFor(t, f.sub2.id)
+      const hidden = await itemFor(t, solder.id)
+      const waiting = stand.items.find((i) => i.row.id === hidden.id)?.row
+      expect(waiting).toMatchObject({
+        hidden: true,
+        can_restore: false,
+        blocked: { reason: 'project_deleted', item_id: project.id },
+      })
+      await as(t, admin).mutation(api.deletedItems.restore, { org_id, ids: [project.id] })
+      await runSteps(t)
+      const held = stand.items.find((i) => i.row.id === project.id)
+      if (held === undefined) throw new Error('no Board rev item')
+      held.back = await backFrom(t, admin, held.row)
+      // the server's with_project before the restore is the stand-in's
+      expect(waiting?.blocked).toEqual(waitingBlock(stand, project.id, f.sub2.id))
+      expect(deletedRestore(stand, { org_id, ids: [project.id] }).restored).toEqual([project.id])
+      const rebuilt = await fixtureFor(t, f, admin)
+      const shapes: PageArgs[] = [
+        { scope: { org_id, all: true } },
+        { scope: { org_id, all: true }, search: 'solder' },
+        { scope: { org_id, all: true }, assignee: f.viewer.id },
+        // the sub-project the restore brought back
+        { scope: { org_id, project_ids: [f.sub2.id] } },
+      ]
+      const people = { org_id, of: 'assignees' as const }
+      for (const [name, fx] of [
+        ['restored by the stand-in', stand],
+        ['rebuilt', rebuilt],
+      ] as const) {
+        for (const args of shapes) {
+          const { real, stand: page } = await both(t, admin, fx, args)
+          expect(page, `${name} ${JSON.stringify(args)}`).toEqual(real)
+        }
+        expect(deletedPeopleOf(fx, people), name).toEqual(
+          await as(t, admin).query(api.deletedItems.people, people),
+        )
+        expect(deletedItemOf(fx, hidden.id), name).toEqual(
+          await as(t, admin).query(api.deletedItems.item, { id: hidden.id }),
+        )
+      }
+      // the server's own outcome: the row, whether the restored sub-project
+      // lists the task, and whether its holder is a choice
+      expect(await as(t, admin).query(api.deletedItems.item, { id: hidden.id })).toMatchObject(
+        o.row,
+      )
+      const { real } = await both(t, admin, rebuilt, shapes[3])
+      expect(real.flatMap((p) => p.entries.map((e) => e.item_id))).toEqual(
+        o.listed ? [hidden.id] : [],
+      )
+      const choices = (await as(t, admin).query(api.deletedItems.people, people)).rows
+      expect(choices.map((p) => p.id).includes(f.viewer.id)).toBe(o.listed)
+    },
+  )
 })

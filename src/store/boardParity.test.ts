@@ -490,14 +490,14 @@ describe('Northstar', () => {
  * `subject`: in TBED's FW and PCB and in a sub-project of SKNK, a task
  * handed to review (the subject assigns, `user` reviews), one the subject
  * reviews and a legacy group In Review that the subject reviews, which
- * stays with its assignee; in FW a group with a subtask in a sibling
- * sub-project, a subtask whose parent is in that sibling, a task whose
- * only subtask is in an archived sub-project, an archived task, and a
- * task a legacy writer stored on the TBED meta itself, assigned to the
- * subject. Beside those: a group stored In Backlog with a To do subtask and
- * one stored Done with a Done subtask, and a group whose subtasks are the
- * subject's, `user`'s and one in the sibling. The sibling is hidden from a
- * subject who sees FW and PCB only. */
+ * stays with its assignee; in FW a group with an open and a Done subtask,
+ * an archived task, and a task a legacy writer stored on the TBED meta
+ * itself, assigned to the subject; the subject's task in a sibling
+ * sub-project, and a group with its subtask in an archived sub-project.
+ * Beside those: a group stored In Backlog with a To do subtask and one
+ * stored Done with a Done subtask, and a group whose subtasks are the
+ * subject's and `user`'s. The sibling is hidden from a subject who sees FW
+ * and PCB only. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   const skunk = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
@@ -542,25 +542,17 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     await task(project, { title: 'Its subtask', parent_id: legacy.id, assignee_id: subject.id })
   }
   const group = await task(f.sub, {
-    title: 'Group with a sibling subtask',
+    title: 'Group with an open and a Done subtask',
     status: 'progress',
     assignee_id: subject.id,
   })
-  await task(sibling, { title: 'Sibling subtask', parent_id: group.id, assignee_id: subject.id })
+  await task(f.sub, { title: 'Open subtask', parent_id: group.id, assignee_id: subject.id })
   await task(f.sub, { title: 'Done subtask', parent_id: group.id, status: 'done' })
-  const hiddenParent = await task(sibling, {
-    title: 'Parent in the sibling',
-    assignee_id: subject.id,
-  })
-  await task(f.sub, {
-    title: 'Subtask of a sibling parent',
-    parent_id: hiddenParent.id,
-    assignee_id: subject.id,
-  })
-  const lone = await task(f.sub, { title: 'Parent of an archived project subtask' })
+  await task(sibling, { title: 'In the sibling', assignee_id: subject.id })
+  const archivedGroup = await task(archived, { title: 'Group in an archived project' })
   await task(archived, {
-    title: 'In an archived project',
-    parent_id: lone.id,
+    title: 'Its subtask in an archived project',
+    parent_id: archivedGroup.id,
     assignee_id: subject.id,
   })
   await task(f.sub, { title: 'Archived task', assignee_id: subject.id, archived_at: NOW })
@@ -587,7 +579,6 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     assignee_id: f.user.id,
     status: 'done',
   })
-  await task(sibling, { title: 'Recent hidden', parent_id: recent.id })
   return { skunk, sibling, tasks }
 }
 
