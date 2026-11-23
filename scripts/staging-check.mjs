@@ -10479,6 +10479,10 @@ async function adminManagementCheck() {
 /** The step that checks Billing's storage figures (billingStorageCheck). */
 export const BILLING_STORAGE_STEP = 'ui/billing-storage'
 
+/** The query Storage by project reads its batches with
+ *  (src/panels/BillingStorage.tsx). */
+export const BILLING_STORAGE_QUERY = 'billing:storageProjects'
+
 /** What Billing shows for the run's sub-project and its one file
  *  (billingStorageCheck): the file's size, the row's bytes and file count
  *  in Storage by project, and the sentence current storage shows while the
@@ -10545,19 +10549,31 @@ async function billingStorageCheck() {
         "current storage reads Being counted, so the deployment's stored-byte totals are not complete",
       )
       expect(/^[0-9]/.test(current), `current storage reads ${short(current)}`)
-      const holds = await typeSearch(
-        app.locator('[data-billing-storage-search]'),
-        `${run.tag} storage`,
-        'the Storage by project search',
-      )
+      // the list before the search may hold this project alone, so the row
+      // counts only once the server answered the search for the text
+      const searched = `${run.tag} storage`
+      const record = recordFrames()
       const rows = app.locator('[data-billing-storage] [data-billing-storage-row]')
       const row = app.locator(`[data-billing-storage-row="${sub.id}:${sub.num}"]`)
-      expect(
-        await until(
-          async () => (await holds()) && (await rows.count()) === 1 && (await row.count()) === 1,
-        ),
-        `a search for the run tag does not list ${sub.name} alone`,
-      )
+      try {
+        const holds = await typeSearch(
+          app.locator('[data-billing-storage-search]'),
+          searched,
+          'the Storage by project search',
+        )
+        expect(
+          await until(
+            async () =>
+              (await holds()) &&
+              searchRead(record.frames, BILLING_STORAGE_QUERY, searched) &&
+              (await rows.count()) === 1 &&
+              (await row.count()) === 1,
+          ),
+          `a search for the run tag does not list ${sub.name} alone`,
+        )
+      } finally {
+        record.stop()
+      }
       const text = ((await row.textContent()) ?? '').trim()
       expect(text.includes(sub.name), `its row reads ${short(text)}, without ${sub.name}`)
       const size = ((await row.locator('[data-billing-storage-size]').textContent()) ?? '').trim()
