@@ -517,7 +517,7 @@ function RowMenuItems({
   )
 }
 
-const noteClass = 'directory-note px-2 py-1 text-sm text-text-2'
+const noteClass = 'px-2 py-1 text-sm text-text-2'
 
 /* The live sub-projects of the expanded project `parent`
    (projectNav.children), 25 at first and 25 more as the list's end scrolls
