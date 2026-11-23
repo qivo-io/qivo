@@ -209,11 +209,13 @@ html[data-appearance] .planner-navigation > :not(.planner-project-list) {
   display: none;
 }
 /* A window too short for the rail's fixed rows and the tree, such as a
-   phone on its side: the tree keeps the height of one row, or of three
-   where it holds three projects, so a short tree gets no empty space, and
-   the rail scrolls as a whole, also without a scrollbar, so the tree and
-   Settings stay in reach. A row the tree reveals scrolls into the rail's
-   view too (components/SidebarProjects.tsx intoTreeView). */
+   phone on its side: the rail scrolls as a whole, also without a
+   scrollbar, so the tree and Settings stay in reach, and a row the tree
+   reveals scrolls into the rail's view too (components/SidebarProjects.tsx
+   intoTreeView). The tree keeps a height that its rows fill, so it leaves
+   no empty space: one row, two (66px with their gap) from two projects or
+   one sub-project, three (100px) from three projects or two sub-projects,
+   and a tree with no project the height of its message. */
 @media (max-height: 600px) {
   html[data-appearance] .planner-navigation {
     overflow-y: auto;
@@ -226,9 +228,20 @@ html[data-appearance] .planner-navigation > :not(.planner-project-list) {
     min-height: 32px;
     overscroll-behavior: auto;
   }
+  html[data-appearance] .planner-project-list:not(:has(> [data-sidebar-group])) {
+    min-height: min-content;
+  }
   html[data-appearance]
-    .planner-project-list:has(
-      > [data-sidebar-group] ~ [data-sidebar-group] ~ [data-sidebar-group]
+    .planner-project-list:is(
+      :has(> [data-sidebar-group] ~ [data-sidebar-group]),
+      :has([data-subproject-row])
+    ) {
+    min-height: 66px;
+  }
+  html[data-appearance]
+    .planner-project-list:is(
+      :has(> [data-sidebar-group] ~ [data-sidebar-group] ~ [data-sidebar-group]),
+      :has([data-subproject-row] ~ [data-subproject-row])
     ) {
     min-height: 100px;
   }
