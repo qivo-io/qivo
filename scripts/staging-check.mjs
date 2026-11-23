@@ -196,9 +196,9 @@
  * tree from the deployment's navigation reads (projectNav.page) to light
  * the project wherever it sorts, with Alpha and Zulu under it
  * (projectNav.children), stars the project through the store, which the
- * server's answer moves into the tree's favorites with its mark, opens
- * Zulu from the tree, checks that the tree shows no scrollbar, and unstars
- * the project again (ui/sidebar-projects).
+ * server's answer moves into the tree's favorites, opens Zulu from the
+ * tree, checks that the tree shows no scrollbar, and unstars the project
+ * again (ui/sidebar-projects).
  * It makes a project of its own with a sub-project, opens the sub-project
  * by its address, which the app remembers, opens My view and All projects,
  * clears the browser's copy of the preferences and opens the bare address,
@@ -11454,7 +11454,7 @@ async function sidebarProjectsCheck() {
         'M stays in the favorites once unstarred',
       )
       starred = false
-      return `lit ${M.name} wherever it sorts with Alpha and Zulu under it, moved it into the favorites with its mark and out again, and opened Zulu from the tree, which shows no scrollbar`
+      return `lit ${M.name} wherever it sorts with Alpha and Zulu under it, moved it into the favorites and out again, and opened Zulu from the tree, which shows no scrollbar`
     } finally {
       if (starred) await setStar(false).catch(() => {})
     }

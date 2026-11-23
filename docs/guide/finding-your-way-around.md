@@ -12,7 +12,7 @@ The **Projects** tree lists the projects you can access through your own
 access: the projects you lead, those you hold a grant or a team share on,
 and the projects above the sub-projects you can open, including projects
 shared by other organizations. Your favorites come first and then the
-rest, each group by name. The tree shows no stars: you set them in
+rest, each group by name. The tree shows no stars. You set them in
 [All projects](#all-projects). A project of another organization shows that
 organization's name under its own.
 
@@ -112,7 +112,7 @@ finds “Café”. It asks once you pause typing, 25 results a page with
 **Previous** and **Next**, your matching favorites first. Each sub-project
 shows with its project, such as “Luma Sensor › Firmware”, and the
 organization's name is not searched. Clearing the field lists your projects
-again from the first page. **New project** next to the field appears if you
+again from the first page. **New project** appears with the field if you
 can create projects
 ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
 
