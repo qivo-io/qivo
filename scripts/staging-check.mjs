@@ -1945,11 +1945,13 @@ async function openAccountMcp() {
 
 /** Waits until MCP access's list `list` (MCP_LISTS) has answered the
  *  search `text` (mcpListSettled), reading its end line's two marks at
- *  once. */
-async function listSettled(list, text = '') {
+ *  once. Given `holds` (typeSearch), each look first checks that the
+ *  list's box still holds `text`. */
+async function listSettled(list, text = '', holds = null) {
   const line = app.locator(`[${list.end}]`)
   expect(
     await until(async () => {
+      if (holds !== null && !(await holds())) return false
       const [end, settled] = await evaluate(
         line,
         (element, marks) => marks.map((mark) => element.getAttribute(mark)),
@@ -1968,8 +1970,7 @@ async function listSettled(list, text = '') {
 async function searchMcpList(list, text) {
   const box = app.locator(`[${list.box}]`)
   if (!(await box.count())) return false
-  await box.fill(text)
-  await listSettled(list, text)
+  await listSettled(list, text, await typeSearch(box, text, 'an MCP access search'))
   return true
 }
 
@@ -2052,13 +2053,13 @@ async function openUsers() {
 /** Types `text` into the search `field`, which `what` names, and answers
  *  `holds`, a check for the waits that follow. In some runs a search field
  *  is empty again a moment after the typing, in Chromium and in WebKit, on
- *  Settings › Users, in a team's Add member picker and on Deleted items,
- *  for a cause not found. It was seen where the step types as soon as a
- *  page or a picker shows. `holds` answers whether the field still holds
- *  the text. When it does not, it types the text again, once, and says so
- *  in a NOTE, with whether the field is still the element it typed into,
- *  so each time leaves its evidence. A field that loses its text a second
- *  time fails the step. */
+ *  Settings › Users, in a team's Add member picker, on Deleted items and
+ *  in Storage by project on Settings › Billing, for a cause not found. It
+ *  was seen where the step types as soon as a page or a picker shows.
+ *  `holds` answers whether the field still holds the text. When it does
+ *  not, it types the text again, once, and says so in a NOTE, with whether
+ *  the field is still the element it typed into, so each time leaves its
+ *  evidence. A field that loses its text a second time fails the step. */
 export async function typeSearch(field, text, what) {
   let retyped = false
   const type = async () => {
@@ -2674,11 +2675,16 @@ async function openDeletedItems(kind, search) {
   if ((await field.count()) > 0) await field.press('Escape')
   await field.waitFor({ state: 'detached', timeout: 10_000 })
   await app.getByRole('radio', { name: kind, exact: true }).click()
-  await app.locator(`[${m.search}]`).fill(search)
+  const holds = await typeSearch(app.locator(`[${m.search}]`), search, "Deleted items' search")
   // the page sends a search once typing rests, and a new filter opens its
   // first page afresh, so what shows after that is the search's answer
-  await sleep(1000)
-  const page = await deletedPageNow()
+  // a text lost while the page answered is typed again, and the page read
+  // again
+  let page
+  do {
+    await sleep(1000)
+    page = await deletedPageNow()
+  } while (!(await holds()))
   expect(
     ((await trigger.textContent()) ?? '').trim().startsWith('All projects') && !page.unscoped,
     'Deleted items did not take All projects as its scope',
@@ -6438,19 +6444,29 @@ async function relationPickersCheck() {
       await picker.waitFor({ timeout: 20_000 })
       return picker
     }
-    const typeInto = async (picker, text) => {
-      await picker.locator('input').fill(text)
-    }
-    const shows = async (picker, text) =>
-      await until(async () => ((await picker.textContent()) ?? '').includes(text), 30_000)
+    /** Types `text` into `picker`'s search and answers its holds check
+     *  (typeSearch). */
+    const typeInto = (picker, text) =>
+      typeSearch(picker.locator('input'), text, 'a relation picker search')
+    const shows = async (picker, text, holds = async () => true) =>
+      await until(
+        async () => (await holds()) && ((await picker.textContent()) ?? '').includes(text),
+        30_000,
+      )
+    /** Whether `row` shows within 30 s while the search holds. */
+    const listed = (row, holds) =>
+      until(async () => (await holds()) && (await row.isVisible()), 30_000)
     await openWindow(run.t0)
     const link = await openPicker('Link task', 'link')
     // the other fixture task by its ID, from the deployment's batch
-    await typeInto(link, run.tz.key)
-    await link.locator(`[data-picker-row="${run.tz.id}"]`).waitFor({ timeout: 30_000 })
+    const byKey = await typeInto(link, run.tz.key)
+    expect(
+      await listed(link.locator(`[data-picker-row="${run.tz.id}"]`), byKey),
+      `Link task does not list ${run.tz.key} for its ID`,
+    )
     // a search with no match, at the project's end and at the list's end
-    await typeInto(link, `${run.tag} nothing`)
-    expect(await shows(link, RELATION_EXPECTED.family), 'no end of the project')
+    const noMatch = await typeInto(link, `${run.tag} nothing`)
+    expect(await shows(link, RELATION_EXPECTED.family, noMatch), 'no end of the project')
     await link.locator('[data-picker-all]').click()
     expect(await shows(link, RELATION_EXPECTED.none), 'no end of the list')
     expect(
@@ -6459,8 +6475,8 @@ async function relationPickersCheck() {
     )
     // a task of the second project only after Search all your projects
     if (far) {
-      await typeInto(link, far.title)
-      expect(await shows(link, RELATION_EXPECTED.more), 'no Search all your projects')
+      const byTitle = await typeInto(link, far.title)
+      expect(await shows(link, RELATION_EXPECTED.more, byTitle), 'no Search all your projects')
       eq(await link.locator(`[data-picker-row="${far.id}"]`).count(), 0, 'a far task too soon')
       await link.locator('[data-picker-all]').click()
       await link.locator(`[data-picker-row="${far.id}"]`).waitFor({ timeout: 30_000 })
@@ -6471,9 +6487,12 @@ async function relationPickersCheck() {
     if (run.child) {
       await openWindow(run.parent)
       const sub = await openPicker('Add subtask', 'subtask')
-      await typeInto(sub, run.child.key)
+      const childKey = await typeInto(sub, run.child.key)
       const kid = sub.locator(`[data-picker-row="${run.child.id}"][data-picker-current]`)
-      await kid.waitFor({ timeout: 30_000 })
+      expect(
+        await listed(kid, childKey),
+        `Add subtask does not list ${run.child.key} as a current subtask`,
+      )
       eq(await kid.getAttribute('aria-pressed'), 'true', 'the current subtask is not checked')
       await app.keyboard.press('Escape')
       await sub.waitFor({ state: 'detached', timeout: 10_000 })
@@ -6564,16 +6583,24 @@ async function labelMentionPickersCheck() {
     })
     const dialog = app.locator('[role="dialog"]')
     await dialog.locator('[data-task-title]').waitFor({ timeout: 60_000 })
-    /** Opens Add label and types `text` into its search. */
+    /** Opens Add label, types `text` into its search and answers the
+     *  picker with the search's holds check (typeSearch). */
     const pickerFor = async (text) => {
       const add = dialog.locator('button[aria-label="Add label"]')
       expect(await until(async () => await add.isEnabled()), 'Add label stays disabled')
       await add.click()
       const picker = app.locator('[data-label-picker]')
       await picker.waitFor({ timeout: 20_000 })
-      await picker.locator('input[aria-label="Search labels"]').fill(text)
-      return picker
+      const holds = await typeSearch(
+        picker.locator('input[aria-label="Search labels"]'),
+        text,
+        "Add label's search",
+      )
+      return { picker, holds }
     }
+    /** Whether `target` shows within 30 s while the search holds. */
+    const shown = (target, holds) =>
+      until(async () => (await holds()) && (await target.isVisible()), 30_000)
     /** Closes the picker and takes `label` off with its chip's ×. */
     const takeOff = async (picker, label) => {
       await app.keyboard.press('Escape')
@@ -6585,9 +6612,9 @@ async function labelMentionPickersCheck() {
       )
     }
     // a label of its own, from the deployment's batch, on and off
-    const picker = await pickerFor(run.tag)
+    const { picker, holds } = await pickerFor(run.tag)
     const option = picker.locator(`[data-label-option="${found.id}"]`)
-    await option.waitFor({ timeout: 30_000 })
+    expect(await shown(option, holds), `Add label does not list ${found.name} for the run tag`)
     await option.click()
     expect(
       await until(async () => (await carried()).includes(found.id)),
@@ -6596,8 +6623,11 @@ async function labelMentionPickersCheck() {
     eq(await option.getAttribute('aria-pressed'), 'true', 'the picked label is not checked')
     await takeOff(picker, found)
     // a new label from the picker, once the deployment says it is free
-    const maker = await pickerFor(madeName)
-    await maker.locator('[data-label-create]').waitFor({ timeout: 30_000 })
+    const { picker: maker, holds: makerHolds } = await pickerFor(madeName)
+    expect(
+      await shown(maker.locator('[data-label-create]'), makerHolds),
+      `Add label does not offer to create ${madeName}`,
+    )
     await maker.locator('input[aria-label="Search labels"]').press('Enter')
     let made = null
     expect(
@@ -7386,9 +7416,16 @@ async function ownerPickersCheck() {
       await trigger.click()
       const list = app.locator('[data-owner-list]')
       await list.waitFor({ timeout: 20_000 })
-      await list.locator('[data-owner-search]').fill(text)
+      const holds = await typeSearch(
+        list.locator('[data-owner-search]'),
+        text,
+        "an owner list's search",
+      )
       const row = list.locator(`[data-owner-choice="${id}"]`)
-      await row.waitFor({ timeout: 30_000 })
+      expect(
+        await until(async () => (await holds()) && (await row.isVisible()), 30_000),
+        `a search of the owner list for ${text} does not list its choice`,
+      )
       await row.click()
       await list.waitFor({ state: 'detached', timeout: 10_000 })
     }
@@ -7900,12 +7937,18 @@ async function inboxListCheck() {
       // the search goes to the server, by t0's key and by M's name
       const search = app.locator(`[${m.search}]`)
       for (const text of [t0.key, M.name]) {
-        await search.fill(text)
+        const holds = await typeSearch(search, text, "the Inbox's search")
         expect(
-          await until(async () => pages().some((args) => args.search === text), 30_000),
+          await until(
+            async () => (await holds()) && pages().some((args) => args.search === text),
+            30_000,
+          ),
           `the Inbox did not search the server for ${text}`,
         )
-        await row.waitFor({ timeout: 60_000 })
+        expect(
+          await until(async () => (await holds()) && (await row.isVisible()), 60_000),
+          `the Inbox does not list t0 for a search of ${text}`,
+        )
       }
       // the list shows the searched page until the cleared text rests and
       // then reads its page afresh, so the menus below, which press t0's
@@ -9165,11 +9208,17 @@ async function settingsLabelsCheck() {
       waitUntil: 'domcontentloaded',
     })
     await app.locator('[data-org-labels][data-labels-state="ok"]').waitFor({ timeout: 60_000 })
-    await app.locator('[data-labels-search]').fill(label.name)
+    const holds = await typeSearch(
+      app.locator('[data-labels-search]'),
+      label.name,
+      'the Labels search',
+    )
     const rows = app.locator('[data-org-labels] [data-label-row]')
     const row = app.locator(`[data-org-labels] [data-label-row="${label.id}"]`)
     expect(
-      await until(async () => (await rows.count()) === 1 && (await row.count()) === 1),
+      await until(
+        async () => (await holds()) && (await rows.count()) === 1 && (await row.count()) === 1,
+      ),
       `a search for ${label.name} does not list it alone`,
     )
     eq(await row.locator('[data-label-kept]').count(), 0, 'kept rows')
@@ -9346,9 +9395,16 @@ async function rosterPartsCheck() {
       const choice = app.locator(`[data-filter-assignee="${holder.id}"]`).first()
       await choice.waitFor({ timeout: 30_000 })
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.people)).length > 0, true, 'the menu read')
-      await search.fill(OWNER_PICKERS_PERSON)
-      await choice.waitFor({ state: 'detached', timeout: 30_000 })
-      await app.getByText('No matching people.').first().waitFor({ timeout: 30_000 })
+      const nobody = await typeSearch(search, OWNER_PICKERS_PERSON, "the Assignee menu's search")
+      const noMatch = app.getByText('No matching people.').first()
+      expect(
+        await until(
+          async () =>
+            (await nobody()) && (await choice.count()) === 0 && (await noMatch.isVisible()),
+          30_000,
+        ),
+        `the Assignee menu does not answer No matching people for ${OWNER_PICKERS_PERSON}`,
+      )
       eq(
         await app.locator(`[data-filter-assignee="${leo.id}"]`).count(),
         0,
@@ -9389,11 +9445,16 @@ async function rosterPartsCheck() {
       await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
       await app.locator('[data-task-subscribe]').first().click()
       await app.locator('[data-task-subscriber-add-open]').first().click()
-      await app.locator('[data-task-subscriber-search]').first().fill(leo.name)
-      await app
-        .locator(`[data-task-subscriber-add="${leo.id}"]`)
-        .first()
-        .waitFor({ timeout: 30_000 })
+      const follower = await typeSearch(
+        app.locator('[data-task-subscriber-search]').first(),
+        leo.name,
+        "the follower popover's search",
+      )
+      const addLeo = app.locator(`[data-task-subscriber-add="${leo.id}"]`).first()
+      expect(
+        await until(async () => (await follower()) && (await addLeo.isVisible()), 30_000),
+        `+ Add does not list ${leo.name} for a search of ${leo.name}`,
+      )
       await app.keyboard.press('Escape')
       await app.keyboard.press('Escape')
       // a refused removal fails the step, so Leo never keeps Viewer on
@@ -9410,9 +9471,16 @@ async function rosterPartsCheck() {
         .locator('[data-workspace-view] [data-sync-page][data-sync-state="ok"]')
         .waitFor({ timeout: 60_000 })
       await app.locator('[data-sync-scope-trigger]').first().click()
-      await app.locator('[data-sync-scope-search]').first().fill(run.tag)
+      const scopeHolds = await typeSearch(
+        app.locator('[data-sync-scope-search]').first(),
+        run.tag,
+        "Team sync's scope search",
+      )
       const pick = app.locator(`[data-sync-scope-choice="team:${team.id}"]`).first()
-      await pick.waitFor({ timeout: 30_000 })
+      expect(
+        await until(async () => (await scopeHolds()) && (await pick.isVisible()), 30_000),
+        `Team sync's scope menu does not list ${team.name} for the run tag`,
+      )
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.teams)).length > 0, true, 'the scope read')
       const picked = sent.length
       await pick.click()
@@ -9968,9 +10036,12 @@ async function pickProject(trigger, name, id, many = true) {
   await trigger.click()
   const field = app.locator('[data-project-picker-search]')
   await field.waitFor({ timeout: 30_000 })
-  await field.fill(name)
+  const holds = await typeSearch(field, name, "the project picker's search")
   const row = app.locator(`[data-project-pick="${id}"]`)
-  await row.waitFor({ timeout: 30_000 })
+  expect(
+    await until(async () => (await holds()) && (await row.isVisible()), 30_000),
+    `the project picker does not list project ${id} for a search of ${name}`,
+  )
   if (!many || (await row.getAttribute('aria-checked')) !== 'true') await row.click()
   if (many) {
     await field.fill('')
@@ -10338,12 +10409,17 @@ async function adminManagementCheck() {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
       waitUntil: 'domcontentloaded',
     })
-    await app.locator(`[${m.search}]`).fill(run.tag)
+    const holds = await typeSearch(
+      app.locator(`[${m.search}]`),
+      run.tag,
+      'the Settings › Projects search',
+    )
     // the search's own rows, every one with the tag, not the list before
     // it, whose row goes with a menu opened on it once the search answers
     const listed = app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`)
     expect(
       await until(async () => {
+        if (!(await holds())) return false
         const names = await listed.allTextContents()
         return names.length > 0 && names.every((name) => name.includes(run.tag))
       }, 60_000),
@@ -10378,11 +10454,12 @@ async function adminManagementCheck() {
     const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
     const input = palette.getByRole('combobox', { name: 'Search tasks and projects' })
     await input.waitFor()
-    await input.fill(`${run.tag} managed work`)
+    const searched = await typeSearch(input, `${run.tag} managed work`, 'the Search palette')
     const item = (key) => palette.locator(`[cmdk-item][data-value="issue-${key}"]`)
     expect(
       await until(
         async () =>
+          (await searched()) &&
           (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null &&
           (await item(control.key).count()) === 1,
         30_000,
@@ -10401,6 +10478,10 @@ async function adminManagementCheck() {
 
 /** The step that checks Billing's storage figures (billingStorageCheck). */
 export const BILLING_STORAGE_STEP = 'ui/billing-storage'
+
+/** The query Storage by project reads its batches with
+ *  (src/panels/BillingStorage.tsx). */
+export const BILLING_STORAGE_QUERY = 'billing:storageProjects'
 
 /** What Billing shows for the run's sub-project and its one file
  *  (billingStorageCheck): the file's size, the row's bytes and file count
@@ -10468,13 +10549,31 @@ async function billingStorageCheck() {
         "current storage reads Being counted, so the deployment's stored-byte totals are not complete",
       )
       expect(/^[0-9]/.test(current), `current storage reads ${short(current)}`)
-      await app.locator('[data-billing-storage-search]').fill(`${run.tag} storage`)
+      // the list before the search may hold this project alone, so the row
+      // counts only once the server answered the search for the text
+      const searched = `${run.tag} storage`
+      const record = recordFrames()
       const rows = app.locator('[data-billing-storage] [data-billing-storage-row]')
       const row = app.locator(`[data-billing-storage-row="${sub.id}:${sub.num}"]`)
-      expect(
-        await until(async () => (await rows.count()) === 1 && (await row.count()) === 1),
-        `a search for the run tag does not list ${sub.name} alone`,
-      )
+      try {
+        const holds = await typeSearch(
+          app.locator('[data-billing-storage-search]'),
+          searched,
+          'the Storage by project search',
+        )
+        expect(
+          await until(
+            async () =>
+              (await holds()) &&
+              searchRead(record.frames, BILLING_STORAGE_QUERY, searched) &&
+              (await rows.count()) === 1 &&
+              (await row.count()) === 1,
+          ),
+          `a search for the run tag does not list ${sub.name} alone`,
+        )
+      } finally {
+        record.stop()
+      }
       const text = ((await row.textContent()) ?? '').trim()
       expect(text.includes(sub.name), `its row reads ${short(text)}, without ${sub.name}`)
       const size = ((await row.locator('[data-billing-storage-size]').textContent()) ?? '').trim()
@@ -10545,12 +10644,17 @@ async function billingAccountsCheck() {
     expect(/^[0-9]/.test(calls), `API calls read ${short(calls)}`)
     const period = await app.locator(`[${m.period}]`).getAttribute(m.period)
     expect(period, 'Billing names no period')
-    await app.locator(`[${m.search}]`).fill(run.tag)
+    const holds = await typeSearch(
+      app.locator(`[${m.search}]`),
+      run.tag,
+      'the API calls by account search',
+    )
     const rows = app.locator(`[data-billing-accounts] [${m.row}]`)
     const rowOf = (agent) => app.locator(`[${m.row}="${agent.id}"]`)
     expect(
       await until(
         async () =>
+          (await holds()) &&
           (await rows.count()) === 2 &&
           (await rowOf(std).count()) === 1 &&
           (await rowOf(viewer).count()) === 1,
@@ -10575,11 +10679,16 @@ async function billingAccountsCheck() {
 
     await app.goto(billing, { waitUntil: 'domcontentloaded' })
     await app.locator(`[${m.namesToggle}="billable"] summary`).click()
-    await app.locator(`[${m.namesSearch}="billable"]`).fill(run.tag)
+    const namesHold = await typeSearch(
+      app.locator(`[${m.namesSearch}="billable"]`),
+      run.tag,
+      'the Who counts toward your bill search',
+    )
     const names = app.locator(`[data-billing-names-list="billable"] [${m.billable}]`)
     expect(
       await until(
         async () =>
+          (await namesHold()) &&
           (await names.count()) === 2 &&
           (await app.locator(`[${m.billable}="${std.id}"]`).count()) === 1 &&
           (await app.locator(`[${m.billable}="${viewer.id}"]`).count()) === 1,
@@ -10772,11 +10881,20 @@ async function settingsProjectsCheck() {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-archived`, {
       waitUntil: 'domcontentloaded',
     })
-    await app.locator(`[${m.archivedSearch}]`).fill(run.tag)
+    const archivedHolds = await typeSearch(
+      app.locator(`[${m.archivedSearch}]`),
+      run.tag,
+      'the Archived projects search',
+    )
     const entry = app.locator(`[${m.entry}="${lists.id}"]:not([${m.under}])`)
     await entry.waitFor({ timeout: 60_000 })
-    for (const sub of [a, b])
-      await app.locator(`[${m.entry}="${sub.id}"][${m.under}]`).waitFor({ timeout: 30_000 })
+    for (const sub of [a, b]) {
+      const hit = app.locator(`[${m.entry}="${sub.id}"][${m.under}]`)
+      expect(
+        await until(async () => (await archivedHolds()) && (await hit.isVisible()), 30_000),
+        `the Archived projects search for the run tag does not list ${sub.name} under ${lists.name}`,
+      )
+    }
     await entry.locator(`[${m.toggle}="${lists.id}"]`).click()
     const chip = (sub) => entry.locator(`[${m.chip}="${sub.id}"]`)
     await chip(a).waitFor({ timeout: 30_000 })
@@ -10961,10 +11079,19 @@ async function projectsPartCheck() {
         ),
         `the New task picker did not subscribe ${PROJECTS_PART_READS.targets}`,
       )
-      await picker.locator(`[${marks.pickerSearch}]`).fill(run.tag)
+      const holds = await typeSearch(
+        picker.locator(`[${marks.pickerSearch}]`),
+        run.tag,
+        "the New task picker's search",
+      )
       const group = picker.locator(`[${marks.group}="${M.id}"]`)
-      for (const sub of [A, Z])
-        await group.locator(`[${marks.target}="${sub.id}"]`).waitFor({ timeout: 60_000 })
+      for (const sub of [A, Z]) {
+        const target = group.locator(`[${marks.target}="${sub.id}"]`)
+        expect(
+          await until(async () => (await holds()) && (await target.isVisible()), 60_000),
+          `the New task picker does not list ${sub.name} under ${M.name} for the run tag`,
+        )
+      }
       await app.keyboard.press('Escape')
       await picker.waitFor({ state: 'detached', timeout: 30_000 })
       // Team sync's scope menu, from the home organization's projects
@@ -10982,8 +11109,16 @@ async function projectsPartCheck() {
         await until(async () => projectsPartProblems(sent, { pageOf: home }).length === 0, 30_000),
         `the scope menu: ${projectsPartProblems(sent, { pageOf: home }).join('; ')}`,
       )
-      await app.locator(`[${marks.scopeSearch}]`).fill(run.tag)
-      await app.locator(`[${marks.scopeChoice}="project:${M.id}"]`).waitFor({ timeout: 60_000 })
+      const scopeHolds = await typeSearch(
+        app.locator(`[${marks.scopeSearch}]`),
+        run.tag,
+        "Team sync's scope search",
+      )
+      const choice = app.locator(`[${marks.scopeChoice}="project:${M.id}"]`)
+      expect(
+        await until(async () => (await scopeHolds()) && (await choice.isVisible()), 60_000),
+        `Team sync's scope menu does not list ${M.name} for the run tag`,
+      )
       await app.keyboard.press('Escape')
       return `booted M's Board with no ${PROJECTS_PART} and a byIds read of M, listed Alpha and Zulu under M in the New task picker from projectNav.targets, and offered M in Team sync's scope menu from the home organization's list`
     } finally {
@@ -11931,10 +12066,11 @@ async function deletedTaskItem(own) {
   await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
   await pickProject(app.locator(`[${m.scope}]`), M.name, M.id)
   await app.getByRole('radio', { name: 'Tasks', exact: true }).click()
-  await app.locator(`[${m.search}]`).fill(own.title)
+  const holds = await typeSearch(app.locator(`[${m.search}]`), own.title, "Deleted items' search")
   const none = DELETED_ITEMS_EXPECTED.none(own.title)
   let found = { id: null, why: `the search for “${own.title}” did not answer within a minute` }
   await until(async () => {
+    if (!(await holds())) return false
     if ((await app.locator(`[${m.state}="ok"]`).count()) === 0) return false
     const ends = await app.locator(`[${m.end}]`).allTextContents()
     if (ends.some((line) => line.trim() === none)) {
@@ -11994,9 +12130,10 @@ async function archivedTasksPageCheck(target) {
       (await page.locator('[data-archive-row]').count()) > 1,
       'the project lists only one archived task without a search',
     )
-    await box.fill(target.key)
+    const byKey = await typeSearch(box, target.key, "Archived tasks' search")
     expect(
       await until(async () => {
+        if (!(await byKey())) return false
         const rows = await page
           .locator('[data-archive-row]')
           .evaluateAll((els) => els.map((el) => el.getAttribute('data-archive-row')))
@@ -12010,8 +12147,12 @@ async function archivedTasksPageCheck(target) {
       'the count line',
     )
     const nothing = `${run.tag} no such task`
-    await box.fill(nothing)
-    await page.getByText(`No archived tasks match “${nothing}”.`).waitFor()
+    const noMatch = await typeSearch(box, nothing, "Archived tasks' search")
+    const none = page.getByText(`No archived tasks match “${nothing}”.`)
+    expect(
+      await until(async () => (await noMatch()) && (await none.isVisible()), 30_000),
+      `the search for ${nothing} does not say no archived task matches`,
+    )
     return `found ${target.key} by search`
   })
 }
@@ -12225,9 +12366,16 @@ async function startupSelectionCheck() {
       STARTUP_LOST_NOTE,
       "the chooser's note",
     )
-    await app.locator(`[${m.chooser}] [${m.search}]`).fill(run.tag)
+    const holds = await typeSearch(
+      app.locator(`[${m.chooser}] [${m.search}]`),
+      run.tag,
+      "the chooser's search",
+    )
     const pick = app.locator(`[${m.chooser}] [${m.pick}="${M.id}"]`)
-    await pick.waitFor({ timeout: 60_000 })
+    expect(
+      await until(async () => (await holds()) && (await pick.isVisible()), 60_000),
+      `the chooser does not list ${M.name} for the run tag`,
+    )
     await pick.click()
     await opens(M)
     expect(
@@ -12284,11 +12432,14 @@ async function projectPickerCheck(tasks) {
     await settledPicker(trigger)
     await trigger.click()
     const field = app.locator('[data-project-picker-search]')
-    await field.fill(M.name)
+    const byM = await typeSearch(field, M.name, "the project picker's search")
     // the page opens on the project of the scope behind Settings, which
     // can be M; chosen whole, it includes Alpha and Zulu, so it comes off
     const whole = app.locator(`[data-project-pick="${M.id}"]`)
-    await whole.waitFor({ timeout: 30_000 })
+    expect(
+      await until(async () => (await byM()) && (await whole.isVisible()), 30_000),
+      `the project picker does not list ${M.name} for its name`,
+    )
     if ((await whole.getAttribute('aria-checked')) === 'true') await whole.click()
     await app.locator(`[${PICKER_EXPECTED.expand}="${M.id}"]`).click()
     for (const p of [A, Z]) {
@@ -12306,9 +12457,12 @@ async function projectPickerCheck(tasks) {
     expect(await exactly([one.id, three.id]), 'Alpha alone does not list exactly 1 and 3')
     // Zulu by its own name, with its project, from projectNav.search
     await trigger.click()
-    await field.fill(Z.name)
+    const byZ = await typeSearch(field, Z.name, "the project picker's search")
     const zulu = app.locator(`[data-project-pick="${Z.id}"]`)
-    await zulu.waitFor({ timeout: 30_000 })
+    expect(
+      await until(async () => (await byZ()) && (await zulu.isVisible()), 30_000),
+      `the project picker does not list ${Z.name} for its name`,
+    )
     eq(
       ((await zulu.textContent()) ?? '').trim(),
       `${M.name}${PICKER_EXPECTED.place}${Z.name}`,
@@ -12352,15 +12506,18 @@ async function projectPickerCheck(tasks) {
       'Search in',
     )
     await palette.locator('[data-palette-archived]').click()
-    await palette
-      .getByRole('combobox', { name: 'Search tasks and projects' })
-      .fill(`${run.tag} archived`)
+    const searched = await typeSearch(
+      palette.getByRole('combobox', { name: 'Search tasks and projects' }),
+      `${run.tag} archived`,
+      'the Search palette',
+    )
     const results = () =>
       palette
         .locator('[cmdk-item]')
         .evaluateAll((els) => els.map((el) => el.getAttribute('data-value')))
     expect(
       await until(async () => {
+        if (!(await searched())) return false
         const busy = await palette.locator('[cmdk-list]').getAttribute('aria-busy')
         const rows = await results()
         return busy === null && rows.length === 1 && rows[0] === `issue-${two.key}`
@@ -12406,21 +12563,27 @@ async function paletteSearchCheck(target, active) {
     const answered = async () =>
       (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null
     // the filter returns active matches
-    await input.fill(active.title)
+    const byActive = await typeSearch(input, active.title, 'the Search palette')
     expect(
       await until(
         async () =>
+          (await byActive()) &&
           (await answered()) &&
           (await palette.locator(`[cmdk-item][data-value="issue-${active.key}"]`).count()) === 1,
       ),
       `Search did not find the active ${active.key} with Include archived tasks off`,
     )
     // and leaves archived ones out
-    await input.fill(target.title)
-    expect(await until(answered), 'Search did not answer with the toggle off')
+    const byTarget = await typeSearch(input, target.title, 'the Search palette')
+    expect(
+      await until(async () => (await byTarget()) && (await answered())),
+      'Search did not answer with the toggle off',
+    )
     eq(await row.count(), 0, 'the archived task with Include archived tasks off')
     const failed = await palette.locator('[data-palette-retry]').count()
     eq(failed, 0, 'a failed search with the toggle off')
+    // the toggle keeps the typed text, so nothing types it again here: a
+    // toggle that cleared the search must fail the step
     await palette.locator('[data-palette-archived]').click()
     expect(
       await until(async () => (await answered()) && (await row.count()) === 1),
