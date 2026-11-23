@@ -186,13 +186,10 @@ describe('Settings › Appearance', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('toasts a file its own check refuses, with its first letter capitalized, and sends nothing', async () => {
+  it('toasts a file its own check refuses, and sends nothing', async () => {
     await deliver(custom({}))
     await choose(new File([new Uint8Array([1, 2, 3, 4])], 'lake.jpg', { type: 'image/jpeg' }))
-    expect(window.showToast).toHaveBeenCalledWith(
-      'The downloaded file is not a JPEG image',
-      'error',
-    )
+    expect(window.showToast).toHaveBeenCalledWith('The file is not a valid JPEG image.', 'error')
     expect(store.upload).not.toHaveBeenCalled()
   })
 
