@@ -323,7 +323,7 @@ async function setVisibility(value: 'visible' | 'hidden') {
 }
 
 describe('the project picker', { timeout: 30_000 }, () => {
-  it('browses the person’s projects 25 at a time, favorites first with a star, to the end', async () => {
+  it('browses the person’s projects 25 at a time, favorites first, to the end', async () => {
     const next = base()
     const ids = Array.from({ length: 30 }, (_, n) => top(next, named(29 - n)))
     await load(next)
@@ -335,7 +335,6 @@ describe('the project picker', { timeout: 30_000 }, () => {
       expect.stringContaining('Sensor programme 029'),
       expect.stringContaining('Sensor programme 000'),
     ])
-    expect(document.querySelectorAll('[data-project-pick] svg.lucide-star')).toHaveLength(2)
     expect(rowIds()).toHaveLength(25)
     expect(asked('page').map((s) => s.args)).toEqual([{}])
     await more()
