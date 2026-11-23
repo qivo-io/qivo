@@ -212,8 +212,8 @@ space; searching the page or printing loads them all first. Use **+** to
 create a task with the **Sub-project** picker. Project pages also
 list tasks; tap one to edit it.
 
-**Projects** opens the same project directory as **All projects** on a
-desktop: your favorites first, 25 projects a page, a star on each project,
+**Projects** opens the same project directory as the sidebar's **Projects**
+title on a desktop: your favorites first, 25 projects a page, a star on each project,
 **Sub-projects** under each and a search that also finds sub-projects
 ([All projects](./finding-your-way-around.md#all-projects)). Each project
 has **People & settings**; in project settings, **Manage people** opens

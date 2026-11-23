@@ -809,7 +809,7 @@ try {
     '[data-mine-nav]',
     '[data-all-nav]',
     '[data-sync-nav]',
-    '.planner-project-list [aria-label="New project"]',
+    'aside [aria-label="New project"]',
     '.planner-project-list [aria-label="Project actions"]',
   ]) {
     const trigger = pageA.locator(sel).first()

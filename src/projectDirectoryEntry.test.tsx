@@ -162,7 +162,7 @@ describe('the All projects entry', () => {
     // the Board of Plan remembers it
     await vi.waitFor(() => expect(remembered(snap)).toBe('plan'))
     // the tree's title is the entry, and the rail has no row of its own
-    const title = await element('aside [data-sidebar-projects] [data-all-nav]')
+    const title = await element('aside [data-all-nav]')
     expect(title.textContent?.trim()).toBe('Projects')
     expect(title.getAttribute('aria-current')).toBeNull()
     expect(

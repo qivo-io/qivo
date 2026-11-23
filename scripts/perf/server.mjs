@@ -145,6 +145,11 @@
 //                        error the check shows its sentence with Retry, and
 //                        startup=none&projectnav=empty the chooser's empty
 //                        state
+//   view                 overview: prefs:get answers the Overview as the
+//                        view the person used last (UIPrefs.view), which
+//                        the benchmark and board-large-smoke start on, to
+//                        open the Board from it. Without it no view is
+//                        saved, and the app opens on the Board
 //   holds                what projectNav.holds answers, which My view's
 //                        Overview, Board, Roadmap and the phone, the Inbox
 //                        and Team sync read only where their "no project"
@@ -2411,13 +2416,12 @@ const read = (name, args = {}) => {
     case 'prefs:get': {
       // the first program as the project the person opened last, which
       // the app opens once projectNav.resolve says it may; startup=none
-      // remembers no project and startup=lost a project no one has
+      // remembers nothing and startup=lost a project no one has
       const program = snapshot.projects.find((p) => p.type === 'meta')
       const startup = parameters.get('startup')
-      // the Overview as the view the person used last: the benchmark's and
-      // board-large-smoke's samples open the Board from it after startup,
-      // and the app falls back to the Board where none is saved
-      const prefs = { view: 'overview' }
+      const prefs = {}
+      // view=overview: the Overview saved as the view used last
+      if (parameters.get('view') === 'overview') prefs.view = 'overview'
       if (program && startup !== 'none')
         prefs.lastProject = {
           org_id: program.org_id,
@@ -2426,6 +2430,7 @@ const read = (name, args = {}) => {
       // syncscope=program: the first program saved as Team sync's scope
       if (program && parameters.get('syncscope') === 'program')
         prefs.teamSyncScope = `project:${program.id}`
+      if (!Object.keys(prefs).length) return null
       return {
         profile_id: snapshot.myProfileIds[0],
         prefs,

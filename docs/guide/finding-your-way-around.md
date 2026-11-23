@@ -191,10 +191,11 @@ Qivo saves your last view, the last project or sub-project you opened, your
 Focus and your Roadmap window per user on the server. They follow you
 across devices and reloads.
 
-A project or sub-project you open keeps the view on screen. An address that
-names no view, such as a task link, the Inbox, All projects or
-`qivo.io/app`, opens on the view you used last, and on the **Board** until
-you have used one. On a phone, a project you choose opens in its task list.
+A project or sub-project you open keeps the view on screen. Where none is
+on screen yet, as after you open Qivo on the Inbox, All projects, Settings,
+a task link or `qivo.io/app`, the project shows the view you used last, and
+the **Board** until you have used one. On a phone, a project you choose in
+**Projects** or in the project list opens in its task list.
 
 Opening Qivo without a page in its address, such as `qivo.io/app`, opens
 that project if you can still open it, after a quick check with the server,

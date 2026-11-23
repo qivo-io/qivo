@@ -1785,7 +1785,7 @@ describe('the benchmark server', () => {
     })
   }, 60_000)
 
-  it('remembers the Overview, and the first program as the project opened last, or none or a lost one as startup asks', async () => {
+  it('remembers the first program as the project opened last, or none or a lost one as startup asks', async () => {
     /** What prefs:get and then resolve of its project answer with `params`. */
     const startup = async (params) => {
       const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
@@ -1811,12 +1811,11 @@ describe('the benchmark server', () => {
     const first = await startup('')
     const program = first.snap.projects.find((p) => p.name === 'Testbed program')
     expect(first.prefs.prefs).toEqual({
-      view: 'overview',
       lastProject: { org_id: program.org_id, project_id: program.id },
     })
     expect(first.resolve).toMatchObject({ state: 'ok', project: { id: program.id } })
-    // no project remembered, and no removed scope answered for older builds
-    expect((await startup('startup=none')).prefs.prefs).toEqual({ view: 'overview' })
+    // nothing remembered, and no removed scope answered for older builds
+    expect((await startup('startup=none')).prefs).toBeNull()
     const lost = await startup('startup=lost')
     expect(lost.prefs.prefs.lastProject.project_id).not.toBe(program.id)
     expect(lost.resolve).toEqual({ state: 'unavailable' })
@@ -1829,14 +1828,14 @@ describe('the benchmark server', () => {
     // Team sync's scope beside it, under the key the app reads only
     const sync = await startup('syncscope=program')
     expect(sync.prefs.prefs).toEqual({
-      view: 'overview',
       lastProject: { org_id: program.org_id, project_id: program.id },
       teamSyncScope: `project:${program.id}`,
     })
     expect((await startup('startup=none&syncscope=program')).prefs.prefs).toEqual({
-      view: 'overview',
       teamSyncScope: `project:${program.id}`,
     })
+    // the Overview as the view used last, only where the page asks for it
+    expect((await startup('startup=none&view=overview')).prefs.prefs).toEqual({ view: 'overview' })
   }, 60_000)
 
   it('stars and unstars a project of the All projects directory and sends the page again', async () => {

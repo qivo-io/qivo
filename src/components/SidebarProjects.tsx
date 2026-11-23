@@ -472,27 +472,10 @@ export function SidebarProjects({
             : 'ok'
   const canCreateProject = P.canCreateProject()
   return (
-    <div
-      ref={tree}
-      data-sidebar-projects=""
-      data-sidebar-projects-state={state}
-      aria-busy={state === 'loading' || state === 'refreshing' || undefined}
-      className="planner-project-list min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-contain [padding:4px_12px_0]"
-      onPointerDownCapture={() => {
-        pressed.current = true
-        setTimeout(() => {
-          pressed.current = false
-        })
-      }}
-      onFocus={(e) => {
-        const row =
-          e.target instanceof Element
-            ? e.target.closest('[data-project-row], [data-subproject-row]')
-            : null
-        if (!pressed.current && row && tree.current?.contains(row)) intoTreeView(tree.current, row)
-      }}
-    >
-      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:8px_8px_8px_0]">
+    <>
+      {/* outside the list below, so the title and New project stay in
+          place while the list scrolls */}
+      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:12px_20px_8px_12px]">
         <Button
           variant="quiet"
           size="xs"
@@ -519,21 +502,43 @@ export function SidebarProjects({
           </Button>
         )}
       </div>
-      {rows}
-      {/* the marker comes with the first rows, below them, so it is not
-         taken as in view from before they landed, which would load the
-         next batch at once */}
-      {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
-      <TreeEnd
-        list={list}
-        end={end}
-        onMore={() => {
-          pressedMore.current = true
-          more()
+      <div
+        ref={tree}
+        data-sidebar-projects=""
+        data-sidebar-projects-state={state}
+        aria-busy={state === 'loading' || state === 'refreshing' || undefined}
+        className="planner-project-list min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-contain [padding:0_12px]"
+        onPointerDownCapture={() => {
+          pressed.current = true
+          setTimeout(() => {
+            pressed.current = false
+          })
         }}
-        onAll={() => actions.openProjects()}
-      />
-    </div>
+        onFocus={(e) => {
+          const row =
+            e.target instanceof Element
+              ? e.target.closest('[data-project-row], [data-subproject-row]')
+              : null
+          if (!pressed.current && row && tree.current?.contains(row))
+            intoTreeView(tree.current, row)
+        }}
+      >
+        {rows}
+        {/* the marker comes with the first rows, below them, so it is not
+           taken as in view from before they landed, which would load the
+           next batch at once */}
+        {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
+        <TreeEnd
+          list={list}
+          end={end}
+          onMore={() => {
+            pressedMore.current = true
+            more()
+          }}
+          onAll={() => actions.openProjects()}
+        />
+      </div>
+    </>
   )
 }
 
