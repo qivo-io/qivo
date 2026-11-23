@@ -11,9 +11,9 @@
    answered, and says so on a failure, with Try again. A choice saves
    through the store (P.setNotificationDelivery); while it runs the select
    is disabled and shows the choice, and once it answers the read owns what
-   shows, so a newer choice from another tab wins. A refusal returns the
-   select to the read's value and shows the server's sentence, the demo's
-   change limit included.
+   shows, so a newer choice from another tab wins, and a toast says it
+   saved. A refusal returns the select to the read's value and toasts the
+   server's sentence, the demo's change limit included.
 
    It chooses destinations only: it turns no alert on, asks for no
    permission and changes no switch of the desktop app. Its line about this
@@ -78,8 +78,6 @@ export function NotificationDeliveryField() {
   // the last answer, which shows marked as refreshing until the next one
   const [held, setHeld] = useState<Delivery | null>(null)
   const [saving, setSaving] = useState<Delivery | null>(null)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const capability = useCapabilityLine()
   useUpdateBlocker(saving !== null)
   const current = view.value?.delivery
@@ -94,13 +92,11 @@ export function NotificationDeliveryField() {
   const choose = async (delivery: Delivery) => {
     if (saving !== null || current === undefined || delivery === current) return
     setSaving(delivery)
-    setError('')
-    setNotice('')
     try {
       await P.setNotificationDelivery(delivery)
-      setNotice('Notification delivery saved.')
+      window.showToast?.('Notification delivery saved.')
     } catch (failure) {
-      setError(refusalText(failure))
+      window.showToast?.(refusalText(failure), 'error')
     } finally {
       setSaving(null)
     }
@@ -168,21 +164,6 @@ export function NotificationDeliveryField() {
       <p data-notification-capability className="-mt-3 text-sm text-text-2">
         {capability}
       </p>
-      {saving !== null && (
-        <p role="status" className="mt-3 text-sm text-text-2">
-          Saving…
-        </p>
-      )}
-      {error && (
-        <p role="alert" data-notification-delivery-error className="mt-3 text-sm text-danger">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" data-notification-delivery-saved className="mt-3 text-sm text-text-2">
-          {notice}
-        </p>
-      )}
     </div>
   )
 }

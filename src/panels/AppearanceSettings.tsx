@@ -205,8 +205,6 @@ export function AppearanceSettings() {
   const loadError = failed ? errorText(appearance.preferencesError) : ''
   // a value held from before a reconnect or an outage, until it arrives again
   const stale = preferences !== null && !appearance.preferencesCurrent
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   useUpdateBlocker(busy || uploading)
@@ -214,6 +212,7 @@ export function AppearanceSettings() {
   useUnsaved(uploading, 'background image')
   const alive = useRef(false)
   const uploadController = useRef<AbortController | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   useEffect(() => {
     alive.current = true
     return () => {
@@ -221,23 +220,23 @@ export function AppearanceSettings() {
       uploadController.current?.abort()
     }
   }, [])
+  /* A refused or failed write is toasted by the store (P.setAppearance,
+     P.removeAppearanceImage, P.uploadAppearanceImage), so the page toasts
+     only its own news: what saved, and a file its own check refused. */
   const update = async (changes: Partial<Pick<AppearancePreferences, 'mode' | 'image_source'>>) => {
     if (!preferences || busy || loadError || stale) return
     setBusy(true)
-    setError('')
-    setNotice('')
     try {
       await P.setAppearance({
         mode: preferences.mode,
         image_source: preferences.image_source,
         ...changes,
       })
-      if (!alive.current) return
       // The subscription owns displayed settings. An HTTP or mutation
       // acknowledgment must not overwrite a newer delivery from another tab.
-      setNotice('Appearance saved.')
-    } catch (failure) {
-      if (alive.current) setError(errorText(failure))
+      window.showToast?.('Appearance saved.')
+    } catch {
+      // toasted by the store
     } finally {
       if (alive.current) setBusy(false)
     }
@@ -246,18 +245,20 @@ export function AppearanceSettings() {
     if (!file || busy || loadError || stale || preferences?.image_source !== 'custom') return
     setBusy(true)
     setUploading(true)
-    setError('')
-    setNotice('')
     const controller = new AbortController()
     uploadController.current = controller
     try {
-      await inspectFile(file)
+      try {
+        await inspectFile(file)
+      } catch (failure) {
+        if (!controller.signal.aborted) window.showToast?.(errorText(failure), 'error')
+        return
+      }
       if (controller.signal.aborted) return
       await P.uploadAppearanceImage(file, controller.signal)
-      if (!alive.current) return
-      setNotice('Custom image saved.')
-    } catch (failure) {
-      if (alive.current && !controller.signal.aborted) setError(errorText(failure))
+      window.showToast?.('Custom image saved.')
+    } catch {
+      // toasted by the store, unless the page closed and so cancelled it
     } finally {
       if (uploadController.current === controller) uploadController.current = null
       if (alive.current) {
@@ -269,14 +270,11 @@ export function AppearanceSettings() {
   const remove = async () => {
     if (!preferences?.custom_image || busy || loadError || stale) return
     setBusy(true)
-    setError('')
-    setNotice('')
     try {
       await P.removeAppearanceImage()
-      if (!alive.current) return
-      setNotice('Custom image removed. Image of the week is selected.')
-    } catch (failure) {
-      if (alive.current) setError(errorText(failure))
+      window.showToast?.('Custom image removed. Image of the week is selected.')
+    } catch {
+      // toasted by the store
     } finally {
       if (alive.current) setBusy(false)
     }
@@ -350,22 +348,31 @@ export function AppearanceSettings() {
                     />
                   )}
                   <div className="space-y-2">
-                    <Label htmlFor={`${id}-upload`} className="text-sm">
-                      {preferences.custom_image ? 'Replace your image' : 'Choose your image'}
-                    </Label>
                     <Input
-                      id={`${id}-upload`}
+                      ref={fileInput}
                       data-appearance-upload
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
-                      aria-describedby={`${id}-requirements`}
-                      className="bg-surface-1"
+                      className="[display:none]"
                       onChange={(event) => {
                         const file = event.target.files?.[0]
                         event.target.value = ''
                         void upload(file)
                       }}
                     />
+                    <Button
+                      type="button"
+                      data-appearance-choose
+                      aria-describedby={`${id}-requirements`}
+                      aria-busy={uploading || undefined}
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      {uploading
+                        ? 'Uploading…'
+                        : preferences.custom_image
+                          ? 'Replace your image'
+                          : 'Choose your image'}
+                    </Button>
                     <p id={`${id}-requirements`} className="text-sm text-text-2">
                       {manualImageRequirements(DEMO_FILE_MIB)}
                     </p>
@@ -380,21 +387,6 @@ export function AppearanceSettings() {
               <WeeklyPreview preferences={preferences} />
             </div>
           </SettingsGroup>
-          {busy && (
-            <p role="status" className="mt-4 text-sm text-text-2">
-              {uploading ? 'Checking and uploading image…' : 'Saving…'}
-            </p>
-          )}
-          {error && (
-            <p role="alert" data-appearance-error className="mt-4 text-sm text-danger">
-              {error}
-            </p>
-          )}
-          {notice && (
-            <p role="status" className="mt-4 text-sm text-text-2">
-              {notice}
-            </p>
-          )}
         </>
       )}
     </div>

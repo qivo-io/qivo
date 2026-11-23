@@ -99,6 +99,7 @@ beforeEach(() => {
   network.onUpdate.mockReset()
   planner.cannotSaveText.mockReset().mockReturnValue(null)
   planner.hasUnsavedWork.mockReset().mockReturnValue(false)
+  window.showToast = vi.fn()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -519,7 +520,8 @@ describe('starting, joining, downloading and cancelling', () => {
       throw new ConvexError({ code: 'rule', message: 'Exports are paused right now.' })
     })
     await press('[data-export-start]')
-    expect(text()).toContain('Exports are paused right now.')
+    expect(window.showToast).toHaveBeenCalledWith('Exports are paused right now.', 'error')
+    expect(text()).not.toContain('Exports are paused right now.')
     expect(file.remove).toHaveBeenCalledTimes(1)
     const { heldExportFile } = await import('../lib/orgExport')
     expect(heldExportFile('export-1')).toBeNull()
@@ -532,7 +534,11 @@ describe('starting, joining, downloading and cancelling', () => {
     await press('[data-export-join]')
     expect(sent('orgExport:request')).toEqual([{ org_id: 'org-1' }])
     expect(text()).toContain('You asked for it.')
-    expect(text()).toContain('An export was already being prepared, so you joined it.')
+    expect(window.showToast).toHaveBeenCalledWith(
+      'An export was already being prepared, so you joined it.',
+      'info',
+    )
+    expect(text()).not.toContain('you joined it')
   })
 
   it('downloads by hand with automatic false, the picker first in a browser that chooses files', async () => {
@@ -778,7 +784,11 @@ describe('starting, joining, downloading and cancelling', () => {
     await press('[data-export-cancel]')
     await press('[data-export-cancel-confirm]')
     expect(network.mutation).not.toHaveBeenCalled()
-    expect(text()).toContain('Saving is paused.')
+    expect(vi.mocked(window.showToast).mock.calls).toEqual([
+      ['Saving is paused.', 'error'],
+      ['Saving is paused.', 'error'],
+    ])
+    expect(text()).not.toContain('Saving is paused.')
   })
 
   it("names the route's wait in seconds when Qivo is busy sending the export", async () => {

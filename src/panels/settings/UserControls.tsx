@@ -9,7 +9,7 @@
    page. `onAccepted` hears the values the server accepted, by the row's
    field names, for a list whose kept rows no paint or read brings them to
    (UsersSettings.tsx). */
-import React, { useEffect as useEffectS, useState as useStateS } from 'react'
+import React, { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -334,14 +334,15 @@ function SendAgain({
   )
 }
 
-const NO_ROW_WAIT_MS = 2 * 60_000
-
-/** Under an invite form: whether the invitation email to the seat just
-    created went out, live, in a full sentence. Only the send to `email`,
-    compared in its stored form, counts, so a correction made elsewhere is
-    not reported as this one. When the seat stops being pending (claimed or
-    cancelled), the last result seen stays. It reads that one seat's row, and
-    stops while the tab is hidden. Key it by seat. */
+/** Under an invite form: the invitation email to the seat just created,
+    live. Only the send to `email`, compared in its stored form, counts, so a
+    correction made elsewhere is not reported as this one. A send that went
+    out is toasted once, and nothing shows while one is on its way. A send
+    that could not go, was held back or may not have arrived shows as a
+    sentence, with Send invitation where it can go again; when the seat
+    stops being pending (claimed or cancelled), the last sentence seen
+    stays. It reads that one seat's row, and stops while the tab is hidden.
+    Key it by seat. */
 export function InviteOutcome({
   orgId,
   seat,
@@ -355,42 +356,33 @@ export function InviteOutcome({
   const row = reads.rows.get(seat)
   // the row holds the address as stored (asciiEmail), so Anna@Bücher.DE
   // matches anna@xn--bcher-kva.de
-  const current = row?.email === asciiEmail(email) ? row.state : undefined
+  const ours = row?.email === asciiEmail(email) ? row : undefined
+  const current = ours?.state
   const [last, setLast] = useStateS<InviteDelivery>()
   useEffectS(() => {
     if (current !== undefined) setLast(current)
   }, [current])
-  // a send that has not even been reserved after this long is not coming
-  const [waited, setWaited] = useStateS(false)
+  // the send toasted last, by when it was reserved, which a Send invitation
+  // after it changes
+  const toasted = useRefS<string | null>(null)
+  const sentSince = current === 'sent' ? ours?.since : undefined
   useEffectS(() => {
-    const timer = setTimeout(() => setWaited(true), NO_ROW_WAIT_MS)
-    return () => clearTimeout(timer)
-  }, [])
-  /* Nothing yet, or the seat's row is for another address: nothing to say.
-     A send in flight whose row then vanished has no outcome either. */
-  const state =
-    current ??
-    (last !== 'sending' ? last : undefined) ??
-    (reads.answered.has(seat) && !row && !last && !waited ? 'sending' : undefined)
+    if (sentSince === undefined || toasted.current === sentSince) return
+    toasted.current = sentSince
+    window.showToast?.(`Invitation email sent to ${email}.`)
+  }, [sentSince])
+  const state = current ?? last
   const freeAt = current === 'held' ? row?.free_at : undefined
   useRenderAt(freeAt ? Date.parse(freeAt) : 0)
-  if (state === undefined) return null
+  if (state === undefined || state === 'sending' || state === 'sent') return null
   const label = inviteLabel(state, freeAt)
-  const text = label.detail
-    ? `${email}: ${label.detail}`
-    : state === 'sent'
-      ? `Invitation email sent to ${email}.`
-      : `Sending the invitation email to ${email}…`
   return (
     <div
       data-invite-outcome={state}
       role="status"
-      className={cn(
-        '[font-size:var(--fs-sm)] [margin-top:8px]',
-        label.failed ? '[color:var(--danger)]' : '[color:var(--text-2)]',
-      )}
+      className="[font-size:var(--fs-sm)] [margin-top:8px] [color:var(--danger)]"
     >
-      {text}
+      {`${email}: ${label.detail ?? label.text}`}
       {current !== undefined && <SendAgain orgId={orgId} seat={seat} row={row} />}
     </div>
   )

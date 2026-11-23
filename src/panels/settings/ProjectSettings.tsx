@@ -747,7 +747,7 @@ function ReviewTimeField({
    viewer for the address, only Viewer for that address, which it says
    rather than change the level unseen. The chosen level stays as it was,
    so another address, or the next invitation, goes out with it again. A
-   lookup that fails or refuses sends nothing and says why. */
+   lookup that fails or refuses sends nothing and toasts why. */
 function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean }) {
   const { project } = answer
   const [email, setEmail] = useStateS('')
@@ -758,7 +758,7 @@ function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean 
   const [note, setNote] = useStateS<string | null>(null)
   /* The seats this form's invitations emailed, newest last, for
      InviteOutcome. Each stays until the page closes, so a later invitation
-     does not hide an earlier one's result. */
+     does not hide an earlier one's failed email. */
   const [emailed, setEmailed] = useStateS<{ seat: string; email: string }[]>([])
   useUpdateBlocker(!!email || inviting)
   useUnsaved(!!email.trim(), 'email')
@@ -775,12 +775,13 @@ function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean 
     const found = await P.projectInviteTarget(project.org_id, project.id, typed)
     if (found === null || found.state !== 'ready') {
       setInviting(false)
-      setNote(
+      window.showToast?.(
         found === null
           ? "Couldn't check this address. Nothing was sent."
           : found.state === 'refused'
             ? sentence(found.message)
             : 'This project is no longer available.',
+        'error',
       )
       return
     }

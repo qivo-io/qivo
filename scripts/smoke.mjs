@@ -2725,7 +2725,13 @@ try {
     if ((await section.getAttribute('data-export-delivery')) !== 'file')
       await fail('The export panel does not save into a chosen file in Chromium')
     await pageA.locator('[data-export-start]').click()
+    // a failed save shows in the section, and a refused press toasts its
+    // sentence; joining an export another admin started is no failure
     const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
+    const exportToast = pageA
+      .locator('.planner-toast-host > div')
+      .filter({ hasNotText: 'so you joined it' })
+      .first()
     const outcome = await Promise.race([
       pageA
         .locator('[data-export-recorded]')
@@ -2733,9 +2739,12 @@ try {
         .waitFor({ timeout: 180000 })
         .then(() => 'saved'),
       exportAlert.waitFor({ state: 'visible', timeout: 180000 }).then(() => 'failed'),
+      exportToast.waitFor({ state: 'visible', timeout: 180000 }).then(() => 'refused'),
     ])
     if (outcome === 'failed')
       await fail(`Organization export failed: ${(await exportAlert.textContent())?.trim()}`)
+    if (outcome === 'refused')
+      await fail(`Organization export failed: ${(await exportToast.textContent())?.trim()}`)
     if (
       (await pageA
         .locator('[data-export-recorded]')

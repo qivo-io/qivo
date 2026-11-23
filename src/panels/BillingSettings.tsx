@@ -71,7 +71,6 @@ function LiveBillingSettings({
 }) {
   const [usage, setUsage] = useState<BillingUsageFigures | null>(null)
   const [usageError, setUsageError] = useState('')
-  const [actionError, setActionError] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [measuredAt, setMeasuredAt] = useState(0)
@@ -128,13 +127,12 @@ function LiveBillingSettings({
     // offline the request would wait without a word
     const paused = P.cannotSaveText()
     if (paused) {
-      setActionError(paused)
+      window.showToast?.(paused, 'error')
       return
     }
     actionInFlight.current = true
     const release = beginUpdateBlock()
     setBusy(true)
-    setActionError('')
     try {
       const result =
         kind === 'checkout'
@@ -142,7 +140,7 @@ function LiveBillingSettings({
           : await convex.action(api.billingActions.portal, { org_id: orgId })
       window.location.assign(result.url)
     } catch (cause) {
-      setActionError(billingError(cause))
+      window.showToast?.(billingError(cause), 'error')
     } finally {
       actionInFlight.current = false
       setBusy(false)
@@ -162,7 +160,6 @@ function LiveBillingSettings({
     // closing the page before the answer would leave the cancellation unknown
     const releaseUnsaved = holdUnsaved()
     setBusy(true)
-    setActionError('')
     try {
       const { ends_at } = await convex.action(api.billingActions.cancelSubscription, {
         org_id: orgId,
@@ -199,9 +196,9 @@ function LiveBillingSettings({
       >
         Billing
       </PageTitle>
-      {(summaryError || actionError) && (
+      {summaryError && (
         <p role="alert" className="mb-4 text-sm text-danger">
-          {summaryError || actionError}
+          {summaryError}
         </p>
       )}
       {new URLSearchParams(window.location.search).get('checkout') === 'complete' &&

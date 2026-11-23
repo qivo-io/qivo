@@ -226,11 +226,11 @@ created. You don't have access to it.**
 
 Invite a guest by email in project settings, choosing **Viewer** or **User**.
 Qivo emails them an invitation to join your organization as a guest, and
-the form then says whether the email went out. If it could not be sent, check
-the address. They can join later by creating an account with it, once Qivo
-can email them. An organization can send up to 50 invitation emails an hour.
-When the email was held back by that limit or could not be sent, **Send
-invitation** beside the line emails it again, or **Send after 14:10** says
+says once the email went out. If it could not be sent, a line under the form
+says so. Check the address. They can join later by creating an account with it,
+once Qivo can email them. An organization can send up to 50 invitation emails
+an hour. When the email was held back by that limit or could not be sent,
+**Send invitation** beside that line emails it again, or **Send after 14:10** says
 when the hour frees a send. Organization admins can use it, and so can the
 project lead who invited the guest while they still lead one of the guest's
 projects.

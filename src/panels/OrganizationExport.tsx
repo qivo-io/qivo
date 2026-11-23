@@ -79,8 +79,6 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   )
   const removal = useOrgRemovalState(orgId).state
   const { delivery, running } = useExportDelivery()
-  const [error, setError] = useState('')
-  const [note, setNote] = useState('')
   // the job whose Cancel export question is open, so it never carries over
   // to a later job
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null)
@@ -143,13 +141,11 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   async function start() {
     const paused = P.cannotSaveText()
     if (paused) {
-      setError(paused)
+      failed(paused)
       return
     }
     const chosen = way === 'file' ? chooseExportFile(slug) : null
     setBusy(true)
-    setError('')
-    setNote('')
     let file: ExportFile | null = null
     try {
       file = chosen ? (await chosen).file : null
@@ -157,11 +153,12 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       if (file) holdExportFile(asked.export_id, file)
       // the line of an earlier save goes with the new export
       clearExportDelivery()
-      if (asked.joined) setNote('An export was already being prepared, so you joined it.')
+      if (asked.joined)
+        window.showToast?.('An export was already being prepared, so you joined it.', 'info')
     } catch (cause) {
       // no export holds the file the picker made, so it goes while empty
       if (file) void discardChosenFile(file)
-      setError(refusal(cause, "Couldn't start the export. Try again."))
+      failed(refusal(cause, "Couldn't start the export. Try again."))
     } finally {
       setBusy(false)
     }
@@ -170,16 +167,15 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   async function cancel(exportId: string) {
     const paused = P.cannotSaveText()
     if (paused) {
-      setError(paused)
+      failed(paused)
       return
     }
     setBusy(true)
-    setError('')
     try {
       await convex.mutation(api.orgExport.cancel, { org_id: orgId, export_id: exportId })
       setConfirmCancel(null)
     } catch (cause) {
-      setError(refusal(cause, "Couldn't cancel the export. Try again."))
+      failed(refusal(cause, "Couldn't cancel the export. Try again."))
     } finally {
       setBusy(false)
     }
@@ -191,15 +187,14 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     if (job.archive_bytes === null) return
     const paused = P.cannotSaveText()
     if (paused) {
-      setError(paused)
+      failed(paused)
       return
     }
-    setError('')
     let file = way === 'file' ? heldExportFile(job.id) : null
     if (way === 'file' && file === null) {
       const chosen = await chooseExportFile(slug)
       if (chosen.file === null) {
-        if (chosen.reason) setError(chosen.reason)
+        if (chosen.reason) failed(chosen.reason)
         return
       }
       file = chosen.file
@@ -283,12 +278,6 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
           </div>
         )}
         {shownDelivery !== null && <DeliveryLine delivery={shownDelivery} />}
-        {note && <p className="text-text-2">{note}</p>}
-        {error && (
-          <p role="alert" className="text-danger">
-            {error}
-          </p>
-        )}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -378,6 +367,8 @@ function shows(
   if (delivery.state === 'saved') return delivery.record !== 'recorded'
   return FAILED_STATES.has(delivery.state)
 }
+
+const failed = (sentence: string) => window.showToast?.(sentence, 'error')
 
 /** What the server's refusal says, or `fallback`. */
 function refusal(cause: unknown, fallback: string): string {

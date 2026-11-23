@@ -46,7 +46,6 @@ import {
   overText,
   SLUG_SHAPE,
   trimMarkdown,
-  WEEK_START_REFUSALS,
 } from '../../convex/lib/limits'
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
@@ -6057,10 +6056,6 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
-/** Refusals of a new first day of the week, which Organization settings
-   shows beside the setting (setOrg). */
-const weekStartRefusal = (d: ErrData) =>
-  d.reason === WEEK_START_REFUSALS.conflicts || d.reason === WEEK_START_REFUSALS.unchecked
 /* asSentence (lib/fieldLimits.ts sentence) shows a refusal message
    capitalized and ending with a period. Server messages are often lowercase
    fragments, and a toast joins them with a sentence of its own. A limit's
@@ -14998,7 +14993,8 @@ export const PLANNER = {
       (notifications.setDelivery), which spends one change on the demo. It
       changes no local switch and asks for no permission, and the server's
       settings watch, not its answer, owns what the Notification delivery
-      field shows. A refusal rejects for the field to word, with no toast. */
+      field shows. A refusal rejects with no toast of its own, for the field
+      to word in one. */
   setNotificationDelivery: (delivery: Delivery) =>
     sendAwaited(api.notifications.setDelivery, { delivery }, 'none'),
   removeAppearanceImage: () =>
@@ -15612,17 +15608,9 @@ export const PLANNER = {
      the limit's sentence, never clamped. Narrates nothing, name included. Resolves whether
      the server saved the change: false without sending when it refused the
      change first (toasted) or there is no home organization here, and false
-     after a refusal, which is toasted and taken back. `weekStartRefused`
-     takes the sentence of a refused first day of the week, the milestones
-     that would share a week or that the server could not check them all
-     (WEEK_START_REFUSALS), and answers whether it showed it; one it did
-     not show, as its field has gone, is toasted. `save` is a settings
+     after a refusal, which is toasted and taken back. `save` is a settings
      field's draft (FieldSave). */
-  setOrg: (
-    patch: OrgPatch,
-    weekStartRefused?: (sentence: string) => boolean,
-    save: FieldSave = {},
-  ): Promise<boolean> => {
+  setOrg: (patch: OrgPatch, save: FieldSave = {}): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.orgName, patch.name ?? ''))
@@ -15672,14 +15660,6 @@ export const PLANNER = {
     return send(api.orgs.update, { org_id: orgId, patch: wire }, view, {
       over: overOf('organizations', org, Object.keys(wire), seen),
       ...fieldSendOptions(save),
-      ...(weekStartRefused && {
-        onError: (error: unknown) => {
-          const d = errData(error)
-          const shown =
-            !!d.message && weekStartRefusal(d) && weekStartRefused(asSentence(String(d.message)))
-          if (!shown) toastWriteError(error)
-        },
-      }),
     })
   },
 

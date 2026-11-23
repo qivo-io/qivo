@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { ConvexError } from 'convex/values'
 import { act, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -230,15 +231,26 @@ describe('the Delete organization question', () => {
     )
     await scheduleDeletion()
     expect(dialog()?.getAttribute('data-state')).toBe('closed')
-    // the closing question still shows it, the page does not
+    // the closing question still shows it
     expect(dialog()?.querySelector('[role="alert"]')).not.toBeNull()
-    expect(document.querySelector('[data-org-deletion] [role="alert"]')).toBeNull()
     await endClosing()
     expect(document.querySelector('[role="alert"]')).toBeNull()
   })
 })
 
 describe('Keep organization', () => {
+  it('toasts a refused stop, and shows it nowhere on the page', async () => {
+    window.showToast = vi.fn()
+    await scheduleDeletion()
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-org-keep]')?.click())
+    await act(async () =>
+      server.requests[0].reject(new ConvexError({ code: 'rule', message: 'Subscribe first.' })),
+    )
+    expect(window.showToast).toHaveBeenCalledWith('Subscribe first.', 'error')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(document.querySelector('[data-org-keep]')?.textContent).toBe('Keep organization')
+  })
+
   it('gives focus to Delete organization once the stopped deletion takes its button away', async () => {
     await scheduleDeletion()
     const keep = document.querySelector<HTMLButtonElement>('[data-org-keep]')
