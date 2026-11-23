@@ -142,6 +142,12 @@ const element = (selector: string) =>
     { timeout: 10_000 },
   )
 const lit = (selector: string) => document.querySelector(selector)?.hasAttribute('data-on')
+/** Whether the element `selector` names is in the page and not hidden,
+    as React's Activity hides what a kept page portals elsewhere. */
+const shows = (selector: string) => {
+  const found = document.querySelector(selector)
+  return !!found && !found.closest('[style*="display: none"]')
+}
 /** The project App remembered for the fixture's person, as the browser's
     copy of the preferences holds it. */
 const remembered = (snap: Snapshot): string | undefined =>
@@ -168,12 +174,20 @@ describe('the All projects entry', () => {
       'All projects',
     )
     expect(document.querySelectorAll('[data-all-nav]')).toHaveLength(1)
+    // its search stands in the toolbar row under the title, where the
+    // Board's filters stand on the Board
+    expect(shows('.workspace-toolbar [data-directory-toolbar] [data-directory-search]')).toBe(true)
+    expect(document.querySelector('[data-filter-row]')).toBeNull()
     // a press on the project goes back to its scope, with its row lit
     await act(async () =>
       (await element('[data-directory-row="plan"] [data-directory-open]')).click(),
     )
     await vi.waitFor(() => expect(lit('[data-project-row="plan"]')).toBe(true))
     expect(lit('[data-all-nav]')).toBe(false)
+    // the Board's own row shows there, and the directory's leaves with it
+    await vi.waitFor(() => expect(shows('[data-filter-row]')).toBe(true))
+    expect(document.querySelector('[data-directory-toolbar]')).not.toBeNull()
+    expect(shows('[data-directory-toolbar]')).toBe(false)
   })
 
   it('keeps My view unlit under the directory, and lights All projects for the directory alone', async () => {

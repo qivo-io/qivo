@@ -85,7 +85,11 @@ import {
   useSettledSearch,
 } from '../lib/pagedList'
 import { DIRECTORY_MOST } from '../lib/projectPick'
+import { useMobile } from '../lib/useMobile'
+import { useHiddenViewMark } from '../lib/viewHidden'
 import { P, type ProjectSettingsAnswer } from '../store/planner'
+import { FilterSearch } from './FilterSearch'
+import { groundRadius } from './ground'
 import { type HeldLine, PageFold } from './pageFold'
 import { pagesState, useMoveFocus } from './pageMoves'
 import {
@@ -100,7 +104,7 @@ import {
 } from './projectNavRows'
 import { Icon, MenuItem, Popover } from './qivo'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
+import { WorkspaceToolbar } from './WorkspaceShell'
 
 type Actions = Record<string, (...args: unknown[]) => void>
 
@@ -123,6 +127,10 @@ type Pending = { want: boolean; busy: boolean }
 export function ProjectDirectory({ actions }: { actions: Actions }) {
   const directory = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
+  const newProject = useRef<HTMLButtonElement>(null)
+  const toolbar = useRef<HTMLDivElement>(null)
+  useHiddenViewMark(toolbar, 'projects')
+  const mobile = useMobile()
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
   const term = nameKey(search.settled)
@@ -271,7 +279,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
               favorite ? `Remove ${row.name} from favorites` : `Add ${row.name} to favorites`
             }
             onClick={() => star(row)}
-            className={cn('shrink-0', favorite ? 'text-warning' : 'text-text-3')}
+            className="shrink-0 text-text-3"
           >
             <Icon name="star" size={18} className={favorite ? 'fill-current' : undefined} />
           </Button>
@@ -375,6 +383,31 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       setText('')
     }
   }
+  const ground = mobile ? 'page' : 'well'
+  const searchBox = (
+    <FilterSearch
+      ref={field}
+      value={text}
+      onValue={setText}
+      onKeyDown={onKeyDown}
+      placeholder="Filter projects…"
+      aria-label="Filter projects and sub-projects"
+      data-directory-search=""
+      width={mobile ? undefined : 180}
+      ground={ground}
+    />
+  )
+  const newProjectButton = P.canCreateProject() && (
+    <Button
+      ref={newProject}
+      data-new-project
+      variant={ground === 'well' ? 'quiet' : 'default'}
+      className={groundRadius(ground)}
+      onClick={() => actions.newProject({ kind: 'program' })}
+    >
+      <Icon name="plus" size={16} /> New project
+    </Button>
+  )
   return (
     <div
       ref={directory}
@@ -383,22 +416,31 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       data-project-directory-state={state}
       aria-busy={state === 'loading' || state === 'refreshing' || undefined}
     >
-      <Input
-        ref={field}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Find a project…"
-        className="bg-surface-1"
-        aria-label="Find a project or sub-project"
-        data-directory-search=""
-      />
-      {P.canCreateProject() && (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button data-new-project onClick={() => actions.newProject({ kind: 'program' })}>
-            <Icon name="plus" size={16} /> New project
-          </Button>
-        </div>
+      {mobile ? (
+        <>
+          {searchBox}
+          {newProjectButton && (
+            <div className="flex flex-wrap items-center justify-end gap-2">{newProjectButton}</div>
+          )}
+        </>
+      ) : (
+        /* a row of this page, laid out as the Board's filter row, which
+           hides with the page as a kept page's portals do (KeptView) */
+        <WorkspaceToolbar>
+          <div
+            ref={toolbar}
+            data-directory-toolbar
+            className="[display:flex] [align-items:center] [justify-content:center] [gap:8px] [padding:12px_20px_var(--panel-gap)] [flex-wrap:wrap]"
+          >
+            <div
+              data-filter-well
+              className="flex min-w-0 flex-wrap items-center justify-center gap-1 rounded-md border border-border bg-background p-1"
+            >
+              {searchBox}
+              {newProjectButton}
+            </div>
+          </div>
+        </WorkspaceToolbar>
       )}
       {listed}
       <PageFold
@@ -431,10 +473,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
             // the button leaves once the organization exists, and New
             // project comes, as the organization's first admin can create one
             actions.createOrg(() =>
-              opener.isConnected
-                ? null
-                : (directory.current?.querySelector<HTMLElement>('[data-new-project]') ??
-                  field.current),
+              opener.isConnected ? null : (newProject.current ?? field.current),
             )
           }}
         >

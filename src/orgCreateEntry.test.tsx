@@ -361,6 +361,9 @@ describe('Create your organization on the Projects page', () => {
     })
     await createFrom(opener, true)
     expect(opener.isConnected).toBe(false)
-    expect(document.activeElement).toBe(button('New project'))
+    // New project stands in the shell's toolbar row on a desktop
+    const newProject = document.querySelector('[data-new-project]')
+    expect(newProject?.textContent?.trim()).toBe('New project')
+    expect(document.activeElement).toBe(newProject)
   })
 })

@@ -1,4 +1,11 @@
-import { createContext, useContext, useState, useSyncExternalStore } from 'react'
+import {
+  createContext,
+  type RefObject,
+  useContext,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 
 /** Whether a kept view (components/KeptView.tsx) is hidden, for the
     floating layers in it, which subscribe while they are mounted. A store
@@ -32,6 +39,28 @@ export const HiddenViewContext = createContext<HiddenState | null>(null)
     or a kept view (components/KeptView.tsx) hidden behind another page.
     The browser gives neither focus; what puts focus back skips both. */
 export const OUT_OF_USE = '[inert], [data-hidden-view]'
+
+/** Gives the element of `ref`, which a kept view renders outside its own
+    box, such as a row it portals into the shell's toolbar, the mark of the
+    hidden view `view` (data-hidden-view) while that view hides, as the
+    view's box has it, so what puts focus back passes the element by
+    (OUT_OF_USE). The mark comes in the commit that hides the view, as
+    KeptView tells its hidden state, before App's layout effects look at
+    focus there; a mark React rendered would come a commit later, since a
+    hidden view does not render for that commit. React's Activity hides
+    the element itself. */
+export function useHiddenViewMark(ref: RefObject<HTMLElement | null>, view: string) {
+  const state = useContext(HiddenViewContext)
+  useLayoutEffect(() => {
+    if (!state) return
+    const mark = () => {
+      if (state.get()) ref.current?.setAttribute('data-hidden-view', view)
+      else ref.current?.removeAttribute('data-hidden-view')
+    }
+    mark()
+    return state.subscribe(mark)
+  }, [state, ref, view])
+}
 
 const noSubscription = () => () => {}
 const shown = () => false

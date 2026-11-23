@@ -11,12 +11,11 @@
      keeps it mounted, with its expanded list's loaded sub-projects and
      focus inside it, which React gives back to a node it moved. Each
      favorite's row sits in a group named Favorite projects
-     ([data-sidebar-group=favorites]), each other row in
-     [data-sidebar-group=rest], and a favorite carries a star mark that is
-     not a control; stars are set in All projects. It loads 25 at first and
-     25 more as its end scrolls into view or Load more is pressed, at most
-     SIDEBAR_MOST.list (lib/projectPick.ts), past which it points to All
-     projects.
+     ([data-sidebar-group=favorites]) and each other row in
+     [data-sidebar-group=rest], with no star; stars are set in All
+     projects. It loads 25 at first and 25 more as its end scrolls into
+     view or Load more is pressed, at most SIDEBAR_MOST.list
+     (lib/projectPick.ts), past which it points to All projects.
    - The scope's top-level project, from the project cache (P.project),
      which App names the scope with, the facts a navigation row seeded
      included, is the one expanded project once a loaded row holds it. Its sub-projects come
@@ -361,13 +360,6 @@ export function SidebarProjects({
               tagged({ name: row.name, tag: tags.get(row.id), truncate: true })
             )}
           </Button>
-          {/* the favorites' mark, not a control: a press on it opens the
-             project through the row, and stars are set in All projects */}
-          {row.favorite && (
-            <span data-sidebar-favorite="" aria-hidden="true" className="flex text-text-3">
-              <Icon name="star" size={14} className="fill-current" />
-            </span>
-          )}
           {/* Keep one trailing action target so ordinary project names
             fit the rail. The menu retains New sub-project for leads. */}
           <Popover

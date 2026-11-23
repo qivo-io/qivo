@@ -11362,7 +11362,6 @@ export const SIDEBAR_PROJECTS_MARKS = {
   state: 'data-sidebar-projects-state',
   row: 'data-project-row',
   group: 'data-sidebar-group',
-  mark: 'data-sidebar-favorite',
   children: 'data-sidebar-children',
   child: 'data-subproject-row',
   more: 'data-sidebar-children-more',
@@ -11375,11 +11374,11 @@ export const SIDEBAR_PROJECTS_MARKS = {
  *  list to answer and for M's lit row, which the tree reads on to wherever
  *  M sorts, and for Alpha and Zulu under it, pressing Load more while one
  *  is still to come. It stars M through the store and waits for the
- *  server's answer to put M's row, with its mark, in the tree's favorites,
- *  with one row for M in the tree. It opens Zulu from the tree, pressing
- *  again while the address has not moved, as the tree says in a toast that
- *  the workspace has not loaded a project yet, and waits for Zulu's
- *  address and lit row. The tree must show no scrollbar
+ *  server's answer to put M's row in the tree's favorites, with one row
+ *  for M in the tree. It opens Zulu from the tree, pressing again while
+ *  the address has not moved, as the tree says in a toast that the
+ *  workspace has not loaded a project yet, and waits for Zulu's address
+ *  and lit row. The tree must show no scrollbar
  *  (scrollbar-width none). It unstars M and waits for M to leave the
  *  favorites; a failure unstars it through the store, so no later step
  *  meets the run's project as a favorite. It reads none of Nora's own
@@ -11426,13 +11425,10 @@ async function sidebarProjectsCheck() {
       starred = true
       expect(
         await until(
-          async () =>
-            (await favorite().count()) === 1 &&
-            (await favorite().locator(`[${m.mark}]`).count()) === 1 &&
-            (await rowOf(M).count()) === 1,
+          async () => (await favorite().count()) === 1 && (await rowOf(M).count()) === 1,
           30_000,
         ),
-        "M's row does not come once into the tree's favorites with its mark",
+        "M's row does not come once into the tree's favorites",
       )
       // Zulu opened from the tree
       const path = () => new URL(app.url()).pathname

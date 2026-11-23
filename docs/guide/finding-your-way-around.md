@@ -11,10 +11,10 @@ still holds your member seat.
 The **Projects** tree lists the projects you can access through your own
 access: the projects you lead, those you hold a grant or a team share on,
 and the projects above the sub-projects you can open, including projects
-shared by other organizations. Your favorites come first, each with a star,
-and then the rest, each group by name. A project of another organization
-shows that organization's name under its own. You set stars in
-[All projects](#all-projects); the star in the tree is a mark, not a button.
+shared by other organizations. Your favorites come first and then the
+rest, each group by name. The tree shows no stars: you set them in
+[All projects](#all-projects). A project of another organization shows that
+organization's name under its own.
 
 The tree loads 25 projects at first and more as you scroll to its end or
 press **Load more**, up to 200. Past that it says that more projects are in
@@ -89,10 +89,11 @@ projects a page, with **Previous** and **Next**. A project of another
 organization shows that organization's name. The directory loads no tasks;
 opening a project loads what its view needs.
 
-The star on a project adds it to your favorites or removes it. Your
-favorites are yours alone, in that organization alone. A star changes no
-one's access and sends no notification, and it cannot change while the
-organization is read-only. The project then moves between the two groups,
+The star on a project adds it to your favorites or removes it, and it is
+filled while the project is a favorite. Your favorites are yours alone, in
+that organization alone. A star changes no one's access and sends no
+notification, and it cannot change while the organization is read-only.
+The project then moves between the two groups,
 here and in the sidebar's **Projects** tree ([Sidebar](#sidebar)).
 An archived project, one in Deleted items and one you lost access to leave
 the directory and keep their star, which shows again when the project is
@@ -105,13 +106,15 @@ sub-project opens it at once, as the sidebar does. A project's **…** menu
 opens its
 **Archived tasks** and, for those who may add one, **New sub-project…**.
 
-The field at the top finds projects and sub-projects by their own names,
-every word in any order, ignoring case and accents, so “cafe” finds “Café”.
-It asks once you pause typing, 25 results a page with **Previous** and
-**Next**, your matching favorites first. Each sub-project shows with its
-project, such as “Luma Sensor › Firmware”, and the organization's name is
-not searched. Clearing the field lists your projects again from the first
-page.
+**Filter projects…** at the top finds projects and sub-projects by their
+own names, every word in any order, ignoring case and accents, so “cafe”
+finds “Café”. It asks once you pause typing, 25 results a page with
+**Previous** and **Next**, your matching favorites first. Each sub-project
+shows with its project, such as “Luma Sensor › Firmware”, and the
+organization's name is not searched. Clearing the field lists your projects
+again from the first page. **New project** next to the field appears if you
+can create projects
+([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
 
 The directory says so when its list is not ready yet, when Qivo could not
 finish checking which projects you can see, and when it checked only part of

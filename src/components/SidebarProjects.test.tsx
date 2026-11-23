@@ -381,7 +381,7 @@ function projects(next: Snapshot, n: number, subsOf = 0) {
 }
 
 describe('the order', { timeout: 60_000 }, () => {
-  it('puts the favorites first with their marks, then the rest by name, each once, with labels and tags', async () => {
+  it('puts the favorites first in their group, then the rest by name, each once, with labels and tags', async () => {
     const next0 = base(true)
     // about 20 top-level projects of two organizations, the second's
     // between the home organization's by name; Test twice
@@ -430,9 +430,8 @@ describe('the order', { timeout: 60_000 }, () => {
     expect(rowIds()).toEqual(reversed)
     await republish()
     expect(rowIds()).toEqual([ids[3], partner, ids[12], ...rest])
-    // each favorite in a group a screen reader names, with its mark beside
-    // the name button, never inside it, and every row a sibling of the
-    // others in one sequence
+    // each favorite in a group a screen reader names, and every row a
+    // sibling of the others in one sequence
     const inGroup = (group: string) =>
       [
         ...document.querySelectorAll<HTMLElement>(
@@ -445,19 +444,12 @@ describe('the order', { timeout: 60_000 }, () => {
       expect(group.getAttribute('role')).toBe('group')
       expect(group.getAttribute('aria-label')).toBe('Favorite projects')
     }
-    for (const group of document.querySelectorAll('[data-sidebar-group="rest"]')) {
+    for (const group of document.querySelectorAll('[data-sidebar-group="rest"]'))
       expect(group.getAttribute('role')).toBeNull()
-      expect(group.querySelector('[data-sidebar-favorite]')).toBeNull()
-    }
     expect(
       new Set([...document.querySelectorAll('[data-sidebar-group]')].map((g) => g.parentElement))
         .size,
     ).toBe(1)
-    for (const id of [ids[3], partner, ids[12]]) {
-      const mark = find('[data-sidebar-favorite]', row(id))
-      expect(mark.getAttribute('aria-hidden')).toBe('true')
-      expect(mark.closest('button')).toBeNull()
-    }
     expect(row(ids[3]).querySelector('button')?.textContent).toBe(named(3))
     // another organization's row names it inside its name button
     const label = find('[data-sidebar-org]', row(partner))
@@ -467,9 +459,9 @@ describe('the order', { timeout: 60_000 }, () => {
     // equal names carry their numbers
     expect(row(testA).querySelector('button')?.textContent).toBe(`Test #${numOf(testA)}`)
     expect(row(testB).querySelector('button')?.textContent).toBe(`Test #${numOf(testB)}`)
-    // the scope's project shows its sub-projects, with no mark or star
+    // the scope's project shows its sub-projects, and the tree no star
+    // control
     expect(childNames()).toEqual([named(0, 'Part'), named(1, 'Part'), named(2, 'Part')])
-    expect(find('[data-sidebar-children]').querySelector('[data-sidebar-favorite]')).toBeNull()
     expect(document.querySelector('[aria-pressed]')).toBeNull()
     // no organization header, and one read of each list
     expect(document.querySelector('[data-org-header]')).toBeNull()

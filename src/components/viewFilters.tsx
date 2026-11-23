@@ -6,7 +6,6 @@ import {
   useState,
 } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
 import { Toggle } from '@/components/ui/toggle'
 import { cn } from '@/lib/utils'
@@ -22,6 +21,8 @@ import {
   type ScopeInfo,
   type ViewOwnerChoices,
 } from '../store/planner'
+import { FilterSearch } from './FilterSearch'
+import { type Ground, groundRadius, menuVariant, toggleVariant } from './ground'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, heldLine } from './pickerWords'
 import { Avatar, Icon, MenuItem, Popover, PriorityIcon } from './qivo'
@@ -34,17 +35,6 @@ import { PERSON_FAILED } from './usePeople'
 type SetFilters = (f: IssueFilters | ((prev: IssueFilters) => IssueFilters)) => void
 
 type ClearFilter = { kind: string; label: string; onClear: () => void }
-
-/* Where the row stands decides what a control looks like at rest (deviation
-   #232): inside a well — the Board and Roadmap toolbars — it is quiet and draws
-   nothing until hovered; on a page — the phone's filter sheet — it keeps a
-   border. Lit is the same everywhere: the raised chip `data-on` / a pressed
-   toggle paints. */
-type Ground = 'well' | 'page'
-const menuVariant = (ground: Ground) => (ground === 'well' ? 'quiet' : 'default')
-const toggleVariant = (ground: Ground) => (ground === 'well' ? 'quiet' : 'outline')
-/* a well's controls take the tighter radius its own corners leave room for */
-const groundRadius = (ground: Ground) => (ground === 'well' ? 'rounded-sm' : 'rounded-md')
 
 /* The clear action sits over the trigger's trailing padding as a sibling
    button. It shares the trigger's surface without nesting interactive controls. */
@@ -139,58 +129,6 @@ const FilterMenuButton = forwardRef<
    of its own and `Popover` only flips it above the trigger when it would cross
    the bottom edge — with a fifty-person roster there is no side of the trigger
    it fits on, and an unbounded list would simply run off the screen. */
-/* The search field. Its own component only because two callers place it and the
-   placeholder is a selector: `input[placeholder="Filter tasks…"]` is how three
-   drives find it, so the string is part of the contract and not decoration. */
-function FilterSearch({
-  filters,
-  setFilters,
-  width,
-  ground,
-}: {
-  filters: IssueFilters
-  setFilters: SetFilters
-  width: number
-  ground: Ground
-}) {
-  /* The one elastic control in the cluster. Everything beside it is a nowrap
-     button that cannot give up a pixel, so when the window is too narrow for the
-     row this is what yields — a search box 60px shorter is a smaller loss than a
-     bar that overflows its own edge.
-     Drawn like the sidebar's Search: a quiet hairline on no fill, that
-     strengthens on hover and while the field has focus — never the accent. */
-  return (
-    <div
-      data-filter-search
-      style={{ flex: `0 1 ${width}px` }}
-      className={cn(
-        'flex h-control min-w-24 items-center gap-2 border border-border bg-transparent px-2 text-text-3 transition-[border-color,color] hover:border-border-strong hover:text-text-2 focus-within:border-border-strong focus-within:text-text-2',
-        groundRadius(ground),
-      )}
-    >
-      <Icon name="search" size={16} />
-      <Input
-        value={filters.search}
-        onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-        placeholder="Filter tasks…"
-        className="h-full min-w-0 flex-1 rounded-none border-none bg-transparent p-0 font-sans text-base text-text-1 shadow-none focus-visible:outline-none focus-visible:ring-0"
-      />
-      {filters.search && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-6 shrink-0 bg-transparent hover:bg-transparent hover:border-border-strong"
-          title="Clear search"
-          aria-label="Clear search"
-          onClick={() => setFilters({ ...filters, search: '' })}
-        >
-          <Icon name="close" size={12} />
-        </Button>
-      )}
-    </div>
-  )
-}
 
 /* ── the rows behind the two pickers ──────────────────────────────────────
    The bodies of the Assignee and Priority popovers. Their own functions
@@ -453,10 +391,14 @@ function ViewFilters({
   )
   return (
     <>
+      {/* the placeholder is a selector: the drive scripts find the field by
+          `input[placeholder="Filter tasks…"]`, so the string is part of the
+          contract and not decoration */}
       {!hideSearch && (
         <FilterSearch
-          filters={filters}
-          setFilters={setFilters}
+          value={filters.search}
+          onValue={(search) => setFilters({ ...filters, search })}
+          placeholder="Filter tasks…"
           width={searchWidth}
           ground={ground}
         />
