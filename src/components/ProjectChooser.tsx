@@ -15,12 +15,10 @@
      (components/ProjectPicker.tsx), every organization's projects from
      the navigation reads, favorites first, one pick and no All projects
      row, under a heading and a line that says where the pick opens; `lost`
-     adds App's note of why no project opened. A press opens the row by
-     the lists' open rule (components/projectNavRows.tsx useNavOpen),
-     whose sentences take the note's place. A new search in the field
-     drops a pick that waits, with its sentence, and so does any
-     navigation the person makes. The panel's list is live, so a project
-     shared meanwhile moves in, and nothing opens by itself.
+     adds App's note of why no project opened. A press opens the row at
+     once by the lists' open rule (components/projectNavRows.tsx
+     useNavOpen). The panel's list is live, so a project shared meanwhile
+     moves in, and nothing opens by itself.
    - `empty`: once the browse list ended confirmed empty, the panel gives
      way to the empty state, which says the person has no active projects
      and who can give access, with New project where they may create one.
@@ -98,9 +96,7 @@ export function ProjectChooser({
   onNewProject: () => void
   purpose?: string | null
 }) {
-  // the open rule's line for a pick, which takes the note's place
-  const [said, setSaid] = useState<string | null>(null)
-  const nav = useNavOpen(onOpen, setSaid)
+  const open = useNavOpen(onOpen)
   const [empty, setEmpty] = useState(false)
   // the field takes focus only where nothing else holds it, on a desktop
   const [focusField] = useState(() => !mobile && focusIsNowhere())
@@ -148,7 +144,6 @@ export function ProjectChooser({
         </Button>
       </div>,
     )
-  const note = said ?? shows.note
   const where = mobile
     ? 'The project you choose opens in its task list.'
     : `The project you choose opens on the ${VIEW_NAMES[view] ?? 'Overview'}.`
@@ -173,21 +168,16 @@ export function ProjectChooser({
         <p
           role="status"
           data-project-chooser-note=""
-          className={cn('text-base text-text-1', !note && 'sr-only')}
+          className={cn('text-base text-text-1', !shows.note && 'sr-only')}
         >
-          {note}
+          {shows.note}
         </p>
       </div>
       <ProjectPickerPanel
         pick={null}
         onPick={(pick) => {
           const row = pick?.kind === 'projects' ? pick.projects[0] : undefined
-          if (row) nav.open(row)
-        }}
-        // a new search drops a pick that waits, and its sentence
-        onSearch={() => {
-          nav.cancel()
-          setSaid(null)
+          if (row) open(row)
         }}
         rules={{ many: false, oneOrg: false, all: 'none' }}
         label="Search your projects"

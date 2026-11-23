@@ -20,14 +20,10 @@
    An empty search reads nothing, and nothing subscribes, so a hidden tab
    reads nothing. A task result opens by its handle or by a reference the
    task window reads from the server (openTaskResult). A project result
-   opens by the open rule of the lists on the navigation reads
-   (components/projectNavRows.tsx useNavOpen): one the workspace holds at
-   once, and one it does not hold yet through projectNav.resolve, while
-   the palette stays open saying "Opening <name>…" and closes as it opens,
-   or says why it cannot (openProjectResult). Any change of the search the
-   text, the toggle and Search in describe drops the wait with its notice,
-   to a cleared field or a text past the limit too, and so do another page
-   of the results, a navigation the person makes and the palette closing. */
+   opens at once by the open rule of the lists on the navigation reads
+   (components/projectNavRows.tsx useNavOpen), and the palette closes as
+   it opens; App shows "Opening <name>…" until the project opens, or why
+   it cannot (openProjectResult). */
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -189,8 +185,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   const [refusal, setRefusal] = useState<{ key: string; message: string } | null>(null)
   // the selected row's value, set to the first row as each page arrives
   const [selected, setSelected] = useState('')
-  // a project result the workspace does not hold yet
-  const [notice, setNotice] = useState<string | null>(null)
   // answers to an older request are dropped
   const seqRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -250,12 +244,9 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     pendingActionRef.current = action
     closeLayer()
   }
-  // a project result's open, which the notice words while it waits and
-  // where it cannot open; the palette closes as it opens
-  const nav = useNavOpen(
-    (id) => run(() => ctx.setScope(id)),
-    (line) => setNotice(line),
-  )
+  // a project result opens as its sidebar entry does (App navScope),
+  // through the lists' open rule, and the palette closes as it opens
+  const openProjectResult = useNavOpen((id) => run(() => ctx.setScope(id)))
 
   // the scope Search in names. A project picked here that is archived or
   // hidden later answers on the server as any project the person cannot
@@ -272,13 +263,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     : overLimit(LIMITS.search, settled)
       ? TOO_LONG
       : searchKeyOf(settled, includeArchived, scope)
-  // any change of the search the field and the controls describe, a
-  // cleared field and a text past the limit too, drops a project's open
-  // that waits, and its notice, during the commit, before its answer lands
-  useLayoutEffect(() => {
-    nav.cancel()
-    setNotice(null)
-  }, [typed])
   useEffect(() => {
     if (text === settled) return
     if (searchKeyOf(text, false, null) === null) {
@@ -300,10 +284,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     setRunning({ seq, key: search.key, move })
     setFailed(null)
     setRefusal(null)
-    // each request, another page of the search and Retry included, drops
-    // a project's open that waits
-    nav.cancel()
-    setNotice(null)
     void P.fetchSearchPage(search.text, {
       includeArchived: search.includeArchived,
       scope: search.scope,
@@ -367,12 +347,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     } else if (shown.starts.length > 1) ask(shown.ask, shown.starts.slice(0, -1), 'previous')
   }
 
-  /* Opens project result `row` as its sidebar entry does (App navScope),
-     through the lists' open rule, so a project the workspace does not
-     hold yet opens once the server said the person may and the workspace
-     holds it, never moving the scope to a project it does not hold. */
-  const openProjectResult = (row: SearchProjectRow) => nav.open(row)
-
   // the rows on screen answer an older text, scope or toggle
   const stale = typed !== (shown?.ask.key ?? null)
   // a request runs, or the pause before one: what is typed waits to be
@@ -411,7 +385,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
       </Button>
     )
   } else if (stale || running?.move === 'first') status = shown ? 'Updating results…' : 'Searching…'
-  else if (notice) status = notice
   else if (shown) {
     const note = searchNote(shown.ask.text.trim(), {
       rows: shown.rows.length,

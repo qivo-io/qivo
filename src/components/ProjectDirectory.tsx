@@ -149,7 +149,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const end: PageEnd = current ? pageEnd(page, !browsing) : 'loading'
   const state = current ? pagesState(page) : 'loading'
 
-  const nav = useNavOpen((id) => actions.openProject(id))
+  const open = useNavOpen((id) => actions.openProject(id))
 
   // the one expanded top-level project, collapsed by a page move, a new
   // search, or its row leaving the page for any reason; a page move or a
@@ -161,7 +161,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     if (placed.current === place) return
     placed.current = place
     setExpanded(null)
-    nav.cancel()
     if (directory.current) directory.current.scrollTop = 0
   }, [place])
   const lost =
@@ -228,9 +227,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       })
     })
   }
-
-  /** Opens `row` as the sidebar does (useNavOpen). */
-  const open = (row: NavProject) => nav.open(row)
 
   const move = useMoveFocus(
     page,
