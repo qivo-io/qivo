@@ -11,7 +11,8 @@ import { plannerFixture } from '../../store/plannerFixture.setup'
 /* "Workdays start on" in Organization settings, on the real store. The
    server refuses a first day of the week that would put two milestones of
    one project in one week (convex/model/milestones.ts assertWeekStartFits);
-   the setting stays and the refusal is toasted. */
+   the setting stays and the refusal is toasted, to stay until the person
+   closes it or chooses a day again. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -47,6 +48,7 @@ beforeEach(async () => {
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
   window.showToast = vi.fn()
+  window.dismissToast = vi.fn()
   const snap = plannerFixture()
   answers = []
   sent = 0
@@ -95,7 +97,8 @@ const render = () =>
     ),
   )
 const select = () => container.querySelector<HTMLSelectElement>('[data-week-start]')
-const REFUSED = `W${CONFLICT.slice(1)} Change reverted.`
+const REFUSED = `W${CONFLICT.slice(1)}`
+const STAYS = { sticky: true, key: 'week-start-refused' }
 
 async function choose(day: number) {
   await act(async () => {
@@ -116,16 +119,20 @@ describe('Workdays start on', () => {
       ),
     )
     await choose(0)
-    expect(window.showToast).toHaveBeenCalledWith(REFUSED, 'error')
+    expect(window.showToast).toHaveBeenCalledExactlyOnceWith(REFUSED, 'error', STAYS)
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(select()?.value).toBe('1')
     expect(P.org.weekStart).toBe(1)
+    expect(window.dismissToast).toHaveBeenCalledTimes(1)
 
     // another refusal says its own sentence
     answers.push(() =>
       Promise.reject(new ConvexError({ code: 'forbidden', message: 'not an admin' })),
     )
     await choose(2)
+    // the next choice takes the refusal of the last one away
+    expect(window.dismissToast).toHaveBeenLastCalledWith(STAYS.key)
+    expect(window.dismissToast).toHaveBeenCalledTimes(2)
     expect(window.showToast).toHaveBeenLastCalledWith(
       "You don't have permission for that. Change reverted.",
       'error',
@@ -156,7 +163,7 @@ describe('Workdays start on', () => {
         new ConvexError({ code: 'rule', reason: WEEK_START_REFUSALS.conflicts, message: CONFLICT }),
       ),
     )
-    expect(window.showToast).toHaveBeenCalledWith(REFUSED, 'error')
+    expect(window.showToast).toHaveBeenCalledWith(REFUSED, 'error', STAYS)
     expect(select()?.disabled).toBe(false)
     expect(select()?.value).toBe('1')
     // the next choice goes out against the saved day

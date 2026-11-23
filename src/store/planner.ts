@@ -46,6 +46,7 @@ import {
   overText,
   SLUG_SHAPE,
   trimMarkdown,
+  WEEK_START_REFUSALS,
 } from '../../convex/lib/limits'
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
@@ -6056,6 +6057,10 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
+/** Refusals of a new first day of the week (setOrg). */
+const weekStartRefusal = (d: ErrData) =>
+  d.reason === WEEK_START_REFUSALS.conflicts || d.reason === WEEK_START_REFUSALS.unchecked
+const WEEK_START_TOAST = 'week-start-refused'
 /* asSentence (lib/fieldLimits.ts sentence) shows a refusal message
    capitalized and ending with a period. Server messages are often lowercase
    fragments, and a toast joins them with a sentence of its own. A limit's
@@ -15012,6 +15017,8 @@ export const PLANNER = {
       : null
   },
   uploadAppearanceImage: (file: File, signal: AbortSignal): Promise<AppearancePreferences> => {
+    // the receiver's sentence for a file it refused, which says what to do
+    let refused: string | undefined
     const pending = (async () => {
       const ticket = await sendAwaited(
         api.appearance.createUpload,
@@ -15027,8 +15034,10 @@ export const PLANNER = {
           signal,
         })
         const result = await response.json()
-        if (!response.ok)
-          throw new Error(result?.error?.message || 'The image upload failed. Please try again.')
+        if (!response.ok) {
+          refused = String(result?.error?.message || 'The image upload failed. Please try again.')
+          throw new Error(refused)
+        }
         return result as AppearancePreferences
       } catch (error) {
         await sendAwaited(
@@ -15042,7 +15051,9 @@ export const PLANNER = {
     // Leaving account settings cancels an in-flight upload, which is not a
     // failed preference save to report in the next screen.
     void pending.catch((error) => {
-      if (!signal.aborted) toastWriteError(error, false)
+      if (signal.aborted) return
+      if (refused) toast(asSentence(refused))
+      else toastWriteError(error, false)
     })
     return pending
   },
@@ -15608,8 +15619,10 @@ export const PLANNER = {
      the limit's sentence, never clamped. Narrates nothing, name included. Resolves whether
      the server saved the change: false without sending when it refused the
      change first (toasted) or there is no home organization here, and false
-     after a refusal, which is toasted and taken back. `save` is a settings
-     field's draft (FieldSave). */
+     after a refusal, which is toasted and taken back. A refused first day
+     of the week (WEEK_START_REFUSALS) names the projects, dates and weeks
+     to change, so its toast stays until the person closes it or chooses a
+     day again. `save` is a settings field's draft (FieldSave). */
   setOrg: (patch: OrgPatch, save: FieldSave = {}): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
@@ -15645,6 +15658,8 @@ export const PLANNER = {
       wire.project_creators = patch.projectCreators
     if (!Object.keys(wire).length) return Promise.resolve(true)
     const orgId = org.id
+    const weekStart = 'week_start' in wire
+    if (weekStart) window.dismissToast?.(WEEK_START_TOAST)
     // the rebuild re-anchors the grid when the week settings moved
     const view: View = {
       workspace: () => {
@@ -15660,6 +15675,17 @@ export const PLANNER = {
     return send(api.orgs.update, { org_id: orgId, patch: wire }, view, {
       over: overOf('organizations', org, Object.keys(wire), seen),
       ...fieldSendOptions(save),
+      ...(weekStart && {
+        onError: (error: unknown) => {
+          const d = errData(error)
+          if (d.message && weekStartRefusal(d))
+            window.showToast?.(asSentence(String(d.message)), 'error', {
+              sticky: true,
+              key: WEEK_START_TOAST,
+            })
+          else toastWriteError(error)
+        },
+      }),
     })
   },
 

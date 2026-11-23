@@ -350,7 +350,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     expect(sentWith('files:avatarUploadUrl')).toEqual({ profile_id: profile, size: 9 })
   })
 
-  it('declares a background’s size, and cancels its ticket when the receiver refuses it', async () => {
+  it('declares a background’s size, and toasts the sentence and cancels its ticket when the receiver refuses it', async () => {
     answers['appearance:createUpload'] = () =>
       Promise.resolve({
         ticket_id: 'ticket-1',
@@ -367,6 +367,10 @@ describe('refusal sentences in restore and upload toasts', () => {
     )
     expect(sentWith('appearance:createUpload')).toEqual({ name: 'Lake.jpg', size: 10 })
     expect(sentWith('appearance:cancelUpload')).toEqual({ ticket_id: 'ticket-1' })
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'The file is larger than its upload said. Choose it again.',
+      'error',
+    )
   })
 
   it('quotes the size refusal that attach returns as a sentence', async () => {
