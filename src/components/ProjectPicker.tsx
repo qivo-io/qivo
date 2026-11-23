@@ -9,10 +9,9 @@
    the fixed rows All projects and an organization's All projects.
 
    - The browse list is projectNav.page, the person's top-level projects 25
-     at a time, their favorites first, with Load more, a favorite's row
-     with a star mark; the All projects directory's star
-     (components/ProjectDirectory.tsx) sets them. Once typing rests
-     SEARCH_DELAY_MS, a text
+     at a time, their favorites first, with Load more, and no star. The
+     All projects directory (components/ProjectDirectory.tsx) alone
+     shows and sets stars. Once typing rests SEARCH_DELAY_MS, a text
      with a name key lists projectNav.search, the projects and sub-projects
      whose own name holds every word typed, each sub-project with its
      project; a text of spaces and accents only, whose name key is empty,
@@ -111,11 +110,11 @@ const cursors = (at: BatchAt) => ({
   ...(at.through === null ? {} : { through: at.through }),
 })
 
-/** A row of the panel: a fixed row, or a project with its parent and
-    favorite state, `child` for one listed under its expanded parent. */
+/** A row of the panel: a fixed row, or a project with its parent,
+    `child` for one listed under its expanded parent. */
 type Entry =
   | { kind: 'fixed'; key: string; fixed: FixedPick; label: string }
-  | { kind: 'row'; key: string; row: PickedProject; favorite: boolean | null; child: boolean }
+  | { kind: 'row'; key: string; row: PickedProject; child: boolean }
 
 /** The sentence a list's held answer carries, with its note's mark, or
     null for an answer with rows. `what` names what the list holds. */
@@ -418,7 +417,6 @@ export function ProjectPickerPanel({
               num: row.num,
               parent: expanded,
             },
-            favorite: null,
             child: true,
           }))
       : []
@@ -432,7 +430,6 @@ export function ProjectPickerPanel({
       num: row.num,
       parent: 'parent' in row ? row.parent : null,
     },
-    favorite: row.favorite,
     child: false,
   })
   const batches = mainShown
@@ -682,12 +679,6 @@ export function ProjectPickerPanel({
           {!included && org && (
             <span data-project-pick-org className="max-w-[40%] shrink truncate text-xs text-text-3">
               {org}
-            </span>
-          )}
-          {entry.favorite === true && (
-            <span className="shrink-0">
-              <Icon name="star" size={14} color="var(--text-3)" />
-              <span className="sr-only">Favorite</span>
             </span>
           )}
           {!rules.many && checked && <Icon name="check" size={16} color="var(--text-2)" />}
