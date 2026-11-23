@@ -16,11 +16,11 @@ import {
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* Where the main All projects entry goes, on the real store and App. The
-   sidebar's All projects row and the phone's Projects tab open the project
-   directory (`/app/~/projects`), which leaves the remembered project
-   (UIPrefs.lastProject) as it was. The row lights for the directory alone,
-   never for an address that once named all projects, and no project row
-   or My view lights under the directory. The views' reads answer from
+   title of the sidebar's Projects tree and the phone's Projects tab open
+   the project directory (`/app/~/projects`), which leaves the remembered
+   project (UIPrefs.lastProject) as it was. The title lights for the
+   directory alone, never for an address that once named all projects, and
+   no project row or My view lights under the directory. The views' reads answer from
    their stand-ins, and the directory's from the navigation reads'
    stand-in. */
 
@@ -155,16 +155,24 @@ const remembered = (snap: Snapshot): string | undefined =>
     ?.project_id
 
 describe('the All projects entry', () => {
-  it("opens the directory from the sidebar's row, lit alone, and keeps the remembered project", async () => {
+  it("opens the directory from the Projects tree's title, lit alone, and keeps the remembered project", async () => {
     const snap = member()
     await app(snap, '/app/testbed/board/p/2')
     await element('[data-project-row="plan"][data-on]')
     // the Board of Plan remembers it
     await vi.waitFor(() => expect(remembered(snap)).toBe('plan'))
-    await act(async () => (await element('[data-all-nav]')).click())
+    // the tree's title is the entry, and the rail has no row of its own
+    const title = await element('aside [data-sidebar-projects] [data-all-nav]')
+    expect(title.textContent?.trim()).toBe('Projects')
+    expect(title.getAttribute('aria-current')).toBeNull()
+    expect(
+      [...document.querySelectorAll('aside button')].map((b) => b.textContent?.trim()),
+    ).not.toContain('All projects')
+    await act(async () => title.click())
     await vi.waitFor(() => expect(location.pathname).toBe('/app/~/projects'))
     await element('[data-project-directory] [data-directory-row="plan"]')
     expect(lit('[data-all-nav]')).toBe(true)
+    expect(title.getAttribute('aria-current')).toBe('page')
     expect(lit('[data-project-row="plan"]')).toBe(false)
     expect(lit('[data-mine-nav]')).toBe(false)
     expect(remembered(snap)).toBe('plan')
@@ -184,13 +192,14 @@ describe('the All projects entry', () => {
     )
     await vi.waitFor(() => expect(lit('[data-project-row="plan"]')).toBe(true))
     expect(lit('[data-all-nav]')).toBe(false)
+    expect(title.getAttribute('aria-current')).toBeNull()
     // the Board's own row shows there, and the directory's leaves with it
     await vi.waitFor(() => expect(shows('[data-filter-row]')).toBe(true))
     expect(document.querySelector('[data-directory-toolbar]')).not.toBeNull()
     expect(shows('[data-directory-toolbar]')).toBe(false)
   })
 
-  it('keeps My view unlit under the directory, and lights All projects for the directory alone', async () => {
+  it("keeps My view unlit under the directory, and lights the Projects tree's title for the directory alone", async () => {
     const snap = member()
     await app(snap, '/app/~/board/mine')
     await vi.waitFor(() => expect(lit('[data-mine-nav]')).toBe(true))
@@ -204,7 +213,7 @@ describe('the All projects entry', () => {
     await act(async () => root.unmount())
     root = createRoot(container)
     // an address that once named all projects names no scope: the startup
-    // rule shows the chooser, and the row stays unlit
+    // rule shows the chooser, and the title stays unlit
     await app(snap, '/app/~/overview/all')
     await element('[data-project-chooser]')
     expect(lit('[data-all-nav]')).toBe(false)

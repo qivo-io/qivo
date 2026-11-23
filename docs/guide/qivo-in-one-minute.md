@@ -1,11 +1,14 @@
 Your organization contains projects, each with sub-projects where tasks live.
-Select a project in the sidebar, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)); **All projects** lists the projects you
-take part in through your own access, your favorites first ([All projects](./finding-your-way-around.md#all-projects)). Each project and My view has three views:
+Select a project in the sidebar, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)); the sidebar's **Projects** title opens
+**All projects**, which lists the projects you take part in through your own
+access, your favorites first ([All projects](./finding-your-way-around.md#all-projects)). Each project and My view has three views, and
+a project opens on the one you used last, the **Board** at first
+([The three views](./finding-your-way-around.md#the-three-views)):
 
-- **Overview** summarizes progress, risks and milestones.
 - **Board** groups tasks by status.
 - **Roadmap** schedules tasks by week and shows each person's workload in
   the **Team** strip.
+- **Overview** summarizes progress, risks and milestones.
 
 To plan work, create a task, add an assignee, remaining hours and a due date,
 then drag its bar on the Roadmap. The assignee can be a person or an agent

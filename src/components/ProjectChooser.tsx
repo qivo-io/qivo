@@ -146,7 +146,7 @@ export function ProjectChooser({
     )
   const where = mobile
     ? 'The project you choose opens in its task list.'
-    : `The project you choose opens on the ${VIEW_NAMES[view] ?? 'Overview'}.`
+    : `The project you choose opens on the ${VIEW_NAMES[view] ?? 'Board'}.`
   return frame(
     empty ? 'empty' : shows.note === null ? 'choose' : 'lost',
     <>

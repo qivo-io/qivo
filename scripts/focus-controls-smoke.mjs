@@ -270,7 +270,8 @@ try {
     return prefs
   })
 
-  // All projects opens the project directory, whose rows the sweep covers
+  // the sidebar's Projects title opens the All projects directory, whose
+  // rows the sweep covers
   await page.locator('[data-all-nav]').click()
   await page.locator('[data-project-directory] [data-directory-row]').first().waitFor()
   await sweep(page.locator('body'), 'All projects directory and sidebar')

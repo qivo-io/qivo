@@ -296,9 +296,9 @@ try {
   await signInDemo(page, demo)
   initialLayout = await page.evaluate(() => window.PLANNER.loadUI().metaViz || 'swimlanes')
   initialFocus = await page.evaluate(() => !!window.PLANNER.loadUI().focus)
-  // Sign-in opens the project directory over the Overview, and a sidebar
-  // project keeps the view, so the drive opens Luma Sensor's Board by its
-  // number
+  // Sign-in opens the project directory over the view saved last, and a
+  // sidebar project keeps the view, so the drive opens Luma Sensor's Board
+  // by its number
   // Luma Sensor and its sub-projects from the navigation reads, as the
   // store holds no project list
   const lumaProject = await navProject(page, 'Luma Sensor')

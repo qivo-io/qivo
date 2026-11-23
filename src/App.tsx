@@ -181,14 +181,14 @@ function Sidebar({
   focusRow: FocusRow | null
   onFocusRowDone: (n: number) => void
 }) {
-  // "My view" is a scope and lights up like a project row. "All projects"
-  // opens the project directory, a page, and lights while it shows, and
-  // only then: no view shows a scope over all projects. The inbox, which
-  // owns the screen, outranks every one of them. Team sync is a page with a
-  // row of its own: while it is open that row is the only lit one, and the
-  // scope underneath waits unlit for its return, as it does under the
-  // directory. A row of the project tree (components/SidebarProjects.tsx)
-  // lights by scopeOn.
+  // "My view" is a scope and lights up like a project row. The tree's
+  // "Projects" title opens the All projects directory, a page, and lights
+  // while it shows, and only then: no view shows a scope over all
+  // projects. The inbox, which owns the screen, outranks every one of
+  // them. Team sync is a page with a row of its own: while it is open that
+  // row is the only lit one, and the scope underneath waits unlit for its
+  // return, as it does under the directory. A row of the project tree
+  // (components/SidebarProjects.tsx) lights by scopeOn.
   const allOn = !inboxOpen && !syncOpen && projectsOpen
   const mineOn = !inboxOpen && !syncOpen && !projectsOpen && P.isMineScope(scope)
   const scopeOn = (id: string) => !syncOpen && !projectsOpen && scope === id
@@ -281,7 +281,7 @@ function Sidebar({
           {/* My view (deviation #49): the three views across every project,
           narrowed to the tasks assigned to ME on any seat I hold (0081). The
           first row because it is the personal surface (the inbox, the other
-          one, is the top bar's first tab); All projects follows it. */}
+          one, is the top bar's first tab). */}
           <div className="[padding:0_12px_4px]">
             <Button
               variant="quiet"
@@ -294,25 +294,6 @@ function Sidebar({
             >
               <Icon name="user" size={16} />
               <span>My view</span>
-            </Button>
-          </div>
-
-          {/* All projects (deviation #47) opens the project directory, every
-          project this login can reach by its own access, home organization
-          and guest seats alike, its favorites first. It sits above the
-          per-project list because it lists them all. */}
-          <div className="[padding:0_12px_4px]">
-            <Button
-              variant="quiet"
-              type="button"
-              aria-current={allOn ? 'page' : undefined}
-              data-on={allOn ? '' : undefined}
-              data-all-nav
-              onClick={() => actions.openProjects()}
-              className={navRow}
-            >
-              <Icon name="layers" size={16} />
-              <span>All projects</span>
             </Button>
           </div>
 
@@ -339,6 +320,7 @@ function Sidebar({
           <SidebarProjects
             scope={scope}
             lit={scopeOn}
+            allOn={allOn}
             actions={actions}
             focusRow={focusRow}
             onFocusRowDone={onFocusRowDone}
@@ -379,9 +361,9 @@ const VIEW_CLASS =
 const PAGE_CLASS = '[flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
 
 const VIEWS = [
-  { id: 'overview', label: 'Overview', icon: 'chart' },
   { id: 'kanban', label: 'Board', icon: 'board' },
   { id: 'roadmap', label: 'Roadmap', icon: 'timeline' },
+  { id: 'overview', label: 'Overview', icon: 'chart' },
 ]
 
 /* The desktop top bar: the Inbox glyph and the three views in one switch,
@@ -870,7 +852,7 @@ function App() {
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
-  const uiView = ['overview', 'kanban', 'roadmap'].includes(uiView0) ? uiView0 : 'overview'
+  const uiView = ['overview', 'kanban', 'roadmap'].includes(uiView0) ? uiView0 : 'kanban'
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the remembered project when the issue lives inside it, else jump
   // to the issue's sub-project — link recipients land on a board that
@@ -934,18 +916,7 @@ function App() {
   // counts the person's scope moves, so one that keeps the scope as it was
   // commits too and the save effect looks again
   const [, setPicks] = useState(0)
-  const [view, setView] = useState(() =>
-    // a viewless issue short link keeps the saved view (the modal sits over
-    // whatever's behind), and so does Team sync, which returns to it on Done;
-    // scope/settings routes without a view mean overview
-    r0?.view
-      ? r0.view
-      : r0?.issue || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
-        ? uiView
-        : r0
-          ? 'overview'
-          : uiView,
-  )
+  const [view, setView] = useState(r0?.view || uiView)
   const [openIssue, setOpenIssue] = useState(r0?.issue || null)
   // A new task's handle is a preview that moves when another person's create
   // takes its number while the write waits, and a change of the home
@@ -1770,18 +1741,10 @@ function App() {
             : liveScope(sc)
               ? sc
               : was.scope,
-        // viewless issue links keep the current view; Settings, #/inbox and
-        // Team sync sit over/instead of the current view, so they must not
-        // reset it either, and the front door keeps it as a boot keeps the
-        // saved one, except a person jump's entry, whose chooser shows on
-        // the view its mark names (jump)
-        view: r.view
-          ? r.view
-          : door && jump
-            ? jump.view
-            : !door && !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
-              ? 'overview'
-              : was.view,
+        // an address that names no view keeps the one on screen, as a boot
+        // keeps the saved one, except a person jump's entry, whose chooser
+        // shows on the view its mark names (jump)
+        view: r.view || (jump ? jump.view : was.view),
         openIssue: issue,
         // a project page held while its project left (Settings) keeps its
         // own address, which parses to no project now: a Back within it,
@@ -2488,9 +2451,9 @@ function App() {
           if (mobile) setView('kanban')
         },
       ),
-    // All projects: the project directory, from the sidebar's row and the
-    // phone's Projects tab. It leaves the scope and the view as they are,
-    // so visiting it never changes the remembered project
+    // All projects: the project directory, from the sidebar's Projects
+    // title and the phone's Projects tab. It leaves the scope and the view
+    // as they are, so visiting it never changes the remembered project
     // (UIPrefs.lastProject), and closes a task window, since its address
     // names no task
     openProjects: () =>

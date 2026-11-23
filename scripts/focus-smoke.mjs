@@ -115,9 +115,10 @@ try {
   // the view preferences as sign-in found them, before the drive opens a
   // project
   initialUI = await page.evaluate(() => window.PLANNER.loadUI())
-  // Sign-in opens the project directory over the Overview, which has no
-  // task filters, and a sidebar project keeps the view, so the drive opens
-  // Luma Sensor's Board by its number before it picks a sidebar project
+  // Sign-in opens the project directory over the view saved last, which
+  // may have no task filters, and a sidebar project keeps the view, so the
+  // drive opens Luma Sensor's Board by its number before it picks a sidebar
+  // project
   const luma = (await navProject(page, 'Luma Sensor')).num
   assert.ok(luma != null, 'Northstar holds no Luma Sensor')
   await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {

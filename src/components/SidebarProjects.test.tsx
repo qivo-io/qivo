@@ -223,6 +223,7 @@ function Harness({ scope }: { scope: string }) {
     <tree.SidebarProjects
       scope={scope}
       lit={(id) => id === scope}
+      allOn={false}
       actions={actions}
       focusRow={request}
       onFocusRowDone={(n) => {

@@ -1,9 +1,9 @@
 ## Sidebar
 
-The sidebar shows your organization, **Search**, **My view**, **All
-projects**, **Team sync**, the **Projects** tree and **Settings**. **All
-projects** opens the project directory ([All projects](#all-projects)). The
-organization name is not a switcher. If you only have a guest identity,
+The sidebar shows your organization, **Search**, **My view**, **Team sync**,
+the **Projects** tree and **Settings**. **Projects**, the tree's title, opens
+the project directory ([All projects](#all-projects)). The organization name
+is not a switcher. If you only have a guest identity,
 **Create your organization…** opens the organization-creation dialog. It does
 not show while an organization that deactivated you, or one being deleted,
 still holds your member seat.
@@ -69,8 +69,9 @@ or that project's archived tasks.
 
 ## Top bar
 
+The view selector reads **Inbox**, **Board**, **Roadmap** and **Overview**.
 Use **Inbox** and its unread count to open notifications ([Your inbox](./working-together.md#your-inbox)). Select
-**Overview**, **Board** or **Roadmap** to return to that view in the current
+**Board**, **Roadmap** or **Overview** to return to that view in the current
 scope. Team sync is a separate page ([Team sync](./planning-against-real-capacity.md#team-sync)).
 
 Board filters and its layout switcher sit below the view selector. Roadmap
@@ -79,10 +80,10 @@ Create tasks from the Board controls described in [Creating a task](./how-work-i
 
 ## All projects
 
-**All projects** in the sidebar, and **Projects** on a phone, open the
-project directory. It lists every project you can access through your own
-access: the projects you lead, those you hold a grant or a team share on,
-and the projects above the sub-projects you can open, including projects
+**Projects**, the title of the sidebar's tree, and **Projects** on a phone
+open the project directory. It lists every project you can access through
+your own access: the projects you lead, those you hold a grant or a team
+share on, and the projects above the sub-projects you can open, including projects
 shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
 Your favorites come first and then the rest, each by name, 25 top-level
 projects a page, with **Previous** and **Next**. A project of another
@@ -132,7 +133,7 @@ My view ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
 every project on all three views. An address that once named all projects,
 such as `…/board/all`, opens like the view's own address: the project you
 opened last once Qivo has checked you can still open it, else the project
-list, and a task after it opens nothing. **All projects** in the sidebar
+list, and a task after it opens nothing. The sidebar's **Projects** title
 lights only for this directory. A person's **Board** or **Roadmap** button
 on Team sync across all projects or a team opens the project list with that
 person's filter kept and a line saying whose tasks a pick will show; the
@@ -189,6 +190,11 @@ unassigned, so Qivo opens its sub-project where you can see and assign it.
 Qivo saves your last view, the last project or sub-project you opened, your
 Focus and your Roadmap window per user on the server. They follow you
 across devices and reloads.
+
+A project or sub-project you open keeps the view on screen. An address that
+names no view, such as a task link, the Inbox, All projects or
+`qivo.io/app`, opens on the view you used last, and on the **Board** until
+you have used one. On a phone, a project you choose opens in its task list.
 
 Opening Qivo without a page in its address, such as `qivo.io/app`, opens
 that project if you can still open it, after a quick check with the server,

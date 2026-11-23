@@ -2411,10 +2411,13 @@ const read = (name, args = {}) => {
     case 'prefs:get': {
       // the first program as the project the person opened last, which
       // the app opens once projectNav.resolve says it may; startup=none
-      // remembers nothing and startup=lost a project no one has
+      // remembers no project and startup=lost a project no one has
       const program = snapshot.projects.find((p) => p.type === 'meta')
       const startup = parameters.get('startup')
-      const prefs = {}
+      // the Overview as the view the person used last: the benchmark's and
+      // board-large-smoke's samples open the Board from it after startup,
+      // and the app falls back to the Board where none is saved
+      const prefs = { view: 'overview' }
       if (program && startup !== 'none')
         prefs.lastProject = {
           org_id: program.org_id,
@@ -2423,7 +2426,6 @@ const read = (name, args = {}) => {
       // syncscope=program: the first program saved as Team sync's scope
       if (program && parameters.get('syncscope') === 'program')
         prefs.teamSyncScope = `project:${program.id}`
-      if (!Object.keys(prefs).length) return null
       return {
         profile_id: snapshot.myProfileIds[0],
         prefs,

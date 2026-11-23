@@ -1,4 +1,5 @@
-/* The sidebar's project tree: the Projects header with New project and the
+/* The sidebar's project tree: the Projects header, whose title opens All
+   projects and lights while it shows (`allOn`), with New project, and the
    person's projects below it, from the server's navigation reads
    (convex/projectNav.ts), each judged by ordinary access, so an
    organization admin's tree holds the projects they take part in, as All
@@ -170,7 +171,8 @@ const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>
 
 /**
  * The sidebar's project tree, on the rules in the module header. `scope`
- * is App's scope, `lit` whether a row lights for it, `actions` App's
+ * is App's scope, `lit` whether a row lights for it, `allOn` whether the
+ * All projects page shows, `actions` App's
  * (openProject, openProjects, openSettings, openArchivedTasks and
  * newProject), `focusRow` App's focus request while it lasts, and
  * `onFocusRowDone` what the tree calls with the request's `n` once it is
@@ -179,12 +181,14 @@ const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>
 export function SidebarProjects({
   scope,
   lit,
+  allOn,
   actions,
   focusRow,
   onFocusRowDone,
 }: {
   scope: string
   lit: (id: string) => boolean
+  allOn: boolean
   actions: Actions
   focusRow: FocusRow | null
   onFocusRowDone: (n: number) => void
@@ -488,10 +492,19 @@ export function SidebarProjects({
         if (!pressed.current && row && tree.current?.contains(row)) intoTreeView(tree.current, row)
       }}
     >
-      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:8px_8px]">
-        <span className="[font-size:var(--fs-xs)] [font-weight:600] [color:var(--text-3)]">
+      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:8px_8px_8px_0]">
+        <Button
+          variant="quiet"
+          size="xs"
+          type="button"
+          aria-current={allOn ? 'page' : undefined}
+          data-on={allOn ? '' : undefined}
+          data-all-nav
+          onClick={() => actions.openProjects()}
+          className="px-2 text-xs font-semibold text-text-3"
+        >
           Projects
-        </span>
+        </Button>
         <div className="[flex:1]" />
         {canCreateProject && (
           <Button

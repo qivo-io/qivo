@@ -185,13 +185,13 @@
  * one archived on its own, and restores it there, which must bring back the
  * project and the carried sub-project only, each checked over REST
  * (ui/settings-projects).
- * It opens All projects from the sidebar, waits for its browse list
- * (projectNav.page), finds its project and Alpha by the run's tag from the
- * deployment's search (projectNav.search), stars the project, which the
- * server's answer puts under Favorites ahead of Alpha, which sorts before
- * it by name (projectNav.setFavorite), lists Alpha and Zulu under it
- * (projectNav.children), opens Zulu, and unstars the project again
- * (ui/project-directory).
+ * It opens All projects from the sidebar's Projects title, waits for its
+ * browse list (projectNav.page), finds its project and Alpha by the run's
+ * tag from the deployment's search (projectNav.search), stars the
+ * project, which the server's answer puts under Favorites ahead of Alpha,
+ * which sorts before it by name (projectNav.setFavorite), lists Alpha and
+ * Zulu under it (projectNav.children), opens Zulu, and unstars the project
+ * again (ui/project-directory).
  * It opens its project's Board by its address, waits for the sidebar's
  * tree from the deployment's navigation reads (projectNav.page) to light
  * the project wherever it sorts, with Alpha and Zulu under it
@@ -208,8 +208,8 @@
  * saying the project is no longer available, and opens the run's main
  * project from it (ui/startup-selection).
  * It opens /board/all, an address that once named all projects, which
- * must give way to the startup rule's page with the All projects row
- * unlit, makes a project of its own that Nora only manages and opens its
+ * must give way to the startup rule's page with the sidebar's Projects
+ * title unlit, makes a project of its own that Nora only manages and opens its
  * numbered Settings address, which the deployment's projectSettings.get
  * answers by organization and number, through a reload, and a number no
  * project holds, which opens the account page (ui/old-paths).
@@ -12160,8 +12160,9 @@ export const OLD_PATHS_STEP = 'ui/old-paths'
 /** The step's own cleanup, reported apart from the step. */
 export const OLD_PATHS_CLEANUP = 'cleanup/old-paths'
 
-/** The marks the step waits for: the sidebar's All projects row and its
- *  lit mark (src/App.tsx), the project chooser, a project page's state
+/** The marks the step waits for: the sidebar's Projects title, which opens
+ *  All projects, and its lit mark (src/components/SidebarProjects.tsx), the
+ *  project chooser, a project page's state
  *  (src/panels/settings/ProjectSettings.tsx) and a Settings page
  *  (src/panels/Settings.tsx). */
 export const OLD_PATHS_MARKS = {
@@ -12175,7 +12176,8 @@ export const OLD_PATHS_MARKS = {
 /** The old addresses and a numbered project page on the deployment's
  *  answers. In the app as Nora it opens `/board/all`, an address that once
  *  named all projects, which must give way to the startup rule's page, a
- *  project's view or the project chooser, with the All projects row unlit.
+ *  project's view or the project chooser, with the sidebar's Projects
+ *  title, which opens All projects, unlit.
  *  Over REST with Nora's write token it makes `<tag> Old paths` led by the
  *  Standard agent and removes Nora's automatic User grant (DELETE with
  *  on_held_tasks leave), so she only manages it, then opens its numbered
@@ -12196,7 +12198,7 @@ async function oldPathsCheck() {
   const path = () => new URL(app.url()).pathname
   let project = null
   await check(OLD_PATHS_STEP, async () => {
-    // 1. the old address takes the startup rule, with the row unlit
+    // 1. the old address takes the startup rule, with the title unlit
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
       waitUntil: 'domcontentloaded',
     })
@@ -12213,7 +12215,7 @@ async function oldPathsCheck() {
     eq(
       await app.locator(`aside [${m.allNav}]`).getAttribute(m.lit),
       null,
-      'the All projects row after the old address',
+      "the sidebar's Projects title after the old address",
     )
     const landed = path()
     // 2. a project Nora only manages, by its numbered Settings address

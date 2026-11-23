@@ -1,4 +1,4 @@
-/* The All projects directory, which the sidebar's All projects row and the
+/* The All projects directory, which the sidebar's Projects title and the
    phone's Projects tab open (`/app/~/projects`). It lists the person's
    projects from the server's navigation reads (convex/projectNav.ts), each
    judged by ordinary access, so an organization admin finds here the
