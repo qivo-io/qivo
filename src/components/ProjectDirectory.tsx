@@ -152,7 +152,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const end: PageEnd = current ? pageEnd(page, !browsing) : 'loading'
   const state = current ? pagesState(page) : 'loading'
 
-  // a status line for stars and for a project the workspace does not hold;
   // `n` tells two equal sentences apart, so each is read out
   const [status, setStatus] = useState<{ text: string; n: number } | null>(null)
   const say = (line: string) => setStatus((was) => ({ text: line, n: (was?.n ?? 0) + 1 }))
@@ -235,7 +234,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     void P.setFavorite({ id: row.id, org_id: row.org_id }, want).then((ok) => {
       // a refused or paused star goes back, and the store says why
       if (!ok) return edit(row.id, null)
-      say(want ? `${row.name} is now a favorite.` : `${row.name} is no longer a favorite.`)
       setPending((was) => {
         if (!was.has(row.id)) return was
         const out = new Map(was)

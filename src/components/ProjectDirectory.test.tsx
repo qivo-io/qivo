@@ -512,7 +512,6 @@ describe('the star', { timeout: 60_000 }, () => {
     // went to the star of the row now at its place
     expect(rowNames()).toEqual([5, 7, 8, 9, 10].map((n) => named(n)))
     expect(document.activeElement).toBe(starOf(ids[7]))
-    expect(pageText()).toContain(`${named(6)} is now a favorite.`)
     await previous()
     expect(rowNames()).toEqual([named(6), named(0), named(1), named(2), named(3)])
     expect(groups()).toEqual(['favorites', 'rest'])
@@ -523,7 +522,6 @@ describe('the star', { timeout: 60_000 }, () => {
     expect(sentStars().at(-1)).toEqual({ org_id: ORG, project_id: ids[6], favorite: false })
     expect(rowNames()).toEqual([0, 1, 2, 3, 4].map((n) => named(n)))
     expect(groups()).toEqual([])
-    expect(pageText()).toContain(`${named(6)} is no longer a favorite.`)
   })
 
   it('sends focus to the star at its place among a search page’s stars, which sub-project rows lack', async () => {
