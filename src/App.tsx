@@ -606,7 +606,12 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
           className="pointer-events-auto animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
           <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
-          <span className="min-w-0 [overflow-wrap:anywhere] [white-space:pre-line]">{t.text}</span>
+          {/* A long text scrolls inside a third of the window, so a toast
+              that stays, with the room below it, keeps within the half the
+              page makes free (lib/floatStack). */}
+          <span className="min-w-0 [max-height:33dvh] [overflow-y:auto] [overscroll-behavior:contain] [overflow-wrap:anywhere] [white-space:pre-line]">
+            {t.text}
+          </span>
           <Button
             type="button"
             variant="ghost"
