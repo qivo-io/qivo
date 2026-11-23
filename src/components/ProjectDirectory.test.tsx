@@ -72,6 +72,7 @@ let ORG: string
 let ME: string
 let PARTNER: string
 let directory: typeof import('./ProjectDirectory')
+let shell: typeof import('./WorkspaceShell')
 let pickLib: typeof import('../lib/projectPick')
 let version: typeof import('../store/usePlannerVersion')
 let store: typeof import('../store/planner')
@@ -195,6 +196,7 @@ async function load(next: Snapshot) {
   store = await import('../store/planner')
   await store.initStore()
   directory = await import('./ProjectDirectory')
+  shell = await import('./WorkspaceShell')
   pickLib = await import('../lib/projectPick')
   version = await import('../store/usePlannerVersion')
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -207,8 +209,9 @@ function Harness() {
   return <directory.ProjectDirectory actions={actions} />
 }
 
-/** Renders the directory, shown or hidden as a kept page is (React's
-    Activity, as components/KeptView.tsx hides one). */
+/** Renders the directory in the workspace shell, whose toolbar row holds
+    its search, shown or hidden as a kept page is (React's Activity, as
+    components/KeptView.tsx hides one). */
 async function render(mode: 'visible' | 'hidden' = 'visible') {
   for (const name of [
     'openProject',
@@ -221,9 +224,11 @@ async function render(mode: 'visible' | 'hidden' = 'visible') {
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <Activity mode={mode}>
-          <Harness />
-        </Activity>
+        <shell.WorkspaceShell header={null}>
+          <Activity mode={mode}>
+            <Harness />
+          </Activity>
+        </shell.WorkspaceShell>
       </TooltipProvider>,
     ),
   )
@@ -688,6 +693,21 @@ describe('the search', { timeout: 60_000 }, () => {
     await act(async () => field().dispatchEvent(event))
     await settle()
     expect(field().value).toBe('')
+  })
+
+  it('leaves focus in the field when Clear empties it, so the next text lands there', async () => {
+    const next0 = base()
+    top(next0, 'Alpha')
+    top(next0, 'Beta')
+    await load(next0)
+    await render()
+    await type('beta')
+    expect(rowNames()).toEqual(['Beta'])
+    const clear = find<HTMLButtonElement>('[aria-label="Clear search"]')
+    clear.focus()
+    await click(clear)
+    expect(field().value).toBe('')
+    expect(document.activeElement).toBe(field())
   })
 
   it('tags equal names among the rows shown and the projects a sub-project names', async () => {

@@ -858,8 +858,9 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
       )
       let held: HTMLElement
       if (opener === 'New project') {
+        // in the page on a phone, in the shell's toolbar row on a desktop
         held = await waitFor(
-          () => page.querySelector<HTMLElement>('[data-new-project]'),
+          () => document.querySelector<HTMLElement>('[data-new-project]'),
           'New project',
         )
         await press(held)
@@ -1181,12 +1182,9 @@ describe("the sidebar's focus request", { timeout: 30_000 }, () => {
     localStorage.clear()
     holdNav = hold
     await boot()
-    const page = await waitFor(
-      () => document.querySelector('.mobile-project-directory'),
-      'the page',
-    )
+    await waitFor(() => document.querySelector('.mobile-project-directory'), 'the page')
     await press(
-      await waitFor(() => page.querySelector<HTMLElement>('[data-new-project]'), 'New project'),
+      await waitFor(() => document.querySelector<HTMLElement>('[data-new-project]'), 'New project'),
     )
     await finish(true, 'Create project')
     await save()

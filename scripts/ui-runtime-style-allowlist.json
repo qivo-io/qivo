@@ -7,6 +7,10 @@
     "count": 1,
     "reason": "selection-anchored link-popover coordinates clamped to the viewport"
   },
+  "src/components/FilterSearch.tsx": {
+    "count": 1,
+    "reason": "a filter row's caller-chosen search width"
+  },
   "src/components/inlineImage.tsx": {
     "count": 1,
     "reason": "a loading description image's placeholder at the width and aspect ratio it will be drawn"
@@ -30,10 +34,6 @@
   "src/components/settingsPage.tsx": {
     "count": 1,
     "reason": "a settings field's caller-chosen control width"
-  },
-  "src/components/viewFilters.tsx": {
-    "count": 1,
-    "reason": "runtime filter-menu width"
   },
   "src/panels/Inbox.tsx": {
     "count": 1,

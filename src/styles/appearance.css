@@ -232,7 +232,13 @@ html[data-appearance] [data-view-switch] .workspace-page-current {
    once. A well's children never do — the well already has it, and a second
    coat would darken the panel twice. */
 html[data-appearance]
-  :is([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions)
+  :is(
+    [data-filter-row],
+    [data-roadmap-toolbar],
+    [data-directory-toolbar],
+    .inbox-options-row,
+    .inbox-bulk-actions
+  )
   :where(button, input, [data-filter-search]):not(
     :where([data-filter-search] *, [data-filter-x], [data-filter-well] *)
   ) {
@@ -402,10 +408,10 @@ html[data-appearance] .planner-subproject > button {
    lies over the rest fill instead. Outline Buttons composite over their own
    --background. Left alone: lit (data-on) and disabled controls, the next
    Overview milestone (its primary-soft fill), the filter row, roadmap
-   toolbar and Inbox rows, whose fill the rules above pin to the panel
-   material or clear, the Projects directory over the photo and the palette's
-   esc key (both below). Behind (hover: hover) like Tailwind's hover, so a tap
-   leaves no sticky fill. */
+   toolbar, All projects' toolbar row and Inbox rows, whose fill the rules
+   above pin to the panel material or clear, the Projects directory over the
+   photo and the palette's esc key (both below). Behind (hover: hover) like
+   Tailwind's hover, so a tap leaves no sticky fill. */
 @media (hover: hover) {
   html[data-appearance]
     :is(
@@ -415,7 +421,14 @@ html[data-appearance] .planner-subproject > button {
       [data-on],
       [data-next],
       :disabled,
-      :where([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions) *,
+      :where(
+          [data-filter-row],
+          [data-roadmap-toolbar],
+          [data-directory-toolbar],
+          .inbox-options-row,
+          .inbox-bulk-actions
+        )
+        *,
       :where([data-background-state="ready"] .mobile-project-directory > div > *)
     ) {
     background-color: var(--surface-1);
@@ -426,7 +439,14 @@ html[data-appearance] .planner-subproject > button {
       [data-on],
       [data-palette-close],
       :disabled,
-      :where([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions) *
+      :where(
+          [data-filter-row],
+          [data-roadmap-toolbar],
+          [data-directory-toolbar],
+          .inbox-options-row,
+          .inbox-bulk-actions
+        )
+        *
     ) {
     background-color: var(--background);
     background-image: linear-gradient(var(--hover), var(--hover));
@@ -456,9 +476,13 @@ html[data-appearance] [data-archive-search-box] {
   background: transparent;
 }
 /* Projects directory controls standing on the photograph paint the panel
-   material once, in every state, and hover by laying the ink over it. */
+   material once, in every state, and hover by laying the ink over it. The
+   phone's search box is one of them; its Clear button stays on the box. */
 html[data-appearance][data-background-state="ready"]
-:is(.mobile-project-directory > input, .mobile-project-directory > div > button) {
+:is(
+  .mobile-project-directory > [data-filter-search],
+  .mobile-project-directory > div:not([data-filter-search]) > button
+) {
   background-color: var(--workspace-panel);
   -webkit-backdrop-filter: var(--workspace-panel-blur);
   backdrop-filter: var(--workspace-panel-blur);
@@ -466,7 +490,7 @@ html[data-appearance][data-background-state="ready"]
 @media (hover: hover) {
   html[data-appearance][data-background-state="ready"]
     .mobile-project-directory
-    > div
+    > div:not([data-filter-search])
     > button:hover {
     background-image: linear-gradient(var(--hover), var(--hover));
   }
