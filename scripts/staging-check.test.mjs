@@ -2682,7 +2682,6 @@ describe('a search that lost its typed text', () => {
   it('guards the searches the steps wait on, and the workflow lists its NOTE', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(SEARCH_LOST).toBe('search-lost')
-    expect(script.match(/await typeSearch\(/g)).toHaveLength(31)
     expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",

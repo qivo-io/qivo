@@ -2678,9 +2678,13 @@ async function openDeletedItems(kind, search) {
   const holds = await typeSearch(app.locator(`[${m.search}]`), search, "Deleted items' search")
   // the page sends a search once typing rests, and a new filter opens its
   // first page afresh, so what shows after that is the search's answer
-  do await sleep(1000)
-  while (!(await holds()))
-  const page = await deletedPageNow()
+  // a text lost while the page answered is typed again, and the page read
+  // again
+  let page
+  do {
+    await sleep(1000)
+    page = await deletedPageNow()
+  } while (!(await holds()))
   expect(
     ((await trigger.textContent()) ?? '').trim().startsWith('All projects') && !page.unscoped,
     'Deleted items did not take All projects as its scope',
@@ -7941,7 +7945,10 @@ async function inboxListCheck() {
           ),
           `the Inbox did not search the server for ${text}`,
         )
-        await row.waitFor({ timeout: 60_000 })
+        expect(
+          await until(async () => (await holds()) && (await row.isVisible()), 60_000),
+          `the Inbox does not list t0 for a search of ${text}`,
+        )
       }
       // the list shows the searched page until the cleared text rests and
       // then reads its page afresh, so the menus below, which press t0's
@@ -9389,11 +9396,15 @@ async function rosterPartsCheck() {
       await choice.waitFor({ timeout: 30_000 })
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.people)).length > 0, true, 'the menu read')
       const nobody = await typeSearch(search, OWNER_PICKERS_PERSON, "the Assignee menu's search")
+      const noMatch = app.getByText('No matching people.').first()
       expect(
-        await until(async () => (await nobody()) && (await choice.count()) === 0, 30_000),
-        `the Assignee menu still lists ${holder.name} for ${OWNER_PICKERS_PERSON}`,
+        await until(
+          async () =>
+            (await nobody()) && (await choice.count()) === 0 && (await noMatch.isVisible()),
+          30_000,
+        ),
+        `the Assignee menu does not answer No matching people for ${OWNER_PICKERS_PERSON}`,
       )
-      await app.getByText('No matching people.').first().waitFor({ timeout: 30_000 })
       eq(
         await app.locator(`[data-filter-assignee="${leo.id}"]`).count(),
         0,
@@ -12555,11 +12566,11 @@ async function paletteSearchCheck(target, active) {
     eq(await row.count(), 0, 'the archived task with Include archived tasks off')
     const failed = await palette.locator('[data-palette-retry]').count()
     eq(failed, 0, 'a failed search with the toggle off')
+    // the toggle keeps the typed text, so nothing types it again here: a
+    // toggle that cleared the search must fail the step
     await palette.locator('[data-palette-archived]').click()
     expect(
-      await until(
-        async () => (await byTarget()) && (await answered()) && (await row.count()) === 1,
-      ),
+      await until(async () => (await answered()) && (await row.count()) === 1),
       `Search did not find ${target.key} with Include archived tasks on`,
     )
     eq(
