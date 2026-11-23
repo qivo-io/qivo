@@ -1,4 +1,4 @@
-import { type ComponentPropsWithoutRef, forwardRef } from 'react'
+import { type ComponentPropsWithoutRef, forwardRef, useImperativeHandle, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -26,6 +26,8 @@ export const FilterSearch = forwardRef<HTMLInputElement, FilterSearchProps>(func
   { value, onValue, width, ground, ...input },
   ref,
 ) {
+  const field = useRef<HTMLInputElement>(null)
+  useImperativeHandle(ref, () => field.current)
   /* The one elastic control in the cluster. Everything beside it is a nowrap
      button that cannot give up a pixel, so when the window is too narrow for the
      row this is what yields — a search box 60px shorter is a smaller loss than a
@@ -45,7 +47,7 @@ export const FilterSearch = forwardRef<HTMLInputElement, FilterSearchProps>(func
     >
       <Icon name="search" size={16} />
       <Input
-        ref={ref}
+        ref={field}
         {...input}
         value={value}
         onChange={(e) => onValue(e.target.value)}
@@ -59,7 +61,11 @@ export const FilterSearch = forwardRef<HTMLInputElement, FilterSearchProps>(func
           className="size-6 shrink-0 bg-transparent hover:bg-transparent hover:border-border-strong"
           title="Clear search"
           aria-label="Clear search"
-          onClick={() => onValue('')}
+          onClick={() => {
+            // Clear leaves with the text, and focus would go with it
+            field.current?.focus()
+            onValue('')
+          }}
         >
           <Icon name="close" size={12} />
         </Button>

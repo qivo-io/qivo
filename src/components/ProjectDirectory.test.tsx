@@ -695,6 +695,21 @@ describe('the search', { timeout: 60_000 }, () => {
     expect(field().value).toBe('')
   })
 
+  it('leaves focus in the field when Clear empties it, so the next text lands there', async () => {
+    const next0 = base()
+    top(next0, 'Alpha')
+    top(next0, 'Beta')
+    await load(next0)
+    await render()
+    await type('beta')
+    expect(rowNames()).toEqual(['Beta'])
+    const clear = find<HTMLButtonElement>('[aria-label="Clear search"]')
+    clear.focus()
+    await click(clear)
+    expect(field().value).toBe('')
+    expect(document.activeElement).toBe(field())
+  })
+
   it('tags equal names among the rows shown and the projects a sub-project names', async () => {
     const next0 = base()
     const a = top(next0, 'Test')
