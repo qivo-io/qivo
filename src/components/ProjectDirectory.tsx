@@ -37,13 +37,10 @@
      (lib/projectPick.ts DIRECTORY_MOST), then a search. One project is expanded at a time, and a
      new search, a page move or the row leaving the page collapses it,
      which stops its read.
-   - A press on a name opens the project as the sidebar does, by the
-     lists' open rule (projectNavRows.tsx useNavOpen): one the workspace
-     holds at once, and one it does not hold yet through
-     projectNav.resolve, saying "Opening <name>…" in the status line until
-     it opens, or why it cannot. A page move or a new search drops the
-     wait, and so do the page hiding and any navigation the person makes
-     (navMoved).
+   - A press on a name opens the project at once as the sidebar does, by
+     the lists' open rule (projectNavRows.tsx useNavOpen), whether the
+     workspace holds it yet or not; App shows "Opening <name>…" until it
+     opens, or why it cannot.
    - No list says it found nothing or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped page or batch and a
      failure each show as themselves, the refusal and a failure with Retry.
@@ -152,16 +149,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const end: PageEnd = current ? pageEnd(page, !browsing) : 'loading'
   const state = current ? pagesState(page) : 'loading'
 
-  // a status line for stars and for a project the workspace does not hold;
-  // `n` tells two equal sentences apart, so each is read out
-  const [status, setStatus] = useState<{ text: string; n: number } | null>(null)
-  const say = (line: string) => setStatus((was) => ({ text: line, n: (was?.n ?? 0) + 1 }))
-  /** Opens a row as the sidebar does, by the lists' open rule, which
-      words in the status line what it waits for and why it cannot open. */
-  const nav = useNavOpen(
-    (id) => actions.openProject(id),
-    (line) => (line === null ? setStatus(null) : say(line)),
-  )
+  const nav = useNavOpen((id) => actions.openProject(id))
 
   // the one expanded top-level project, collapsed by a page move, a new
   // search, or its row leaving the page for any reason; a page move or a
@@ -173,10 +161,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     if (placed.current === place) return
     placed.current = place
     setExpanded(null)
-    // a new page or search starts at its top, and an older note goes, with
-    // an open that waits
     nav.cancel()
-    setStatus(null)
     if (directory.current) directory.current.scrollTop = 0
   }, [place])
   const lost =
@@ -235,7 +220,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     void P.setFavorite({ id: row.id, org_id: row.org_id }, want).then((ok) => {
       // a refused or paused star goes back, and the store says why
       if (!ok) return edit(row.id, null)
-      say(want ? `${row.name} is now a favorite.` : `${row.name} is no longer a favorite.`)
       setPending((was) => {
         if (!was.has(row.id)) return was
         const out = new Map(was)
@@ -420,13 +404,6 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           </Button>
         </div>
       )}
-      <p
-        role="status"
-        data-directory-status=""
-        className={cn('directory-note text-sm text-text-2', !status && 'sr-only')}
-      >
-        {status && <span key={status.n}>{status.text}</span>}
-      </p>
       {listed}
       <PageFold
         page={page}
@@ -540,7 +517,7 @@ function RowMenuItems({
   )
 }
 
-const noteClass = 'directory-note px-2 py-1 text-sm text-text-2'
+const noteClass = 'px-2 py-1 text-sm text-text-2'
 
 /* The live sub-projects of the expanded project `parent`
    (projectNav.children), 25 at first and 25 more as the list's end scrolls

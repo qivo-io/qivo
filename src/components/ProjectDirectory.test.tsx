@@ -512,7 +512,6 @@ describe('the star', { timeout: 60_000 }, () => {
     // went to the star of the row now at its place
     expect(rowNames()).toEqual([5, 7, 8, 9, 10].map((n) => named(n)))
     expect(document.activeElement).toBe(starOf(ids[7]))
-    expect(pageText()).toContain(`${named(6)} is now a favorite.`)
     await previous()
     expect(rowNames()).toEqual([named(6), named(0), named(1), named(2), named(3)])
     expect(groups()).toEqual(['favorites', 'rest'])
@@ -523,7 +522,6 @@ describe('the star', { timeout: 60_000 }, () => {
     expect(sentStars().at(-1)).toEqual({ org_id: ORG, project_id: ids[6], favorite: false })
     expect(rowNames()).toEqual([0, 1, 2, 3, 4].map((n) => named(n)))
     expect(groups()).toEqual([])
-    expect(pageText()).toContain(`${named(6)} is no longer a favorite.`)
   })
 
   it('sends focus to the star at its place among a search page’s stars, which sub-project rows lack', async () => {
@@ -907,7 +905,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
 })
 
 describe('opening and the menu', { timeout: 60_000 }, () => {
-  it('opens a project as the sidebar does, and one the workspace does not hold yet through the server', async () => {
+  it('opens a project at once as the sidebar does, one the workspace does not hold yet included, with no check of the server’s', async () => {
     const next0 = base()
     const plan = top(next0, 'Plan')
     await load(next0)
@@ -929,10 +927,8 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     // open rule, with no check of the server's first: the scope's own read
     // by id decides (App)
     await click(find('[data-directory-open]', row(late)))
-    const status = () => find('[data-directory-status]').textContent
     expect(actions.openProject).toHaveBeenLastCalledWith(late)
     expect(resolves()).toEqual([])
-    expect(status()).toBe('')
     // People & settings names the project
     const people = [...row(plan).querySelectorAll('button')].find((b) =>
       b.textContent?.includes('People & settings'),
@@ -941,23 +937,17 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     expect(actions.openSettings).toHaveBeenCalledWith(`project:${plan}`)
   })
 
-  it('opens a row at once and goes back to the top on a page move', async () => {
+  it('goes back to the top on a page move', async () => {
     const next0 = base()
     for (let n = 0; n < 12; n++) top(next0, named(n))
     await load(next0)
-    // first by name, and not yet in the workspace
-    const late = top(snap, 'Late arrival')
     force.batch = 5
     await render()
-    await click(find('[data-directory-open]', row(late)))
-    const status = () => find('[data-directory-status]').textContent
-    expect(actions.openProject).toHaveBeenLastCalledWith(late)
-    expect(status()).toBe('')
+    const first = rowIds()
     const list = find('[data-project-directory]')
     list.scrollTop = 400
     await next()
-    expect(rowIds()).not.toContain(late)
-    expect(status()).toBe('')
+    expect(rowIds()).not.toContain(first[0])
     expect(list.scrollTop).toBe(0)
   })
 
