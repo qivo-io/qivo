@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { Activity, act, useState } from 'react'
+import { Activity, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -108,27 +108,16 @@ async function load(next: Snapshot) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 }
 
-/** Rows that open through the rule, with the line it says. */
+/** Rows that open through the rule. */
 function Opener({ list }: { list: { id: string; name: string; org_id: string; num: number }[] }) {
-  const [line, setLine] = useState<string | null>(null)
-  const nav = rows.useNavOpen(go, setLine)
+  const open = rows.useNavOpen(go)
   return (
     <div>
       {list.map((row) => (
-        <Button
-          key={row.id}
-          type="button"
-          noTooltip
-          data-open={row.id}
-          onClick={() => nav.open(row)}
-        >
+        <Button key={row.id} type="button" noTooltip data-open={row.id} onClick={() => open(row)}>
           {row.name}
         </Button>
       ))}
-      <Button type="button" noTooltip data-cancel onClick={() => nav.cancel()}>
-        Cancel
-      </Button>
-      <p data-line>{line}</p>
     </div>
   )
 }
@@ -148,7 +137,6 @@ async function render(
   await settle()
 }
 
-const line = () => document.querySelector('[data-line]')?.textContent ?? ''
 const press = async (id: string) => {
   await act(async () => document.querySelector<HTMLElement>(`[data-open="${id}"]`)?.click())
   await settle()
@@ -190,7 +178,6 @@ describe('the open rule', { timeout: 30_000 }, () => {
     expect(store.P.project('far')).toMatchObject({ name: 'Far away', num: 7, org: ORG_OF() })
     // must fail: a seed gives no level, so nothing is offered for it yet
     expect(store.P.canWrite('far')).toBe(false)
-    expect(line()).toBe('')
   })
 
   it("seeds a sub-project's row with its parent, so the scope names its top-level project", async () => {

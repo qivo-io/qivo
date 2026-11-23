@@ -122,9 +122,6 @@ export type FocusRow = { id: string; n: number }
 /** The top-level list's identity, one list across every seat. */
 const TREE_KEY = JSON.stringify(['sidebar'])
 
-/** The key of the toast the open rule's lines share. */
-const OPEN_TOAST = 'sidebar-open'
-
 /** What a favorite's row adds for a screen reader: the group of favorite
     projects it belongs to, which no other row has. */
 const FAVORITE_GROUP = { role: 'group', 'aria-label': 'Favorite projects' } as const
@@ -315,16 +312,7 @@ export function SidebarProjects({
   const pressed = useRef(false)
 
   const tags = navTags(list.rows)
-  // the open rule's lines, in one toast that each line replaces and an
-  // open takes away
-  const nav = useNavOpen(
-    (id) => actions.openProject(id),
-    (line) =>
-      line === null
-        ? window.dismissToast?.(OPEN_TOAST)
-        : window.showToast?.(line, 'info', { key: OPEN_TOAST }),
-  )
-  const open = (row: NavProject) => nav.open(row)
+  const open = useNavOpen((id) => actions.openProject(id))
   /* A press on a row opens it. A pick in its menu, portaled out of the
      row, reaches the row too, and moves the scope by the same open rule. */
   const pressRow = (_e: MouseEvent<HTMLElement>, row: NavProject) => open(row)

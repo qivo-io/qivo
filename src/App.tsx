@@ -1242,8 +1242,7 @@ function App() {
   /** Runs `go`, a user's move to the place `next` patches in, once the
       windows it closes hold no unsent text, or after the person chose
       Discard. Raw setters remain for moves the person did not ask for.
-      The accepted move drops every open that waits and startup's check
-      (navMoved). */
+      The accepted move drops startup's check (navMoved). */
   const move = (next: UiState, go: () => void) => {
     const to = { ...hereRef.current, ...next }
     closeOrAsk(withSettingsTask(hereRef.current, to, closedBy(hereRef.current, to, unsent)), () => {
@@ -1818,8 +1817,8 @@ function App() {
          marker unheard (lib/pageHistory holdLayers). */
       if (holdLayers(event)) return
       refusal.accepted()
-      /* A move to another page or task drops every open that waits and
-         startup's check (navMoved), and so does one on the same page that
+      /* A move to another page or task drops startup's check
+         (navMoved), and so does one on the same page that
          changes which project address the workspace does not hold it
          checks, as from the chooser to an earlier project's address in the
          same view, or from that address to the front door. One that stays
@@ -1974,7 +1973,7 @@ function App() {
      until a view shows, as no tab there leads to the scope beneath. Every
      navigation the person makes while it is on its way drops it
      (navMoved), a view pill, another page, project or Team sync scope,
-     Back or Forward and an open that starts to wait in a list, so its
+     Back or Forward and a row's open in a list, so its
      answer changes nothing and the chooser takes its line's place, unless
      Back or Forward reached an address that names its own opening.
      Otherwise its answer counts only while the scope is still empty and

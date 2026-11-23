@@ -2055,7 +2055,6 @@ describe('the task window on a task whose project the workspace does not hold', 
   })
 
   it("opens a crumb's project at once by the open rule, with no check of the server's", async () => {
-    window.dismissToast = vi.fn()
     await loadLab()
     const shown = vi.fn()
     await openWindow(await noteTask(inLab()), shown)

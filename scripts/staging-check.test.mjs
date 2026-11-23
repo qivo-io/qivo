@@ -923,7 +923,7 @@ describe('staging check REST contract', () => {
     for (const mark of Object.values(PROJECT_DIRECTORY_MARKS)) expect(page).toContain(mark)
     // the open rule the directory shares (projectNavRows.tsx), which opens
     // a row's project at once, so the step presses once
-    expect(page).toContain('nav.open(row)')
+    expect(page).toContain('const open = useNavOpen(')
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
       check.indexOf('await settingsProjectsCheck()'),

@@ -13,7 +13,7 @@
    projectNav.resolve (openResolved), which every navigation the person
    makes drops (navMoved). */
 
-import { type ReactNode, useCallback } from 'react'
+import type { ReactNode } from 'react'
 import type {
   NavChildren,
   NavPage,
@@ -254,17 +254,16 @@ export function seedTargetRow(row: NavTargetRow) {
   })
 }
 
-/* Who hears the person's navigations (navMoved): each open that waits
-   (useNavOpen) and startup's check (App.tsx). */
+/* Who hears the person's navigations (navMoved): startup's check
+   (App.tsx). */
 const navMoves = new Set<() => void>()
 
-/** Tells every open that waits, and startup's check, that the person moved
-    elsewhere, so each drops its wait with its "Opening" line and its
-    answer changes nothing. App calls it for each move it accepts and for
-    each Back or Forward it accepts that changes the page, the open task or
-    the project address the workspace does not hold that the page checks,
-    and an open that starts to wait calls it first, so another list's open
-    gives way to it. */
+/** Tells startup's check that the person moved elsewhere, so it drops
+    its wait with its "Opening" line and its answer changes nothing. App
+    calls it for each move it accepts and for each Back or Forward it
+    accepts that changes the page, the open task or the project address
+    the workspace does not hold that the page checks, and each row open
+    calls it (useNavOpen). */
 export function navMoved() {
   // one heard removes at most itself, which a walk of a Set allows
   for (const heard of navMoves) heard()
@@ -280,28 +279,22 @@ export function onNavMove(heard: () => void): () => void {
 }
 
 /**
- * The open rule of the lists on the navigation reads. `open(row)` seeds the
- * row's facts into the store's project cache (seedNavRow) and opens the
- * project at once with `go(id)`, as for any row: App sets the scope and
- * shows "Opening <name>…" until the cache answers for it, the lost note if
- * it answers the project gone and the failure's sentence with Retry. It
- * ends any line the caller shows (`say(null)`), when the caller passes
- * `say`, and tells every check that waits that the person moved
- * (navMoved). `cancel()` does nothing now that no open waits; callers keep
- * it for a page move or a new search.
+ * The open rule of the lists on the navigation reads, as a function of a
+ * row. It seeds the row's facts into the store's project cache
+ * (seedNavRow) and opens the project at once with `go(id)`, as for any
+ * row: App sets the scope and shows "Opening <name>…" until the cache
+ * answers for it, the lost note if it answers the project gone and the
+ * failure's sentence with Retry. It tells startup's check that the person
+ * moved (navMoved).
  */
-export function useNavOpen(go: (id: string) => void, say?: (line: string | null) => void) {
+export function useNavOpen(go: (id: string) => void) {
   const goNow = useLatest(go)
-  const sayNow = useLatest((line: string | null) => say?.(line))
-  const cancel = useCallback(() => {}, [])
-  const open = (row: NavOpenRow) => {
+  return (row: NavOpenRow) => {
     seedNavRow(row)
     noteOpenedName(row.id, row.name)
-    sayNow(null)
     navMoved()
     goNow(row.id)
   }
-  return { open, cancel }
 }
 
 /* The name each row open showed for its project, by id, newest last and
