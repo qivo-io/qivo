@@ -37,7 +37,9 @@ active projects only once the list has ended empty.
 
 The tree scrolls while navigation and Settings stay visible, without a
 scrollbar: use the mouse wheel, a trackpad, touch or the keyboard. A row
-that takes focus scrolls into view. Coming back from **Settings**, the tree
+that takes focus scrolls into view. In a window too short for the sidebar,
+such as a phone on its side, the tree keeps three rows and the whole
+sidebar scrolls. Coming back from **Settings**, the tree
 shows the projects it held, where you left it.
 
 An organization admin's tree holds the projects they take part in, as
