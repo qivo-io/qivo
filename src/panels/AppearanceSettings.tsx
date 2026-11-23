@@ -20,6 +20,7 @@ import {
 } from '../../convex/lib/panoramaImage'
 import { SettingsGroup } from '../components/settingsPage'
 import { ThemeSelector } from '../components/ThemeSelector'
+import { announce } from '../lib/announce'
 import { useAppearance, usePreview } from '../lib/appearanceContext'
 import { assertDemoFileSize, DEMO_FILE_MIB } from '../lib/demoMode'
 import { useUnsaved } from '../lib/leaveGuard'
@@ -212,7 +213,6 @@ export function AppearanceSettings() {
   useUnsaved(uploading, 'background image')
   const alive = useRef(false)
   const uploadController = useRef<AbortController | null>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
   useEffect(() => {
     alive.current = true
     return () => {
@@ -247,6 +247,8 @@ export function AppearanceSettings() {
     setUploading(true)
     const controller = new AbortController()
     uploadController.current = controller
+    // the field's label says it too, which a screen reader does not read out
+    announce('Uploading image…')
     try {
       try {
         await inspectFile(file)
@@ -348,31 +350,27 @@ export function AppearanceSettings() {
                     />
                   )}
                   <div className="space-y-2">
+                    <Label htmlFor={`${id}-upload`} className="text-sm">
+                      {uploading
+                        ? 'Uploading…'
+                        : preferences.custom_image
+                          ? 'Replace your image'
+                          : 'Choose your image'}
+                    </Label>
                     <Input
-                      ref={fileInput}
+                      id={`${id}-upload`}
                       data-appearance-upload
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
-                      className="[display:none]"
+                      aria-describedby={`${id}-requirements`}
+                      aria-busy={uploading || undefined}
+                      className="bg-surface-1"
                       onChange={(event) => {
                         const file = event.target.files?.[0]
                         event.target.value = ''
                         void upload(file)
                       }}
                     />
-                    <Button
-                      type="button"
-                      data-appearance-choose
-                      aria-describedby={`${id}-requirements`}
-                      aria-busy={uploading || undefined}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      {uploading
-                        ? 'Uploading…'
-                        : preferences.custom_image
-                          ? 'Replace your image'
-                          : 'Choose your image'}
-                    </Button>
                     <p id={`${id}-requirements`} className="text-sm text-text-2">
                       {manualImageRequirements(DEMO_FILE_MIB)}
                     </p>

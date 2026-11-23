@@ -130,8 +130,12 @@ describe('the outcome of an invitation from the project form', () => {
     expect(said()).toBeNull()
     push([row('sending')])
     expect(said()).toBeNull()
+    // the live region is there, empty, before the sentence, so it is announced
+    const region = host.querySelector('[role="status"]')
+    expect(region?.textContent).toBe('')
     push([row('unsent')])
     expect(said()).toBe(unsent)
+    expect(host.querySelector('[role="status"]')).toBe(region)
     expect(host.querySelector('[data-invite-again]')?.textContent).toBe('Send invitation')
     expect(toast).not.toHaveBeenCalled()
   })

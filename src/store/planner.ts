@@ -6061,6 +6061,10 @@ const readOnly = (d: ErrData) =>
 const weekStartRefusal = (d: ErrData) =>
   d.reason === WEEK_START_REFUSALS.conflicts || d.reason === WEEK_START_REFUSALS.unchecked
 const WEEK_START_TOAST = 'week-start-refused'
+/** Refusals of the demo (convex/lib/demo.ts demoRefusal), such as its change
+   limit. They are forbidden ones whose sentences say what to do, so they show
+   verbatim. */
+const demoRefusal = (d: ErrData) => typeof d.reason === 'string' && d.reason.startsWith('demo_')
 /* asSentence (lib/fieldLimits.ts sentence) shows a refusal message
    capitalized and ending with a period. Server messages are often lowercase
    fragments, and a toast joins them with a sentence of its own. A limit's
@@ -6341,7 +6345,7 @@ function refusalSentence(e: unknown): string {
   const d = errData(e)
   if (refusedAsPaused(e)) return refusalPauseText(e)
   // the organization's deletion, to someone who keeps another one, says so
-  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d)) && d.message)
+  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d) || demoRefusal(d)) && d.message)
     return asSentence(String(d.message))
   if (d.code === 'forbidden') return "You don't have permission for that."
   // not_found, bad_request, conflict, transport — all generic
@@ -15625,6 +15629,8 @@ export const PLANNER = {
      day again. `save` is a settings field's draft (FieldSave). */
   setOrg: (patch: OrgPatch, save: FieldSave = {}): Promise<boolean> => {
     const org = homeRow()
+    // before the pause check, so a choice made while paused takes it away too
+    if ('weekStart' in patch) window.dismissToast?.(WEEK_START_TOAST)
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.orgName, patch.name ?? ''))
       return Promise.resolve(false)
@@ -15659,7 +15665,6 @@ export const PLANNER = {
     if (!Object.keys(wire).length) return Promise.resolve(true)
     const orgId = org.id
     const weekStart = 'week_start' in wire
-    if (weekStart) window.dismissToast?.(WEEK_START_TOAST)
     // the rebuild re-anchors the grid when the week settings moved
     const view: View = {
       workspace: () => {

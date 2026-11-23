@@ -2726,12 +2726,9 @@ try {
       await fail('The export panel does not save into a chosen file in Chromium')
     await pageA.locator('[data-export-start]').click()
     // a failed save shows in the section, and a refused press toasts its
-    // sentence; joining an export another admin started is no failure
+    // sentence as an error
     const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
-    const exportToast = pageA
-      .locator('.planner-toast-host > div')
-      .filter({ hasNotText: 'so you joined it' })
-      .first()
+    const exportToast = pageA.locator('.planner-toast-host > [data-toast-tone="error"]').first()
     const outcome = await Promise.race([
       pageA
         .locator('[data-export-recorded]')

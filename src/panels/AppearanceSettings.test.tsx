@@ -133,7 +133,8 @@ afterEach(async () => {
 
 const deliver = (value: AppearancePreferences) => act(async () => store.deliver?.(value))
 const previewText = () => container.querySelector('.aspect-video')?.textContent ?? ''
-const chooser = () => container.querySelector('[data-appearance-choose]')
+const upload = () => container.querySelector<HTMLInputElement>('[data-appearance-upload]')
+const uploadLabel = () => container.querySelector(`label[for="${upload()?.id}"]`)
 /** Picks `file` in the upload's file dialog. */
 async function choose(file: File) {
   const input = container.querySelector<HTMLInputElement>('[data-appearance-upload]')
@@ -195,7 +196,7 @@ describe('Settings › Appearance', () => {
     expect(store.upload).not.toHaveBeenCalled()
   })
 
-  it('says Uploading… on its button while the image goes, then toasts it saved', async () => {
+  it('says Uploading… on the file field while the image goes, then toasts it saved', async () => {
     await deliver(custom({}))
     // the browser's decoding, which jsdom lacks
     Object.assign(URL, { createObjectURL: () => 'blob:pick', revokeObjectURL: () => {} })
@@ -210,13 +211,13 @@ describe('Settings › Appearance', () => {
     )
     await choose(new File([png(1920, 1080)], 'lake.png', { type: 'image/png' }))
     expect(store.upload).toHaveBeenCalledTimes(1)
-    expect(chooser()?.textContent).toBe('Uploading…')
-    expect(chooser()?.getAttribute('aria-busy')).toBe('true')
+    expect(uploadLabel()?.textContent).toBe('Uploading…')
+    expect(upload()?.getAttribute('aria-busy')).toBe('true')
     expect(window.showToast).not.toHaveBeenCalled()
     await act(async () => answer())
     expect(window.showToast).toHaveBeenCalledWith('Custom image saved.')
-    expect(chooser()?.textContent).toBe('Replace your image')
-    expect(chooser()?.hasAttribute('aria-busy')).toBe(false)
+    expect(uploadLabel()?.textContent).toBe('Replace your image')
+    expect(upload()?.hasAttribute('aria-busy')).toBe(false)
   })
 
   it('shows the custom preview the provider read for this image and version, and asks only while open', async () => {

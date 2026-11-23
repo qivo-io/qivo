@@ -374,16 +374,24 @@ export function InviteOutcome({
   const state = current ?? last
   const freeAt = current === 'held' ? row?.free_at : undefined
   useRenderAt(freeAt ? Date.parse(freeAt) : 0)
-  if (state === undefined || state === 'sending' || state === 'sent') return null
-  const label = inviteLabel(state, freeAt)
+  const label =
+    state === undefined || state === 'sending' || state === 'sent'
+      ? null
+      : inviteLabel(state, freeAt)
+  // The region is on the page before a failure's sentence arrives, empty
+  // until then, so a screen reader reads the sentence (lib/announce.ts).
   return (
     <div
-      data-invite-outcome={state}
+      data-invite-outcome={label ? state : undefined}
       role="status"
-      className="[font-size:var(--fs-sm)] [margin-top:8px] [color:var(--danger)]"
+      className={cn('[font-size:var(--fs-sm)] [color:var(--danger)]', label && '[margin-top:8px]')}
     >
-      {`${email}: ${label.detail ?? label.text}`}
-      {current !== undefined && <SendAgain orgId={orgId} seat={seat} row={row} />}
+      {label && (
+        <>
+          {`${email}: ${label.detail ?? label.text}`}
+          {current !== undefined && <SendAgain orgId={orgId} seat={seat} row={row} />}
+        </>
+      )}
     </div>
   )
 }
