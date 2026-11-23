@@ -147,14 +147,23 @@ function passedTop(rows: readonly NavPageRow[], name: string, id: string) {
   return last?.favorite === false && after(last, name, id)
 }
 
-/** Scrolls the tree `list` by its own scrollTop, and nothing around it, so
-    `row` shows whole in it, or from its top where it is taller. */
-function intoTreeView(list: HTMLElement, row: Element) {
+/** Scrolls `scroller` by its own scrollTop so `row` shows whole in it, or
+    from its top where it is taller. */
+function intoView(scroller: HTMLElement, row: Element) {
   const box = row.getBoundingClientRect()
-  const view = list.getBoundingClientRect()
-  if (box.top < view.top) list.scrollTop -= view.top - box.top
+  const view = scroller.getBoundingClientRect()
+  if (box.top < view.top) scroller.scrollTop -= view.top - box.top
   else if (box.bottom > view.bottom)
-    list.scrollTop += Math.min(box.bottom - view.bottom, box.top - view.top)
+    scroller.scrollTop += Math.min(box.bottom - view.bottom, box.top - view.top)
+}
+
+/** Scrolls the tree `list` so `row` shows in it, and then the rail around
+    it where the rail scrolls too, as in a window too short for it
+    (styles/appearance.css), and nothing else. */
+function intoTreeView(list: HTMLElement, row: Element) {
+  intoView(list, row)
+  const rail = list.parentElement
+  if (rail && rail.scrollHeight > rail.clientHeight) intoView(rail, row)
 }
 
 /** Whether focus is nowhere, or in a view hidden behind another page. */

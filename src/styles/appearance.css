@@ -209,9 +209,11 @@ html[data-appearance] .planner-navigation > :not(.planner-project-list) {
   display: none;
 }
 /* A window too short for the rail's fixed rows and the tree, such as a
-   phone on its side: the tree keeps three rows and the rail scrolls as a
-   whole, also without a scrollbar, so the tree and Settings stay in
-   reach. */
+   phone on its side: the tree keeps the height of one row, or of three
+   where it holds three projects, so a short tree gets no empty space, and
+   the rail scrolls as a whole, also without a scrollbar, so the tree and
+   Settings stay in reach. A row the tree reveals scrolls into the rail's
+   view too (components/SidebarProjects.tsx intoTreeView). */
 @media (max-height: 600px) {
   html[data-appearance] .planner-navigation {
     overflow-y: auto;
@@ -221,8 +223,14 @@ html[data-appearance] .planner-navigation > :not(.planner-project-list) {
     display: none;
   }
   html[data-appearance] .planner-project-list {
-    min-height: 96px;
+    min-height: 32px;
     overscroll-behavior: auto;
+  }
+  html[data-appearance]
+    .planner-project-list:has(
+      > [data-sidebar-group] ~ [data-sidebar-group] ~ [data-sidebar-group]
+    ) {
+    min-height: 100px;
   }
 }
 html[data-appearance] :is(.planner-topbar, .roadmap-view, [data-roadmap-toolbar], .settings-shell) {
