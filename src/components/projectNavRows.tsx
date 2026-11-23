@@ -285,13 +285,14 @@ export function onNavMove(heard: () => void): () => void {
  * project at once with `go(id)`, as for any row: App sets the scope and
  * shows "Opening <name>…" until the cache answers for it, the lost note if
  * it answers the project gone and the failure's sentence with Retry. It
- * ends any line the caller shows (`say(null)`) and tells every check that
- * waits that the person moved (navMoved). `cancel()` does nothing now that
- * no open waits; callers keep it for a page move or a new search.
+ * ends any line the caller shows (`say(null)`), when the caller passes
+ * `say`, and tells every check that waits that the person moved
+ * (navMoved). `cancel()` does nothing now that no open waits; callers keep
+ * it for a page move or a new search.
  */
-export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
+export function useNavOpen(go: (id: string) => void, say?: (line: string | null) => void) {
   const goNow = useLatest(go)
-  const sayNow = useLatest(say)
+  const sayNow = useLatest((line: string | null) => say?.(line))
   const cancel = useCallback(() => {}, [])
   const open = (row: NavOpenRow) => {
     seedNavRow(row)

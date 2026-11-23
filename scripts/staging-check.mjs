@@ -11011,7 +11011,6 @@ export const PROJECT_DIRECTORY_MARKS = {
   children: 'data-directory-children',
   child: 'data-directory-child',
   favorites: 'data-directory-group',
-  status: 'data-directory-status',
   state: 'data-project-directory-state',
 }
 
