@@ -44,6 +44,7 @@ let root: Root
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  window.showToast = vi.fn()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -135,16 +136,18 @@ describe('desktop settings page recovery', () => {
     await act(async () => save.reject(new Error('Save unavailable')))
     expect(settings.get).toHaveBeenCalledTimes(2)
     expect(toggle('Show notifications').getAttribute('aria-checked')).toBe('true')
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(window.showToast).toHaveBeenCalledWith(
       "Couldn't save desktop settings. Try again.",
+      'error',
     )
+    expect(container.querySelector('[role="alert"]')).toBeNull()
     expectSwitchesDisabled(false)
     expect(isUpdateBlocked()).toBe(false)
 
     await act(async () => toggle('Show notifications').click())
     expect(settings.update).toHaveBeenCalledTimes(2)
     expect(toggle('Show notifications').getAttribute('aria-checked')).toBe('false')
-    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(window.showToast).toHaveBeenCalledTimes(1)
     expectSwitchesDisabled(false)
   })
 

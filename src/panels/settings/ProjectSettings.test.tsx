@@ -1163,7 +1163,11 @@ describe('changing access', () => {
     })
     await type(email, 'other@example.test')
     await click(find('[data-invite-send]'))
-    expect(text('[data-invite-note]')).toBe("Couldn't check this address. Nothing was sent.")
+    expect(toast).toHaveBeenLastCalledWith(
+      "Couldn't check this address. Nothing was sent.",
+      'error',
+    )
+    expect(document.querySelector('[data-invite-note]')).toBeNull()
     expect(requests).toEqual([])
   })
 
@@ -1199,8 +1203,9 @@ describe('changing access', () => {
     await type(find<HTMLInputElement>('[data-invite-email]'), `${'a'.repeat(250)}@x.io`)
     await click(find('[data-invite-send]'))
     expect(reads('projectSettings:inviteTarget')).toHaveLength(1)
-    expect(text('[data-invite-note]')).toBe(
+    expect(toast).toHaveBeenLastCalledWith(
       'An email address must be at most 254 characters. Use a shorter address.',
+      'error',
     )
     expect(requests).toEqual([])
   })

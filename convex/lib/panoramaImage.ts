@@ -31,7 +31,13 @@ export function validateManualImageFile(mime: string | undefined, size: number) 
  * replace complete decoding or human content/license review. */
 export function manualImageDimensions(bytes: Uint8Array, mime: string) {
   validateManualImageFile(mime, bytes.byteLength)
-  if (mime === 'image/jpeg') return jpegDimensions(bytes)
+  if (mime === 'image/jpeg') {
+    // another format under a JPEG name or type, which jpegDimensions words
+    // for a downloaded file
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8)
+      throw new Error('The file is not a valid JPEG image.')
+    return jpegDimensions(bytes)
+  }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const signature = (offset: number, value: string) =>
     Array.from(value).every((c, i) => bytes[offset + i] === c.charCodeAt(0))

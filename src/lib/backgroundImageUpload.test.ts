@@ -117,7 +117,7 @@ describe('background image batch upload', () => {
     expect(result.added).toBe(1)
     expect(result.missingMetadata).toEqual([])
     expect(result.failed).toEqual([
-      { name: 'invalid.jpg', message: expect.stringMatching(/not a JPEG/) },
+      { name: 'invalid.jpg', message: 'The file is not a valid JPEG image.' },
       { name: 'broken.jpg', message: expect.stringMatching(/could not be decoded/) },
       { name: 'refused.jpg', message: 'Previously removed by a reviewer' },
     ])

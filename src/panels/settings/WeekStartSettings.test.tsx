@@ -11,7 +11,8 @@ import { plannerFixture } from '../../store/plannerFixture.setup'
 /* "Workdays start on" in Organization settings, on the real store. The
    server refuses a first day of the week that would put two milestones of
    one project in one week (convex/model/milestones.ts assertWeekStartFits);
-   the setting stays and the refusal shows under it instead of a toast. */
+   the setting stays and the refusal is toasted, to stay until the person
+   closes it or chooses a day again. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -47,6 +48,7 @@ beforeEach(async () => {
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
   window.showToast = vi.fn()
+  window.dismissToast = vi.fn()
   const snap = plannerFixture()
   answers = []
   sent = 0
@@ -95,7 +97,8 @@ const render = () =>
     ),
   )
 const select = () => container.querySelector<HTMLSelectElement>('[data-week-start]')
-const refusal = () => container.querySelector('[data-week-start-refusal]')
+const REFUSED = `W${CONFLICT.slice(1)}`
+const STAYS = { sticky: true, key: 'week-start-refused' }
 
 async function choose(day: number) {
   await act(async () => {
@@ -107,7 +110,7 @@ async function choose(day: number) {
 }
 
 describe('Workdays start on', () => {
-  it('keeps the day and shows a refused change under the setting', async () => {
+  it('keeps the day and toasts a refused change', async () => {
     await render()
     expect(select()?.value).toBe('1')
     answers.push(() =>
@@ -116,31 +119,28 @@ describe('Workdays start on', () => {
       ),
     )
     await choose(0)
-    expect(refusal()?.textContent).toBe(`W${CONFLICT.slice(1)}`)
-    expect(refusal()?.getAttribute('role')).toBe('alert')
-    // the select shows the saved day again, which is valid; the refusal
-    // still describes it
-    expect(select()?.hasAttribute('aria-invalid')).toBe(false)
-    expect(select()?.getAttribute('aria-describedby')).toBe('week-start-refusal')
+    expect(window.showToast).toHaveBeenCalledExactlyOnceWith(REFUSED, 'error', STAYS)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(select()?.value).toBe('1')
     expect(P.org.weekStart).toBe(1)
-    expect(window.showToast).not.toHaveBeenCalled()
+    expect(window.dismissToast).toHaveBeenCalledTimes(1)
 
-    // another refusal is toasted as before
+    // another refusal says its own sentence
     answers.push(() =>
       Promise.reject(new ConvexError({ code: 'forbidden', message: 'not an admin' })),
     )
     await choose(2)
-    expect(refusal()).toBeNull()
-    expect(window.showToast).toHaveBeenCalledWith(
+    // the next choice takes the refusal of the last one away
+    expect(window.dismissToast).toHaveBeenLastCalledWith(STAYS.key)
+    expect(window.dismissToast).toHaveBeenCalledTimes(2)
+    expect(window.showToast).toHaveBeenLastCalledWith(
       "You don't have permission for that. Change reverted.",
       'error',
     )
 
     // a change the server takes says so
     await choose(0)
-    expect(refusal()).toBeNull()
-    expect(window.showToast).toHaveBeenCalledWith('Workdays now start on Sunday')
+    expect(window.showToast).toHaveBeenLastCalledWith('Workdays now start on Sunday')
   })
 
   it('waits for an answer before another choice, so the answer belongs to the day on screen', async () => {
@@ -163,7 +163,7 @@ describe('Workdays start on', () => {
         new ConvexError({ code: 'rule', reason: WEEK_START_REFUSALS.conflicts, message: CONFLICT }),
       ),
     )
-    expect(refusal()?.textContent).toBe(`W${CONFLICT.slice(1)}`)
+    expect(window.showToast).toHaveBeenCalledWith(REFUSED, 'error', STAYS)
     expect(select()?.disabled).toBe(false)
     expect(select()?.value).toBe('1')
     // the next choice goes out against the saved day
@@ -211,25 +211,5 @@ describe('Workdays start on', () => {
       patch: { week_start: 3 },
       expected: { week_start: 1 },
     })
-  })
-
-  it('toasts a refusal that comes after the page has gone', async () => {
-    await render()
-    let refuse = (_error: unknown) => {}
-    answers.push(
-      () =>
-        new Promise((_resolve, reject) => {
-          refuse = reject
-        }),
-    )
-    await choose(0)
-    await act(async () => root.render(<div />))
-    await act(async () =>
-      refuse(
-        new ConvexError({ code: 'rule', reason: WEEK_START_REFUSALS.conflicts, message: CONFLICT }),
-      ),
-    )
-    expect(window.showToast).toHaveBeenCalledWith(`W${CONFLICT.slice(1)} Change reverted.`, 'error')
-    expect(P.org.weekStart).toBe(1)
   })
 })

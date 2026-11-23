@@ -128,16 +128,13 @@ const weekStartSaves = new Map<string, Promise<boolean>>()
 
 // The first day of each roadmap week. The server refuses a day that would
 // put two milestones of one project in one week, or that it could not check
-// against every milestone; the setting stays as it was and the refusal shows
-// under it, long enough to read the projects and dates it names, until the
-// next choice. The select waits for each answer, also across leaving and
-// opening the page again, so an answer always belongs to the choice on screen
-// and the next choice is sent against the saved day.
+// against every milestone; the setting stays as it was and the store toasts
+// the refusal (P.setOrg). The select waits for each answer, also across
+// leaving and opening the page again, so an answer always belongs to the
+// choice on screen and the next choice is sent against the saved day.
 function WeekStartField() {
   const orgId = P.org.id
-  const [refusal, setRefusal] = useStateS('')
   const [busy, setBusy] = useStateS(() => weekStartSaves.has(orgId))
-  // a refusal that comes after the page has gone is toasted instead
   const mounted = useRefS(true)
   useEffectS(() => {
     mounted.current = true
@@ -150,27 +147,19 @@ function WeekStartField() {
       mounted.current = false
     }
   }, [orgId])
-  const refused = (sentence: string) => {
-    if (!mounted.current) return false
-    setRefusal(sentence)
-    return true
-  }
-  // wide enough for the refusal; the select keeps its own width
   return (
-    <SettingsField label="Workdays start on" width={560}>
+    <SettingsField label="Workdays start on" width={330}>
       <NativeSelect
         value={P.org.weekStart ?? 1}
         aria-label="Workdays start on"
-        aria-describedby={refusal ? 'week-start-refusal' : undefined}
         aria-busy={busy || undefined}
         disabled={busy}
         data-week-start
         onChange={(e) => {
           if (busy) return
           const d = Number(e.target.value)
-          setRefusal('')
           setBusy(true)
-          const save = P.setOrg({ weekStart: d }, refused).then((saved) => {
+          const save = P.setOrg({ weekStart: d }).then((saved) => {
             if (weekStartSaves.get(orgId) === save) weekStartSaves.delete(orgId)
             if (mounted.current) setBusy(false)
             if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
@@ -186,16 +175,6 @@ function WeekStartField() {
           </option>
         ))}
       </NativeSelect>
-      {refusal && (
-        <div
-          id="week-start-refusal"
-          role="alert"
-          data-week-start-refusal
-          className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
-        >
-          {refusal}
-        </div>
-      )}
     </SettingsField>
   )
 }
@@ -430,7 +409,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             probe="data-org-name"
             onCommit={(v, save) => {
               // the toast waits for the server, so a refusal never reads as done
-              void P.setOrg({ name: v }, undefined, save.as('name')).then((saved) => {
+              void P.setOrg({ name: v }, save.as('name')).then((saved) => {
                 if (saved) window.showToast?.('Organization renamed')
               })
             }}
@@ -454,7 +433,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
                 : 'Only an organization admin can change the attachment limit.'
             }
             onCommit={(mib, save) => {
-              void P.setOrg({ maxAttachmentMb: mib }, undefined, save.as('max_attachment_mb')).then(
+              void P.setOrg({ maxAttachmentMb: mib }, save.as('max_attachment_mb')).then(
                 (saved) => {
                   if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
                 },
@@ -513,13 +492,11 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             unit="h per week, for new users"
             probe="data-org-plannable"
             onCommit={(h, save) => {
-              void P.setOrg(
-                { defaultPlannableHours: h },
-                undefined,
-                save.as('default_plannable_hours'),
-              ).then((saved) => {
-                if (saved) window.showToast?.(`New users start on ${h} h per week`)
-              })
+              void P.setOrg({ defaultPlannableHours: h }, save.as('default_plannable_hours')).then(
+                (saved) => {
+                  if (saved) window.showToast?.(`New users start on ${h} h per week`)
+                },
+              )
             }}
           />
         </SettingsSection>

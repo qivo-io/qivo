@@ -134,6 +134,22 @@ describe('refusal sentences in restore and upload toasts', () => {
     expect(showToast).not.toHaveBeenCalled()
   })
 
+  it('quotes the demo’s change limit, not a missing permission', async () => {
+    answers['appearance:save'] = () =>
+      Promise.reject(
+        new ConvexError({
+          code: 'forbidden',
+          reason: 'demo_limit',
+          message: 'Your demo has reached its change limit. Try again later.',
+        }),
+      )
+    await expect(P.setAppearance({ mode: 'dark', image_source: 'none' })).rejects.toThrow()
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'Your demo has reached its change limit. Try again later.',
+      'error',
+    )
+  })
+
   it('adds no second period to a project restore refusal that has one', async () => {
     answers['projects:unarchive'] = refuse('rule', 'Ask a project lead to restore it.')
     expect(await P.unarchiveProject(snap.projects[0].id, { orgId: P.homeOrg })).toBe(false)
@@ -350,7 +366,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     expect(sentWith('files:avatarUploadUrl')).toEqual({ profile_id: profile, size: 9 })
   })
 
-  it('declares a background’s size, and cancels its ticket when the receiver refuses it', async () => {
+  it('declares a background’s size, and toasts the sentence and cancels its ticket when the receiver refuses it', async () => {
     answers['appearance:createUpload'] = () =>
       Promise.resolve({
         ticket_id: 'ticket-1',
@@ -367,6 +383,10 @@ describe('refusal sentences in restore and upload toasts', () => {
     )
     expect(sentWith('appearance:createUpload')).toEqual({ name: 'Lake.jpg', size: 10 })
     expect(sentWith('appearance:cancelUpload')).toEqual({ ticket_id: 'ticket-1' })
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'The file is larger than its upload said. Choose it again.',
+      'error',
+    )
   })
 
   it('quotes the size refusal that attach returns as a sentence', async () => {

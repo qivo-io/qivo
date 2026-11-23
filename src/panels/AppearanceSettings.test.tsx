@@ -14,19 +14,22 @@ import type { AppearancePreferences } from '../store/planner'
 import { AppearanceSettings } from './AppearanceSettings'
 
 /* What Settings › Appearance says for a custom background whose preview
-   the demo's storage left no room for, how it shows a refusal, and that
-   its previews come from the provider's preview, never a mint of its own.
-   The page shows the account's appearance from the provider's context,
-   answered here by a stand-in, and the store's save is answered by hand. */
+   the demo's storage left no room for, what it toasts for a save and an
+   upload, and that its previews come from the provider's preview, never a
+   mint of its own. The page shows the account's appearance from the
+   provider's context, answered here by a stand-in, and the store's save and
+   upload are answered by hand. */
 
 const store = vi.hoisted(() => ({
   deliver: null as ((value: AppearancePreferences) => void) | null,
   save: vi.fn(),
+  upload: vi.fn(),
   mint: vi.fn(async () => null),
 }))
 vi.mock('../store/planner', () => ({
   P: {
     setAppearance: store.save,
+    uploadAppearanceImage: store.upload,
     mintAppearanceImageUrl: store.mint,
   },
 }))
@@ -95,7 +98,9 @@ let root: Root
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   store.save.mockReset()
+  store.upload.mockReset()
   store.mint.mockClear()
+  window.showToast = vi.fn()
   context.preview = null
   context.asks = 0
   context.retries = 0
@@ -121,12 +126,38 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   // Settings never mints a URL of its own
   expect(store.mint).not.toHaveBeenCalled()
 })
 
 const deliver = (value: AppearancePreferences) => act(async () => store.deliver?.(value))
 const previewText = () => container.querySelector('.aspect-video')?.textContent ?? ''
+const upload = () => container.querySelector<HTMLInputElement>('[data-appearance-upload]')
+const uploadLabel = () => container.querySelector(`label[for="${upload()?.id}"]`)
+/** Picks `file` in the upload's file dialog. */
+async function choose(file: File) {
+  const input = container.querySelector<HTMLInputElement>('[data-appearance-upload]')
+  if (!input) throw new Error('no upload')
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+/** A still PNG of `width` × `height` that the page's header check takes. */
+function png(width: number, height: number) {
+  const bytes = new Uint8Array(45)
+  const view = new DataView(bytes.buffer)
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10])
+  view.setUint32(8, 13)
+  bytes.set([73, 72, 68, 82], 12)
+  view.setUint32(16, width)
+  view.setUint32(20, height)
+  // the IEND chunk after the IHDR's 13 bytes and its checksum
+  view.setUint32(33, 0)
+  bytes.set([73, 69, 78, 68], 37)
+  return bytes
+}
 
 describe('Settings › Appearance', () => {
   it("says the demo's full storage left no room for a preview yet, and that the background shows", async () => {
@@ -139,16 +170,51 @@ describe('Settings › Appearance', () => {
     expect(previewText()).toBe('Preparing preview…')
   })
 
-  it('shows a refusal with its first letter capitalized', async () => {
+  it('toasts a saved change, and leaves a refused one to the store, which toasts it', async () => {
     await deliver(custom({}))
+    store.save.mockResolvedValue(null)
+    const none = container.querySelector<HTMLInputElement>('[data-appearance-source="none"]')
+    await act(async () => none?.click())
+    expect(window.showToast).toHaveBeenCalledTimes(1)
+    expect(window.showToast).toHaveBeenCalledWith('Appearance saved.')
     store.save.mockRejectedValue(
       new ConvexError({ code: 'rule', message: 'the demo stores at most 5 MiB of files in total' }),
     )
-    const none = container.querySelector<HTMLInputElement>('[data-appearance-source="none"]')
     await act(async () => none?.click())
-    expect(container.querySelector('[data-appearance-error]')?.textContent).toBe(
-      'The demo stores at most 5 MiB of files in total',
+    expect(store.save).toHaveBeenCalledTimes(2)
+    expect(window.showToast).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('toasts a file its own check refuses, and sends nothing', async () => {
+    await deliver(custom({}))
+    await choose(new File([new Uint8Array([1, 2, 3, 4])], 'lake.jpg', { type: 'image/jpeg' }))
+    expect(window.showToast).toHaveBeenCalledWith('The file is not a valid JPEG image.', 'error')
+    expect(store.upload).not.toHaveBeenCalled()
+  })
+
+  it('says Uploading… on the file field while the image goes, then toasts it saved', async () => {
+    await deliver(custom({}))
+    // the browser's decoding, which jsdom lacks
+    Object.assign(URL, { createObjectURL: () => 'blob:pick', revokeObjectURL: () => {} })
+    Object.assign(HTMLImageElement.prototype, { decode: async () => {} })
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(1920)
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(1080)
+    let answer = () => {}
+    store.upload.mockReturnValue(
+      new Promise<void>((resolve) => {
+        answer = resolve
+      }),
     )
+    await choose(new File([png(1920, 1080)], 'lake.png', { type: 'image/png' }))
+    expect(store.upload).toHaveBeenCalledTimes(1)
+    expect(uploadLabel()?.textContent).toBe('Uploading…')
+    expect(upload()?.getAttribute('aria-busy')).toBe('true')
+    expect(window.showToast).not.toHaveBeenCalled()
+    await act(async () => answer())
+    expect(window.showToast).toHaveBeenCalledWith('Custom image saved.')
+    expect(uploadLabel()?.textContent).toBe('Replace your image')
+    expect(upload()?.hasAttribute('aria-busy')).toBe(false)
   })
 
   it('shows the custom preview the provider read for this image and version, and asks only while open', async () => {

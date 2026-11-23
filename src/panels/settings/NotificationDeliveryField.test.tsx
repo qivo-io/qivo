@@ -191,7 +191,7 @@ describe('Notification delivery', () => {
     await act(async () => saves[0].answer())
     expect(select()?.disabled).toBe(false)
     expect(select()?.value).toBe('all')
-    expect(text('[data-notification-delivery-saved]')).toBe('Notification delivery saved.')
+    expect(window.showToast).toHaveBeenCalledWith('Notification delivery saved.')
     // another tab switches back, and its delivery replaces what shows
     await act(async () => {
       stand.answer('notifications:setDelivery', { delivery: 'recent' })
@@ -207,12 +207,11 @@ describe('Notification delivery', () => {
     await choose('all')
     await act(async () => saves[0].answer())
     expect(select()?.value).toBe('recent')
-    expect(text('[data-notification-delivery-error]')).toBe(
+    expect(window.showToast).toHaveBeenCalledWith(
       'Your demo has reached its change limit. Try again later.',
+      'error',
     )
-    expect(
-      container.querySelector('[data-notification-delivery-error]')?.getAttribute('role'),
-    ).toBe('alert')
+    expect(window.showToast).toHaveBeenCalledTimes(1)
   })
 
   it('says it could not load, and Try again reads again', async () => {

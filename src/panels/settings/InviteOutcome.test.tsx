@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
-/* The line under the project invite form: what it says about the invitation
-   email to the seat the form just created, as invites.deliveries changes. It
-   reads that one seat's row, and stops while the tab is hidden. */
+/* What the project invite form says about the invitation email to the seat
+   it just created, as invites.deliveries changes: a toast once a send went
+   out, and a sentence under the form for one that did not. It reads that
+   one seat's row, and stops while the tab is hidden. */
 
 type Row = {
   profile_id: string
@@ -38,7 +39,10 @@ beforeAll(async () => {
 
 let root: Root
 let host: HTMLDivElement
+let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 beforeEach(() => {
+  toast = vi.fn<(message: string, tone?: string) => void>()
+  window.showToast = toast
   network.onUpdate.mockImplementation((_ref, _args, next, fail) => {
     network.push = (rows) => (rows === null ? fail(new Error('refused')) : next(rows))
     return () => {}
@@ -55,11 +59,15 @@ afterEach(() => {
 
 const seat = 'seat-1'
 const email = 'Guest.New@example.test'
-const row = (state: string, address = 'guest.new@example.test'): Row => ({
+// when the first send and a later Send invitation were reserved, recent
+// enough that neither reads as uncertain
+const FIRST = new Date().toISOString()
+const AGAIN = new Date(Date.now() + 1000).toISOString()
+const row = (state: string, address = 'guest.new@example.test', since = FIRST): Row => ({
   profile_id: seat,
   email: address,
   state,
-  since: new Date().toISOString(),
+  since,
 })
 
 async function mount(typed = email) {
@@ -71,6 +79,24 @@ async function mount(typed = email) {
     ),
   )
 }
+/** Mounts the outcome as development does, its effects run twice. */
+async function mountStrict() {
+  act(() =>
+    root.render(
+      <StrictMode>
+        <TooltipProvider>
+          <InviteOutcome orgId="org-1" seat={seat} email={email} />
+        </TooltipProvider>
+      </StrictMode>,
+    ),
+  )
+}
+const setVisibility = (value: 'visible' | 'hidden') =>
+  act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+const unsent = `${email}: The invitation email could not be sent. Check the address. They can join later by creating an account with it, once Qivo can email them.`
 const push = (rows: Row[] | null) => act(() => network.push(rows))
 // the sentence, without the Send invitation control after it
 const said = () => host.querySelector('[data-invite-outcome]')?.firstChild?.textContent ?? null
@@ -98,58 +124,80 @@ describe('the outcome of an invitation from the project form', () => {
     expect(network.onUpdate.mock.calls.length).toBe(watched + 1)
   })
 
-  it('says nothing until the deliveries load, then follows the send', async () => {
+  it('shows nothing while the email is on its way, and a sentence once it could not be sent', async () => {
     await mount()
-    expect(said()).toBeNull()
     push([])
-    expect(said()).toBe(`Sending the invitation email to ${email}…`)
+    expect(said()).toBeNull()
     push([row('sending')])
-    expect(said()).toBe(`Sending the invitation email to ${email}…`)
+    expect(said()).toBeNull()
+    // the live region is there, empty, before the sentence, so it is announced
+    const region = host.querySelector('[role="status"]')
+    expect(region?.textContent).toBe('')
     push([row('unsent')])
-    expect(said()).toBe(
-      `${email}: The invitation email could not be sent. Check the address. They can join later by creating an account with it, once Qivo can email them.`,
-    )
+    expect(said()).toBe(unsent)
+    expect(host.querySelector('[role="status"]')).toBe(region)
+    expect(host.querySelector('[data-invite-again]')?.textContent).toBe('Send invitation')
+    expect(toast).not.toHaveBeenCalled()
   })
 
-  it('keeps the result once the seat is claimed and leaves the list', async () => {
-    await mount()
+  it('toasts a send that went out once, and shows nothing for it', async () => {
+    await mountStrict()
     push([row('sent')])
-    expect(said()).toBe(`Invitation email sent to ${email}.`)
+    expect(said()).toBeNull()
+    expect(toast.mock.calls).toEqual([[`Invitation email sent to ${email}.`]])
+    // hidden and shown again, the read delivers the same send once more
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    push([row('sent')])
+    expect(toast).toHaveBeenCalledTimes(1)
+    // the seat claimed, its row leaves the list, and no sentence comes back
     push([])
-    expect(said()).toBe(`Invitation email sent to ${email}.`)
+    expect(said()).toBeNull()
+    expect(toast).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the failure once Send invitation goes out, with one toast', async () => {
+    await mountStrict()
+    push([row('unsent')])
+    expect(said()).toBe(unsent)
+    push([row('sending', undefined, AGAIN)])
+    expect(said()).toBeNull()
+    push([row('sent', undefined, AGAIN)])
+    expect(said()).toBeNull()
+    expect(toast.mock.calls).toEqual([[`Invitation email sent to ${email}.`]])
+  })
+
+  it('keeps the sentence of a failed email once the seat is claimed and leaves the list', async () => {
+    await mount()
+    push([row('unsent')])
+    push([])
+    expect(said()).toBe(unsent)
+    expect(host.querySelector('[data-invite-again]')).toBeNull()
   })
 
   it('follows the send to an address with a Unicode domain, stored as punycode', async () => {
     await mount('Anna@Bücher.DE')
     push([row('sent', 'anna@xn--bcher-kva.de')])
-    expect(said()).toBe('Invitation email sent to Anna@Bücher.DE.')
+    expect(toast).toHaveBeenCalledWith('Invitation email sent to Anna@Bücher.DE.')
   })
 
   it('reports nothing for a send to an address corrected elsewhere', async () => {
     await mount()
-    push([row('sent', 'corrected@example.test')])
+    push([row('unsent', 'corrected@example.test')])
     expect(said()).toBeNull()
-  })
-
-  it('stops saying Sending when no send is recorded within two minutes', async () => {
-    vi.useFakeTimers()
-    try {
-      await mount()
-      push([])
-      expect(said()).toBe(`Sending the invitation email to ${email}…`)
-      act(() => vi.advanceTimersByTime(2 * 60_000 + 1))
-      expect(said()).toBeNull()
-    } finally {
-      vi.useRealTimers()
-    }
+    push([row('sent', 'corrected@example.test')])
+    expect(toast).not.toHaveBeenCalled()
+    // the send to its own address it does report
+    push([row('sent')])
+    expect(toast).toHaveBeenCalledTimes(1)
   })
 
   it('turns a send that never settles uncertain after five minutes, on a page left open', async () => {
     vi.useFakeTimers()
     try {
       await mount()
-      push([row('sending')])
-      expect(said()).toBe(`Sending the invitation email to ${email}…`)
+      push([row('sending', undefined, new Date().toISOString())])
+      expect(said()).toBeNull()
       act(() => vi.advanceTimersByTime(5 * 60_000 + 1))
       expect(said()).toBe(
         `${email}: The mail service did not confirm the invitation email. If it does not arrive, they can still join by creating an account with this address.`,
@@ -157,15 +205,6 @@ describe('the outcome of an invitation from the project form', () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-
-  it('does not claim a send is still in flight when its row vanished or the query failed', async () => {
-    await mount()
-    push([row('sending')])
-    push([])
-    expect(said()).toBeNull()
-    push(null)
-    expect(said()).toBeNull()
   })
 
   it('says when a held invitation can go again, and offers to send it', async () => {

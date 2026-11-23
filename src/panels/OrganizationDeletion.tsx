@@ -64,13 +64,17 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   const shown = useClosingWords(open, { confirm, error, busy })
   if (!state) return null
 
-  /** Runs one admin action, closing the dialog on success and showing the
-   * refusal otherwise. */
-  async function run(work: () => Promise<unknown>, fallback: string) {
+  /** Runs one admin action, closing the dialog on success and handing the
+   * refusal to `refused` otherwise. */
+  async function run(
+    work: () => Promise<unknown>,
+    fallback: string,
+    refused: (sentence: string) => void,
+  ) {
     // offline the request would wait without a word
     const paused = P.cannotSaveText()
     if (paused) {
-      setError(paused)
+      refused(paused)
       return
     }
     setBusy(true)
@@ -82,7 +86,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
       setOpen(false)
       setConfirm('')
     } catch (cause) {
-      setError(failure(cause, fallback))
+      refused(failure(cause, fallback))
     } finally {
       releaseUnsaved()
       setBusy(false)
@@ -132,6 +136,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
                   void run(
                     () => convex.mutation(api.orgRemovals.keep, { org_id: orgId }),
                     'The deletion could not be stopped. Try again.',
+                    (sentence) => window.showToast?.(sentence, 'error'),
                   )
                 }
               >
@@ -193,6 +198,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
                 void run(
                   () => convex.action(api.orgRemovals.request, { org_id: orgId, confirm: confirm }),
                   'The organization could not be deleted. Try again.',
+                  setError,
                 )
               }}
             >
@@ -201,11 +207,6 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {error && deletion && (
-        <p role="alert" className="mt-2 text-sm text-danger">
-          {error}
-        </p>
-      )}
     </SettingsSection>
   )
 }

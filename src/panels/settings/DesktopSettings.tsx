@@ -37,20 +37,20 @@ export function DesktopSettingsPage({
   const id = useId()
   const [values, setValues] = useState<QivoDesktopSettingsSnapshot | null>(null)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   useUpdateBlocker(saving)
 
   useEffect(() => {
     let active = true
     setValues(null)
-    setError(null)
+    setLoadError(null)
     void settings.get().then(
       (next) => {
         if (active) setValues(next)
       },
       () => {
-        if (active) setError("Couldn't load desktop settings.")
+        if (active) setLoadError("Couldn't load desktop settings.")
       },
     )
     return () => {
@@ -61,7 +61,6 @@ export function DesktopSettingsPage({
   const save = async (patch: Partial<QivoDesktopSettings>) => {
     if (!values || saving) return
     setSaving(true)
-    setError(null)
     try {
       const saved = await settings.update(patch)
       setValues(saved)
@@ -69,12 +68,12 @@ export function DesktopSettingsPage({
       // the notification leader reports to the server at once
       noteCapabilityChange(saved)
     } catch {
-      setError("Couldn't save desktop settings. Try again.")
+      window.showToast?.("Couldn't save desktop settings. Try again.", 'error')
       try {
         // A rejected startup change can add a warning without changing the saved values.
         setValues(await settings.get())
       } catch {
-        // Keep the confirmed values and save error when the snapshot is unavailable.
+        // Keep the confirmed values when the snapshot is unavailable.
       }
     } finally {
       setSaving(false)
@@ -84,7 +83,7 @@ export function DesktopSettingsPage({
   return (
     <>
       <PageTitle>Desktop app</PageTitle>
-      <SettingsSection title="This computer" aria-busy={saving || (!values && !error)}>
+      <SettingsSection title="This computer" aria-busy={saving || (!values && !loadError)}>
         {values ? (
           <div className="space-y-6">
             {fields.map((field) => {
@@ -130,22 +129,19 @@ export function DesktopSettingsPage({
               )
             })}
           </div>
-        ) : !error ? (
+        ) : loadError ? (
+          <div>
+            <p role="alert" className="text-sm text-danger">
+              {loadError}
+            </p>
+            <Button type="button" className="mt-3" onClick={() => setLoadAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          </div>
+        ) : (
           <p role="status" className="text-sm text-text-2">
             Loading desktop settings…
           </p>
-        ) : null}
-        {error && (
-          <div className={values ? 'mt-4' : undefined}>
-            <p role="alert" className="text-sm text-danger">
-              {error}
-            </p>
-            {!values && (
-              <Button type="button" className="mt-3" onClick={() => setLoadAttempt((n) => n + 1)}>
-                Retry
-              </Button>
-            )}
-          </div>
         )}
       </SettingsSection>
     </>

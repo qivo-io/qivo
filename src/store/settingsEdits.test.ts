@@ -356,12 +356,15 @@ describe('settings edits through the client store', () => {
     it('sends it as expected from setOrg, and the value on screen without it', () => {
       P.setOrg({ name: 'Testbed Robotics' })
       expect(latest().args.expected).toEqual({ name: 'Testbed Labs' })
-      P.setOrg({ name: 'Testbed AB' }, undefined, { seen: { name: 'Testbed Labs' } })
+      P.setOrg({ name: 'Testbed AB' }, { seen: { name: 'Testbed Labs' } })
       // the screen shows the first save's paint; the field began before it
       expect(latest().args.expected).toEqual({ name: 'Testbed Labs' })
-      P.setOrg({ defaultPlannableHours: 32 }, undefined, {
-        seen: { default_plannable_hours: 36 },
-      })
+      P.setOrg(
+        { defaultPlannableHours: 32 },
+        {
+          seen: { default_plannable_hours: 36 },
+        },
+      )
       expect(latest().args).toMatchObject({
         patch: { default_plannable_hours: 32 },
         expected: { default_plannable_hours: 36 },
@@ -370,9 +373,9 @@ describe('settings edits through the client store', () => {
 
     it('sends the stored attachment limit for the default a field showed, and any other as seen', () => {
       // the fixture's organization stores no limit; the field shows 20
-      P.setOrg({ maxAttachmentMb: 10 }, undefined, { seen: { max_attachment_mb: 20 } })
+      P.setOrg({ maxAttachmentMb: 10 }, { seen: { max_attachment_mb: 20 } })
       expect(latest().args.expected).toEqual({ max_attachment_mb: null })
-      P.setOrg({ maxAttachmentMb: 12 }, undefined, { seen: { max_attachment_mb: 15 } })
+      P.setOrg({ maxAttachmentMb: 12 }, { seen: { max_attachment_mb: 15 } })
       expect(latest().args.expected).toEqual({ max_attachment_mb: 15 })
     })
 
@@ -484,7 +487,7 @@ describe('settings edits through the client store', () => {
       }
       const org = snap.orgs[0].id
       const project = snap.projects[0].id
-      P.setOrg({ name: 'Testbed Robotics' }, undefined, { keepDraft })
+      P.setOrg({ name: 'Testbed Robotics' }, { keepDraft })
       latest().reject(changed('organization', org, 'name'))
       P.updateTeam(
         't-crew',
@@ -514,7 +517,7 @@ describe('settings edits through the client store', () => {
     it('runs keepUnsaved for a painted save that fails with an error, as for a refusal', async () => {
       const calls: string[] = []
       const save = { keepUnsaved: () => calls.push('keepUnsaved') }
-      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      P.setOrg({ name: 'Testbed Robotics' }, save)
       expect(P.org.name).toBe('Testbed Robotics')
       // a server fault reaches the app as an Error, not a ConvexError
       latest().reject(new Error('[Request ID: 1] Server Error'))
@@ -542,7 +545,7 @@ describe('settings edits through the client store', () => {
       const moved = P.setOrgSlug('testbed-ab', save)
       latest().reject(new ConvexError({ code: 'conflict', reason: 'slug_taken', message: 'taken' }))
       await moved
-      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      P.setOrg({ name: 'Testbed Robotics' }, save)
       latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
       await settle()
       expect(calls).toEqual([['keepDraft', 'Planner', { name: 'Ana' }], ['keepUnsaved']])
@@ -563,7 +566,7 @@ describe('settings edits through the client store', () => {
         },
         keepUnsaved: () => calls.push('keepUnsaved'),
       }
-      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      P.setOrg({ name: 'Testbed Robotics' }, save)
       const painted = latest()
       const renamed = P.setDisplayName('Planner Prime', save)
       const awaited = latest()
