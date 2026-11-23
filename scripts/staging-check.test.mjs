@@ -390,7 +390,7 @@ describe('staging check REST contract', () => {
     // given his name
     expect(step).not.toContain('leo.email')
     expect(step).not.toContain('mentionChoices')
-    expect(step).toContain(`.fill(leo.name)`)
+    expect(step).toMatch(/\[data-task-subscriber-search\]'\)\.first\(\),\s*leo\.name,/)
     // the removal duty starts before the PUT, so the finally removes a
     // grant the server committed whose answer was lost
     const duty = step.indexOf('granted = true')
@@ -875,7 +875,8 @@ describe('staging check REST contract', () => {
       check.indexOf('await archiveChecks()'),
     )
     // the searches type the run's tag, so the run's rows show on staging
-    expect(check).toContain('.fill(run.tag)')
+    expect(check).toMatch(/\[\$\{marks\.pickerSearch\}\]`\),\s*run\.tag,/)
+    expect(check).toMatch(/\[\$\{marks\.scopeSearch\}\]`\),\s*run\.tag,/)
     const picker = readFileSync(
       new URL('../src/components/TargetPicker.tsx', import.meta.url),
       'utf8',
@@ -1081,7 +1082,7 @@ describe('staging check REST contract', () => {
     const archived = step.indexOf(`\`/projects/\${S.id}\`, { archived: true }`)
     expect(archived).toBeGreaterThan(bare)
     expect(step.indexOf(`[\${m.state}="lost"]`)).toBeGreaterThan(archived)
-    expect(step).toContain('.fill(run.tag)')
+    expect(step).toMatch(/\[\$\{m\.chooser\}\] \[\$\{m\.search\}\]`\),\s*run\.tag,/)
     expect(step).toContain('await opens(M)')
   })
   it('reads the directory’s groups, and refuses a page that breaks favorites first', () => {
@@ -1285,7 +1286,7 @@ describe('staging check REST contract', () => {
       script.indexOf('async function deletedTaskItem('),
       script.indexOf('/** The Settings page Archived tasks opens'),
     )
-    const typed = finder.indexOf('.fill(own.title)')
+    const typed = finder.indexOf(`typeSearch(app.locator(\`[\${m.search}]\`), own.title`)
     expect(typed).toBeGreaterThan(-1)
     const settled = finder.indexOf('m.state}="ok"]`).count()) === 0) return false')
     expect(settled).toBeGreaterThan(typed)
@@ -1970,8 +1971,10 @@ describe('staging check REST contract', () => {
     )
     // it reads; the only write is the usage those calls make
     expect(step).not.toMatch(/restOk\([^)]*'(POST|PUT|PATCH|DELETE)'/)
-    expect(step).toContain(`await app.locator(\`[\${m.search}]\`).fill(run.tag)`)
-    expect(step).toContain(`await app.locator(\`[\${m.namesSearch}="billable"]\`).fill(run.tag)`)
+    expect(step).toMatch(/typeSearch\(\s*app\.locator\(`\[\$\{m\.search\}\]`\),\s*run\.tag,/)
+    expect(step).toMatch(
+      /typeSearch\(\s*app\.locator\(`\[\$\{m\.namesSearch\}="billable"\]`\),\s*run\.tag,/,
+    )
     expect(step).toContain(`eq(await app.locator(\`[\${m.accessPeriod}]\`).inputValue(), period`)
   })
 
@@ -2043,7 +2046,9 @@ describe('staging check REST contract', () => {
       check.indexOf('/** Creates a personal token through the New token dialog'),
     )
     expect(helpers).toContain('mcpListSettled(end, settled, text)')
-    expect(helpers).toContain('await listSettled(list, text)')
+    expect(helpers).toContain(
+      "await listSettled(list, text, await typeSearch(box, text, 'an MCP access search'))",
+    )
     expect(helpers).not.toMatch(/sleep\(/)
   })
 
@@ -2674,17 +2679,18 @@ describe('a search that lost its typed text', () => {
       seen.done()
     }
   })
-  it('guards the Users search, the searched pickers and lists and the Deleted items search, and the workflow lists its NOTE', () => {
+  it('guards the searches the steps wait on, and the workflow lists its NOTE', () => {
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(SEARCH_LOST).toBe('search-lost')
-    // Deleted items types twice, each time right after the page opened
-    expect(script.match(/await typeSearch\(/g)).toHaveLength(4)
+    expect(script.match(/await typeSearch\(/g)).toHaveLength(31)
     expect(script).toContain('(await subHolds()) && (await listed.count()) === 1')
     for (const use of [
       "typeSearch(app.locator('[data-users-search]'), text, 'the Users search')",
       'async function searchAnswered(search, text, rows, what = "a picker\'s search", read = null)',
       'typeSearch(search, text, what)',
       'words, "Deleted items\' search")',
+      "app.locator('[data-billing-storage-search]'),",
+      `app.locator(\`[\${m.archivedSearch}]\`),`,
     ])
       expect(script, use).toContain(use)
     const workflow = readFileSync(
