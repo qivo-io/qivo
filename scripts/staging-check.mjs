@@ -9512,6 +9512,14 @@ async function rosterPartsCheck() {
       )
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.teams)).length > 0, true, 'the scope read')
       earlier = await evaluate(app, () => window.PLANNER.loadUI().teamSyncScope ?? null)
+      // a team that is gone, as a run before this restore left one, is no
+      // scope of hers to put back
+      const savedTeam = /^team:(.+)$/.exec(earlier ?? '')?.[1]
+      if (
+        savedTeam &&
+        (await rest(w, 'GET', `/teams/${encodeURIComponent(savedTeam)}`)).status === 404
+      )
+        earlier = null
       const picked = sent.length
       await pick.click()
       scoped = true
