@@ -40,7 +40,15 @@
    - A press on a name opens the project at once as the sidebar does, by
      the lists' open rule (projectNavRows.tsx useNavOpen), whether the
      workspace holds it yet or not; App shows "Opening <name>…" until it
-     opens, or why it cannot.
+     opens, or why it cannot. On a desktop a press elsewhere on the row
+     opens it too, and its controls do only their own job.
+   - On a desktop the rows stand in one panel under a Project and Lead
+     header, each project and sub-project with its own lead (the reads'
+     lead_id) named in the row's organization as the Overview's health
+     table names one (components/usePeople.ts), none for no lead or one
+     the server says the organization does not hold, and the row menu opens
+     the project's settings. A phone keeps one card a project, with People
+     & settings on it and no lead.
    - No list says it found nothing or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped page or batch and a
      failure each show as themselves, the refusal and a failure with Retry.
@@ -64,6 +72,7 @@ import { nameKey } from '../../convex/lib/nameKey'
 import type {
   NavChildRow,
   NavChildren,
+  NavLead,
   NavPage,
   NavPageRow,
   NavProject,
@@ -87,7 +96,7 @@ import {
 import { DIRECTORY_MOST } from '../lib/projectPick'
 import { useMobile } from '../lib/useMobile'
 import { useHiddenViewMark } from '../lib/viewHidden'
-import { P, type ProjectSettingsAnswer } from '../store/planner'
+import { type NamedPerson, P, type ProjectSettingsAnswer } from '../store/planner'
 import { FilterSearch } from './FilterSearch'
 import { groundRadius } from './ground'
 import { type HeldLine, PageFold } from './pageFold'
@@ -102,8 +111,9 @@ import {
   tagged,
   useNavOpen,
 } from './projectNavRows'
-import { Icon, MenuItem, Popover } from './qivo'
+import { Avatar, Icon, MenuItem, Popover } from './qivo'
 import { Button } from './ui/button'
+import { personLabel, usePeople } from './usePeople'
 import { WorkspaceToolbar } from './WorkspaceShell'
 
 type Actions = Record<string, (...args: unknown[]) => void>
@@ -118,6 +128,36 @@ const parentOf = (row: Row): NavProject | null => ('parent' in row ? row.parent 
 /** A star the person pressed: the state it shows, and whether the write is
     still on its way. */
 type Pending = { want: boolean; busy: boolean }
+
+const leadOf = (row: NavProject & NavLead): NamedPerson => ({
+  org: row.org_id,
+  id: row.lead_id ?? '',
+})
+const NO_LEADS: NamedPerson[] = []
+
+/* A drag that selects text in a row ends in a click on the row, which must
+   not open it. */
+const selectsText = () => window.getSelection()?.isCollapsed === false
+
+function Lead({ row }: { row: NavProject & NavLead }) {
+  const lead = P.person(row.lead_id, row.org_id)
+  const shown = lead && lead.state !== 'gone' ? lead : null
+  return (
+    <span className="directory-lead" data-directory-lead="">
+      {shown && (
+        <>
+          <span aria-hidden="true" className="flex">
+            <Avatar id={shown.id} size={20} />
+          </span>
+          <span className="sr-only">Lead </span>
+          <span data-directory-lead-name="" className="truncate">
+            {personLabel(shown, '')}
+          </span>
+        </>
+      )}
+    </span>
+  )
+}
 
 /**
  * The All projects directory, on the rules in the module header. `actions`
@@ -246,6 +286,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   // equal names among the rows shown carry their number, and so do the
   // projects a search's sub-project rows name before their own
   const tags = navTags(rows, parentOf)
+  usePeople(mobile ? NO_LEADS : rows.map(leadOf))
 
   const grouped = rows.some((r) => r.favorite === true)
   const firstFavorite = rows.findIndex((r) => r.favorite === true)
@@ -365,13 +406,130 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     )
   }
 
+  const toggle = (row: NavProject, isOpen: boolean) =>
+    setExpanded(isOpen ? null : { id: row.id, org_id: row.org_id, name: row.name, num: row.num })
+
+  const lineTop = (row: Row & { favorite: boolean }) => {
+    const p = pending.get(row.id)
+    const favorite = p?.want ?? row.favorite
+    const isOpen = expanded?.id === row.id
+    const org = foreignOrg(row.org_id)
+    return (
+      <div key={row.id} className="directory-item" data-directory-row={row.id}>
+        <div className="directory-line" onClick={() => selectsText() || open(row)}>
+          <Button
+            variant="ghost"
+            size="icon"
+            noTooltip
+            data-directory-expand=""
+            aria-expanded={isOpen}
+            aria-label={`${isOpen ? 'Hide' : 'Show'} sub-projects of ${row.name}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggle(row, isOpen)
+            }}
+            className="text-text-3"
+          >
+            <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={16} />
+          </Button>
+          <Button
+            variant="unstyled"
+            className="directory-open"
+            data-directory-open=""
+            onClick={(e) => {
+              e.stopPropagation()
+              open(row)
+            }}
+          >
+            <span className="font-semibold">
+              {tagged({ name: row.name, tag: tags.get(row.id) })}
+            </span>
+            {org && (
+              <span data-directory-org="" className="text-xs text-text-2">
+                {org}
+              </span>
+            )}
+          </Button>
+          <Lead row={row} />
+          {/* the menu's items reach the row through its portal too */}
+          <span className="directory-actions" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="icon"
+              noTooltip
+              data-directory-star=""
+              aria-pressed={favorite}
+              aria-busy={p?.busy || undefined}
+              aria-label={
+                favorite ? `Remove ${row.name} from favorites` : `Add ${row.name} to favorites`
+              }
+              onClick={() => star(row)}
+              className="text-text-3"
+            >
+              <Icon name="star" size={16} className={favorite ? 'fill-current' : undefined} />
+            </Button>
+            <RowMenu row={row} actions={actions} settings />
+          </span>
+        </div>
+        {isOpen && expanded && (
+          <SubProjects key={expanded.id} parent={expanded} onOpen={open} lines />
+        )}
+      </div>
+    )
+  }
+
+  const lineSub = (row: NavSearchRow, up: NavProject) => {
+    const org = foreignOrg(row.org_id)
+    return (
+      <div
+        key={row.id}
+        className="directory-item"
+        data-directory-row={row.id}
+        data-directory-parent={up.id}
+      >
+        <div className="directory-line" onClick={() => selectsText() || open(row)}>
+          <span />
+          <Button
+            variant="unstyled"
+            className="directory-open"
+            data-directory-open=""
+            onClick={(e) => {
+              e.stopPropagation()
+              open(row)
+            }}
+          >
+            <span>
+              <span className="text-text-2">
+                {tagged({ name: up.name, tag: tags.get(up.id) })}
+                {' › '}
+              </span>
+              <span className="font-semibold">
+                {tagged({ name: row.name, tag: tags.get(row.id) })}
+              </span>
+            </span>
+            {org && (
+              <span data-directory-org="" className="text-xs text-text-2">
+                {org}
+              </span>
+            )}
+          </Button>
+          <Lead row={row} />
+          <span />
+        </div>
+      </div>
+    )
+  }
+
   const listed: ReactNode[] = []
   rows.forEach((row, i) => {
     if (grouped && i === firstFavorite) listed.push(heading('favorites'))
     if (grouped && i === firstRest) listed.push(heading('rest'))
     const up = parentOf(row)
-    if (up !== null && 'parent' in row) listed.push(subRow(row, up))
-    else if (row.favorite !== null) listed.push(topRow({ ...row, favorite: row.favorite }))
+    if (up !== null && 'parent' in row) listed.push(mobile ? subRow(row, up) : lineSub(row, up))
+    else if (row.favorite !== null) {
+      const top = { ...row, favorite: row.favorite }
+      listed.push(mobile ? topRow(top) : lineTop(top))
+    }
   })
 
   const searching = !browsing
@@ -384,6 +542,30 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     }
   }
   const ground = mobile ? 'page' : 'well'
+  const fold = (
+    <PageFold
+      page={page}
+      end={end}
+      hook="project-directory"
+      tooLong={search.tooLong}
+      focus={move}
+      held={(answer): HeldLine => ({
+        line: heldText(answer, 'page'),
+        retry: answer?.state !== 'not_ready',
+      })}
+      words={{
+        loading: 'Loading projects…',
+        failed: "Couldn't load your projects.",
+        none: `No projects match “${search.settled}”.`,
+        empty,
+        nomore: searching ? 'No more matches.' : 'No more projects.',
+        stopped: 'Qivo checked part of your projects. Next continues.',
+        stoppedEmpty:
+          'Qivo checked part of your projects and found nothing there yet. Next continues.',
+        stuck: 'Qivo could not check part of your projects.',
+      }}
+    />
+  )
   const searchBox = (
     <FilterSearch
       ref={field}
@@ -442,29 +624,25 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           </div>
         </WorkspaceToolbar>
       )}
-      {listed}
-      <PageFold
-        page={page}
-        end={end}
-        hook="project-directory"
-        tooLong={search.tooLong}
-        focus={move}
-        held={(answer): HeldLine => ({
-          line: heldText(answer, 'page'),
-          retry: answer?.state !== 'not_ready',
-        })}
-        words={{
-          loading: 'Loading projects…',
-          failed: "Couldn't load your projects.",
-          none: `No projects match “${search.settled}”.`,
-          empty,
-          nomore: searching ? 'No more matches.' : 'No more projects.',
-          stopped: 'Qivo checked part of your projects. Next continues.',
-          stoppedEmpty:
-            'Qivo checked part of your projects and found nothing there yet. Next continues.',
-          stuck: 'Qivo could not check part of your projects.',
-        }}
-      />
+      {mobile ? (
+        <>
+          {listed}
+          {fold}
+        </>
+      ) : (
+        <section className="directory-panel" data-directory-panel="">
+          {rows.length > 0 && (
+            <div className="directory-line directory-head" aria-hidden="true">
+              <span />
+              <span className="directory-head-name">Project</span>
+              <span className="directory-lead">Lead</span>
+              <span />
+            </div>
+          )}
+          {listed}
+          {fold}
+        </section>
+      )}
       {/* while the server would create one (P.orgCreate) */}
       {!P.homeOrg && P.orgCreate === 'now' && (
         <Button
@@ -484,12 +662,21 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   )
 }
 
-/* A top-level row's actions menu: Archived tasks, and New sub-project… once
-   the project's settings answer that the person may create one there
-   (projectSettings.get can_create_sub_project), after Archived tasks, so
-   the first item and the keyboard's place do not move as it comes. It
-   offers nothing more while the read fails or the project is unavailable. */
-function RowMenu({ row, actions }: { row: NavProject; actions: Actions }) {
+/* A top-level row's actions menu: with `settings` Project settings first,
+   as the sidebar's menu has it, then Archived tasks, and New sub-project…
+   once the project's settings answer that the person may create one there
+   (projectSettings.get can_create_sub_project), last, so the first items
+   and the keyboard's place do not move as it comes. It offers nothing more
+   while the read fails or the project is unavailable. */
+function RowMenu({
+  row,
+  actions,
+  settings = false,
+}: {
+  row: NavProject
+  actions: Actions
+  settings?: boolean
+}) {
   return (
     <Popover
       width={230}
@@ -506,7 +693,7 @@ function RowMenu({ row, actions }: { row: NavProject; actions: Actions }) {
         </Button>
       )}
     >
-      {(close) => <RowMenuItems row={row} close={close} actions={actions} />}
+      {(close) => <RowMenuItems row={row} close={close} actions={actions} settings={settings} />}
     </Popover>
   )
 }
@@ -517,10 +704,12 @@ function RowMenuItems({
   row,
   close,
   actions,
+  settings,
 }: {
   row: NavProject
   close: () => void
   actions: Actions
+  settings: boolean
 }) {
   const key = JSON.stringify({ id: row.id })
   const read = useLiveView<ProjectSettingsAnswer>(api.projectSettings.get, key)
@@ -528,6 +717,17 @@ function RowMenuItems({
   const creates = answer?.state === 'ok' && answer.can_create_sub_project
   return (
     <>
+      {settings && (
+        <MenuItem
+          data-directory-settings=""
+          onClick={() => {
+            close()
+            actions.openSettings(`project:${row.id}`)
+          }}
+        >
+          <Icon name="cog" size={16} /> Project settings
+        </MenuItem>
+      )}
       <MenuItem
         onClick={() => {
           close()
@@ -557,13 +757,18 @@ const noteClass = 'px-2 py-1 text-sm text-text-2'
 /* The live sub-projects of the expanded project `parent`
    (projectNav.children), 25 at first and 25 more as the list's end scrolls
    into view or Load more is pressed, up to DIRECTORY_MOST.children. It
-   reads only while it is mounted, so collapsing stops it. */
+   reads only while it is mounted, so collapsing stops it. With `lines`, a
+   desktop's, each row carries its lead and every batch's rows are
+   siblings with each batch's note after its rows, so the branch line ends
+   on the last row (styles/appearance.css .planner-subproject). */
 function SubProjects({
   parent,
   onOpen,
+  lines = false,
 }: {
   parent: NavProject
   onOpen: (row: NavProject) => void
+  lines?: boolean
 }) {
   const list = usePagedList<NavChildren, NavChildRow>({
     key: JSON.stringify(['children', parent.id]),
@@ -588,6 +793,44 @@ function SubProjects({
       ),
   )
   const tags = navTags(list.rows, () => parent)
+  usePeople(lines ? list.rows.map(leadOf) : NO_LEADS)
+  if (lines)
+    return (
+      <div data-directory-children={parent.id} className="directory-children">
+        {list.batches.flatMap((batch, i) => [
+          ...batch.rows.map((r) => (
+            <div
+              key={r.id}
+              className="directory-line directory-child planner-subproject"
+              onClick={() => selectsText() || onOpen(r)}
+            >
+              <span />
+              <Button
+                variant="unstyled"
+                className="directory-open"
+                data-directory-child={r.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen(r)
+                }}
+              >
+                {tagged({ name: r.name, tag: tags.get(r.id) })}
+              </Button>
+              <Lead row={r} />
+              <span />
+            </div>
+          )),
+          <BatchNote
+            key={`note:${batch.id}`}
+            list={list}
+            batch={batch}
+            last={i === list.batches.length - 1}
+          />,
+        ])}
+        {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
+        <ChildrenEnd list={list} end={end} onMore={more} />
+      </div>
+    )
   return (
     <div data-directory-children={parent.id}>
       {list.batches.map((batch, i) => (

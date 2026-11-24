@@ -44,6 +44,7 @@ import { expectedChildren, expectedPage, navSees } from './projectNav.setup'
 import {
   badRequest,
   kids,
+  listed,
   mapOf,
   measured,
   measuredWalk,
@@ -230,7 +231,7 @@ describe('access', () => {
       user_id: f.admin.id,
       level: 'user',
     })
-    expect(ok(await page(t, [f.admin])).rows).toEqual([{ ...row(f.hidden), favorite: false }])
+    expect(ok(await page(t, [f.admin])).rows).toEqual([{ ...listed(f.hidden), favorite: false }])
   })
 
   it('lists only the sub-project a parent is shown for, never its others', async () => {
@@ -239,9 +240,9 @@ describe('access', () => {
     const pia = await person(t, f.org.id, 'Pia')
     await plantGrants(t, pia, [f.sub])
     await ready(t, f)
-    expect(ok(await page(t, [pia])).rows).toEqual([{ ...row(f.meta), favorite: false }])
+    expect(ok(await page(t, [pia])).rows).toEqual([{ ...listed(f.meta), favorite: false }])
     expect(ok(await kids(t, [pia], f.meta.id)).rows).toEqual([
-      { ...row(f.sub), parent_id: f.meta.id },
+      { ...listed(f.sub), parent_id: f.meta.id },
     ])
     expect(await resolved(t, [pia], { project_id: f.sub2.id })).toEqual({ state: 'unavailable' })
   })
@@ -265,7 +266,7 @@ describe('access', () => {
       user_id: pia.id,
       level: 'viewer',
     })
-    expect(ok(await page(t, [pia])).rows).toEqual([{ ...row(f.meta), favorite: true }])
+    expect(ok(await page(t, [pia])).rows).toEqual([{ ...listed(f.meta), favorite: true }])
   })
 
   it('shows nothing through the reach rows of a Viewer whose lead_id still names them', async () => {
@@ -522,9 +523,9 @@ describe('favorites', () => {
     await plantStar(t, pia, f.otherProject, { org_id: f.org.id })
     const rows = ok(await page(t, [pia])).rows
     expect(rows).toEqual([
-      { ...row(keptA), favorite: false },
-      { ...row(keptB), favorite: false },
-      { ...row(parent), favorite: false },
+      { ...listed(keptA), favorite: false },
+      { ...listed(keptB), favorite: false },
+      { ...listed(parent), favorite: false },
     ])
     expect(rows).toEqual(await expectedPage(t, [pia]))
     expect(await resolved(t, [pia], { project_id: keptA.id })).toMatchObject({
@@ -548,7 +549,7 @@ describe('favorites', () => {
     await plantStar(t, elsewhere, f.otherProject)
     await plantStar(t, ann, f.otherProject, { org_id: f.org.id })
     const rows = ok(await page(t, [ann, elsewhere])).rows
-    expect(rows).toEqual([{ ...row(f.otherProject), favorite: true }])
+    expect(rows).toEqual([{ ...listed(f.otherProject), favorite: true }])
   })
 
   it('passes a run of rows that fail, a batch at a time, when the budget stops a batch at one', async () => {
@@ -921,7 +922,7 @@ describe('budgets', () => {
     const [shared] = await plantMetas(t, f.org.id, ['Shared'])
     await plantShares(t, await plantTeam(t, f.org.id, 'Red', [pia]), [shared])
     await ready(t, f)
-    expect(ok(await page(t, [pia])).rows).toEqual([{ ...row(shared), favorite: false }])
+    expect(ok(await page(t, [pia])).rows).toEqual([{ ...listed(shared), favorite: false }])
     Object.assign(OWN_READS, { teamReads: 0 })
     expect(await page(t, [pia])).toMatchObject({ state: 'unavailable', reason: ACCESS_UNCHECKED })
   })
@@ -947,7 +948,7 @@ describe('budgets', () => {
     await plantGrants(t, vic, [subs[2]], 'viewer')
     await ready(t, f)
     expect(ok(await page(t, [pia])).rows).toHaveLength(1)
-    expect(ok(await page(t, [vic])).rows).toEqual([{ ...row(parent), favorite: false }])
+    expect(ok(await page(t, [vic])).rows).toEqual([{ ...listed(parent), favorite: false }])
     Object.assign(PROJECT_NAV, { teams: 1 })
     expect(await page(t, [pia])).toMatchObject({ reason: ACCESS_UNCHECKED })
     // a guest takes no team shares, so none of their teams is read
@@ -1020,7 +1021,7 @@ describe('readiness', () => {
       await plantGrants(t, pia, [f.sub])
       await ready(t, f)
       expect(ok(await kids(t, [pia], f.meta.id)).rows).toEqual([
-        { ...row(f.sub), parent_id: f.meta.id },
+        { ...listed(f.sub), parent_id: f.meta.id },
       ])
       await unstamp(t, f.org.id, stamp)
       expect(await kids(t, [pia], f.meta.id)).toEqual({ state: 'not_ready' })
@@ -1316,7 +1317,7 @@ describe('reads at the design size', () => {
     const first = await measured(t, (ctx) => navPageOf(ctx, seats, {}))
     console.log('page, 500 archived sub-projects under 167 live parents, its one batch', first.read)
     const batch = ok(first.out)
-    expect(batch.rows).toEqual(tops.map((p) => ({ ...row(p), favorite: false })))
+    expect(batch.rows).toEqual(tops.map((p) => ({ ...listed(p), favorite: false })))
     expect(batch.next).toBeNull()
     whole([{ ...first.read, stopped: batch.stopped }])
     expect(await kids(t, [pia], parents[0].id)).toEqual({ state: 'unavailable' })

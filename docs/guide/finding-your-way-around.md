@@ -92,6 +92,13 @@ projects a page, with **Previous** and **Next**. A project of another
 organization shows that organization's name. The directory loads no tasks;
 opening a project loads what its view needs.
 
+On a desktop the directory is one panel with a row for each project, under
+the column headings **Project** and **Lead**. **Lead** shows the picture and
+name of the project's lead. A sub-project's row shows its own lead. The cell
+is empty for a project without a lead, such as one whose lead was removed
+from the organization. On a phone each project is a card, which shows no
+lead.
+
 The star on a project adds it to your favorites or removes it, and it is
 filled while the project is a favorite. Your favorites are yours alone, in
 that organization alone. A star changes no one's access and sends no
@@ -102,18 +109,21 @@ An archived project, one in Deleted items and one you lost access to leave
 the directory and keep their star, which shows again when the project is
 restored or your access returns. Removing your seat removes its stars.
 
-**Sub-projects** under a project lists its sub-projects, 25 at first and
-more as you scroll or press **Load more**, up to 100, and then asks you to
-search. One project's list is open at a time. Selecting a project or a
-sub-project opens it at once, as the sidebar does. A project's **…** menu
-opens its
-**Archived tasks** and, for those who may add one, **New sub-project…**.
+The arrow at the left of a project's row, or **Sub-projects** on a phone,
+lists its sub-projects under it, 25 at first and more as you scroll or
+press **Load more**, up to 100, and then asks you to search. One project's
+list is open at a time. Selecting a project or a sub-project opens it at
+once, as the sidebar does. On a desktop a click anywhere on its row opens
+it, except on the arrow, the star and the **…** menu. A project's **…**
+menu opens its **Project settings** on a desktop, its **Archived tasks**
+and, for those who may add one, **New sub-project…**. On a phone
+**People & settings** on the card opens the project's settings.
 
 **Filter projects…** at the top finds projects and sub-projects by their
 own names, every word in any order, ignoring case and accents, so “cafe”
 finds “Café”. It asks once you pause typing, 25 results a page with
 **Previous** and **Next**, your matching favorites first. Each sub-project
-shows with its project, such as “Luma Sensor › Firmware”, and the
+shows with its project's name first, such as “Luma Sensor › Firmware”, and the
 organization's name is not searched. Clearing the field lists your projects
 again from the first page. **New project** appears with the field if you
 can create projects

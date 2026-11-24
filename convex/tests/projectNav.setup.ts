@@ -89,12 +89,19 @@ export async function favoriteSeen(ctx: QueryCtx, row: Doc<'project_favorites'>)
 /** favoriteSeen in its own transaction. */
 export const shows = (t: T, row: Doc<'project_favorites'>) => t.run((ctx) => favoriteSeen(ctx, row))
 
+/* `p` as the oracle names a project. */
+const named = (p: Doc<'projects'>) => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
+
+/* `p` as the oracle names a listed project, with its own lead. */
+const listed = (p: Doc<'projects'>) => ({ ...named(p), lead_id: p.lead_id ?? null })
+
 /** A page row as the oracle names it. */
 export type ExpectedRow = {
   id: string
   org_id: string
   name: string
   num: number
+  lead_id: string | null
   favorite: boolean
 }
 
@@ -128,7 +135,7 @@ export const expectedPage = (t: T, seats: readonly Doc<'profiles'>[]) =>
           .collect()
         let favorite = false
         for (const row of rows) if (await favoriteSeen(ctx, row)) favorite = true
-        out.push({ id: p.id, org_id: p.org_id, name: p.name, num: p.num, favorite })
+        out.push({ ...listed(p), favorite })
       }
     }
     return out.sort(order)
@@ -146,7 +153,7 @@ export const expectedChildren = (t: T, seat: Doc<'profiles'>, parent: Doc<'proje
       if (await navSees(ctx, seat, child)) out.push(child)
     return out
       .sort((a, b) => compareValues([nameKey(a.name), a.id], [nameKey(b.name), b.id]))
-      .map((c) => ({ id: c.id, org_id: c.org_id, name: c.name, num: c.num, parent_id: p.id }))
+      .map((c) => ({ ...listed(c), parent_id: p.id }))
   })
 
 /** A row of projectNav.search as the oracle names it: a top-level project
@@ -157,12 +164,10 @@ export type ExpectedSearchRow = {
   org_id: string
   name: string
   num: number
+  lead_id: string | null
   parent: { id: string; org_id: string; name: string; num: number } | null
   favorite: boolean | null
 }
-
-/* `p` as the oracle names a project. */
-const named = (p: Doc<'projects'>) => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
 
 /* Positions in the search's order: the group, the name key's bytes, the id
  * and the organization. */
@@ -204,7 +209,7 @@ export const expectedSearch = (
         if (p.parent_id !== undefined) {
           const parent = await byId(ctx, 'projects', p.parent_id)
           if (parent === null) throw new Error(`no parent of ${p.id}`)
-          out.push({ ...named(p), parent: named(parent), favorite: null })
+          out.push({ ...listed(p), parent: named(parent), favorite: null })
           continue
         }
         const rows = await ctx.db
@@ -215,7 +220,7 @@ export const expectedSearch = (
           .collect()
         let favorite = false
         for (const row of rows) if (await favoriteSeen(ctx, row)) favorite = true
-        out.push({ ...named(p), parent: null, favorite })
+        out.push({ ...listed(p), parent: null, favorite })
       }
     }
     return out.sort(searchOrder)

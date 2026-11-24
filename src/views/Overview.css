@@ -2,7 +2,7 @@
   display: none;
 }
 
-@media (min-width: 761px) {
+@media not all and (max-width: 760px) {
   .overview-view {
     scroll-padding-bottom: 1px;
   }

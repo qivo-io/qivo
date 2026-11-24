@@ -91,7 +91,8 @@ const vNavCursors = { after: v.optional(v.string()), through: v.optional(v.strin
  * favorites of every seat by the reader rule first, then the rest of every
  * seat, each group in name key order with the project id breaking ties,
  * rows of several organizations in one order. Rows are `{ id, org_id,
- * name, num, favorite }`. With `org_id` only that seat's, an organization
+ * name, num, lead_id, favorite }`, `lead_id` the project's own lead or
+ * null, as byIds answers it. With `org_id` only that seat's, an organization
  * without the caller's seat answering an empty last batch; with `team_id`,
  * which needs `org_id`, the projects and sub-projects that team holds a
  * share on that the caller sees, with `parent_id` (navTeamOf). Each list
@@ -105,8 +106,9 @@ export const page = authedQuery({
 
 /** One batch of the live sub-projects the caller sees of top-level
  * project `project_id` (navChildrenOf), rows `{ id, org_id, name, num,
- * parent_id }`. A sub-project the caller sees answers an empty last batch,
- * and every project they cannot open `unavailable` alike. */
+ * lead_id, parent_id }`, `lead_id` the sub-project's own lead or null. A
+ * sub-project the caller sees answers an empty last batch, and every
+ * project they cannot open `unavailable` alike. */
 export const children = authedQuery({
   args: { project_id: v.string(), ...vNavCursors },
   handler: (ctx, a): Promise<NavChildren> => navChildrenOf(ctx, ctx.myProfiles, a),
@@ -180,8 +182,9 @@ export const byIds = authedQuery({
  * every active seat, or only the seat in `org_id` when given. The matching
  * favorites come first, then every other match, top-level projects and
  * sub-projects together, each group in name key order with the project id
- * breaking ties. Rows are `{ id, org_id, name, num, parent, favorite }`, a
- * sub-project's `parent` its top-level project and its `favorite` null. A
+ * breaking ties. Rows are `{ id, org_id, name, num, lead_id, parent,
+ * favorite }`, `lead_id` the project's own lead or null, a sub-project's
+ * `parent` its top-level project and its `favorite` null. A
  * search with nothing to match, an empty org_id or a cursor of another
  * list, login, organization or search is a bad_request, and a search past
  * its limit is refused with the limit's sentence. An org_id without the

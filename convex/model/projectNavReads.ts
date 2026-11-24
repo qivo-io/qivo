@@ -248,12 +248,21 @@ export const PROJECT_NAV = { teams: 64, children: 4, rootRows: 1000, roots: 512 
  * organization. Nothing about the person's level, rights or sub-projects. */
 export type NavProject = { id: string; org_id: string; name: string; num: number }
 
-/** A row of projectNav.page, a top-level project, with whether it is one of
- * its seat's favorites by the reader rule (model/projectFavorites.ts). */
-export type NavPageRow = NavProject & { favorite: boolean }
+/** A listed project's own lead (`lead_id`, null for none), as
+ * projectNav.byIds answers it for every project the caller opens for
+ * navigation, so a list says no more of it than byIds does. A legacy
+ * sub-project without a lead of its own answers null, not its parent's
+ * lead, as the app's project cache holds it (src/store/viewModels.ts
+ * ProjectFacts). */
+export type NavLead = { lead_id: string | null }
 
-/** A row of projectNav.children, a live sub-project. */
-export type NavChildRow = NavProject & { parent_id: string }
+/** A row of projectNav.page, a top-level project with its own lead, and
+ * with whether it is one of its seat's favorites by the reader rule
+ * (model/projectFavorites.ts). */
+export type NavPageRow = NavProject & NavLead & { favorite: boolean }
+
+/** A row of projectNav.children, a live sub-project with its own lead. */
+export type NavChildRow = NavProject & NavLead & { parent_id: string }
 
 /** One batch of a navigation list (lib/namedPages.ts ListBatch): `next`
  * null at the end, and `stopped` where the read budget ended it before it
@@ -324,6 +333,12 @@ const navProject = (p: Doc<'projects'>): NavProject => ({
   org_id: p.org_id,
   name: p.name,
   num: p.num,
+})
+
+/* `p` as a row of a navigation list, with its own lead. */
+const navListed = (p: Doc<'projects'>): NavProject & NavLead => ({
+  ...navProject(p),
+  lead_id: p.lead_id ?? null,
 })
 
 /* ------------------------------------------------------------ the cursors */
@@ -1100,7 +1115,7 @@ export async function navPageOf(
       await guard.settle()
       if (project === null || kept.has(project.id)) return null
       kept.add(project.id)
-      return { ...navProject(project), favorite: !reach }
+      return { ...navListed(project), favorite: !reach }
     }
     const batch = await listBatch(ctx, ask, {
       stream: (reads) => mergeNamed<PageRow>([...streams, ...rests].map((stream) => stream(reads))),
@@ -1204,7 +1219,7 @@ export async function navChildrenOf(
       await guard.settle()
       if (!sees) return null
       kept.add(sub.id)
-      return { ...navProject(sub), parent_id: project.id }
+      return { ...navListed(sub), parent_id: project.id }
     }
     const batch = await listBatch(ctx, ask, { stream, keep, limit: LIST_BATCH, ceiling })
     return { state: 'ok', ...batch }
@@ -1602,7 +1617,7 @@ async function navTeamOf(
       const open = await opened(sight, project)
       await guard.settle()
       if (open === null) return null
-      return { ...navProject(project), favorite: false, parent_id: open.parent?.id ?? null }
+      return { ...navListed(project), favorite: false, parent_id: open.parent?.id ?? null }
     }
     const batch = await listBatch(ctx, ask, { stream, keep, limit: LIST_BATCH, ceiling })
     return { state: 'ok', ...batch }
@@ -2005,13 +2020,15 @@ function targetStream(
 
 /** A row of projectNav.search, a top-level project with its favorite
  * state and no parent, or a sub-project with its parent and no favorite
- * state, as projectNav.resolve answers one project. */
-export type NavSearchRow = NavProject & {
-  /** the top-level project above a sub-project, null for a top-level one */
-  parent: NavProject | null
-  /** a top-level project's favorite state, null for a sub-project */
-  favorite: boolean | null
-}
+ * state, as projectNav.resolve answers one project, each with its own
+ * lead. */
+export type NavSearchRow = NavProject &
+  NavLead & {
+    /** the top-level project above a sub-project, null for a top-level one */
+    parent: NavProject | null
+    /** a top-level project's favorite state, null for a sub-project */
+    favorite: boolean | null
+  }
 
 /** What projectNav.search answers. Its unavailable answer always carries
  * access_unchecked, as the search names no project. */
@@ -2302,18 +2319,18 @@ async function searchShows(
 ): Promise<NavSearchRow | null> {
   if ('profile_id' in row) {
     const p = await favoriteShows(sight, row)
-    return p === null ? null : { ...navProject(p), parent: null, favorite: true }
+    return p === null ? null : { ...navListed(p), parent: null, favorite: true }
   }
   if ('grantee_kind' in row) {
     if (row.kind === 'root') {
       const p = await restShows(ctx, sight, row)
-      return p === null ? null : { ...navProject(p), parent: null, favorite: false }
+      return p === null ? null : { ...navListed(p), parent: null, favorite: false }
     }
     const shown = await childRowShows(sight, row)
     if (shown === null) return null
-    return { ...navProject(shown.project), parent: navProject(shown.parent), favorite: null }
+    return { ...navListed(shown.project), parent: navProject(shown.parent), favorite: null }
   }
   const parent = row.parent_id === undefined ? undefined : parents.get(row.parent_id)
   if (parent === undefined || !(await inheritedShows(sight, parent, row))) return null
-  return { ...navProject(row), parent: navProject(parent), favorite: null }
+  return { ...navListed(row), parent: navProject(parent), favorite: null }
 }

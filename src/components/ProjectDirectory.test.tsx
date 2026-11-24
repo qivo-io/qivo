@@ -4,6 +4,7 @@ import { ConvexError } from 'convex/values'
 import { Activity, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isPeopleSettingsRead, peopleSettingsServer } from '../store/peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import {
   answerProjectNav,
@@ -19,8 +20,10 @@ import { TooltipProvider } from './ui/tooltip'
 
 /* The All projects directory (components/ProjectDirectory.tsx) on the real
    store, with the navigation reads and the star answered by their stand-in
-   (store/projectNavStandIn.setup.ts) from the workspace the test holds, and
-   a project's settings by theirs (store/projectSettingsStandIn.setup.ts).
+   (store/projectNavStandIn.setup.ts) from the workspace the test holds, a
+   project's settings by theirs (store/projectSettingsStandIn.setup.ts) and
+   the leads' people.byIds by Settings' people stand-in
+   (store/peopleSettingsStandIn.setup.ts).
    The person holds a user seat in Testbed Labs with a grant on each
    top-level project a case plants, and with `partner` a user seat in
    Partner Co. A star goes through the store to a mutation double that
@@ -168,9 +171,11 @@ async function load(next: Snapshot) {
   refuseStar = undefined
   whole = null
   const settings = projectSettingsServer(() => snap)
+  const people = peopleSettingsServer(() => snap)
   network.onUpdate.mockImplementation((ref, args, receive, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, receive, fail)
+    if (isPeopleSettingsRead(name)) return people.watch(name, args, receive, fail)
     const s: Sub = { name, args, next: receive, fail, open: true }
     subs.push(s)
     if (isProjectNavRead(name)) {
@@ -949,12 +954,24 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     await click(find('[data-directory-open]', row(late)))
     expect(actions.openProject).toHaveBeenLastCalledWith(late)
     expect(resolves()).toEqual([])
-    // People & settings names the project
-    const people = [...row(plan).querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('People & settings'),
-    )
-    await click(people)
+    // the menu's Project settings names the project
+    await click(find('[data-directory-menu]', row(plan)))
+    await click(find('[data-directory-settings]'))
     expect(actions.openSettings).toHaveBeenCalledWith(`project:${plan}`)
+  })
+
+  it('opens a project on a press on its lead, and not on the press that ends a text selection there', async () => {
+    const next0 = base()
+    const plan = top(next0, 'Plan')
+    await load(next0)
+    await render()
+    const lead = find('[data-directory-lead]', row(plan))
+    window.getSelection()?.selectAllChildren(row(plan))
+    await click(lead)
+    expect(actions.openProject).not.toHaveBeenCalled()
+    window.getSelection()?.removeAllRanges()
+    await click(lead)
+    expect(actions.openProject).toHaveBeenCalledWith(plan)
   })
 
   it('goes back to the top on a page move', async () => {
@@ -971,7 +988,7 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     expect(list.scrollTop).toBe(0)
   })
 
-  it('offers New sub-project… after Archived tasks once the project’s settings allow it', async () => {
+  it('offers Project settings and Archived tasks, and New sub-project… last once the project’s settings allow it', async () => {
     const next0 = base()
     const led = top(next0, 'Led by me')
     const ledRow = next0.projects.find((p) => p.id === led)
@@ -989,13 +1006,78 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
       await settle()
       const menu = find('[data-slot="popover-content"]')
       const out = [...menu.querySelectorAll('button')].map((b) => b.textContent?.trim())
-      await click([...menu.querySelectorAll('button')][0])
+      await click([...menu.querySelectorAll('button')][1])
       return out
     }
-    expect(await items(led)).toEqual(['Archived tasks', 'New sub-project…'])
+    expect(await items(led)).toEqual(['Project settings', 'Archived tasks', 'New sub-project…'])
     expect(actions.openArchivedTasks).toHaveBeenCalledWith(led)
-    expect(await items(granted)).toEqual(['Archived tasks'])
-    expect(await items(late)).toEqual(['Archived tasks', 'New sub-project…'])
+    expect(await items(granted)).toEqual(['Project settings', 'Archived tasks'])
+    expect(await items(late)).toEqual(['Project settings', 'Archived tasks', 'New sub-project…'])
+  })
+})
+
+describe('the lead', { timeout: 60_000 }, () => {
+  /** Adds a person of organization `org` to `next`, whom the workspace
+      does not hold, answering their id. */
+  function person(next: Snapshot, org: string, name: string) {
+    const id = crypto.randomUUID()
+    next.profiles.push({
+      ...next.profiles[0],
+      id,
+      org_id: org,
+      auth_user_id: undefined,
+      name,
+      initials: name.slice(0, 2).toUpperCase(),
+      org_role: 'user',
+    })
+    return id
+  }
+  /** Project `id`'s lead becomes `lead`, or none. */
+  function leads(next: Snapshot, id: string, lead: string | undefined) {
+    const p = next.projects.find((x) => x.id === id)
+    if (!p) throw new Error('no project')
+    p.lead_id = lead
+  }
+  /** Lets the people's answer land, which the store paints in its next
+      frame. */
+  const painted = async () => {
+    await settle()
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await settle()
+  }
+  /** The lead's name the row of `id` shows, '' for an empty cell. */
+  const leadOf = (id: string) =>
+    find('[data-directory-lead]', row(id)).querySelector('[data-directory-lead-name]')
+      ?.textContent ?? ''
+
+  it('names each row’s lead in the row’s organization, and none for no lead or one whose seat is gone', async () => {
+    const next0 = base(true)
+    const ada = person(next0, ORG, 'Ada Lind')
+    const bo = person(next0, ORG, 'Bo Ek')
+    const pia = person(next0, PARTNER, 'Pia Holm')
+    const led = top(next0, 'Led here')
+    leads(next0, led, ada)
+    const kid = sub(next0, led, 'Firmware')
+    leads(next0, kid, bo)
+    const none = top(next0, 'Nobody leads')
+    leads(next0, none, undefined)
+    const partnered = top(next0, 'Partner work', { org: PARTNER })
+    leads(next0, partnered, pia)
+    // a lead whose seat Testbed Labs no longer holds
+    const gone = top(next0, 'Lead gone')
+    leads(next0, gone, crypto.randomUUID())
+    await load(next0)
+    await render()
+    await painted()
+    expect(leadOf(led)).toBe('Ada Lind')
+    expect(leadOf(partnered)).toBe('Pia Holm')
+    expect(leadOf(none)).toBe('')
+    expect(leadOf(gone)).toBe('')
+    // a sub-project's row names its own lead
+    await click(find('[data-directory-expand]', row(led)))
+    await painted()
+    const child = find(`[data-directory-child="${kid}"]`).closest('.directory-child')
+    expect(child?.querySelector('[data-directory-lead-name]')?.textContent).toBe('Bo Ek')
   })
 })
 

@@ -106,7 +106,7 @@ html[data-appearance] .workspace-shell > .planner-sidebar {
   font-size: var(--fs-sm);
   font-weight: 600;
 }
-@media (min-width: 761px) {
+@media not all and (max-width: 760px) {
   /* Match Roadmap's 24px space below Team. Keep this outside the scrolling
      content so tall panels and Board's pinned feet stop above the window. */
   .workspace-shell {

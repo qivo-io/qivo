@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
    must hold no label button, which WebKit paints as an empty field. */
 const customizable =
   typeof CSS !== 'undefined' && CSS.supports('appearance', 'base-select')
-    ? window.matchMedia('(min-width: 761px)')
+    ? window.matchMedia('not all and (max-width: 760px)')
     : null
 const subscribeCustomizable = (change: () => void) => {
   customizable?.addEventListener('change', change)
