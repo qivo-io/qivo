@@ -110,6 +110,16 @@ export function weekToDate(w: number): Date {
   return dayStart(d.getFullYear(), d.getMonth(), d.getDate() + Math.round(w * 7))
 }
 
+/** The weeks of `w0`..`w1`, the first excepted, whose first day opens a
+    month. */
+export function monthStartWeeks(w0: number, w1: number): ReadonlySet<number> {
+  const out = new Set<number>()
+  for (let w = w0 + 1; w <= w1; w++) {
+    if (weekToDate(w).getMonth() !== weekToDate(w - 1).getMonth()) out.add(w)
+  }
+  return out
+}
+
 export const MONTHS = [
   'Jan',
   'Feb',
