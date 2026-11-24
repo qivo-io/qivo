@@ -412,6 +412,8 @@ describe('the picker', () => {
         },
       )
       expect(state()).toBe('unavailable')
+      // the sentence asks for support, so the title asks for no new pick
+      expect(title()).toBe("Couldn't open this meeting")
       expect(document.body.textContent).toContain(
         'Qivo could not check all of your access in time.',
       )
