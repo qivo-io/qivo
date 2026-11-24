@@ -304,7 +304,7 @@ describe('the picker', () => {
     async () => {
       const { board, calls } = await open(people({}), () => ({ scope: 'team:gone', step: 'team' }))
       expect(state()).toBe('unavailable')
-      expect(title()).toBe('Select project')
+      expect(title()).toBe('Select a team or project')
       expect(document.querySelector('[data-sync-scope]')?.textContent).toContain('Choose a scope')
       // the refused scope is never read as All projects
       expect(asked(board)).toEqual([{ kind: 'team', team_id: 'gone' }])
@@ -319,7 +319,7 @@ describe('the picker', () => {
         (b) => answerResolve(b, { fail: () => false }),
       )
       expect(state()).toBe('choose')
-      expect(title()).toBe('Select project')
+      expect(title()).toBe('Select a team or project')
       expect(asked(again.board)).toEqual([])
     },
     BOARD_TEST_TIMEOUT,
@@ -395,7 +395,7 @@ describe('the picker', () => {
       expect([...document.querySelectorAll('button')].some((b) => b.textContent === 'Retry')).toBe(
         true,
       )
-      expect(title()).not.toBe('Select project')
+      expect(title()).not.toBe('Select a team or project')
     },
     BOARD_TEST_TIMEOUT,
   )
