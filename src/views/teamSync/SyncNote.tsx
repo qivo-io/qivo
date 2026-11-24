@@ -189,7 +189,7 @@ const LIMITS_FIRST_BATCH = 25
 /* For a saved or linked team or project the page cannot show. The text
    says what to do next and deliberately not that the scope is missing. */
 const SELECT_TITLE = 'Select project'
-const SELECT_HINT = 'Pick a team or project from the menu above, or one of the choices below.'
+const SELECT_HINT = 'Pick a team or project from the menu above, or a choice below.'
 
 /** The choices of a note, as buttons. */
 function Choices({
