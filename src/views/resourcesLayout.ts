@@ -1,4 +1,4 @@
-/* The sizes of the Roadmap's team heatmap (Resources.tsx), which the Roadmap
+/* The sizes of the Roadmap's Team utilization (Resources.tsx), which the Roadmap
    reads to give the strip its height. */
 
 /** The strip's header height. */

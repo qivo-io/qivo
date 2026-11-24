@@ -156,6 +156,7 @@ const cells = (id: string) =>
       hours: el.dataset.loadHours,
       pct: el.dataset.loadPct,
       paused: el.dataset.loadPaused !== undefined,
+      line: el.querySelector('.rs-load-line') !== null,
       unknown: el.dataset.loadUnknown !== undefined,
       waiting: el.dataset.loadWaiting !== undefined,
       text: el.textContent ?? '',
@@ -324,6 +325,56 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     expect(cells(board.snapshot.profiles[0].id).find((c) => c.week === TODAY_WEEK)?.text).toMatch(
       /^\d+%$/,
     )
+  })
+
+  it('leaves only a week without load blank, and shows paused work as a line even with no figure', async () => {
+    // the store repaints the faces an answer brings in the next frame
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 0))
+    // a person and an agent, each with 4 hours this week and a paused task
+    // two weeks on
+    const board = await loadBoard(network, (snap) => {
+      other(snap, 'agent')
+      const now = { remaining_hours: 4, start_week: week(0), end_week: week(0) }
+      const paused = { paused: true, start_week: week(2), end_week: week(2) }
+      const slight = { remaining_hours: 0.08, start_week: week(3), end_week: week(4) }
+      snap.issues.push({ ...taskRow(snap, 'mine', 'todo', 1), ...now })
+      snap.issues.push({ ...taskRow(snap, 'mine-slight', 'todo', 5), ...slight })
+      snap.issues.push({ ...taskRow(snap, 'mine-paused', 'todo', 2), ...paused })
+      snap.issues.push({ ...taskRow(snap, 'theirs', 'todo', 3), assignee_id: OTHER, ...now })
+      snap.issues.push({
+        ...taskRow(snap, 'theirs-paused', 'todo', 4),
+        assignee_id: OTHER,
+        ...paused,
+      })
+    })
+    await renderRoadmap(board)
+    await act(async () => await new Promise((r) => setTimeout(r, 40)))
+    expect(document.querySelector(`[data-res-row="${OTHER}"] .rs-person-name`)?.textContent).toBe(
+      'Agent',
+    )
+    const at = (id: string, n: number) => {
+      const cell = cells(id).find((c) => c.week === TODAY_WEEK + n)
+      if (!cell) throw new Error(`no week ${n} for ${id}`)
+      return { text: cell.text, line: cell.line, label: cell.label }
+    }
+    const me = board.snapshot.profiles[0].id
+    expect(at(me, 0)).toMatchObject({ text: expect.stringMatching(/^\d+%$/), line: true })
+    expect(at(me, 1)).toMatchObject({ text: '', line: false, label: expect.stringMatching(/0%$/) })
+    expect(at(me, 2)).toMatchObject({ text: '', line: true })
+    // 0.04 of 32 hours is work, though it rounds to 0% and to 0 hours
+    expect(at(me, 3)).toMatchObject({
+      text: '0%',
+      line: true,
+      label: expect.stringMatching(/, under 0\.1 \/ \d+ h, 0%$/),
+    })
+    // an agent's hours stand alone, and its paused week keeps its line too
+    expect(at(OTHER, 0)).toMatchObject({ text: '4 h', line: false })
+    expect(at(OTHER, 1)).toMatchObject({
+      text: '',
+      line: false,
+      label: expect.stringMatching(/0 h$/),
+    })
+    expect(at(OTHER, 2)).toMatchObject({ text: '', line: true })
   })
 
   it("reads a guest's people one call each, the 50 with the most rows, and the rest as unknown", async () => {

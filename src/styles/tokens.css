@@ -164,6 +164,12 @@
   /* An unknown delay (the owner's load could not be read) is the same band
      with a muted block, as the task window's Delay unknown is muted. */
   --delay-banner-unknown-block: color-mix(in oklab, var(--text-3) 70%, transparent);
+  /* Team utilization's load line: a lighter planner blue for ordinary load,
+     and the Board's Slipping and Delayed blocks for a week near and over
+     capacity. */
+  --load-line-normal: color-mix(in oklab, var(--primary) 88%, white);
+  --load-line-near: var(--delay-banner-behind-block);
+  --load-line-over: var(--delay-banner-late-block);
 
   /* Milestone — a date marker, not a status. Shares the violet with "in
      review" and meets it nowhere: one is a diamond on the roadmap's header
@@ -317,6 +323,11 @@
   /* Roadmap group bands a step darker than the white rows. Opaque, so pinned
      headings still cover scrolling rows. */
   --roadmap-group: #eef2f7;
+  /* The load line holds 3:1 on the frosted panel over a dark photo (#e6e6e6
+     at worst): the planned bars' blue rim, and Slipping's amber at a lower
+     OKLCH lightness (0.58), since #d49a00 gives 2.5:1 on white. */
+  --load-line-normal: var(--roadmap-bar-planned-rim);
+  --load-line-near: #a66e00;
 
   /* Component hooks. Shared consumers read their token with a fallback, so
      a palette that sets none keeps the default look:
@@ -327,7 +338,7 @@
      --theme-choice-checked     the chosen theme card
      --status-fill-<status>     Overview status bar segments (dots keep inks)
      --roadmap-bar-<state>-rim  roadmap bar and week-chip rims
-     --heat-*-fill              Team utilization near, over and empty weeks */
+     --heat-*-fill              Team sync's near and over load figures */
   --float-border: rgba(25, 39, 56, 0.28);
   --switch-off: rgba(25, 39, 56, 0.3);
   --theme-choice-checked: color-mix(in srgb, var(--primary) 10%, var(--surface-1));
@@ -343,7 +354,6 @@
   --roadmap-bar-unknown-rim: #6b7684;
   --heat-near-fill: color-mix(in oklab, var(--roadmap-bar-behind) 50%, transparent);
   --heat-over-fill: color-mix(in oklab, var(--roadmap-bar-late) 28%, transparent);
-  --heat-empty-fill: rgba(25, 39, 56, 0.03);
 }
 
 /* Every planner backdrop (dialogs, the palette, the task and focus windows)

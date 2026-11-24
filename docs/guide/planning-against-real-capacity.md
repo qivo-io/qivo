@@ -53,31 +53,38 @@ and auto-fit pauses until Qivo can read it again. That applies to agents too.
 
 ## The Team strip
 
-**Team utilization** sits below the Roadmap on the same weekly grid. People
-and agents appear alphabetically. Each person's cells show their scheduled
-load as a percentage of their own plannable hours, with **0%** for empty weeks.
+**Team utilization** sits below the Roadmap on the same weekly grid, with the
+timeline's week lines. People and agents appear alphabetically. Each person's
+cells show their scheduled load as a percentage of their own plannable hours,
+over a thin line that fills up to 100%. A week without load stays blank, and
+a week whose load is too small to show as a figure reads **0%** over an
+empty line, or **0 h** in a row that shows hours.
 While Qivo reads a person's workload their cells show **…**, and where it
 could not read it, for example past the bounds of one read, a cell says
-**unknown**, never 0%. As a guest or organization Viewer, Qivo reads the
+**unknown**, never blank. As a guest or organization Viewer, Qivo reads the
 workload of the 50 people with the most tasks on the Roadmap, and shows the
 others as unknown.
 Their weekly capacity appears beside their name. New people start with the
 organization default, initially 32 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
 While Qivo loads a person's details their row says **Loading…**, and a
 person whose weekly hours Qivo could not read shows their hours without a
-percentage or color, with **Capacity unknown** beside their name and in the
-cell descriptions. Their row stays in its place until their details
+percentage or line, apart from the dashed line of a week with paused work,
+with **Capacity unknown** beside their name and in the cell descriptions. Their row stays in its place until their details
 arrive.
 
-Blue shows ordinary load, yellow marks **90–100%**, and red marks **over 100%**.
-**100%** fills that person's planning time, which already excludes time
-reserved for meetings and other overhead. Accessible cell descriptions include
-the underlying hours and capacity, such as **16 / 30 h**.
+The line is blue for ordinary load, yellow at **90–100%** and red **over
+100%**. Only the line changes color, never the figure. **100%** fills that
+person's planning time, which already excludes time reserved for meetings and
+other overhead. Accessible cell descriptions include
+the underlying hours and capacity, such as **16 / 30 h**, and say **under
+0.1** for hours too few to show.
 
 A task counts toward its owner's load. In Review tasks with reviewers count
-toward the reviewer. **Paused** tasks contribute no hours but give their
-planned weeks a dashed border. Resuming restores their hours. Agent rows show
-hours only, with no percentage or over-capacity warning.
+toward the reviewer. **Paused** tasks contribute no hours, but in their
+planned weeks the line is dashed, also in a full week and in a week with no
+other load. Resuming restores their hours. Agent rows show
+hours only, with no percentage, line or over-capacity warning, apart from the
+dashed line of a week with paused work.
 
 **All projects / This project** chooses which visible projects contribute
 hours. The toggle is absent in My view. Use the three

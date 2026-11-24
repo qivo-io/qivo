@@ -37,7 +37,7 @@ import { useHolds } from '../components/useHolds'
 import { sortName, usePeople } from '../components/usePeople'
 import { useProjects } from '../components/useProjects'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
-import { isoToWeek, winWeeks } from '../lib/dates'
+import { isoToWeek, monthStartWeeks, winWeeks } from '../lib/dates'
 import { isIssueGroup } from '../lib/issueGroups'
 import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
@@ -83,6 +83,7 @@ import {
   type RoadmapView,
   useRoadmapView,
 } from './roadmap/useRoadmapView'
+import { WeekLines } from './roadmap/WeekLines'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import { useScopeMilestones } from './useScopeMilestones'
 import '../styles/mobile-views.css'
@@ -1962,7 +1963,7 @@ function Roadmap({
   const flagsScroll = flagRows.lanes > flagLanes
   const msBandH = mine ? 0 : flagBandHeight(Math.min(flagRows.lanes, flagLanes))
   const headH = HEAD_PAD_T + WEEK_BAND_H + msBandH
-  // Fit all visible people in the heatmap up to a 620px
+  // Fit all visible people in Team utilization up to a 620px
   // panel. Leave the actual timeline's header, project/sub-project bands and
   // several task rows above it; smaller viewports scroll the remaining people.
   // Header and its rule, the rows, and the panel's two borders.
@@ -1996,11 +1997,8 @@ function Roadmap({
   // a new month, so every month line sits on a week boundary (the window's
   // own left edge is not one). With the month band gone these carry the month
   // rhythm on their own: a solid gridline, and a brighter date in the cell
-  // that opens the month. Same walk the team strip does.
-  const monthStarts = new Set()
-  for (let w = w0 + 1; w <= w1; w++) {
-    if (P.weekToDate(w).getMonth() !== P.weekToDate(w - 1).getMonth()) monthStarts.add(w)
-  }
+  // that opens the month. Team utilization's week lines read the same set.
+  const monthStarts = monthStartWeeks(w0, w1)
   const timelineW = NW * weekW
   const dueX = (iso) =>
     ((P.isoToDate(iso).getTime() - P.weekToDate(w0).getTime()) / 86400000) * (weekW / 7)
@@ -2108,24 +2106,7 @@ function Roadmap({
   const guides = (track: string) => (
     <>
       {resourceWeekHighlight()}
-      {Array.from({ length: NW }).map((_, i) => {
-        // keyed on the WEEK the gridline stands on (the same identity the
-        // week band's cells key on), not the column index
-        const w = w0 + i
-        return i === 0 ? null : monthStarts.has(w) ? (
-          <div
-            key={w}
-            style={{ left: i * weekW }}
-            className="[position:absolute] [top:0] [bottom:0] [width:1px] [background:var(--border-strong)]"
-          />
-        ) : (
-          <div
-            key={w}
-            style={{ left: i * weekW }}
-            className="[position:absolute] [top:0] [bottom:0] [width:0] [border-left:1px_dashed_var(--border)] [opacity:0.6]"
-          />
-        )
-      })}
+      <WeekLines w0={w0} w1={w1} weekW={weekW} monthStarts={monthStarts} />
       {milestonesOf(track)
         .filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
         .map((m) => (
@@ -2821,6 +2802,7 @@ function Roadmap({
             w0={w0}
             w1={w1}
             weekW={weekW}
+            monthStarts={monthStarts}
             labelW={LABEL_W}
             gutter={GUTTER_W}
             height={stripMode === 'max' ? '100%' : stripH}

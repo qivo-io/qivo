@@ -81,10 +81,10 @@
   },
   "src/views/Resources.tsx": {
     "count": 2,
-    "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
+    "reason": "shared timeline/panel geometry and each week's load-line fill; weekly grid presentation is scoped in Resources.css"
   },
   "src/views/Roadmap.tsx": {
-    "count": 24,
+    "count": 22,
     "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, the milestone flag band's computed height, a track row's milestone box height, and persisted colors"
   },
   "src/views/overview/StatusBar.tsx": {
@@ -102,5 +102,9 @@
   "src/views/roadmap/TimelineRow.tsx": {
     "count": 10,
     "reason": "fixed row geometry and intrinsic offscreen height, sticky offsets, drag/date coordinates, and task state colors"
+  },
+  "src/views/roadmap/WeekLines.tsx": {
+    "count": 2,
+    "reason": "week line positions on the timeline's computed week width"
   }
 }

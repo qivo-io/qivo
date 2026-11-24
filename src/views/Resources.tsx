@@ -1,4 +1,4 @@
-/* The Roadmap's weekly team heatmap. Its people are the owners of the tasks
+/* The Roadmap's weekly Team utilization. Its people are the owners of the tasks
  * the Roadmap shows, and each person's hours come from the server's owner
  * loads through the owner-load cache (planning.ownerLoads, P.ownerItems),
  * reconciled by task with the rows this person holds, so a pending edit
@@ -10,13 +10,14 @@
  * Both panes always share the Roadmap's week width, gutters and scroll origin.
  * Every row is one line — the capacity beside the name, one value per cell —
  * so a panel of a given height shows more people; the scheduled / capacity
- * hours live in each cell's accessible description. Paused tasks add no load,
- * and any week one of them is planned in wears a dashed border, whatever its
- * size. A person whose load is still on its way shows "…" in every cell, and
- * one whose load could not be read, came back past the reader's bounds or
- * past a guest's or Viewer's cap of people, or from a backend that sent no
- * projects or paused list, shows "unknown", never a percentage, so missing
- * work never reads as free time. */
+ * hours live in each cell's accessible description. A week without load
+ * shows nothing. Paused tasks add no load, and in any week one of them is
+ * planned in the whole load line is dashed, whatever the pause's size and
+ * the week's load. A person whose load is still on its
+ * way shows "…" in every cell, and one whose load could not be read, came
+ * back past the reader's bounds or past a guest's or Viewer's cap of people,
+ * or from a backend that sent no projects or paused list, shows "unknown",
+ * never a percentage, so missing work never reads as free time. */
 import { type CSSProperties, type Ref, useEffect, useMemo, useRef, useState } from 'react'
 import { Avatar, Icon, Seg } from '../components/qivo'
 import { Button } from '../components/ui/button'
@@ -32,6 +33,7 @@ import {
 import { P, type PersonView, type ScopeInfo } from '../store/planner'
 import type { OwnerItem } from '../store/viewDelay'
 import { CAPACITY_UNKNOWN, capacityOf } from './capacity'
+import { WeekLines } from './roadmap/WeekLines'
 import './Resources.css'
 
 /** A person's place in Team utilization: their id and organization, how
@@ -102,6 +104,8 @@ type Props = {
   w0: number
   w1: number
   weekW: number
+  /** the timeline's month-start weeks, which its week lines are drawn from */
+  monthStarts: ReadonlySet<number>
   labelW: number
   gutter?: number
   height: number | string
@@ -129,6 +133,7 @@ function ResourceStrip({
   w0,
   w1,
   weekW,
+  monthStarts,
   labelW,
   gutter = 0,
   height,
@@ -226,11 +231,12 @@ function ResourceStrip({
     if (!f || f.state === 'waiting') return `${P.weekLabel(week)}, Loading workload`
     if (f.state === 'unknown') return `${P.weekLabel(week)}, workload unknown`
     const h = f.hours.get(week) ?? 0
+    const hours = h > 0 && fmtHours(h) === '0' ? 'under 0.1' : fmtHours(h)
     const cap = capById.get(id) ?? null
-    if (cap === null) return `${P.weekLabel(week)}, ${fmtHours(h)} h, ${CAPACITY_UNKNOWN}`
+    if (cap === null) return `${P.weekLabel(week)}, ${hours} h, ${CAPACITY_UNKNOWN}`
     return hasPlannableWeek(cap)
-      ? `${P.weekLabel(week)}, ${fmtHours(h)} / ${fmtHours(cap)} h, ${Math.round((h / cap) * 100)}%`
-      : `${P.weekLabel(week)}, ${fmtHours(h)} h`
+      ? `${P.weekLabel(week)}, ${hours} / ${fmtHours(cap)} h, ${Math.round((h / cap) * 100)}%`
+      : `${P.weekLabel(week)}, ${hours} h`
   }
   const description = (p: TeamPerson, f: Figures | undefined, week: number) =>
     `${personLabel(p.person, 'Unknown user')}, ${measurement(p.id, f, week)}${f?.state === 'ok' && f.paused.has(week) ? ', includes paused work' : ''}`
@@ -383,6 +389,8 @@ function ResourceStrip({
                         const raw = known?.hours.get(w) ?? 0
                         const pct =
                           bounded && known ? Math.round((raw / (capacity as number)) * 100) : null
+                        const loaded = raw > 0
+                        const paused = known?.paused.has(w) ?? false
                         return (
                           <Button
                             type="button"
@@ -436,17 +444,24 @@ function ResourceStrip({
                                 data-load-box={w}
                                 data-load-pct={pct ?? undefined}
                                 data-load-hours={Math.round(raw * 10) / 10}
-                                data-load-paused={known.paused.has(w) || undefined}
-                                style={
-                                  {
-                                    '--res-heat': `${Math.min(24, 4 + (pct ?? 0) * 0.16)}%`,
-                                  } as CSSProperties
-                                }
+                                data-load-paused={paused || undefined}
                               >
-                                <strong>{bounded ? `${pct}%` : `${fmtHours(raw)} h`}</strong>
+                                {loaded && (
+                                  <strong>{bounded ? `${pct}%` : `${fmtHours(raw)} h`}</strong>
+                                )}
+                                {(paused || (bounded && loaded)) && (
+                                  <span
+                                    className="rs-load-line"
+                                    style={
+                                      {
+                                        '--rs-load': `${Math.min(100, pct ?? 0)}%`,
+                                      } as CSSProperties
+                                    }
+                                  />
+                                )}
                               </span>
                             ) : (
-                              // no figure, no heat and no paused mark: a load
+                              // no figure, no line and no paused mark: a load
                               // that is not there is never free time
                               <span
                                 className="rs-heat-value rs-heat-unknown"
@@ -465,6 +480,9 @@ function ResourceStrip({
                   </div>
                 )
               })}
+              <div className="rs-week-lines" aria-hidden="true">
+                <WeekLines w0={w0} w1={w1} weekW={weekW} monthStarts={monthStarts} />
+              </div>
             </div>
           )}
         </div>
