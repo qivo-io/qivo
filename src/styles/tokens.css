@@ -639,7 +639,7 @@ textarea {
   background-size: 12px 12px;
 }
 @supports (appearance: base-select) {
-  @media (min-width: 761px) {
+  @media not all and (max-width: 760px) {
     [data-slot="native-select"],
     [data-slot="native-select"]::picker(select) {
       appearance: base-select;
