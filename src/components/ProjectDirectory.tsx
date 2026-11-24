@@ -135,6 +135,10 @@ const leadOf = (row: NavProject & NavLead): NamedPerson => ({
 })
 const NO_LEADS: NamedPerson[] = []
 
+/* A drag that selects text in a row ends in a click on the row, which must
+   not open it. */
+const selectsText = () => window.getSelection()?.isCollapsed === false
+
 function Lead({ row }: { row: NavProject & NavLead }) {
   const lead = P.person(row.lead_id, row.org_id)
   const shown = lead && lead.state !== 'gone' ? lead : null
@@ -412,7 +416,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     const org = foreignOrg(row.org_id)
     return (
       <div key={row.id} className="directory-item" data-directory-row={row.id}>
-        <div className="directory-line" onClick={() => open(row)}>
+        <div className="directory-line" onClick={() => selectsText() || open(row)}>
           <Button
             variant="ghost"
             size="icon"
@@ -483,7 +487,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
         data-directory-row={row.id}
         data-directory-parent={up.id}
       >
-        <div className="directory-line" onClick={() => open(row)}>
+        <div className="directory-line" onClick={() => selectsText() || open(row)}>
           <span />
           <Button
             variant="unstyled"
@@ -798,7 +802,7 @@ function SubProjects({
             <div
               key={r.id}
               className="directory-line directory-child planner-subproject"
-              onClick={() => onOpen(r)}
+              onClick={() => selectsText() || onOpen(r)}
             >
               <span />
               <Button

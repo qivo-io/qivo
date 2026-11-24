@@ -960,6 +960,20 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     expect(actions.openSettings).toHaveBeenCalledWith(`project:${plan}`)
   })
 
+  it('opens a project on a press on its lead, and not on the press that ends a text selection there', async () => {
+    const next0 = base()
+    const plan = top(next0, 'Plan')
+    await load(next0)
+    await render()
+    const lead = find('[data-directory-lead]', row(plan))
+    window.getSelection()?.selectAllChildren(row(plan))
+    await click(lead)
+    expect(actions.openProject).not.toHaveBeenCalled()
+    window.getSelection()?.removeAllRanges()
+    await click(lead)
+    expect(actions.openProject).toHaveBeenCalledWith(plan)
+  })
+
   it('goes back to the top on a page move', async () => {
     const next0 = base()
     for (let n = 0; n < 12; n++) top(next0, named(n))
