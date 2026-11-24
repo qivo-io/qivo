@@ -304,7 +304,7 @@ describe('the picker', () => {
     async () => {
       const { board, calls } = await open(people({}), () => ({ scope: 'team:gone', step: 'team' }))
       expect(state()).toBe('unavailable')
-      expect(title()).toBe('This team or project is not available')
+      expect(title()).toBe('Select project')
       expect(document.querySelector('[data-sync-scope]')?.textContent).toContain('Choose a scope')
       // the refused scope is never read as All projects
       expect(asked(board)).toEqual([{ kind: 'team', team_id: 'gone' }])
@@ -319,7 +319,7 @@ describe('the picker', () => {
         (b) => answerResolve(b, { fail: () => false }),
       )
       expect(state()).toBe('choose')
-      expect(title()).toBe('This team or project is not available')
+      expect(title()).toBe('Select project')
       expect(asked(again.board)).toEqual([])
     },
     BOARD_TEST_TIMEOUT,
@@ -350,7 +350,7 @@ describe('the picker', () => {
           })
         },
       )
-      // never "not available" while the number resolves
+      // never asks to select a project while the number resolves
       expect(document.querySelector('[data-sync-note="resolving"]')).not.toBeNull()
       expect(title()).toBe('Opening the project…')
       await act(async () => (answer as (() => void) | null)?.())
@@ -395,7 +395,7 @@ describe('the picker', () => {
       expect([...document.querySelectorAll('button')].some((b) => b.textContent === 'Retry')).toBe(
         true,
       )
-      expect(title()).not.toBe('This team or project is not available')
+      expect(title()).not.toBe('Select project')
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -412,6 +412,8 @@ describe('the picker', () => {
         },
       )
       expect(state()).toBe('unavailable')
+      // the sentence asks for support, so the title asks for no new pick
+      expect(title()).toBe("Couldn't open this meeting")
       expect(document.body.textContent).toContain(
         'Qivo could not check all of your access in time.',
       )

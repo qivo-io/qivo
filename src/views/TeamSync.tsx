@@ -480,8 +480,8 @@ export function TeamSync({
   // scope, its facts seeded, so the page never asks to choose a project the
   // person can open. While it resolves the page says it is opening the
   // project; a failed resolve and the access_unchecked refusal say so with
-  // Retry, which asks again (`tries`), and only an unavailable answer says
-  // the project is not available.
+  // Retry, which asks again (`tries`), and only an unavailable answer asks
+  // to select a project.
   const asked = scope.kind === 'unresolved' ? syncProjectNumber(scope.segment) : null
   const askedNum = asked?.num ?? null
   const askedOrg = asked ? (asked.org_id ?? P.homeOrg) : ''
