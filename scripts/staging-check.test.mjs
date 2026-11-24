@@ -212,6 +212,7 @@ import {
   TOAST_HOST,
   taskPages,
   threadFitsBudget,
+  tookMutation,
   typeSearch,
   UPLOAD_STEP,
   WAITS,
@@ -414,6 +415,14 @@ describe('staging check REST contract', () => {
       ].join('\n'),
     )
     expect(cleanup).not.toMatch(/\brest\(w, 'DELETE'/)
+  })
+  it('counts a save as taken only on the answer that says the deployment ran it', () => {
+    const answer = (fields) => JSON.stringify({ type: 'MutationResponse', requestId: 7, ...fields })
+    expect(tookMutation(answer({ success: true, result: null }), 7)).toBe(true)
+    // a refused save, and the answer to another request, restore nothing
+    expect(tookMutation(answer({ success: false, result: 'no' }), 7)).toBe(false)
+    expect(tookMutation(answer({ success: true, result: null }), 8)).toBe(false)
+    expect(tookMutation('not json', 7)).toBe(false)
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     // the window and its section part, which the Overview and the phone

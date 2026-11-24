@@ -9325,6 +9325,21 @@ export const ROSTER_READS = {
  *  save). */
 const PREFS_SAVE_MUTATION = 'prefs:save'
 
+/** Whether frame `text`, a message the page received on its sync socket,
+ *  says the deployment ran the mutation of request `requestId`. */
+export function tookMutation(text, requestId) {
+  try {
+    const message = JSON.parse(text)
+    return (
+      message?.type === 'MutationResponse' &&
+      message.requestId === requestId &&
+      message.success === true
+    )
+  } catch {
+    return false
+  }
+}
+
 /** The workspace without its people and catalog parts on the deployment,
  *  as Nora. A fresh load of M's Board passes no subscription of
  *  REMOVED_PARTS on its sync socket, and the store holds Nora's own seats
@@ -9360,7 +9375,11 @@ async function rosterPartsCheck() {
     expect(leo, `the organization has no ${OWNER_PICKERS_PERSON}`)
     const team = await restOk(w, 'GET', `/teams/${run.team.id}`)
     const sent = []
-    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    const answers = []
+    const record = (ws) => {
+      ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+      ws.on('framereceived', (frame) => answers.push(String(frame.payload)))
+    }
     app.on('websocket', record)
     const board = `${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`
     let filtered = false
@@ -9372,23 +9391,28 @@ async function rosterPartsCheck() {
     // so her earlier pick goes back, or none where she had none.
     const restorePick = async () => {
       const from = sent.length
+      const answeredFrom = answers.length
       await evaluate(
         app,
         (scope) => window.PLANNER.saveUINow({ teamSyncScope: scope ?? undefined }),
         earlier,
       )
-      let saved
+      // Request ids start again with each page, so only answers received
+      // since this save count. A save of the pick itself can go out again
+      // after a reconnect, so the save is found by the scope it holds.
+      const taken = () => {
+        const save = sent.slice(from).find((f) => {
+          const args = sentMutation(f, PREFS_SAVE_MUTATION)
+          return args?.profile_id === run.nora.id && (args.prefs?.teamSyncScope ?? null) === earlier
+        })
+        if (save === undefined) return false
+        const request = mutationRequest(save, PREFS_SAVE_MUTATION)
+        return answers.slice(answeredFrom).some((f) => tookMutation(f, request))
+      }
       expect(
-        await until(async () => {
-          saved = sent
-            .slice(from)
-            .map((f) => sentMutation(f, PREFS_SAVE_MUTATION))
-            .find(Boolean)
-          return saved !== undefined
-        }, 30_000),
-        "Nora's earlier Team sync scope was not saved again",
+        await until(async () => taken(), 30_000),
+        "the deployment did not save Nora's earlier Team sync scope again",
       )
-      eq(saved.prefs?.teamSyncScope ?? null, earlier, "Nora's Team sync scope after the step")
       unrestored = false
     }
     try {
@@ -9512,14 +9536,13 @@ async function rosterPartsCheck() {
       )
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.teams)).length > 0, true, 'the scope read')
       earlier = await evaluate(app, () => window.PLANNER.loadUI().teamSyncScope ?? null)
-      // a team that is gone, as a run before this restore left one, is no
-      // scope of hers to put back
+      // a saved team that no longer exists is no scope to put back
       const savedTeam = /^team:(.+)$/.exec(earlier ?? '')?.[1]
-      if (
-        savedTeam &&
-        (await rest(w, 'GET', `/teams/${encodeURIComponent(savedTeam)}`)).status === 404
-      )
-        earlier = null
+      if (savedTeam) {
+        const found = await rest(w, 'GET', `/teams/${encodeURIComponent(savedTeam)}`)
+        if (found.status === 404) earlier = null
+        else eq(found.status, 200, "the read of Nora's saved Team sync team")
+      }
       const picked = sent.length
       await pick.click()
       scoped = true
@@ -9550,7 +9573,13 @@ async function rosterPartsCheck() {
           .goto(board, { waitUntil: 'domcontentloaded' })
           .then(() => app.locator('[data-filter-x="assignee"]').first().click({ timeout: 30_000 }))
           .catch(() => {})
-      if (unrestored) await restorePick().catch(() => {})
+      // a scope the step could not put back goes as a check of its own, so
+      // the run counts it among its failures
+      if (unrestored)
+        await check(`${ROSTER_PARTS_STEP}/restore`, async () => {
+          await restorePick()
+          return "saved Nora's earlier Team sync scope again after the step failed"
+        })
       if (scoped)
         await app
           .goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
