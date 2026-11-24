@@ -88,6 +88,129 @@
   padding: 0 4px;
 }
 
+/* The desktop All projects page: one panel of rows, in the material of the
+   Overview's and Settings' panels. Every line shares one grid (the arrow,
+   the name, the lead, the star and menu), so the Project and Lead header,
+   the rows and the expanded sub-projects line up. The panel is as wide as
+   a readable name column and the Lead column need. */
+@media (min-width: 761px) {
+  .mobile-project-directory {
+    padding: 0 20px 24px;
+  }
+  .directory-panel {
+    width: 100%;
+    max-width: 960px;
+    margin-inline: auto;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--workspace-panel, var(--surface-1));
+    box-shadow: var(--workspace-panel-shadow);
+    -webkit-backdrop-filter: var(--workspace-panel-blur);
+    backdrop-filter: var(--workspace-panel-blur);
+  }
+  .directory-line {
+    display: grid;
+    grid-template-columns: var(--ctl-sm) minmax(160px, 1fr) minmax(0, 200px) 66px;
+    align-items: center;
+    column-gap: 4px;
+    min-height: 40px;
+    padding: 0 4px;
+    border-radius: var(--r-md);
+  }
+  .directory-item > .directory-line,
+  .directory-child {
+    cursor: pointer;
+  }
+  @media (hover: hover) {
+    .directory-item > .directory-line:hover,
+    .directory-child:hover {
+      background: var(--hover);
+    }
+  }
+  .directory-item + .directory-item {
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+  .directory-head {
+    min-height: 32px;
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+  }
+  .directory-head-name {
+    padding-left: 4px;
+  }
+  .directory-panel > .directory-group {
+    padding: 12px 8px 4px;
+    color: var(--text-2);
+  }
+  .directory-open {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-self: start;
+    column-gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 8px 4px;
+    border-radius: var(--r-md);
+    color: var(--text-1);
+    line-height: 20px;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .directory-open:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+    outline: 2px solid var(--primary);
+    outline-offset: 0;
+  }
+  .directory-lead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding-left: 12px;
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+  .directory-head > .directory-lead {
+    color: inherit;
+    font-size: inherit;
+  }
+  .directory-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+  }
+  /* A sub-project's line carries the sidebar's branch lines, drawn from
+     under the start of its project's name. */
+  .directory-children {
+    padding-bottom: 6px;
+  }
+  .directory-child {
+    position: relative;
+    min-height: 32px;
+  }
+  .directory-child.planner-subproject::before,
+  .directory-child.planner-subproject::after {
+    left: 46px;
+  }
+  .directory-panel .directory-child > .directory-open {
+    margin-left: 18px;
+    padding: 4px;
+  }
+  .directory-children > :not(.directory-child) {
+    margin-left: 58px;
+  }
+  .directory-panel > .settings-page-fold {
+    padding: 8px 8px 0;
+  }
+  .directory-panel > .settings-page-fold:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+}
+
 @media (max-width: 760px) {
   :root {
     --ctl-xs: 44px;
