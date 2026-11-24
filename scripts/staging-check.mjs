@@ -776,9 +776,11 @@ export const failedShot = (id) => `failed-${id.replaceAll('/', '-')}`
  *  next check and goes on to cleanup. A second signal exits at once. */
 let interrupted = false
 
-/** Runs one check and records PASS or FAIL. The run continues either way. */
-async function check(id, fn) {
-  if (interrupted) throw new Abort('interrupted by a signal')
+/** Runs one check and records PASS or FAIL. The run continues either way.
+ *  After a signal it throws without running `fn`, unless `afterSignal`
+ *  says the check undoes something the step must not leave behind. */
+async function check(id, fn, { afterSignal = false } = {}) {
+  if (interrupted && !afterSignal) throw new Abort('interrupted by a signal')
   try {
     const note = await fn()
     results.pass++
@@ -9399,15 +9401,21 @@ async function rosterPartsCheck() {
       )
       // Request ids start again with each page, so only answers received
       // since this save count. A save of the pick itself can go out again
-      // after a reconnect, so the save is found by the scope it holds.
+      // after a reconnect, so a save is found by the scope it holds, and
+      // the app sends a refused save again, so any of them may be taken.
       const taken = () => {
-        const save = sent.slice(from).find((f) => {
-          const args = sentMutation(f, PREFS_SAVE_MUTATION)
-          return args?.profile_id === run.nora.id && (args.prefs?.teamSyncScope ?? null) === earlier
-        })
-        if (save === undefined) return false
-        const request = mutationRequest(save, PREFS_SAVE_MUTATION)
-        return answers.slice(answeredFrom).some((f) => tookMutation(f, request))
+        const requests = sent
+          .slice(from)
+          .filter((f) => {
+            const args = sentMutation(f, PREFS_SAVE_MUTATION)
+            return (
+              args?.profile_id === run.nora.id && (args.prefs?.teamSyncScope ?? null) === earlier
+            )
+          })
+          .map((f) => mutationRequest(f, PREFS_SAVE_MUTATION))
+        return answers
+          .slice(answeredFrom)
+          .some((f) => requests.some((request) => tookMutation(f, request)))
       }
       expect(
         await until(async () => taken(), 30_000),
@@ -9574,12 +9582,17 @@ async function rosterPartsCheck() {
           .then(() => app.locator('[data-filter-x="assignee"]').first().click({ timeout: 30_000 }))
           .catch(() => {})
       // a scope the step could not put back goes as a check of its own, so
-      // the run counts it among its failures
+      // the run counts it among its failures, and also after a signal, as
+      // the run's cleanup then deletes the team the scope names
       if (unrestored)
-        await check(`${ROSTER_PARTS_STEP}/restore`, async () => {
-          await restorePick()
-          return "saved Nora's earlier Team sync scope again after the step failed"
-        })
+        await check(
+          `${ROSTER_PARTS_STEP}/restore`,
+          async () => {
+            await restorePick()
+            return "saved Nora's earlier Team sync scope again after the step failed"
+          },
+          { afterSignal: true },
+        )
       if (scoped)
         await app
           .goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
