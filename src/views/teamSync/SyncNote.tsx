@@ -325,11 +325,21 @@ export function SyncNote({
         />
       )
     case 'unavailable':
-      return (
+      // the server's sentence asks for support, so its title asks for no pick
+      return meeting.message ? (
+        <ChoiceNote
+          state="unavailable"
+          icon="alert"
+          title="Couldn't open this meeting"
+          hint={meeting.message}
+          choices={pickerChoices()}
+          onPick={onPick}
+        />
+      ) : (
         <ChoiceNote
           state="unavailable"
           title={SELECT_TITLE}
-          hint={meeting.message ?? SELECT_HINT}
+          hint={SELECT_HINT}
           choices={pickerChoices()}
           onPick={onPick}
         />
