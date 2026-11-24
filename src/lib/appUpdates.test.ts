@@ -285,6 +285,28 @@ describe('safe application updates', () => {
     expect(app.reload).not.toHaveBeenCalled()
   })
 
+  it('tells its caller nothing while the person types, and once when the state changes', async () => {
+    const app = setup()
+    app.safety.blocked = true
+    await app.monitor.check()
+    expect(app.onChange).toHaveBeenCalledOnce()
+    expect(app.state()).toEqual({
+      available: true,
+      blocked: true,
+      reloading: false,
+      automaticPaused: false,
+    })
+
+    for (let key = 0; key < 5; key++) app.monitor.activity()
+    expect(app.onChange).toHaveBeenCalledOnce()
+
+    app.safety.blocked = false
+    app.monitor.activity()
+    app.monitor.activity()
+    expect(app.onChange).toHaveBeenCalledTimes(2)
+    expect(app.state()).toMatchObject({ available: true, blocked: false })
+  })
+
   it('ignores a version response that arrives after disposal', async () => {
     const app = setup()
     let resolveVersion: (value: unknown) => void
