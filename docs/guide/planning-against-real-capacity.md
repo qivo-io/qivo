@@ -56,7 +56,9 @@ and auto-fit pauses until Qivo can read it again. That applies to agents too.
 **Team utilization** sits below the Roadmap on the same weekly grid, with the
 timeline's week lines. People and agents appear alphabetically. Each person's
 cells show their scheduled load as a percentage of their own plannable hours,
-over a thin line that fills up to 100%. A week without load stays blank.
+over a thin line that fills up to 100%. A week without load stays blank, and
+a week whose load is too small to show as a percentage reads **0%** over an
+empty line.
 While Qivo reads a person's workload their cells show **…**, and where it
 could not read it, for example past the bounds of one read, a cell says
 **unknown**, never blank. As a guest or organization Viewer, Qivo reads the
@@ -66,8 +68,8 @@ Their weekly capacity appears beside their name. New people start with the
 organization default, initially 32 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
 While Qivo loads a person's details their row says **Loading…**, and a
 person whose weekly hours Qivo could not read shows their hours without a
-percentage or line, with **Capacity unknown** beside their name and in the
-cell descriptions. Their row stays in its place until their details
+percentage or line, apart from the dashed line of a week with paused work,
+with **Capacity unknown** beside their name and in the cell descriptions. Their row stays in its place until their details
 arrive.
 
 The line is blue for ordinary load, yellow at **90–100%** and red **over
@@ -78,8 +80,8 @@ the underlying hours and capacity, such as **16 / 30 h**.
 
 A task counts toward its owner's load. In Review tasks with reviewers count
 toward the reviewer. **Paused** tasks contribute no hours, but in their
-planned weeks the part of the line that the load leaves empty is dashed, also
-in a week with no other load. Resuming restores their hours. Agent rows show
+planned weeks the line is dashed, also in a full week and in a week with no
+other load. Resuming restores their hours. Agent rows show
 hours only, with no percentage, line or over-capacity warning, apart from the
 dashed line of a week with paused work.
 

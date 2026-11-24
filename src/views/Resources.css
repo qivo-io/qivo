@@ -199,18 +199,26 @@
     color-mix(in oklab, var(--text-1) 15%, transparent) var(--rs-load)
   );
 }
-/* A week holding a paused task dashes the part the load leaves empty, the
-   same mark at any size of pause, so the figure stays the running load. The
-   dashes are laid from the right, so the line ends on a whole dash. */
+/* A week holding a paused task dashes its whole line, the same mark at any
+   size of pause and at any load, a full week included. The dashes are laid
+   from the right, so the line ends on a whole dash. */
 .resource-strip .rs-heat-value[data-load-paused] .rs-load-line {
-  background:
-    linear-gradient(to right, var(--rs-load-fill) var(--rs-load), transparent var(--rs-load)),
-    linear-gradient(
-      to right,
-      transparent 3px,
-      color-mix(in oklab, var(--text-1) 55%, transparent) 3px
-    )
-    right / 7px 100% repeat-x;
+  background: linear-gradient(
+    to right,
+    var(--rs-load-fill) var(--rs-load),
+    color-mix(in oklab, var(--text-1) 55%, transparent) var(--rs-load)
+  );
+  -webkit-mask: linear-gradient(to right, transparent 3px, #000 3px) right / 7px 100% repeat-x;
+  mask: linear-gradient(to right, transparent 3px, #000 3px) right / 7px 100% repeat-x;
+}
+/* Forced colors drop gradients, which would leave a paused week with no
+   mark at all. */
+@media (forced-colors: active) {
+  .resource-strip .rs-load-line,
+  .resource-strip .rs-heat-value[data-load-paused] .rs-load-line {
+    forced-color-adjust: none;
+    background: linear-gradient(to right, CanvasText var(--rs-load), GrayText var(--rs-load));
+  }
 }
 
 .resource-strip .rs-heat-value strong {

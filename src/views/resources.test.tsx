@@ -327,7 +327,7 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     )
   })
 
-  it('leaves a week without load blank, and shows paused work as a line even with no figure', async () => {
+  it('leaves only a week without load blank, and shows paused work as a line even with no figure', async () => {
     // the store repaints the faces an answer brings in the next frame
     vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 0))
     // a person and an agent, each with 4 hours this week and a paused task
@@ -336,7 +336,9 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
       other(snap, 'agent')
       const now = { remaining_hours: 4, start_week: week(0), end_week: week(0) }
       const paused = { paused: true, start_week: week(2), end_week: week(2) }
+      const slight = { remaining_hours: 0.2, start_week: week(3), end_week: week(4) }
       snap.issues.push({ ...taskRow(snap, 'mine', 'todo', 1), ...now })
+      snap.issues.push({ ...taskRow(snap, 'mine-slight', 'todo', 5), ...slight })
       snap.issues.push({ ...taskRow(snap, 'mine-paused', 'todo', 2), ...paused })
       snap.issues.push({ ...taskRow(snap, 'theirs', 'todo', 3), assignee_id: OTHER, ...now })
       snap.issues.push({
@@ -359,6 +361,8 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     expect(at(me, 0)).toMatchObject({ text: expect.stringMatching(/^\d+%$/), line: true })
     expect(at(me, 1)).toMatchObject({ text: '', line: false, label: expect.stringMatching(/0%$/) })
     expect(at(me, 2)).toMatchObject({ text: '', line: true })
+    // 0.1 of 32 hours is work, though it rounds to 0%
+    expect(at(me, 3)).toMatchObject({ text: '0%', line: true })
     // an agent's hours stand alone, and its paused week keeps its line too
     expect(at(OTHER, 0)).toMatchObject({ text: '4 h', line: false })
     expect(at(OTHER, 1)).toMatchObject({

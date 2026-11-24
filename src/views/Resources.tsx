@@ -12,8 +12,8 @@
  * so a panel of a given height shows more people; the scheduled / capacity
  * hours live in each cell's accessible description. A week without load
  * shows nothing. Paused tasks add no load, and in any week one of them is
- * planned in the part of the load line that the load leaves empty is
- * dashed, whatever the pause's size. A person whose load is still on its
+ * planned in the whole load line is dashed, whatever the pause's size and
+ * the week's load. A person whose load is still on its
  * way shows "…" in every cell, and one whose load could not be read, came
  * back past the reader's bounds or past a guest's or Viewer's cap of people,
  * or from a backend that sent no projects or paused list, shows "unknown",
@@ -388,7 +388,7 @@ function ResourceStrip({
                         const raw = known?.hours.get(w) ?? 0
                         const pct =
                           bounded && known ? Math.round((raw / (capacity as number)) * 100) : null
-                        const loaded = bounded ? (pct ?? 0) > 0 : fmtHours(raw) !== '0'
+                        const loaded = fmtHours(raw) !== '0'
                         const paused = known?.paused.has(w) ?? false
                         return (
                           <Button
