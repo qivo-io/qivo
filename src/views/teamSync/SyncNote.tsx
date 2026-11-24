@@ -186,8 +186,9 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
 /* A note reads one batch of its list: the first, 25 rows. */
 const LIMITS_FIRST_BATCH = 25
 
-/* For a saved or linked team or project the page cannot show. The text
-   says what to do next and deliberately not that the scope is missing. */
+/* One text where the page has no scope to show, whether none was picked
+   or the saved or linked one cannot be shown. It says what to do next
+   and deliberately not that a scope is missing. */
 const SELECT_TITLE = 'Select a team or project'
 const SELECT_HINT = 'Pick a team or project from the menu above, or a choice below.'
 
@@ -304,20 +305,9 @@ export function SyncNote({
   const smaller = useNarrower(scopeKey, meeting, past)
   switch (meeting.state) {
     case 'choose':
-      if (meeting.why === 'none')
-        return (
-          <ChoiceNote
-            state="choose"
-            icon="people"
-            title="Choose what this meeting covers"
-            hint="Team sync covers one team or project at a time. Pick one, or All projects from the menu above."
-            choices={pickerChoices()}
-            onPick={onPick}
-          />
-        )
       return (
         <ChoiceNote
-          state="unresolved"
+          state={meeting.why === 'none' ? 'choose' : 'unresolved'}
           title={SELECT_TITLE}
           hint={SELECT_HINT}
           choices={pickerChoices()}
