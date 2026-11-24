@@ -302,7 +302,7 @@ button { font: inherit; cursor: pointer; }
   width: 126%;
   max-width: none;
   height: auto;
-  top: -3%;
+  top: 0;
   left: -26%;
 }
 .media-capacity {
