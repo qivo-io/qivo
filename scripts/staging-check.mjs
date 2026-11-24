@@ -9321,6 +9321,10 @@ export const ROSTER_READS = {
   board: 'tasks:board',
 }
 
+/** The mutation that saves a person's view preferences (convex/prefs.ts
+ *  save). */
+const PREFS_SAVE_MUTATION = 'prefs:save'
+
 /** The workspace without its people and catalog parts on the deployment,
  *  as Nora. A fresh load of M's Board passes no subscription of
  *  REMOVED_PARTS on its sync socket, and the store holds Nora's own seats
@@ -9362,6 +9366,31 @@ async function rosterPartsCheck() {
     let filtered = false
     let scoped = false
     let granted = false
+    let earlier = null
+    let unrestored = false
+    // The pick below is saved as Nora's own and the run deletes its team,
+    // so her earlier pick goes back, or none where she had none.
+    const restorePick = async () => {
+      const from = sent.length
+      await evaluate(
+        app,
+        (scope) => window.PLANNER.saveUINow({ teamSyncScope: scope ?? undefined }),
+        earlier,
+      )
+      let saved
+      expect(
+        await until(async () => {
+          saved = sent
+            .slice(from)
+            .map((f) => sentMutation(f, PREFS_SAVE_MUTATION))
+            .find(Boolean)
+          return saved !== undefined
+        }, 30_000),
+        "Nora's earlier Team sync scope was not saved again",
+      )
+      eq(saved.prefs?.teamSyncScope ?? null, earlier, "Nora's Team sync scope after the step")
+      unrestored = false
+    }
     try {
       // a fresh load subscribes neither removed part, and the store holds
       // Nora's own seats alone
@@ -9482,9 +9511,11 @@ async function rosterPartsCheck() {
         `Team sync's scope menu does not list ${team.name} for the run tag`,
       )
       eq(sent.filter((f) => addsQuery(f, ROSTER_READS.teams)).length > 0, true, 'the scope read')
+      earlier = await evaluate(app, () => window.PLANNER.loadUI().teamSyncScope ?? null)
       const picked = sent.length
       await pick.click()
       scoped = true
+      unrestored = true
       expect(
         await until(
           async () =>
@@ -9501,6 +9532,7 @@ async function rosterPartsCheck() {
         ),
         "the agenda was not read for the team's scope",
       )
+      await restorePick()
       return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${holder.name}, who holds a task there, and not ${leo.name} in its Assignee menu, ${leo.name} by his name in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
     } finally {
       // a failure leaves the Board's filter and Team sync's scope as they
@@ -9510,6 +9542,7 @@ async function rosterPartsCheck() {
           .goto(board, { waitUntil: 'domcontentloaded' })
           .then(() => app.locator('[data-filter-x="assignee"]').first().click({ timeout: 30_000 }))
           .catch(() => {})
+      if (unrestored) await restorePick().catch(() => {})
       if (scoped)
         await app
           .goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
