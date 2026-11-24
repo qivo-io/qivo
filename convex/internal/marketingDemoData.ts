@@ -12,7 +12,7 @@ declare class TextEncoder {
   encode(input: string): Uint8Array
 }
 
-export const MARKETING_DEMO_VERSION = 10
+export const MARKETING_DEMO_VERSION = 11
 
 export type DemoPerson = {
   key: string
@@ -1312,7 +1312,7 @@ const issues: DemoIssue[] = [
       assignee: 'daniel',
       startWeek: 0,
       endWeek: 0,
-      remaining: 14,
+      remaining: 20,
       dueDay: 4,
       priority: 'high',
       labels: ['software', 'integration'],
@@ -3917,6 +3917,11 @@ export const MARKETING_DEMO = {
       followupIssue: 'landing-page-art',
       followupWeek: 3,
       followupHours: 18,
+    },
+    overload: {
+      person: 'daniel',
+      week: 0,
+      hours: 37,
     },
     walkthrough: [
       'portfolio',

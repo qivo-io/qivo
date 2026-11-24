@@ -3,8 +3,9 @@
 The product screenshots show the fictional Northstar Labs demo scenario, not
 customer data. Portraits visible in them were generated for fictional people.
 
-The landscape visible in the composed screenshots is Francesco Ungaro's
-Pexels photo 1526713: https://www.pexels.com/photo/1526713/.
+The landscape visible in the composed screenshots is Leonhard Niederwimmer's
+Pexels photo 38754765, "Serene Upper Austria Sunset Over Hilly Landscape":
+https://www.pexels.com/photo/38754765/.
 The Pexels license permits this composed product and marketing use:
 https://www.pexels.com/license/. The standalone photo is not published here.
 
