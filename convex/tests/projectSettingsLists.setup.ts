@@ -151,7 +151,14 @@ export const expectedSubProjects = (t: T, seat: Doc<'profiles'>, parent: Doc<'pr
     }
     return out
       .sort((a, b) => compareValues([nameKey(a.name), a.id], [nameKey(b.name), b.id]))
-      .map((c) => ({ id: c.id, org_id: c.org_id, name: c.name, num: c.num, parent_id: p.id }))
+      .map((c) => ({
+        id: c.id,
+        org_id: c.org_id,
+        name: c.name,
+        num: c.num,
+        lead_id: c.lead_id ?? null,
+        parent_id: p.id,
+      }))
   })
 
 /* The archived sub-projects beneath top-level project `p` the seat sees:

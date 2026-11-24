@@ -283,6 +283,7 @@ const childRow = (sub: Doc<'projects'>, parent: Doc<'projects'>): NavChildRow =>
   org_id: sub.org_id,
   name: sub.name,
   num: sub.num,
+  lead_id: sub.lead_id ?? null,
   parent_id: parent.id,
 })
 

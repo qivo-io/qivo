@@ -213,6 +213,9 @@ export const row = (p: Doc<'projects'>) => ({
   num: p.num,
 })
 
+/** `p` as a row of a navigation list, with its own lead. */
+export const listed = (p: Doc<'projects'>) => ({ ...row(p), lead_id: p.lead_id ?? null })
+
 /** The project with id `id` as it is stored now. */
 export const now = (t: T, id: string) =>
   t.run(async (ctx) => {

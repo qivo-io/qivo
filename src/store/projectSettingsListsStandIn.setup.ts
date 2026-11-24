@@ -330,7 +330,9 @@ export function settingsSubProjectsStandIn(
       .map((c) => ({ at: nameAt(c), project: c })),
     ask,
     (c): NavChildRow | null =>
-      sees(ws, me, c) ? { ...refOf(c), org_id: c.org_id, parent_id: root.id } : null,
+      sees(ws, me, c)
+        ? { ...refOf(c), org_id: c.org_id, lead_id: c.lead_id ?? null, parent_id: root.id }
+        : null,
     force,
   )
 }

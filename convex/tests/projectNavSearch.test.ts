@@ -48,6 +48,7 @@ import { as, NOW, newT, plantLogin, plantSeat, type T, uuid, withOrg } from './h
 import { expectedSearch } from './projectNav.setup'
 import {
   badRequest,
+  listed,
   mapOf,
   measured,
   names,
@@ -101,14 +102,14 @@ const namesOf = (rows: readonly NavSearchRow[]) => rows.map((r) => r.name)
 
 /** `p` as a top-level row of the search. */
 const top = (p: Doc<'projects'>, favorite = false): NavSearchRow => ({
-  ...row(p),
+  ...listed(p),
   parent: null,
   favorite,
 })
 
 /** `p`, a sub-project of `parent`, as a row of the search. */
 const under = (p: Doc<'projects'>, parent: Doc<'projects'>): NavSearchRow => ({
-  ...row(p),
+  ...listed(p),
   parent: row(parent),
   favorite: null,
 })

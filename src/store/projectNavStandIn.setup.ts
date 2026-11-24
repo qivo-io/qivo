@@ -83,6 +83,7 @@ import type {
   NavChildRow,
   NavChildren,
   NavHolds,
+  NavLead,
   NavPage,
   NavPageRow,
   NavProject,
@@ -223,6 +224,8 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     return levelOf(me, p) !== null || liveChildren(p).some((c) => levelOf(me, c) !== null)
   }
   const nav = (p: Project): NavProject => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
+  /* `p` as a row of a navigation list, with its own lead. */
+  const listed = (p: Project): NavProject & NavLead => ({ ...nav(p), lead_id: p.lead_id ?? null })
   /* The byIds row of `p`, which `me` sees: its level where `me` reaches it
      for a reason of its own, else viewer. */
   const byIdRow = (me: Profile, p: Project): NavByIdRow => {
@@ -246,6 +249,7 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     visible,
     liveChildren,
     nav,
+    listed,
     starred: (p: Project) => favorites.has(p.id),
   }
 }
@@ -591,7 +595,7 @@ export function projectNavStandIn(
         candidates.push({
           at: [`${favorite ? '0' : '1'}${key}`, p.id, seat.org_id],
           row: matches(key)
-            ? { ...rule.nav(p), parent: parent ? rule.nav(parent) : null, favorite }
+            ? { ...rule.listed(p), parent: parent ? rule.nav(parent) : null, favorite }
             : null,
         })
       }
@@ -617,7 +621,7 @@ export function projectNavStandIn(
       .filter((c) => rule.sees(seat, c))
       .map((c) => ({
         at: [nameKey(c.name), c.id] as Position,
-        row: { ...rule.nav(c), parent_id: p.id } satisfies NavChildRow,
+        row: { ...rule.listed(c), parent_id: p.id } satisfies NavChildRow,
       }))
     return batchOf(list, scope, byPosition(candidates), after, through, force)
   }
@@ -644,7 +648,7 @@ export function projectNavStandIn(
       .filter((p) => shared.has(p.id) && rule.sees(seat, p))
       .map((p) => ({
         at: [nameKey(p.name), p.id, orgId] as Position,
-        row: { ...rule.nav(p), favorite: false, parent_id: p.parent_id ?? null },
+        row: { ...rule.listed(p), favorite: false, parent_id: p.parent_id ?? null },
       }))
     return batchOf(list, scope, byPosition(candidates), after, through, force)
   }
@@ -663,7 +667,7 @@ export function projectNavStandIn(
       const favorite = rule.starred(p)
       candidates.push({
         at: [`${favorite ? '0' : '1'}${nameKey(p.name)}`, p.id, seat.org_id],
-        row: { ...rule.nav(p), favorite },
+        row: { ...rule.listed(p), favorite },
       })
     }
   }
