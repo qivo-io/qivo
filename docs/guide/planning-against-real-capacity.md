@@ -76,7 +76,8 @@ The line is blue for ordinary load, yellow at **90–100%** and red **over
 100%**. Only the line changes color, never the figure. **100%** fills that
 person's planning time, which already excludes time reserved for meetings and
 other overhead. Accessible cell descriptions include
-the underlying hours and capacity, such as **16 / 30 h**.
+the underlying hours and capacity, such as **16 / 30 h**, and say **under
+0.1** for hours too few to show.
 
 A task counts toward its owner's load. In Review tasks with reviewers count
 toward the reviewer. **Paused** tasks contribute no hours, but in their

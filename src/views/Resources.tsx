@@ -231,11 +231,12 @@ function ResourceStrip({
     if (!f || f.state === 'waiting') return `${P.weekLabel(week)}, Loading workload`
     if (f.state === 'unknown') return `${P.weekLabel(week)}, workload unknown`
     const h = f.hours.get(week) ?? 0
+    const hours = h > 0 && fmtHours(h) === '0' ? 'under 0.1' : fmtHours(h)
     const cap = capById.get(id) ?? null
-    if (cap === null) return `${P.weekLabel(week)}, ${fmtHours(h)} h, ${CAPACITY_UNKNOWN}`
+    if (cap === null) return `${P.weekLabel(week)}, ${hours} h, ${CAPACITY_UNKNOWN}`
     return hasPlannableWeek(cap)
-      ? `${P.weekLabel(week)}, ${fmtHours(h)} / ${fmtHours(cap)} h, ${Math.round((h / cap) * 100)}%`
-      : `${P.weekLabel(week)}, ${fmtHours(h)} h`
+      ? `${P.weekLabel(week)}, ${hours} / ${fmtHours(cap)} h, ${Math.round((h / cap) * 100)}%`
+      : `${P.weekLabel(week)}, ${hours} h`
   }
   const description = (p: TeamPerson, f: Figures | undefined, week: number) =>
     `${personLabel(p.person, 'Unknown user')}, ${measurement(p.id, f, week)}${f?.state === 'ok' && f.paused.has(week) ? ', includes paused work' : ''}`

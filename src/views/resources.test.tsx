@@ -362,7 +362,11 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     expect(at(me, 1)).toMatchObject({ text: '', line: false, label: expect.stringMatching(/0%$/) })
     expect(at(me, 2)).toMatchObject({ text: '', line: true })
     // 0.04 of 32 hours is work, though it rounds to 0% and to 0 hours
-    expect(at(me, 3)).toMatchObject({ text: '0%', line: true })
+    expect(at(me, 3)).toMatchObject({
+      text: '0%',
+      line: true,
+      label: expect.stringMatching(/, under 0\.1 \/ \d+ h, 0%$/),
+    })
     // an agent's hours stand alone, and its paused week keeps its line too
     expect(at(OTHER, 0)).toMatchObject({ text: '4 h', line: false })
     expect(at(OTHER, 1)).toMatchObject({
