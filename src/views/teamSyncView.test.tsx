@@ -280,7 +280,7 @@ describe('the picker', () => {
         () => ({ scope: '', step: 'team' }),
       )
       expect(state()).toBe('choose')
-      expect(title()).toBe('Choose what this meeting covers')
+      expect(title()).toBe('Select a team or project')
       // nothing was asked, and certainly not All projects
       expect(asked(board)).toEqual([])
       const choices = [...document.querySelectorAll<HTMLElement>('[data-sync-choice]')].map(
