@@ -186,6 +186,11 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
 /* A note reads one batch of its list: the first, 25 rows. */
 const LIMITS_FIRST_BATCH = 25
 
+/* For a saved or linked team or project the page cannot show. The text
+   says what to do next and deliberately not that the scope is missing. */
+const SELECT_TITLE = 'Select project'
+const SELECT_HINT = 'Pick a team or project from the menu above, or one of the choices below.'
+
 /** The choices of a note, as buttons. */
 function Choices({
   choices,
@@ -218,7 +223,7 @@ function ChoiceNote({
   action,
 }: {
   state: string
-  icon: string
+  icon?: string
   title: string
   hint: string
   choices: readonly SyncChoice[]
@@ -232,9 +237,11 @@ function ChoiceNote({
       className="qivo-empty-state animate-in fade-in slide-in-from-bottom-1 flex min-h-[260px] flex-1 flex-col overflow-y-auto p-10"
     >
       <div className="m-auto flex flex-col items-center gap-1.5">
-        <div className="mb-2 grid size-[52px] place-items-center rounded-xl border border-border bg-surface-2 shadow-card">
-          <Icon name={icon} size={22} color="var(--text-3)" />
-        </div>
+        {icon && (
+          <div className="mb-2 grid size-[52px] place-items-center rounded-xl border border-border bg-surface-2 shadow-card">
+            <Icon name={icon} size={22} color="var(--text-3)" />
+          </div>
+        )}
         <div data-empty-state-title className="max-w-[460px] text-center text-md font-semibold">
           {title}
         </div>
@@ -311,9 +318,8 @@ export function SyncNote({
       return (
         <ChoiceNote
           state="unresolved"
-          icon="eyeOff"
-          title="This team or project is not available"
-          hint="Qivo cannot show it here. Choose another team or project."
+          title={SELECT_TITLE}
+          hint={SELECT_HINT}
           choices={pickerChoices()}
           onPick={onPick}
         />
@@ -322,9 +328,8 @@ export function SyncNote({
       return (
         <ChoiceNote
           state="unavailable"
-          icon="eyeOff"
-          title="This team or project is not available"
-          hint={meeting.message ?? 'Qivo cannot show it here. Choose another team or project.'}
+          title={SELECT_TITLE}
+          hint={meeting.message ?? SELECT_HINT}
           choices={pickerChoices()}
           onPick={onPick}
         />
