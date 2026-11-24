@@ -66,7 +66,7 @@ function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {
 
 describe('the versioned Northstar marketing scenario', () => {
   it('keeps the agreed organization, project mix and sole administrator', () => {
-    expect(MARKETING_DEMO_VERSION).toBe(10)
+    expect(MARKETING_DEMO_VERSION).toBe(11)
     expect(people).toHaveLength(8)
     expect(people.filter((person) => person.role === 'admin').map((person) => person.key)).toEqual([
       'nora',
@@ -408,7 +408,7 @@ describe('the versioned Northstar marketing scenario', () => {
     for (const issue of issues) visit(issue.key, new Set())
   })
 
-  it('keeps the planned work within each person’s weekly capacity', () => {
+  it('keeps the planned work within each person’s weekly capacity, except the one overloaded week', () => {
     const hoursAt = (person: string, week: number) =>
       issues.reduce((hours, issue) => {
         const { startWeek: start, endWeek: end } = issue
@@ -429,14 +429,20 @@ describe('the versioned Northstar marketing scenario', () => {
     const artwork = issues.find((issue) => issue.key === scene.followupIssue)!
     expect(artwork.startWeek).toBe(scene.followupWeek)
     expect(artwork.endWeek).toBe(scene.followupWeek)
+    const overload = MARKETING_DEMO.demo.overload
+    expect(hoursAt(overload.person, overload.week)).toBe(overload.hours)
+    expect(overload.hours).toBeGreaterThan(defaultCapacity)
     for (const person of people.filter((person) => person.kind === 'person')) {
       for (let week = 0; week <= 6; week++) {
-        expect(hoursAt(person.key, week)).toBeLessThanOrEqual(defaultCapacity)
+        if (person.key === overload.person && week === overload.week) continue
+        expect(hoursAt(person.key, week), `${person.key} in week ${week}`).toBeLessThanOrEqual(
+          defaultCapacity,
+        )
       }
     }
   })
 
-  it('shows no projected delays for the planned work', () => {
+  it('projects delays only for the tasks of the overloaded week', () => {
     // The production preview starts next Monday. Use the actual application
     // projection with that same relationship between recording time and anchor.
     const anchor = TODAY_WEEK + 1
@@ -462,35 +468,40 @@ describe('the versioned Northstar marketing scenario', () => {
         })
         loadByOwner.set(owner, load)
       }
-      return scenario
-        .filter((issue) => {
-          const owner = ownerOf(issue)
-          const person = people.find((candidate) => candidate.key === owner)
-          // a group is judged by its calculated end and its leaves' completion
-          const kids = subtasksOf(issue)
-          const weeks = weeksOf(issue)
-          const result = delayOf(
-            {
-              uuid: issue.key,
-              status: issue.status,
-              isGroup: kids.length > 0,
-              isDone: kids.length > 0 ? kids.every((kid) => kid.status === 'done') : undefined,
-              owner: owner ?? null,
-              start: weeks.start === undefined ? null : anchor + weeks.start,
-              end: weeks.end === undefined ? null : anchor + weeks.end,
-              dueWeek: issue.dueDay === undefined ? null : anchor + Math.floor(issue.dueDay / 7),
-              duePast: false,
-              remaining: issue.remaining,
-              remainingSet: TODAY_WEEK,
-              capacity: person?.kind === 'agent' ? Infinity : defaultCapacity,
-            },
-            owner ? (loadByOwner.get(owner) ?? []) : [],
-          )
-          return result !== null && result.status !== 'ok'
-        })
-        .map((issue) => issue.key)
+      return scenario.flatMap((issue) => {
+        const owner = ownerOf(issue)
+        const person = people.find((candidate) => candidate.key === owner)
+        // a group is judged by its calculated end and its leaves' completion
+        const kids = subtasksOf(issue)
+        const weeks = weeksOf(issue)
+        const result = delayOf(
+          {
+            uuid: issue.key,
+            status: issue.status,
+            isGroup: kids.length > 0,
+            isDone: kids.length > 0 ? kids.every((kid) => kid.status === 'done') : undefined,
+            owner: owner ?? null,
+            start: weeks.start === undefined ? null : anchor + weeks.start,
+            end: weeks.end === undefined ? null : anchor + weeks.end,
+            dueWeek: issue.dueDay === undefined ? null : anchor + Math.floor(issue.dueDay / 7),
+            duePast: false,
+            remaining: issue.remaining,
+            remainingSet: TODAY_WEEK,
+            capacity: person?.kind === 'agent' ? Infinity : defaultCapacity,
+          },
+          owner ? (loadByOwner.get(owner) ?? []) : [],
+        )
+        return result !== null && result.status !== 'ok' ? [`${issue.key}: ${result.status}`] : []
+      })
     }
-    expect(delayed()).toEqual([])
+    // Daniel's three tasks planned for the overloaded week only cannot all
+    // finish in it. The telemetry task is also due that week, so it is late
+    // rather than behind.
+    expect(delayed()).toEqual([
+      'device-onboarding-design: behind',
+      'dashboard-regression: behind',
+      'ingestion: late',
+    ])
   })
 })
 
