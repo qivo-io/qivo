@@ -1,7 +1,8 @@
 /* Shareable app routes under /app/<org>/, where <org> is a slug or `~` for
    cross-organization/account pages. Slug validation excludes `~`.
 
-   Routes (view = overview|board|roadmap):
+   Routes (view = board|roadmap|overview; an address without one keeps the
+   view on screen, at a boot the saved one, else the Board):
      <view>/tasks/<ref>        task over that view
      tasks/<ref>               task using saved view/scope
      [<view>/]p/<n>            project/sub-project scope
@@ -852,7 +853,7 @@ export function buildPath(state: UiState): string {
   // Team sync owns the screen too; the scope and view below it stay as they
   // were, so the address names only the page (and a task over it)
   if (s.sync) return syncPath(s.sync, s.openIssue)
-  const viewUrl = VIEW_TO_URL[s.view || ''] || 'overview'
+  const viewUrl = VIEW_TO_URL[s.view || ''] || 'board'
   /* My view is a scope an issue link must NAME: there is no project to
      restore it from on the way back (scopeForIssue would land the reload on
      the issue's own sub-project and silently leave the mode). */
@@ -935,6 +936,10 @@ export function pathMatchesState(path: string, s: UiState): boolean {
      closing a task over it is a navigation, as over the inbox. */
   if (r.sync || s.sync) return !!r.sync === !!s.sync && issue === (s.openIssue || null)
   if (issue !== (s.openIssue || null)) return false
+  // an address that names no view matches whatever view the state has, as
+  // App shows the view on screen or the saved one there, so it normalizes
+  // in place to the canonical view-prefixed form
+  const sameView = !r.view || r.view === (s.view || 'kanban')
   if (s.openIssue) {
     /* Entering or leaving My view with the window open changes the pane
        behind the task, so it earns a history entry. Reading "no scope
@@ -944,11 +949,8 @@ export function pathMatchesState(path: string, s: UiState): boolean {
        place, or every such boot under My view would push a junk entry.
        Compared by identity, as the token is the scope. */
     if ((r.view || r.scope) && sentinelOf(r.scope) !== sentinelOf(s.scope)) return false
-    // a viewless short link matches whatever view the state has — the URL
-    // normalizes in place to the canonical view-prefixed form
-    return (r.view || s.view || 'overview') === (s.view || 'overview')
+    return sameView
   }
-  const sameView = (r.view || 'overview') === (s.view || 'overview')
   const ask = r.unheld
   if (ask && typeof ask === 'object') {
     /* A project by number (Route.unheld) is the state's scope only where

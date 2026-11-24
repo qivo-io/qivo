@@ -417,15 +417,15 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
       expect(viewReads()).toEqual([])
       expect(q('[data-project-picker]')).toBeNull()
       await act(async () => cache(null))
-      await until(() => shown() === 'overview', 'the Overview')
+      await until(() => shown() === 'kanban', 'the Board')
       const p = store.P.project(id)
       expect(location.pathname).toBe(
-        `/app/${org === ORG ? 'testbed' : 'partner'}/overview/p/${p?.num}`,
+        `/app/${org === ORG ? 'testbed' : 'partner'}/board/p/${p?.num}`,
       )
       // the address became the view's in place, and resolve was never asked
       expect(history.length).toBe(entries)
       expect(asks).toEqual([])
-      await until(() => viewReads().length > 0, "the Overview's reads")
+      await until(() => viewReads().length > 0, "the Board's reads")
       // unchanged, so not sent again
       expect(sentProjects()).toEqual([])
       await leave()
@@ -477,9 +477,9 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     expect(store.P.loadUI().lastProject?.project_id).toBe(managed)
     await leave()
     await app(structuredClone(snap), '/app/testbed', remembering(LUMA))
-    await until(() => shown() === 'overview', 'the Overview')
+    await until(() => shown() === 'kanban', 'the Board')
     expect(asks).toEqual([])
-    expect(location.pathname).toBe('/app/testbed/overview/p/10')
+    expect(location.pathname).toBe('/app/testbed/board/p/10')
   })
 
   it('says a check that could not finish with Retry, never the chooser or a view, and opens once Retry gets ok', async () => {
@@ -505,9 +505,9 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await chooser('retry')
     // and the project opens once its read answers ok
     await act(async () => cache(null))
-    await until(() => shown() === 'overview', 'the Overview')
+    await until(() => shown() === 'kanban', 'the Board')
     expect(asks).toEqual([])
-    expect(location.pathname).toBe('/app/testbed/overview/p/10')
+    expect(location.pathname).toBe('/app/testbed/board/p/10')
   })
 
   it('drops the remembered project once the person moved to another address while the cache checked it', async () => {
@@ -716,6 +716,50 @@ describe('what is remembered', { timeout: 60_000 }, () => {
   })
 })
 
+describe('the view a project opens on', { timeout: 60_000 }, () => {
+  it('is the view used last, else the Board, for a project picked after Qivo opened on the Inbox or All projects', async () => {
+    const snap = world()
+    await app(structuredClone(snap), '/app/~/inbox', { view: 'roadmap' })
+    await until(() => q(`aside [data-project-row="${LUMA}"] button`), "the tree's row")
+    await click(q(`aside [data-project-row="${LUMA}"] button`))
+    await until(() => shown() === 'roadmap', "Luma Sensor's Roadmap")
+    expect(location.pathname).toBe('/app/testbed/roadmap/p/10')
+    await leave()
+    await app(structuredClone(snap), '/app/~/projects')
+    await until(() => q(`[data-directory-row="${LUMA}"] [data-directory-open]`), 'the row')
+    await click(q(`[data-directory-row="${LUMA}"] [data-directory-open]`))
+    await until(() => shown() === 'kanban', "Luma Sensor's Board")
+    expect(location.pathname).toBe('/app/testbed/board/p/10')
+  })
+
+  it('is the view used last for a project address that names none, and the view on screen when Back or Forward reaches one', async () => {
+    const snap = world()
+    await app(snap, '/app/testbed/p/10', { view: 'roadmap' })
+    await until(() => shown() === 'roadmap', "Luma Sensor's Roadmap")
+    await until(() => location.pathname === '/app/testbed/roadmap/p/10', 'the view in the address')
+    await click(
+      [...document.querySelectorAll('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === 'Board',
+      ),
+    )
+    await until(() => shown() === 'kanban', "Luma Sensor's Board")
+    await go('/app/testbed/p/10')
+    await settle()
+    expect(shown()).toBe('kanban')
+    expect(location.pathname).toBe('/app/testbed/board/p/10')
+  })
+
+  it("reads Inbox, Board, Roadmap, Overview in the top bar's switch", async () => {
+    await app(world(), '/app/testbed/board/p/10')
+    await until(() => shown() === 'kanban', "Luma Sensor's Board")
+    expect(
+      [...document.querySelectorAll('[data-view-switch] button')].map(
+        (b) => b.getAttribute('aria-label')?.split(',')[0] ?? b.textContent?.trim(),
+      ),
+    ).toEqual(['Inbox', 'Board', 'Roadmap', 'Overview'])
+  })
+})
+
 describe('at the design size', { timeout: 60_000 }, () => {
   /** 200 live top-level projects of the home organization, named in
       order, with no sub-projects, answering their ids in name order. */
@@ -737,9 +781,9 @@ describe('at the design size', { timeout: 60_000 }, () => {
     // one read of its id, whatever its place among the 200
     expect(cacheReads()).toEqual([[ids[149]]])
     await act(async () => cache(null))
-    await until(() => shown() === 'overview', 'the Overview')
+    await until(() => shown() === 'kanban', 'the Board')
     expect(asks).toEqual([])
-    await until(() => viewReads().length > 0, "the Overview's reads")
+    await until(() => viewReads().length > 0, "the Board's reads")
   })
 
   it('lists 25 at first, 50 with Load more, and then asks for a search at a lowered bound', async () => {
@@ -769,7 +813,7 @@ describe('at the design size', { timeout: 60_000 }, () => {
     expect(q('[data-project-picker]')).toBeNull()
     expect(viewReads()).toEqual([])
     await act(async () => cache(null))
-    await until(() => shown() === 'overview', 'the Overview')
+    await until(() => shown() === 'kanban', 'the Board')
     expect(store.P.scopeInfo(kids[27])?.name).toBe('Module 28')
     expect(asks).toEqual([])
   })

@@ -1,4 +1,4 @@
-import { ImageIcon } from 'lucide-react'
+import { ImageIcon, MailIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { decodeCanvasImage } from '@/lib/appearance'
 
@@ -57,7 +57,8 @@ export function BackgroundBoardPreview({
       <div className="flex h-full min-h-0 gap-3 overflow-auto p-3 text-xs">
         <aside className="hidden w-36 shrink-0 rounded-xl border border-[var(--border)] bg-[var(--workspace-panel)] p-3 [backdrop-filter:var(--workspace-panel-blur)] sm:block">
           <div className="wordmark mb-7 text-base">Qivo</div>
-          <div className="mb-5 text-[var(--text-2)]">All projects</div>
+          <div className="mb-5 text-[var(--text-2)]">My view</div>
+          <div className="mb-3 font-semibold text-[var(--text-3)]">Projects</div>
           <div className="mb-3 font-semibold">Product launch</div>
           <div className="space-y-3 pl-3 text-[var(--text-2)]">
             <p>Hardware</p>
@@ -66,10 +67,12 @@ export function BackgroundBoardPreview({
           </div>
         </aside>
         <div className="min-w-[620px] flex-1">
-          <div className="mb-4 flex w-fit gap-4 rounded-xl border border-[var(--border)] bg-[var(--workspace-panel)] px-4 py-3 [backdrop-filter:var(--workspace-panel-blur)]">
-            <span>Overview</span>
+          <div className="mb-4 flex w-fit items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--workspace-panel)] px-4 py-3 [backdrop-filter:var(--workspace-panel-blur)]">
+            <MailIcon className="size-4 text-[var(--text-2)]" />
+            <span className="h-4 border-l border-[var(--border)]" />
             <span className="border-b border-white font-semibold">Board</span>
             <span>Roadmap</span>
+            <span>Overview</span>
           </div>
           <div className="grid h-[calc(100%-60px)] min-h-[360px] grid-cols-4 gap-2">
             {columns.map((column) => (

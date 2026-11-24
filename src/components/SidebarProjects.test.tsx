@@ -223,6 +223,7 @@ function Harness({ scope }: { scope: string }) {
     <tree.SidebarProjects
       scope={scope}
       lit={(id) => id === scope}
+      allOn={false}
       actions={actions}
       focusRow={request}
       onFocusRowDone={(n) => {
@@ -283,8 +284,8 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   // a layout: the tree is 320px tall from the window's top, and each
-  // project row is 32px below the 40px header, moved by the tree's
-  // scrollTop, which records what the tree writes
+  // project row is 32px, the first 40px below the tree's top, moved by
+  // the tree's scrollTop, which records what the tree writes
   scrolled = []
   request = null
   done = []

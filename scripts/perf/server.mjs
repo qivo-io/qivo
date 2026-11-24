@@ -145,6 +145,11 @@
 //                        error the check shows its sentence with Retry, and
 //                        startup=none&projectnav=empty the chooser's empty
 //                        state
+//   view                 overview: prefs:get answers the Overview as the
+//                        view the person used last (UIPrefs.view), which
+//                        the benchmark and board-large-smoke start on, to
+//                        open the Board from it. Without it no view is
+//                        saved, and the app opens on the Board
 //   holds                what projectNav.holds answers, which My view's
 //                        Overview, Board, Roadmap and the phone, the Inbox
 //                        and Team sync read only where their "no project"
@@ -2415,6 +2420,8 @@ const read = (name, args = {}) => {
       const program = snapshot.projects.find((p) => p.type === 'meta')
       const startup = parameters.get('startup')
       const prefs = {}
+      // view=overview: the Overview saved as the view used last
+      if (parameters.get('view') === 'overview') prefs.view = 'overview'
       if (program && startup !== 'none')
         prefs.lastProject = {
           org_id: program.org_id,

@@ -1111,6 +1111,13 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     ).toBe(true)
   })
 
+  it("a project address that names no view takes the state's view in place, and one that names another view is a navigation", () => {
+    expect(pathMatchesState('/app/home/p/7', { scope: 'p-home-7', view: 'roadmap' })).toBe(true)
+    expect(pathMatchesState('/app/home/overview/p/7', { scope: 'p-home-7', view: 'roadmap' })).toBe(
+      false,
+    )
+  })
+
   it('an address whose only difference is the ORG segment has MOVED, not navigated', () => {
     /* `organizations` is in the realtime publication, so an admin renaming the
        address re-emits in every colleague's open tab within a second. Pushing

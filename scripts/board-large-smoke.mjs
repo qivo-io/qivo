@@ -88,7 +88,7 @@ try {
   const openBoard = async (page) => {
     // a fast network: this checks the Board, not how long results take
     await page.goto(
-      `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
+      `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&view=overview&latency=0&mbps=10000`,
     )
     // the project the app opens, once startup's check let it (App.tsx)
     await page.locator('[data-workspace-view]').first().waitFor(slow)
@@ -423,7 +423,7 @@ try {
   // come near the seconds main freezes for.
   const pooled = await open()
   await pooled.page.goto(
-    `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
+    `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&view=overview&latency=0&mbps=10000`,
   )
   await pooled.page.locator('[data-workspace-view]').first().waitFor(slow)
   await pooled.page.evaluate(() => window.PLANNER.saveUI({ metaViz: 'pool' }))

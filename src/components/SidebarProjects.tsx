@@ -1,4 +1,5 @@
-/* The sidebar's project tree: the Projects header with New project and the
+/* The sidebar's project tree: the Projects header, whose title opens All
+   projects and lights while it shows (`allOn`), with New project, and the
    person's projects below it, from the server's navigation reads
    (convex/projectNav.ts), each judged by ordinary access, so an
    organization admin's tree holds the projects they take part in, as All
@@ -146,14 +147,23 @@ function passedTop(rows: readonly NavPageRow[], name: string, id: string) {
   return last?.favorite === false && after(last, name, id)
 }
 
-/** Scrolls the tree `list` by its own scrollTop, and nothing around it, so
-    `row` shows whole in it, or from its top where it is taller. */
-function intoTreeView(list: HTMLElement, row: Element) {
+/** Scrolls `scroller` by its own scrollTop so `row` shows whole in it, or
+    from its top where it is taller. */
+function intoView(scroller: HTMLElement, row: Element) {
   const box = row.getBoundingClientRect()
-  const view = list.getBoundingClientRect()
-  if (box.top < view.top) list.scrollTop -= view.top - box.top
+  const view = scroller.getBoundingClientRect()
+  if (box.top < view.top) scroller.scrollTop -= view.top - box.top
   else if (box.bottom > view.bottom)
-    list.scrollTop += Math.min(box.bottom - view.bottom, box.top - view.top)
+    scroller.scrollTop += Math.min(box.bottom - view.bottom, box.top - view.top)
+}
+
+/** Scrolls the tree `list` so `row` shows in it, and then the rail around
+    it where the rail scrolls too, as in a window too short for it
+    (styles/appearance.css), and nothing else. */
+function intoTreeView(list: HTMLElement, row: Element) {
+  intoView(list, row)
+  const rail = list.parentElement
+  if (rail && rail.scrollHeight > rail.clientHeight) intoView(rail, row)
 }
 
 /** Whether focus is nowhere, or in a view hidden behind another page. */
@@ -170,7 +180,8 @@ const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>
 
 /**
  * The sidebar's project tree, on the rules in the module header. `scope`
- * is App's scope, `lit` whether a row lights for it, `actions` App's
+ * is App's scope, `lit` whether a row lights for it, `allOn` whether the
+ * All projects page shows, `actions` App's
  * (openProject, openProjects, openSettings, openArchivedTasks and
  * newProject), `focusRow` App's focus request while it lasts, and
  * `onFocusRowDone` what the tree calls with the request's `n` once it is
@@ -179,12 +190,14 @@ const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>
 export function SidebarProjects({
   scope,
   lit,
+  allOn,
   actions,
   focusRow,
   onFocusRowDone,
 }: {
   scope: string
   lit: (id: string) => boolean
+  allOn: boolean
   actions: Actions
   focusRow: FocusRow | null
   onFocusRowDone: (n: number) => void
@@ -468,30 +481,22 @@ export function SidebarProjects({
             : 'ok'
   const canCreateProject = P.canCreateProject()
   return (
-    <div
-      ref={tree}
-      data-sidebar-projects=""
-      data-sidebar-projects-state={state}
-      aria-busy={state === 'loading' || state === 'refreshing' || undefined}
-      className="planner-project-list min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-contain [padding:4px_12px_0]"
-      onPointerDownCapture={() => {
-        pressed.current = true
-        setTimeout(() => {
-          pressed.current = false
-        })
-      }}
-      onFocus={(e) => {
-        const row =
-          e.target instanceof Element
-            ? e.target.closest('[data-project-row], [data-subproject-row]')
-            : null
-        if (!pressed.current && row && tree.current?.contains(row)) intoTreeView(tree.current, row)
-      }}
-    >
-      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:8px_8px]">
-        <span className="[font-size:var(--fs-xs)] [font-weight:600] [color:var(--text-3)]">
+    <>
+      {/* outside the list below, so the title and New project stay in
+          place while the list scrolls */}
+      <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:12px_20px_8px_12px]">
+        <Button
+          variant="quiet"
+          size="xs"
+          type="button"
+          aria-current={allOn ? 'page' : undefined}
+          data-on={allOn ? '' : undefined}
+          data-all-nav
+          onClick={() => actions.openProjects()}
+          className="px-2 text-xs font-semibold text-text-3"
+        >
           Projects
-        </span>
+        </Button>
         <div className="[flex:1]" />
         {canCreateProject && (
           <Button
@@ -506,21 +511,43 @@ export function SidebarProjects({
           </Button>
         )}
       </div>
-      {rows}
-      {/* the marker comes with the first rows, below them, so it is not
-         taken as in view from before they landed, which would load the
-         next batch at once */}
-      {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
-      <TreeEnd
-        list={list}
-        end={end}
-        onMore={() => {
-          pressedMore.current = true
-          more()
+      <div
+        ref={tree}
+        data-sidebar-projects=""
+        data-sidebar-projects-state={state}
+        aria-busy={state === 'loading' || state === 'refreshing' || undefined}
+        className="planner-project-list min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-contain [padding:0_12px]"
+        onPointerDownCapture={() => {
+          pressed.current = true
+          setTimeout(() => {
+            pressed.current = false
+          })
         }}
-        onAll={() => actions.openProjects()}
-      />
-    </div>
+        onFocus={(e) => {
+          const row =
+            e.target instanceof Element
+              ? e.target.closest('[data-project-row], [data-subproject-row]')
+              : null
+          if (!pressed.current && row && tree.current?.contains(row))
+            intoTreeView(tree.current, row)
+        }}
+      >
+        {rows}
+        {/* the marker comes with the first rows, below them, so it is not
+           taken as in view from before they landed, which would load the
+           next batch at once */}
+        {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
+        <TreeEnd
+          list={list}
+          end={end}
+          onMore={() => {
+            pressedMore.current = true
+            more()
+          }}
+          onAll={() => actions.openProjects()}
+        />
+      </div>
+    </>
   )
 }
 

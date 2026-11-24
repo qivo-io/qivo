@@ -208,6 +208,28 @@ html[data-appearance] .planner-navigation > :not(.planner-project-list) {
 .planner-project-list::-webkit-scrollbar {
   display: none;
 }
+/* A window too short for the rail's fixed rows and the tree, such as a
+   phone on its side: the rail scrolls as a whole, also without a
+   scrollbar, so the tree and Settings stay in reach, and a row the tree
+   reveals scrolls into the rail's view too (components/SidebarProjects.tsx
+   intoTreeView). The tree no longer shrinks there. It takes the height of
+   what it holds, up to 120px, and scrolls past that, so a short tree shows
+   whole and leaves no empty space. 120px is the height the rail's fixed
+   rows leave the tree at 601px, so the rail does not jump at the switch. */
+@media (max-height: 600px) {
+  html[data-appearance] .planner-navigation {
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  html[data-appearance] .planner-navigation::-webkit-scrollbar {
+    display: none;
+  }
+  html[data-appearance] .planner-project-list {
+    flex-shrink: 0;
+    max-height: 120px;
+    overscroll-behavior: auto;
+  }
+}
 html[data-appearance] :is(.planner-topbar, .roadmap-view, [data-roadmap-toolbar], .settings-shell) {
   background: transparent;
 }

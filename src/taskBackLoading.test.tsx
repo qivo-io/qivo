@@ -542,13 +542,13 @@ describe('Back to a task still to arrive', { timeout: 60_000 }, () => {
     expect(location.pathname).not.toBe(`/app/${org}/board/p/2`)
   })
 
-  it('closes the waiting window when All projects opens the directory, whose address names no task', async () => {
+  it("closes the waiting window when the sidebar's Projects title opens the All projects directory, whose address names no task", async () => {
     const { org } = await bootLoading(true, undefined, secondProject)
     await back(`/app/${org}/board/p/1`)
     await back(`/app/${org}/board/tasks/qn-2`)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
-    await pressScope('All projects')
+    await pressScope('Projects')
     expect(location.pathname).toBe('/app/~/projects')
     expect(history.length).toBe(entries + 1)
     expect(document.querySelector('[data-task-loading]')).toBeNull()

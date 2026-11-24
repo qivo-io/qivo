@@ -1834,6 +1834,8 @@ describe('the benchmark server', () => {
     expect((await startup('startup=none&syncscope=program')).prefs.prefs).toEqual({
       teamSyncScope: `project:${program.id}`,
     })
+    // the Overview as the view used last, only where the page asks for it
+    expect((await startup('startup=none&view=overview')).prefs.prefs).toEqual({ view: 'overview' })
   }, 60_000)
 
   it('stars and unstars a project of the All projects directory and sends the page again', async () => {

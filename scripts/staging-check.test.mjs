@@ -999,6 +999,7 @@ describe('staging check REST contract', () => {
     const sources = [
       '../src/App.tsx',
       '../src/components/ProjectChooser.tsx',
+      '../src/components/SidebarProjects.tsx',
       '../src/panels/settings/ProjectSettings.tsx',
       '../src/panels/Settings.tsx',
     ]

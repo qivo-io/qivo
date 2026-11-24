@@ -521,7 +521,7 @@ async function openPage(origin, tasks, metrics, query = '') {
     return elapsed
   }
   await page.goto(
-    `${origin}/?${workspaceParameters(tasks)}&latency=${latency}&mbps=${bandwidth}${query}${filesQuery}`,
+    `${origin}/?${workspaceParameters(tasks)}&view=overview&latency=${latency}&mbps=${bandwidth}${query}${filesQuery}`,
   )
   /* Adds the files the page served to `metrics`, once its sample ends. */
   const recordFiles = () => {
