@@ -40,14 +40,29 @@ export function createAppUpdateMonitor(options: Options) {
   let checking: Promise<void> | undefined
   let checkedAt: number | undefined
 
+  let published: AppUpdateState | undefined
+
+  // Every key press and input event ends here. A caller that renders on each
+  // call renders before React handles that event, and React can then put a
+  // text field's older value back and lose what the person entered.
   const publish = () => {
-    if (!disposed)
-      options.onChange({
-        available: target !== null,
-        blocked: options.isBlocked(),
-        reloading,
-        automaticPaused,
-      })
+    if (disposed) return
+    const state: AppUpdateState = {
+      available: target !== null,
+      blocked: options.isBlocked(),
+      reloading,
+      automaticPaused,
+    }
+    if (
+      published &&
+      published.available === state.available &&
+      published.blocked === state.blocked &&
+      published.reloading === state.reloading &&
+      published.automaticPaused === state.automaticPaused
+    )
+      return
+    published = state
+    options.onChange(state)
   }
   const cancelTimer = () => {
     clearTimeout(timer)
