@@ -415,6 +415,7 @@ describe('the versioned Northstar marketing scenario', () => {
         if (
           ownerOf(issue) !== person ||
           issue.status === 'done' ||
+          issue.paused ||
           start === undefined ||
           end === undefined ||
           week < start ||
@@ -454,6 +455,7 @@ describe('the versioned Northstar marketing scenario', () => {
         if (
           !owner ||
           issue.status === 'done' ||
+          issue.paused ||
           issue.startWeek === undefined ||
           issue.endWeek === undefined
         )
