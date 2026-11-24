@@ -93,7 +93,7 @@
    the name, the lead, the star and menu), so the Project and Lead header,
    the rows and the expanded sub-projects line up. The panel is as wide as
    a readable name column and the Lead column need. */
-@media (min-width: 761px) {
+@media not all and (max-width: 760px) {
   .mobile-project-directory {
     padding: 0 20px 24px;
   }
