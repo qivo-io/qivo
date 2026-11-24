@@ -306,26 +306,26 @@ button { font: inherit; cursor: pointer; }
   left: -26%;
 }
 .media-capacity {
-  aspect-ratio: 3;
+  aspect-ratio: 4.2;
 }
 .media-capacity img {
   position: absolute;
-  width: 128%;
+  width: 130%;
   max-width: none;
   height: auto;
-  bottom: -1%;
-  left: -28%;
+  bottom: 0;
+  left: -27.5%;
 }
 .media-task {
   aspect-ratio: 1.52;
 }
 .media-task img {
   position: absolute;
-  width: 142%;
+  width: 118%;
   max-width: none;
   height: auto;
-  top: -5.6%;
-  left: -21%;
+  top: -5.4%;
+  left: -9%;
 }
 .media-plain img {
   object-fit: cover;
