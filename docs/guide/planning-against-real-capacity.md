@@ -57,8 +57,8 @@ and auto-fit pauses until Qivo can read it again. That applies to agents too.
 timeline's week lines. People and agents appear alphabetically. Each person's
 cells show their scheduled load as a percentage of their own plannable hours,
 over a thin line that fills up to 100%. A week without load stays blank, and
-a week whose load is too small to show as a percentage reads **0%** over an
-empty line.
+a week whose load is too small to show as a figure reads **0%** over an
+empty line, or **0 h** in a row that shows hours.
 While Qivo reads a person's workload their cells show **…**, and where it
 could not read it, for example past the bounds of one read, a cell says
 **unknown**, never blank. As a guest or organization Viewer, Qivo reads the

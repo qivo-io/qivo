@@ -388,7 +388,7 @@ function ResourceStrip({
                         const raw = known?.hours.get(w) ?? 0
                         const pct =
                           bounded && known ? Math.round((raw / (capacity as number)) * 100) : null
-                        const loaded = fmtHours(raw) !== '0'
+                        const loaded = raw > 0
                         const paused = known?.paused.has(w) ?? false
                         return (
                           <Button
