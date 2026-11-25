@@ -249,6 +249,14 @@ describe('the shared walk', () => {
     expect(walk.finishes).toEqual([PROJECTION_WEEKS])
     expect(walkStepsSoFar() - before).toBe(PROJECTION_WEEKS)
   })
+  it('gives no free hours from the week a walk stops at its bound', () => {
+    const later = PROJECTION_WEEKS + 10
+    const stopped = shareOwnerWeeks([{ issueUuid: 'a', from: 0, end: 0, remaining: 1e12 }], 32)
+    expect(stopped.fitFree(later, 10)).toBe(later + PROJECTION_WEEKS - 1)
+    // a walk that finishes its tasks leaves the weeks after them free
+    const finished = shareOwnerWeeks([{ issueUuid: 'a', from: 0, end: 0, remaining: 64 }], 32)
+    expect(finished.fitFree(later, 10)).toBe(later)
+  })
 })
 
 describe('loadByProject', () => {

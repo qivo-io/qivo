@@ -56,7 +56,8 @@ from the new measurement. An unfinished task's projected finish cannot be
 earlier than the current week. The projection follows an owner through at
 most 520 overbooked weeks, ten years. A task it has not finished by then is
 projected to finish in the week after them, or at its planned end if that is
-later.
+later, and a task without a plan or a paused one gets no free hours from
+that week on.
 
 The owner is the assignee, or the reviewer while the task is In Review with
 one. Without an owner, remaining hours or positive weekly capacity, the

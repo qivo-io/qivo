@@ -197,7 +197,8 @@ export type OwnerWeeks = {
   finishes: number[]
   /** the week the hours the walk leaves free cover `remaining` hours from
       week `from`, as fitEndWeek fits against committed hours, within
-      PROJECTION_WEEKS weeks of `from` */
+      PROJECTION_WEEKS weeks of `from`; a walk stopped at its bound leaves
+      no hours free from the week it stopped at */
   fitFree(from: number, remaining: number): number
 }
 
@@ -219,7 +220,7 @@ export type OwnerWeeks = {
  * and end. Overbooked weeks take one step each, and the walk stops at the
  * overbooked week after PROJECTION_WEEKS of them. A task it has not
  * finished by then finishes in that week or at its planned end, whichever
- * is later.
+ * is later, and the walk leaves no hours free from that week on.
  */
 export function shareOwnerWeeks(spans: readonly SharedSpan[], capacity: number): OwnerWeeks {
   const cap = Math.max(0, capacity)
@@ -244,6 +245,7 @@ export function shareOwnerWeeks(spans: readonly SharedSpan[], capacity: number):
     const fits = total <= cap + FITS
     if (!fits && overbooked === PROJECTION_WEEKS) {
       for (const t of [...active, ...tasks.slice(next)]) t.fin = Math.max(t.end, week)
+      used.push({ from: week, to: Infinity, hours: cap })
       break
     }
     walkSteps += 1
