@@ -332,6 +332,23 @@ const sentProjects = () =>
     'lastProject' in patch ? [patch.lastProject?.project_id ?? null] : [],
   )
 const lastSent = () => sentProjects().at(-1)
+/** The projects whose sub-projects the sidebar shows. */
+const expanded = () =>
+  [...document.querySelectorAll<HTMLElement>('aside [data-sidebar-children]')].map(
+    (c) => c.dataset.sidebarChildren,
+  )
+/** The projects whose sub-projects the sidebar read, in order. */
+const childReads = () =>
+  log.flatMap((s) =>
+    s.name === 'projectNav:children' ? [(s.args as { project_id: string }).project_id] : [],
+  )
+/** Lets the project cache's answers paint, in the store's next frame, and
+    the reads they start land. */
+const painted = async () => {
+  await settle()
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await settle()
+}
 async function click(element: Element | null | undefined) {
   if (!element) throw new Error('nothing to click')
   await act(async () => (element as HTMLElement).click())
@@ -1165,6 +1182,20 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     expect(sentProjects()).toEqual([])
   })
 
+  it('leaves My view on the project opened last, not the one the task’s address showed', async () => {
+    await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
+    await until(() => windowReads.length > 0, "the window's read")
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    await until(() => expanded()[0] === LUMA, "Firmware's project expanded")
+    await click(q('[data-mine-nav]'))
+    // must fail for a sidebar that keeps the project it showed last
+    await until(() => expanded()[0] === PORTAL, 'the project opened last expanded')
+    expect(expanded()).toEqual([PORTAL])
+    expect(sentProjects()).toEqual([])
+  })
+
   // KNOWN DEFECT: scopeForIssue (lib/router.ts) keeps a preferred project
   // for a task in it, and while the project cache reads the task's project,
   // but on the app's path the task's answer reaches App's pendingTask
@@ -1441,5 +1472,44 @@ describe('a check that waits, and the person’s next move', { timeout: 60_000 }
     // remembered once the cache answered it ok
     await until(() => lastSent() === LUMA, 'the row remembered')
     expect(sentProjects()).toEqual([LUMA])
+  })
+})
+
+describe('the sidebar’s expanded project', { timeout: 60_000 }, () => {
+  it('expands none while Qivo checks the project a link names or after the check failed, and the linked project once it opens', async () => {
+    const snap = world()
+    const release = holdResolve()
+    await app(structuredClone(snap), '/app/partner/board/p/13', remembering(LUMA))
+    await chooser('checking')
+    await until(() => q('aside [data-project-row]'), "the sidebar's rows")
+    await painted()
+    // must fail for a sidebar that expands the project opened last meanwhile
+    expect(expanded()).toEqual([])
+    expect(childReads()).toEqual([])
+    await release()
+    await until(() => expanded().length > 0, 'the linked project expanded')
+    expect(expanded()).toEqual([PORTAL])
+    expect(new Set(childReads())).toEqual(new Set([PORTAL]))
+    await leave()
+    resolveWith = () => {
+      throw new Error('the read failed')
+    }
+    await app(structuredClone(snap), '/app/testbed/board/p/99', remembering(LUMA))
+    await chooser('retry')
+    await until(() => q('aside [data-project-row]'), "the sidebar's rows")
+    await painted()
+    expect(expanded()).toEqual([])
+    expect(childReads()).toEqual([])
+  })
+
+  it('keeps the project opened last for My view when a link names a project the person cannot open', async () => {
+    const snap = world()
+    const lost = meta(snap, 'Taken away', ORG, false)
+    await app(structuredClone(snap), `/app/testbed/board/p/${lost}`, remembering(LUMA))
+    await chooser('lost')
+    await click(q('[data-mine-nav]'))
+    // must fail for a sidebar that took the link's project as opened last
+    await until(() => expanded().length > 0, 'the project opened last expanded')
+    expect(expanded()).toEqual([LUMA])
   })
 })

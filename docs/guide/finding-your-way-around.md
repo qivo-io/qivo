@@ -21,9 +21,16 @@ press **Load more**, up to 200. Past that it says that more projects are in
 **All projects**, with a button that opens it. Select a project to reveal
 its sub-projects, 25 at first and more as you scroll or press **Load more**,
 up to 100, after which it asks you to search. One project stays expanded at
-a time, the one you opened last. It stays expanded while you visit
-**My view**, **Team sync**, **Inbox**, **All projects** or **Settings**, and
-opening another project collapses it. When you open a project from
+a time, the one you are in. It stays expanded while you visit
+**Team sync**, **Inbox**, **All projects** or **Settings**, and opening
+another project collapses it. On **My view** the project you opened last
+is expanded, the one Qivo saves for you
+([The three views](#the-three-views)), also after a reload. Opening a task
+by its link does not change that project, so after a task link has shown
+you another project, **My view** expands the one you opened before it.
+Until Qivo has checked a project you open from a link or the one you had
+open last time, and while it asks you to choose a project, no project is
+expanded. When you open a project from
 elsewhere, such as **All projects**, Search or a link, the tree loads on
 until it shows that project and brings its row into view. A project opens
 at once. Where Qivo has not yet checked a project you open from a link or

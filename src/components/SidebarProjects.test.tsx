@@ -687,7 +687,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(childNames()).toEqual(['Frontend'])
   })
 
-  it('keeps the project opened last expanded and unlit while the scope names no project, until another project opens', async () => {
+  it("expands the project opened last on My view, unlit, and the scope's own project elsewhere", async () => {
     const { big, cloud } = await bigProject()
     const frontend = snap.projects.find((p) => p.parent_id === cloud)?.id as string
     /** The projects whose sub-projects show. */
@@ -696,7 +696,12 @@ describe('the expanded list', { timeout: 60_000 }, () => {
         (c) => c.dataset.sidebarChildren,
       )
     const current = () => document.querySelectorAll('[data-sidebar-projects] [aria-current]')
+    /** Saves project `id` as the one the person opened last, as App does
+        once a view shows it. */
+    const saved = (id: string) =>
+      store.P.saveUINow({ lastProject: { org_id: ORG, project_id: id } })
     await render(big)
+    saved(big)
     expect(lit()).toEqual([big])
     const reads = asked('children').length
     // My view keeps Luma Sensor's sub-projects, read once, and lights no row
@@ -712,6 +717,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
     // a sub-project opened last keeps its project expanded, unlit
     await render(frontend)
+    saved(frontend)
     expect(lit()).toEqual([frontend])
     await render('mine')
     expect(expanded()).toEqual([cloud])
