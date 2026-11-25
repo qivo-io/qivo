@@ -62,9 +62,11 @@ that week on.
 The owner is the assignee, or the reviewer while the task is In Review with
 one. Without an owner, remaining hours or positive weekly capacity, the
 projection uses the planned end, or the current week if that end has passed.
-Agents have no weekly capacity limit, so every ask fits. An agent's task is
-projected to finish at its planned end, and competing workload does not
-extend it.
+Agents have no weekly capacity limit, so every ask fits. An agent's task
+with remaining hours is projected to finish at its planned end, and
+competing workload does not extend it. Without a plan, or while paused, it
+is projected to finish in the current week, or at its planned start if that
+is later, as with 0 Remaining below.
 
 **0 Remaining** means no work left, while an empty field means no estimate.
 With an owner and capacity, zero projects completion in the current week or
