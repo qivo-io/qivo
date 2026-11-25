@@ -32,6 +32,9 @@ type MobileRoadmapProps = {
   /** whether `tasks` are a current answer's, so an empty list may say that
       nothing matches */
   settled?: boolean
+  /** whether a toolbar filter Clear filters undoes is on, so the note for
+      hidden Done tasks offers it */
+  filtered?: boolean
   filterControls: React.ReactNode
   actions: Record<string, (...args: unknown[]) => void>
   onTimeline: () => void
@@ -150,6 +153,7 @@ export function MobileRoadmap({
   tasks: shown,
   hiddenDone = [],
   settled = true,
+  filtered = false,
   filterControls,
   actions,
   onTimeline,
@@ -432,9 +436,18 @@ export function MobileRoadmap({
           {tasks.length === 0 &&
             settled &&
             (hiddenDone.some(chosen) ? (
-              <p className="mobile-roadmap-note" data-roadmap-done-hidden>
-                Done tasks are hidden. To show them, {TURN_OFF_HIDE_DONE}.
-              </p>
+              <div data-roadmap-done-hidden>
+                <p className="mobile-roadmap-note">
+                  {filtered
+                    ? `Done tasks are hidden, and no other tasks match your filters. To show Done tasks, ${TURN_OFF_HIDE_DONE}.`
+                    : `Done tasks are hidden. To show them, ${TURN_OFF_HIDE_DONE}.`}
+                </p>
+                {filtered && (
+                  <Button type="button" className="mt-2" onClick={() => actions.clearFilters()}>
+                    Clear filters
+                  </Button>
+                )}
+              </div>
             ) : (
               <p className="mobile-roadmap-note">No tasks match these filters.</p>
             ))}

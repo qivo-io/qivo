@@ -1908,4 +1908,45 @@ describe('the phone over the answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
         .sort(),
     ).toEqual(['QN-1', 'QN-3'])
   })
+
+  it('offers Clear filters where a filter leaves only Done tasks in the Task schedule', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 760px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    )
+    // the only High task, two-1, is Done this week, and one-1 is open
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues[1].status = 'done'
+      },
+      { scope: 'plan' },
+    )
+    const clearFilters = vi.fn()
+    const note = () => document.querySelector('[data-roadmap-done-hidden]')
+    const clear = () =>
+      [...(note()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Clear filters')
+    await renderRoadmap(board, {
+      filters: { ...ROW, priority: 'high' },
+      actions: { clearFilters },
+    })
+    const schedule = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Task schedule',
+    )
+    await act(async () => schedule?.click())
+    expect(note()?.textContent).toContain('no other tasks match your filters')
+    await act(async () => clear()?.click())
+    expect(clearFilters).toHaveBeenCalledTimes(1)
+    // with no filter on and every task Done, there is nothing to clear
+    board.snapshot.issues[0].status = 'done'
+    await renderRoadmap(board, { actions: { clearFilters } })
+    await board.answer()
+    expect(note()?.textContent).toContain('Done tasks are hidden.')
+    expect(clear()).toBeUndefined()
+  })
 })

@@ -1774,6 +1774,7 @@ function Roadmap({
       tasks={empty ? [] : rowTasks}
       hiddenDone={empty ? [] : hiddenDone}
       settled={view.current}
+      filtered={clearable}
       filterControls={filterControls}
       actions={actions}
       onTimeline={() => setMobileLayout('timeline')}
