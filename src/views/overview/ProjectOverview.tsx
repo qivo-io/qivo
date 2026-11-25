@@ -810,13 +810,17 @@ function LoadPanel({
   live: boolean
 }) {
   const [all, setAll] = useState(false)
-  // the people's loads read while the page shows, as Team utilization's
-  // do, a guest's or Viewer's capped calls going first to those who hold
-  // the most listed tasks
+  // the people's loads read while the panel and the tab show, as Team
+  // utilization's do, a guest's or Viewer's capped calls going first to
+  // those who hold the most listed tasks. A kept page that hides, or a
+  // body that gives way to a note, stops the reads and keeps their answers
+  // for a return
   const owners = (people ?? []).map((p) => ({ org, owner: p.id, cards: p.listed + 1 }))
   const key = JSON.stringify(owners)
   useEffect(() => {
-    P.watchOverviewPeople(JSON.parse(key), live)
+    const need = JSON.parse(key)
+    P.watchOverviewPeople(need, live)
+    return () => P.watchOverviewPeople(need, false)
   }, [key, live])
   const named = usePeople((people ?? []).map((p) => ({ org, id: p.id })))
   const week = TODAY_WEEK

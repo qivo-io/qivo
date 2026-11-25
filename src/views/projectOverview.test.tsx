@@ -12,8 +12,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    (store/overviewStandIn.setup.ts), whose Needs attention list holds the
    stored facts' kinds: the sentence and Tasks left, a count Qivo could not
    work out, a tab's read, a row opened while the next answer loads, the
-   sub-projects' Load more and cap, a milestone's late count, and the row
-   actions a reader may not use. The
+   people's load reads of a kept page, the sub-projects' Load more and cap,
+   a milestone's late count, and the row actions a reader may not use. The
    list's own rule is the server's, which convex/tests/overviewNeeds.test.ts
    tests. */
 
@@ -169,6 +169,16 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     await act(async () => row?.querySelector<HTMLElement>('[data-focus-key="row"]')?.click())
     await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
     expect(text('[data-task-title]')).toBe('Task later')
+  })
+
+  it("stops the people's load reads while its kept page hides, and reads them again when it shows", async () => {
+    const { board, show } = await overview(plan, { kept: true })
+    expect(q('[data-ov-people]')).not.toBeNull()
+    expect(board.server.loads.size).toBeGreaterThan(0)
+    await show(false)
+    expect(board.server.loads.size).toBe(0)
+    await show(true)
+    expect(board.server.loads.size).toBeGreaterThan(0)
   })
 
   it('asks a failed Load more of the sub-projects again with Retry, and says how many it shows past the cap', async () => {

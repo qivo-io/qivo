@@ -12180,7 +12180,9 @@ export const PLANNER = {
       key, the people its Load this week shows, `owners`, each with how
       many of the listed tasks are theirs, which orders a guest's or
       Viewer's capped calls, and whether it reads now (`live`, while the
-      page and the tab show). P.releaseOverview releases them. */
+      panel and the tab show). Not live, the cache keeps their last
+      answers without reading them, for the panel's return.
+      P.releaseOverview releases them. */
   watchOverviewPeople: (owners: readonly OwnerNeed[], live: boolean) => {
     if (owners.length === 0) ownerLoads.release(OVERVIEW_PEOPLE)
     else ownerLoads.register(OVERVIEW_PEOPLE, owners, live)
