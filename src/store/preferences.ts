@@ -10,6 +10,9 @@ export type UIPrefs = Partial<{
   metaViz: string
   roadmapWin: RoadmapWin
   roadmapWinDefault: RoadmapWin
+  /** whether the Roadmap draws Slipping and Delayed tasks' projected
+      finish as stripes; absent means it does */
+  roadmapProjection: boolean
   /** the last specific project or sub-project the person was in, which
       startup opens once projectNav.resolve says they may (App.tsx). Only
       App's save effect writes it, for a project scope the workspace holds

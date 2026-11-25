@@ -13,6 +13,9 @@ export type LaidRow = {
   end: number | null
   /** whether the task is stale now (P.isStale), which follows the clock */
   stale: boolean
+  /** whether one of a task's subtasks has started (Roadmap.tsx
+      subtasksStarted), which its own model does not follow */
+  started: boolean
 }
 
 /* The rows a chunk takes before new rows start another one, and the most

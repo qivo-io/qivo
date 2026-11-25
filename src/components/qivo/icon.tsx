@@ -31,6 +31,7 @@ import {
   Columns3,
   Command as CommandIcon,
   Copy,
+  createLucideIcon,
   Diamond,
   Download,
   ExternalLink,
@@ -77,6 +78,14 @@ import {
 } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
+
+/* A Roadmap bar with the stripes of a projected finish, which Lucide does
+   not draw. */
+const BarStripes = createLucideIcon('bar-stripes', [
+  ['rect', { x: '3', y: '7', width: '18', height: '10', rx: '2.5', key: 'bar' }],
+  ['path', { d: 'm10 17 5-10', key: 'stripe-1' }],
+  ['path', { d: 'm15 17 5-10', key: 'stripe-2' }],
+])
 
 /* ---- Generic chrome icons use lucide; Qivo status/priority glyphs stay below. ---- */
 const LUCIDE_ICONS: Record<string, LucideIcon> = {
@@ -151,6 +160,7 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   cog: Settings,
   at: AtSign,
   star: Star,
+  projection: BarStripes,
 }
 function Icon({
   name,

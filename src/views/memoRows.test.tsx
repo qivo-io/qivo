@@ -311,6 +311,8 @@ describe('memoized task rows', () => {
           due={null}
           start={issue.start}
           end={issue.end}
+          showProjection
+          started={false}
           w0={0}
           w1={12}
           weekW={36}
@@ -356,6 +358,8 @@ describe('memoized task rows', () => {
           due={null}
           start={null}
           end={null}
+          showProjection
+          started={false}
           w0={0}
           w1={12}
           weekW={36}

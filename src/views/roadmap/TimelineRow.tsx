@@ -16,7 +16,7 @@ export type Row = {
   proj: ProjectFacts
   issue?: IssueVM
 }
-type DueMark = { x: number; color: string; state: string } | null
+type DueMark = { x: number; state: string } | null
 
 type Props = {
   row: Row
@@ -33,6 +33,10 @@ type Props = {
   due: DueMark
   start: number | null
   end: number | null
+  /** whether the person shows a Slipping or Delayed task's projected finish */
+  showProjection: boolean
+  /** a subtask of the row's task has started (Roadmap.tsx subtasksStarted) */
+  started: boolean
   w0: number
   w1: number
   weekW: number
@@ -69,6 +73,8 @@ function TimelineRowView({
   due,
   start,
   end,
+  showProjection,
+  started,
   w0,
   w1,
   weekW,
@@ -156,6 +162,11 @@ function TimelineRowView({
           it={row.issue}
           edge={edge}
           side={side}
+          past={
+            (edge.kind === 'outside' ? edge.endpoint : side === 'before' ? w0 - 1 : w1 + 1) <
+            P.TODAY_WEEK
+          }
+          started={started}
           fade={fade}
           ring={ring}
           onReveal={() => onEdgeReveal(side, edge.endpoint)}
@@ -319,17 +330,18 @@ function TimelineRowView({
           >
             {renderGuides()}
             {renderFlags?.()}
-            {/* The due hover strip stays below bars and inside the grid. */}
+            {/* The due hover strip stays inside the grid, below a plan's bar
+                and above its run-on and stripes (Roadmap.css). */}
             {due && (
               <HoverTooltip content={`Due ${P.fmtISO(row.issue.due)}, ${due.state}`}>
                 <div
                   style={{ left: Math.min(Math.max(due.x - 4, 0), timelineW - 8) }}
-                  className="[position:absolute] [top:3px] [bottom:3px] [width:8px] [cursor:help]"
+                  className="[position:absolute] [top:3px] [bottom:3px] [width:8px] [cursor:help] [z-index:1]"
                 />
               </HoverTooltip>
             )}
             {/* Committed row kind prevents ghost bars after remote unscheduling. */}
-            {row.kind === 'task' && start != null && end >= w0 && start <= w1 && (
+            {row.kind === 'task' && start != null && end != null && (
               <Bar
                 it={row.issue}
                 start={start}
@@ -337,6 +349,8 @@ function TimelineRowView({
                 w0={w0}
                 w1={w1}
                 weekW={weekW}
+                showProjection={showProjection}
+                started={started}
                 onSched={onSchedule}
                 onCommit={onCommit}
                 onOpen={onOpen}
@@ -346,18 +360,19 @@ function TimelineRowView({
             {/* Due lines paint above bars without intercepting drag pointers. */}
             {due && (
               <div
-                style={{
-                  left: Math.min(Math.max(due.x - 1, 0), timelineW - 2),
-                  background: due.color,
-                }}
-                className="[position:absolute] [top:0] [bottom:0] [width:2px] [opacity:0.85] [pointer-events:none] [z-index:1]"
+                style={{ left: Math.min(Math.max(due.x - 1, 0), timelineW - 2) }}
+                className="roadmap-due [position:absolute] [top:0] [bottom:0] [width:2px] [pointer-events:none] [z-index:3]"
               />
             )}
             {row.kind === 'unsched' &&
               (() => {
                 // Clip long pills to the grid. Only the pill intercepts pointers.
                 const it = row.issue
-                const pc = P.delayColor(it) || 'var(--text-3)'
+                const pressure = P.delayColor(it) && P.delayOf(it)?.status
+                const pc =
+                  pressure === 'behind' || pressure === 'late'
+                    ? `var(--roadmap-bar-${pressure})`
+                    : 'var(--text-3)'
                 return (
                   <div className="[position:absolute] [left:0] [right:0] [top:0] [bottom:0] [padding-left:8px] [overflow:clip] [display:flex] [align-items:center] [pointer-events:none]">
                     <Button
@@ -415,12 +430,7 @@ export const TimelineRow = memo(TimelineRowView, (before, after) => {
     before.row.issue !== after.row.issue
   )
     return false
-  if (
-    before.due?.x !== after.due?.x ||
-    before.due?.color !== after.due?.color ||
-    before.due?.state !== after.due?.state
-  )
-    return false
+  if (before.due?.x !== after.due?.x || before.due?.state !== after.due?.state) return false
   return (Object.keys(after) as (keyof Props)[]).every(
     (key) =>
       key === 'row' ||
