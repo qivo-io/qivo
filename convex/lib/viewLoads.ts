@@ -24,7 +24,7 @@ import type { QueryCtx } from '../_generated/server'
 import { type Access, accessOf, isOrgStaff, OWN_READS } from './access'
 import { LEVEL_STEP_READS, type ReadCeiling } from './archivedTasks'
 import { byId } from './db'
-import { type DelayInfo, type DelayIssue, delayOf } from './delay'
+import { type DelayInfo, type DelayIssue, delayOf, delayProjector } from './delay'
 import { badRequest } from './functions'
 import {
   loadRowsOf,
@@ -43,7 +43,7 @@ import {
   type ViewBudget,
   type ViewSeats,
 } from './viewReads'
-import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from './workload'
+import { DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from './workload'
 
 // --- figures --------------------------------------------------------------------------
 
@@ -306,6 +306,7 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
       isGroup: facts !== null,
       isDone: facts === null ? task.status === 'done' : facts.done,
       partial: facts?.span.partial ?? false,
+      paused: task.paused === true,
       owner: taskOwnerId(task, facts !== null) ?? null,
       start,
       end,
@@ -346,20 +347,25 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
     const load: Load =
       got.state !== 'ok'
         ? UNKNOWN
-        : canonicalLoad(
-            loadRowsOf(seat.me, got.tasks).map((row) => ({
-              issueUuid: row.issue_id,
-              start: clock.ofDay(row.start_week),
-              end: clock.ofDay(row.end_week),
-              remaining: row.remaining,
-              remainingSet:
-                row.remaining_set_at === null ? null : clock.ofInstant(row.remaining_set_at),
-            })),
-          )
+        : loadRowsOf(seat.me, got.tasks).map((row) => ({
+            issueUuid: row.issue_id,
+            start: clock.ofDay(row.start_week),
+            end: clock.ofDay(row.end_week),
+            remaining: row.remaining,
+            remainingSet:
+              row.remaining_set_at === null ? null : clock.ofInstant(row.remaining_set_at),
+          }))
     if (got.state === 'ok') owned.set(owner, got.tasks)
     loads.set(owner, load)
     return load
   }
+
+  // each owner's walk, built on the first verdict that reads their load,
+  // which is in `loads` by then
+  const projector = delayProjector((owner) => {
+    const load = loads.get(owner)
+    return load === undefined || load === UNKNOWN ? [] : load
+  }, 0)
 
   return {
     /** The profiles with these ids, each read once a query through the
@@ -408,9 +414,8 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
       const it = delayIssue(task, facts, capacityOf(owner, task.org_id))
       const needed = await this.needs(task, facts)
       if (needed === null) return delayOf(it, [], 0)
-      const load = await loadOf(task.org_id, needed)
-      if (load === UNKNOWN) return UNKNOWN
-      return delayOf(it, load, 0)
+      if ((await loadOf(task.org_id, needed)) === UNKNOWN) return UNKNOWN
+      return projector(it)
     },
     /** Reads the loads of `owners`, owner ids of organization `orgId`, in
      * owner id order, and answers whether every one was read. It stops at

@@ -30,7 +30,7 @@ import { type Access, isOrgStaff, OWN_READS } from './access'
 import { LEVEL_STEP_READS, type ReadCeiling, roomOf } from './archivedTasks'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
-import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf } from './delay'
+import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
 import { TEAM_ROW_MAX_BYTES } from './limits'
 import type { OrgLoadRow } from './loadRows'
 import {
@@ -42,7 +42,6 @@ import {
 } from './ownerLoads'
 import { taskOwnerId } from './review'
 import {
-  canonicalLoad,
   DEFAULT_PLANNABLE_HOURS,
   type LoadSpan,
   plannableHoursOf,
@@ -136,6 +135,7 @@ function delayIssue(
         ? issue.status === 'done'
         : !facts.partial && facts.total > 0 && facts.done === facts.total,
     partial: facts?.partial ?? false,
+    paused: issue.paused === true,
     owner: taskOwnerId(issue, isGroup) ?? null,
     start,
     end,
@@ -158,8 +158,7 @@ function delayJson(info: DelayInfo | null, grid: WeekGrid): DelayJson | null {
   }
 }
 
-/* Load rows as the delay projection walks them, by owner, each owner's in
- * the app's order (canonicalLoad). */
+/* Load rows as the delay projection walks them, by owner. */
 function spansByOwner(rows: readonly OrgLoadRow[], grid: WeekGrid) {
   const out = new Map<string, LoadSpan[]>()
   for (const row of rows) {
@@ -174,7 +173,6 @@ function spansByOwner(rows: readonly OrgLoadRow[], grid: WeekGrid) {
     if (own === undefined) out.set(row.owner_id, [span])
     else own.push(span)
   }
-  for (const spans of out.values()) canonicalLoad(spans)
   return out
 }
 
@@ -247,9 +245,9 @@ const delayRoom =
   }
 
 /* Whether the owner's other work can change `issue`'s verdict `it`. A
- * group, a Done task, an agent and zero hours never fit hours against the
- * owner's other work (lib/delay.ts, fitEndWeek), and a projected finish
- * with neither a planned end nor a due date has nothing to be judged
+ * group, a Done task, an agent and zero hours never share hours with the
+ * owner's other work (lib/delay.ts finishWithoutLoad), and a projected
+ * finish with neither a planned end nor a due date has nothing to be judged
  * against, so its verdict is null whatever the load. */
 const needsLoad = (
   issue: Doc<'issues'>,
@@ -264,20 +262,19 @@ const needsLoad = (
   Number.isFinite(capacity) &&
   capacity > 0
 
-/* The verdict of `it` against the load `load` read for its owner `ownerId`,
- * as `me` may see it. spansByOwner puts the rows in the order the app's load
- * takes (canonicalLoad), so each week's hours add up in the same order and
- * round the same way. */
-function loadVerdict(
-  me: Caller,
-  it: DelayIssue,
-  ownerId: string,
-  load: OwnedLoad | undefined,
-  clock: DelayClock,
-): DelayJson | null {
-  if (load === undefined || load.state !== 'ok') return UNAVAILABLE_DELAY
-  const spans = spansByOwner(loadRowsOf(me, load.tasks), clock.grid).get(ownerId) ?? []
-  return delayJson(delayOf(it, spans, clock.todayWeek), clock.grid)
+/* The verdicts of tasks against the loads `loads` read for their owners,
+ * as `me` may see them. Each owner's walk (lib/delay.ts ownerProjection) is
+ * built once, on the first of their tasks it judges, and shared by the
+ * rest. A task whose owner's load is missing or was not `ok` is
+ * UNAVAILABLE_DELAY. */
+function loadVerdicts(me: Caller, loads: ReadonlyMap<string, OwnedLoad>, clock: DelayClock) {
+  const projector = delayProjector((owner) => {
+    const load = loads.get(owner)
+    if (load?.state !== 'ok') return []
+    return spansByOwner(loadRowsOf(me, load.tasks), clock.grid).get(owner) ?? []
+  }, clock.todayWeek)
+  return (it: DelayIssue, ownerId: string): DelayJson | null =>
+    loads.get(ownerId)?.state === 'ok' ? delayJson(projector(it), clock.grid) : UNAVAILABLE_DELAY
 }
 
 /**
@@ -313,7 +310,7 @@ export function taskForecaster(
     }
     const room = delayRoom(await ctx.meta.getTransactionMetrics(), { ...access.shared })
     const load = await ownerLoadReader(ctx, { me, access, room }).read(profile.id)
-    return loadVerdict(me, it, profile.id, load, clock)
+    return loadVerdicts(me, new Map([[profile.id, load]]), clock)(it, profile.id)
   }
 }
 
@@ -406,6 +403,7 @@ export async function pageForecaster(
       loads.set(owner, load)
     }
   }
+  const verdictOf = loadVerdicts(me, loads, clock)
   return async (issue, project, facts) => {
     if (!tracked(issue, project)) return null
     const profile = ownerOf(issue, facts !== null)
@@ -414,6 +412,6 @@ export async function pageForecaster(
     if (profile === undefined || !needsLoad(issue, facts, it, capacity)) {
       return delayJson(delayOf(it, [], clock.todayWeek), clock.grid)
     }
-    return loadVerdict(me, it, profile.id, loads.get(profile.id), clock)
+    return verdictOf(it, profile.id)
   }
 }

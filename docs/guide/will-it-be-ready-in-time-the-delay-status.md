@@ -15,17 +15,35 @@ for a projection; without them, it gets a warning only once overdue.
 
 ## How the projection works
 
-Each Remaining save records when you measured it. Qivo projects from that
-week or the planned start, whichever is later, using the owner's plannable
-hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)) minus their other scheduled work. Paused work takes no capacity.
+Qivo projects all of one owner's unfinished tasks together, week by week,
+against the owner's plannable hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
+Each Remaining save records when you measured it, and a task's remaining
+hours count from that week. A task takes part from that week or its planned
+start, whichever is later.
 
-The other scheduled work counts each of the owner's other tasks with a plan,
-its remaining hours spread evenly over its planned weeks, from its planned
-start or the week its Remaining was saved, whichever is later, or all in that
-week when it was saved after the plan ended. The projection
-assumes that those other tasks finish on their own plan: one of them running
-late does not move its hours into later weeks here, so the projected finish
-can be earlier than the owner's whole workload allows.
+In each week, every task that has started asks for its remaining hours
+divided by the weeks left in its plan, that week included. A task whose plan
+has ended asks for all its remaining hours.
+
+- When the asks fit in the owner's weekly hours, every task gets what it
+  asks for. A task that gets its ask every week finishes in its planned end
+  week.
+- When they do not fit, the week is overbooked, and every task gets the same
+  share of its ask. The hours a task did not get stay as its remaining hours
+  and move to the next week, where it asks again.
+
+A task's projected finish is the week its remaining hours reach zero. For
+example, a person with 32 hours a week has three tasks of 32 hours each, all
+planned for this week only. Each gets a third of the week, and all three are
+projected to finish in the third week, Behind plan. A task squeezed in one
+week asks for more in the weeks left in its plan, so it can still finish on
+time when those weeks have room.
+
+A task with remaining hours but no plan, and a paused task, ask for nothing.
+They get the hours the planned tasks leave free in each week, and paused
+work takes no hours from other tasks.
+
+The projection counts the owner's other open work as you may see it.
 Organization admins and users receive organization-wide commitments, with
 hidden-project hours kept anonymous. Viewers and guests receive only work
 from visible projects and tasks they own ([Project access](./who-sees-what-the-access-model.md)).
@@ -33,13 +51,17 @@ from visible projects and tasks they own ([Project access](./who-sees-what-the-a
 The projection assumes progress since the measurement, so an estimate's age
 alone does not add more work. Saving another estimate starts the calculation
 from the new measurement. An unfinished task's projected finish cannot be
-earlier than the current week.
+earlier than the current week. The projection follows an owner through at
+most 520 overbooked weeks, ten years. A task it has not finished by then is
+projected to finish in the week after them, or at its planned end if that is
+later.
 
 The owner is the assignee, or the reviewer while the task is In Review with
 one. Without an owner, remaining hours or positive weekly capacity, the
 projection uses the planned end, or the current week if that end has passed.
-Agents have no weekly capacity limit, so competing workload does not extend
-their projected finish.
+Agents have no weekly capacity limit, so every ask fits. An agent's task is
+projected to finish at its planned end, and competing workload does not
+extend it.
 
 **0 Remaining** means no work left, while an empty field means no estimate.
 With an owner and capacity, zero projects completion in the current week or

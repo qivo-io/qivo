@@ -9,8 +9,8 @@ import {
   computeDelayMap as delayMapOn,
   delayOf as delayOn,
   delayWithProjection,
+  finishWithoutLoad,
 } from '../../convex/lib/delay'
-import { fitEndWeekAgainst } from '../../convex/lib/workload'
 import { TODAY_WEEK } from './dates'
 import type { LoadSpan } from './workload'
 
@@ -78,12 +78,11 @@ export function delayBeforeLoads(
   const unknown = it.duePast || (it.dueWeek === null && it.end === null) ? null : DELAY_UNKNOWN
   if (it.isGroup && !datesKnown) return it.duePast ? null : DELAY_UNKNOWN
   let asked = false
-  const verdict = delayWithProjection(it, TODAY_WEEK, (from, remaining, capacity) => {
-    // the fit reads the owner's other work only for hours left against a
-    // finite capacity: none left, or an agent's unlimited time, finishes
-    // at `from` whatever the load (convex/lib/workload.ts fitEndWeek)
-    if (remaining > 0 && capacity < Infinity) asked = true
-    return fitEndWeekAgainst([], it.uuid, from, remaining, capacity)
+  const verdict = delayWithProjection(it, TODAY_WEEK, (from) => {
+    const fin = finishWithoutLoad(it, from)
+    if (fin !== null) return fin
+    asked = true
+    return from
   })
   if (asked) return unknown
   if (it.isGroup && loading && it.partial) return verdict?.status === 'late' ? verdict : unknown

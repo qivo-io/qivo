@@ -1,9 +1,11 @@
-/* How a task's remaining hours spread over the weeks and when an owner's
- * free capacity finishes them, the rules the app's capacity views and delay
- * projection (src/lib/workload.ts re-exports these) share with the REST and
- * MCP workload pages (lib/ownerLoads.ts weeklyHours) and delay verdicts
- * (lib/delay.ts, lib/machineDelay.ts). Weeks are integer indexes on one grid;
- * weekGrid maps a deployment's dates onto it. */
+/* How a task's remaining hours spread over the weeks, when an owner's free
+ * capacity finishes them, and how an owner's tasks share their weekly hours
+ * when a week is overbooked. The app's capacity views and Auto-fit read the
+ * spread and the fit (src/lib/workload.ts re-exports these), as do the REST
+ * and MCP workload pages (lib/ownerLoads.ts weeklyHours). Delay verdicts
+ * (lib/delay.ts, lib/machineDelay.ts) read the shared walk
+ * (shareOwnerWeeks). Weeks are integer indexes on one grid; weekGrid maps a
+ * deployment's dates onto it. */
 
 /** The slice of a load item the capacity math reads, which is also the
  * shape of a plan_org_load row once its dates are week indexes. */
@@ -142,76 +144,161 @@ export function fitEndWeekAgainst(
   return fitEndWeek(start, remaining, capacity, committed, maxWeeks)
 }
 
-/** How many weeks of an owner's totals prepareLoadProjection adds up at once. */
-const TOTALS_BLOCK = 64
+/** How many overbooked weeks the shared walk (shareOwnerWeeks) follows,
+    and how many weeks a free-hours fit looks at from its first week. */
+export const PROJECTION_WEEKS = 520
 
-/** Reuse one owner's weekly totals across projections. Each total is added
- * up on first use, TOTALS_BLOCK weeks at a time, so a plan that runs to the
- * year 9999 costs only the weeks the projections read. Near a completion
- * boundary, repeat the original ordered sum: subtracting self from a total
- * can lose small commitments to rounding and change the finish week. */
-export function prepareLoadProjection(items: LoadSpan[]) {
-  const blocks = new Map<number, Map<number, number>>()
-  const totals = {
-    get(week: number): number {
-      const block = Math.floor(week / TOTALS_BLOCK)
-      let byWeek = blocks.get(block)
-      if (!byWeek) {
-        const from = block * TOTALS_BLOCK
-        byWeek = committedByWeek(items, null, { from, to: from + TOTALS_BLOCK - 1 })
-        blocks.set(block, byWeek)
-      }
-      return byWeek.get(week) || 0
-    },
+/* Hours left at or below this count as none, as in fitEndWeek. */
+const DONE = 1e-9
+
+let walkSteps = 0
+
+/** How many steps shareOwnerWeeks has taken so far, in this module
+    instance, a run of weeks or one overbooked week each. A test reads it
+    before and after a call to measure the call's work without a clock. */
+export function walkStepsSoFar(): number {
+  return walkSteps
+}
+
+/** One task in its owner's shared walk: it asks for hours from week
+    `from`, with `remaining` hours left then, and its plan ends in week
+    `end`, never before `from`. */
+export type SharedSpan = { issueUuid: string | null; from: number; end: number; remaining: number }
+
+/** Load span `span` in the shared walk, judged in week `todayWeek`. It takes
+    part from the week its hours were measured, or `todayWeek` without a
+    measurement, or its planned start when that is later, which also covers
+    a future start. Its plan ends at its planned end, or in that first week
+    when the plan ended before it, as spreadWindow piles such hours. */
+export function sharedSpanOf(span: LoadSpan, todayWeek: number): SharedSpan {
+  const from = Math.max(span.start, span.remainingSet ?? todayWeek)
+  return {
+    issueUuid: span.issueUuid,
+    from,
+    end: Math.max(span.end, from),
+    remaining: span.remaining,
   }
-  const own = new Map<string, { start: number; end: number; per: number }[]>()
-  // each week's total adds some of these hours in the same order, so no
-  // total can exceed their sum, and all are finite when it is
-  let sum = 0
-  for (const it of items) {
-    const win = spreadWindow(it.start, it.end, it.remainingSet)
-    const span = win.end - win.start + 1
-    const per = (it.remaining || 0) / span
-    if (span <= 0 || per <= 0) continue
-    sum += per
-    if (!it.issueUuid) continue
-    const spans = own.get(it.issueUuid) || []
-    spans.push({ ...win, per })
-    own.set(it.issueUuid, spans)
-  }
-  const finite = Number.isFinite(sum)
-  return (
-    start: number,
-    remaining: number,
-    capacity: number,
-    excludeUuid?: string | null,
-    maxWeeks = 520,
-  ): number => {
-    const exact = () => fitEndWeekAgainst(items, excludeUuid, start, remaining, capacity, maxWeeks)
-    if (!(remaining > 0)) return start
-    if (!finite || !Number.isFinite(remaining) || !Number.isFinite(capacity)) return exact()
-    const self = excludeUuid ? own.get(excludeUuid) : undefined
-    if (!self) return fitEndWeek(start, remaining, capacity, totals, maxWeeks)
-    const cap = Math.max(0, capacity)
-    let left = remaining
-    let uncertainty = 0
-    for (let w = start; w < start + maxWeeks; w++) {
-      const total = totals.get(w)
-      let excluded = 0
-      for (const span of self) if (w >= span.start && w <= span.end) excluded += span.per
-      const committed = Math.max(0, total - excluded)
-      // Positive sums bound error by their total and addition count. Include
-      // both summation orders, self subtraction, and accumulated solver error.
-      uncertainty =
-        (uncertainty +
-          Number.EPSILON * 4 * (total * (items.length + 2) + Math.abs(left) + cap + committed) +
-          Number.MIN_VALUE * items.length) *
-        (1 + Number.EPSILON)
-      left -= Math.max(0, cap - committed)
-      if (Math.abs(left - 1e-9) <= uncertainty) return exact()
-      if (left <= 1e-9) return w
+}
+
+/* The walk's one order of its tasks: by first week, plan end, hours and
+   task id, a hidden row's null first. Each week's asks add up in it, so the
+   answer is the same however the rows arrive. */
+const byShared = (a: SharedSpan, b: SharedSpan) =>
+  a.from - b.from || a.end - b.end || a.remaining - b.remaining || order(a.issueUuid, b.issueUuid)
+
+/** What one owner's shared walk answers. */
+export type OwnerWeeks = {
+  /** the week each of `spans` finishes, in the order given, its first week
+      for one without hours left */
+  finishes: number[]
+  /** the week the hours the walk leaves free cover `remaining` hours from
+      week `from`, as fitEndWeek fits against committed hours, within
+      PROJECTION_WEEKS weeks of `from` */
+  fitFree(from: number, remaining: number): number
+}
+
+/**
+ * One owner's tasks `spans` sharing `capacity` hours a week, walked week by
+ * week from the earliest task's first week. In each week every task that
+ * has started and has hours left asks for its hours left divided by the
+ * weeks left in its plan, this week included, or for all its hours left
+ * once its plan has ended. When the asks fit in the capacity every task
+ * gets its ask; when they do not, every task gets the same share of its ask
+ * and keeps the rest for the next week. A task finishes in the week its
+ * hours left reach zero. So a task that gets its ask every week finishes in
+ * its plan's last week.
+ *
+ * A stretch of weeks in which the asks fit and no task starts takes one
+ * step, so a plan that runs to the year 9999 costs no more than its start
+ * and end. Overbooked weeks take one step each, and the walk stops at the
+ * overbooked week after PROJECTION_WEEKS of them. A task it has not
+ * finished by then finishes in that week or at its planned end, whichever
+ * is later.
+ */
+export function shareOwnerWeeks(spans: readonly SharedSpan[], capacity: number): OwnerWeeks {
+  const cap = Math.max(0, capacity)
+  let overbooked = 0
+  type Task = SharedSpan & { left: number; ask: number; fin: number }
+  const finishes = spans.map((s) => s.from)
+  const all = spans.map((s): Task => ({ ...s, left: s.remaining, ask: 0, fin: s.end }))
+  const tasks = all.filter((t) => t.remaining > 0).sort(byShared)
+  // the hours the walk gives in each run of weeks, in week order
+  const used: { from: number; to: number; hours: number }[] = []
+  let next = 0
+  let active: Task[] = []
+  let week = tasks.length > 0 ? tasks[0].from : 0
+  while (active.length > 0 || next < tasks.length) {
+    if (active.length === 0) week = Math.max(week, tasks[next].from)
+    while (next < tasks.length && tasks[next].from <= week) active.push(tasks[next++])
+    let total = 0
+    for (const t of active) {
+      t.ask = week < t.end ? t.left / (t.end - week + 1) : t.left
+      total += t.ask
     }
-    return start + maxWeeks - 1
+    if (total > cap && overbooked === PROJECTION_WEEKS) {
+      for (const t of [...active, ...tasks.slice(next)]) t.fin = Math.max(t.end, week)
+      break
+    }
+    walkSteps += 1
+    if (total > cap) {
+      overbooked += 1
+      const share = cap / total
+      used.push({ from: week, to: week, hours: cap })
+      active = active.filter((t) => {
+        // an endless ask makes the share 0, and Infinity * 0 is NaN
+        if (share > 0) t.left -= t.ask * share
+        if (t.left > DONE) return true
+        t.fin = week
+        return false
+      })
+      week += 1
+      continue
+    }
+    // Every ask fits until the next task starts, and an ask met in full
+    // asks the same the week after, so each task runs its plan out.
+    const until = next < tasks.length ? tasks[next].from - 1 : Infinity
+    const ending = active
+      .filter((t) => t.end <= until)
+      .sort((a, b) => Math.max(week, a.end) - Math.max(week, b.end))
+    let from = week
+    let hours = total
+    for (const t of ending) {
+      t.fin = Math.max(week, t.end)
+      if (t.fin >= from) used.push({ from, to: t.fin, hours })
+      from = t.fin + 1
+      hours -= t.ask
+    }
+    active = active.filter((t) => t.end > until)
+    for (const t of active) t.left -= t.ask * (until - week + 1)
+    if (active.length > 0 && from <= until) used.push({ from, to: until, hours })
+    week = until + 1
+  }
+  all.forEach((t, i) => {
+    if (t.remaining > 0) finishes[i] = t.fin
+  })
+  return {
+    finishes,
+    fitFree(from, remaining) {
+      if (!(remaining > 0) || remaining <= DONE) return from
+      const end = from + PROJECTION_WEEKS - 1
+      let left = remaining
+      let i = 0
+      while (i < used.length && used[i].to < from) i++
+      for (let w = from; w <= end; ) {
+        const run = used[i]
+        const busy = run !== undefined && run.from <= w
+        const to = Math.min(end, busy ? run.to : run === undefined ? end : run.from - 1)
+        const free = cap - (busy ? run.hours : 0)
+        if (busy) i++
+        if (free > 0) {
+          const weeks = Math.max(1, Math.ceil((left - DONE) / free))
+          if (weeks <= to - w + 1) return w + weeks - 1
+          left -= free * (to - w + 1)
+        }
+        w = to + 1
+      }
+      return end
+    },
   }
 }
 

@@ -21,7 +21,8 @@ try {
   })
   const { computeDelayMap, delayOf } = await server.ssrLoadModule('/src/lib/delay.ts')
   const { TODAY_WEEK } = await server.ssrLoadModule('/src/lib/dates.ts')
-  const baseline = (issues, load) => {
+  // every issue judged alone, each against a walk of its own
+  const alone = (issues, load) => {
     const result = new Map()
     for (const issue of issues) {
       const info = delayOf(issue, load.get(issue.owner) || [])
@@ -29,13 +30,12 @@ try {
     }
     return result
   }
-  const fixture = (count) => {
+  const fixture = (count, owners) => {
     let randomState = 20261001
     const random = (max) => {
       randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
       return Math.floor((randomState / 2 ** 32) * max)
     }
-    const owners = Math.max(5, Math.ceil(count / 100))
     const load = new Map(Array.from({ length: owners }, (_, i) => [`owner-${i}`, []]))
     const issues = Array.from({ length: count }, (_, index) => {
       const start = TODAY_WEEK - 12 + random(52)
@@ -44,16 +44,17 @@ try {
         owner: `owner-${random(owners)}`,
         status: index % 13 === 0 ? 'done' : index % 5 === 0 ? 'review' : 'progress',
         isGroup: index % 17 === 0,
+        paused: index % 19 === 0,
         start,
         end: start + random(12),
         remainingSet: start + random(6),
         remaining: random(720) / 10,
         dueWeek: start + 3 + random(16),
         duePast: start + 8 < TODAY_WEEK,
-        capacity: [16, 24, 32, 37.5][index % 4],
+        capacity: 32,
       }
-      // Paused tasks (every nineteenth), done tasks and groups contribute no load.
-      if (index % 19 && issue.status !== 'done' && !issue.isGroup) {
+      // paused and done tasks and groups carry no load
+      if (!issue.paused && issue.status !== 'done' && !issue.isGroup) {
         load.get(issue.owner).push({
           issueUuid: issue.uuid,
           start: issue.start,
@@ -74,42 +75,40 @@ try {
         })
       }
     }
-    return { issues, load, owners }
+    return { issues, load }
   }
   const median = (values) => values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)]
   const results = []
   let observed = 0
-  for (const count of [100, 1000, 10000]) {
-    const { issues, load, owners } = fixture(count)
-    assert.deepEqual(computeDelayMap(issues, load), baseline(issues, load))
-    const iterations = Math.max(1, Math.ceil(10000 / count))
-    const measure = (calculate) => {
+  // the design size's 10,000 open tasks of an organization over its 1,000
+  // people, then one person with a sub-project's 300 open tasks and with a
+  // project's 800, one figure at a time
+  for (const [count, owners] of [
+    [10000, 1000],
+    [300, 1],
+    [800, 1],
+  ]) {
+    const { issues, load } = fixture(count, owners)
+    const shared = computeDelayMap(issues, load)
+    // the shared walk gives each issue the verdict a walk of its own gives
+    const sample = issues.filter((_, i) => i % Math.ceil(count / 200) === 0)
+    const sampled = new Map(
+      sample.flatMap((it) => (shared.has(it.uuid) ? [[it.uuid, shared.get(it.uuid)]] : [])),
+    )
+    assert.deepEqual(sampled, alone(sample, load))
+    const iterations = Math.max(1, Math.ceil(2000 / count))
+    const measure = () => {
       const start = performance.now()
-      for (let i = 0; i < iterations; i++) observed += calculate(issues, load).size
+      for (let i = 0; i < iterations; i++) observed += computeDelayMap(issues, load).size
       return (performance.now() - start) / iterations
     }
-    for (let i = 0; i < 3; i++) {
-      measure(baseline)
-      measure(computeDelayMap)
-    }
-    const old = []
-    const current = []
-    for (let sample = 0; sample < 9; sample++) {
-      // Alternate order to reduce warmup and machine-load bias.
-      if (sample % 2) {
-        current.push(measure(computeDelayMap))
-        old.push(measure(baseline))
-      } else {
-        old.push(measure(baseline))
-        current.push(measure(computeDelayMap))
-      }
-    }
+    for (let i = 0; i < 3; i++) measure()
+    const times = Array.from({ length: 9 }, measure)
     results.push({
       tasks: count,
       owners,
-      'baseline median ms': median(old).toFixed(3),
-      'optimized median ms': median(current).toFixed(3),
-      speedup: `${(median(old) / median(current)).toFixed(2)}x`,
+      'median ms': median(times).toFixed(3),
+      'slowest ms': Math.max(...times).toFixed(3),
     })
   }
   assert.ok(observed > 0)

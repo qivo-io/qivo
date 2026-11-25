@@ -402,6 +402,7 @@ export function teamSyncStandIn(
       isGroup: false,
       isDone: t.status === 'done',
       partial: false,
+      paused: t.paused === true,
       owner: ownerId ?? null,
       start,
       end: planned === null ? null : Math.max(start ?? planned, planned),

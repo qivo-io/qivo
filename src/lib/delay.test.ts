@@ -27,30 +27,32 @@ const span = (o: Partial<LoadSpan>): LoadSpan => ({
 })
 
 describe('delayOf — projection with owner + remaining', () => {
-  it('is ok when the projected finish lands inside the plan and before due', () => {
-    // 34h free/wk, 60h → finishes T+1; plan runs to T+2, due later still
+  it('is ok, finishing at the planned end, when every week meets its ask', () => {
+    // 60h over T..T+2 asks 20h a week of 34, so it runs its plan out
     const d = delayOf(iss({ start: T, end: T + 2, dueWeek: T + 4, remaining: 60 }), [])
-    expect(d).toEqual({ status: 'ok', fin: T + 1 })
+    expect(d).toEqual({ status: 'ok', fin: T + 2 })
   })
   it('goes behind when other commitments push the finish past the planned end', () => {
-    // 24h/wk committed elsewhere → 10h free/wk; 60h needs 6 weeks, plan allows 2
+    // asks of 30h and 24h a week overbook 34h until the subject's plan ends,
+    // and its rest fits only in T+3
     const load = [span({ start: T, end: T + 9, remaining: 240 })]
     const d = delayOf(iss({ start: T, end: T + 1, dueWeek: T + 9, remaining: 60 }), load)
-    expect(d).toEqual({ status: 'behind', fin: T + 5 })
+    expect(d).toEqual({ status: 'behind', fin: T + 3 })
   })
   it('goes late when the projection also misses the due week', () => {
     const load = [span({ start: T, end: T + 9, remaining: 240 })]
-    const d = delayOf(iss({ start: T, end: T + 1, dueWeek: T + 3, remaining: 60 }), load)
-    expect(d).toEqual({ status: 'late', fin: T + 5 })
+    const d = delayOf(iss({ start: T, end: T + 1, dueWeek: T + 2, remaining: 60 }), load)
+    expect(d).toEqual({ status: 'late', fin: T + 3 })
   })
   it('a slipped competitor with a fresh estimate re-anchors to its measurement week', () => {
     // 68h planned wholly in the past, but measured NOW: still to do, so it
-    // saturates week T, pushing the subject's 68h past its T+1 due week.
+    // shares week T on with the subject's 68h, and the 136h of both take
+    // the four weeks T..T+3, past the subject's T+1 due week
     const load = [
       span({ issueUuid: 'A', start: T - 3, end: T - 1, remaining: 68, remainingSet: T }),
     ]
     const d = delayOf(iss({ uuid: 'B', start: T, end: T + 1, dueWeek: T + 1, remaining: 68 }), load)
-    expect(d).toEqual({ status: 'late', fin: T + 2 })
+    expect(d).toEqual({ status: 'late', fin: T + 3 })
   })
   it('a slipped competitor whose estimate predates its window is assumed done', () => {
     // same 68h, but measured back when the window began: the work is assumed
@@ -73,10 +75,11 @@ describe('delayOf — projection with owner + remaining', () => {
     expect(d).toEqual({ status: 'behind', fin: T + 1 })
   })
   it('projects from the measurement week, assuming progress since the estimate', () => {
-    // 100h measured at the T-4 start: 34h/wk covers it by T-2. Anchoring at
-    // today instead would read 100h still ahead → T+2 > end → falsely behind.
+    // 100h measured at the T-4 start ask 100/6 a week to the T+1 end.
+    // Anchoring at today instead would ask 100h over two weeks of 34 →
+    // T+2 > end → falsely behind.
     const d = delayOf(iss({ start: T - 4, end: T + 1, remaining: 100, remainingSet: T - 4 }), [])
-    expect(d).toEqual({ status: 'ok', fin: T })
+    expect(d).toEqual({ status: 'ok', fin: T + 1 })
   })
   it('floors the projected finish at today — an open issue past its end is behind, not green', () => {
     // measured T-5, fits by T-5, but the issue is still open at T with its
@@ -91,7 +94,7 @@ describe('delayOf — projection with owner + remaining', () => {
       iss({ start: T + 3, end: T + 4, dueWeek: T + 8, remaining: 30, remainingSet: T - 1 }),
       [],
     )
-    expect(d).toEqual({ status: 'ok', fin: T + 3 })
+    expect(d).toEqual({ status: 'ok', fin: T + 4 })
   })
   // a stored 0 is an ANSWER ("nothing left to do"), not a missing one: it
   // projects a finish of now, instead of falling back to a planned end the
@@ -244,7 +247,8 @@ describe('computeDelayMap', () => {
     expect(m.has('d')).toBe(false)
   })
   it("walks each issue against its own owner's load, not anyone else's", () => {
-    // u1 has 10h free a week; the same issue owned by u2 (say, its reviewer) has 34h
+    // u1 shares the week with 24h a week of other work; the same issue owned
+    // by u2 (say, its reviewer) has the week to itself
     const load = new Map<string, LoadSpan[]>([
       ['u1', [span({ start: T, end: T + 9, remaining: 240 })]],
     ])
@@ -254,7 +258,132 @@ describe('computeDelayMap', () => {
       load,
     )
     expect(m.get('mine')).toEqual({ status: 'behind', fin: T + 2 })
-    expect(m.get('theirs')).toEqual({ status: 'ok', fin: T })
+    expect(m.get('theirs')).toEqual({ status: 'ok', fin: T + 1 })
+  })
+})
+
+describe("the shared walk of an owner's tasks", () => {
+  /* Task `uuid` of owner u1 at 32h a week, and its span in u1's load. */
+  const task = (uuid: string, o: Partial<DelayIssue>) => {
+    const it = iss({ uuid, capacity: 32, remainingSet: T, ...o })
+    const own: LoadSpan = {
+      issueUuid: uuid,
+      start: it.start ?? T,
+      end: it.end ?? T,
+      remaining: it.remaining ?? 0,
+      remainingSet: it.remainingSet,
+    }
+    return { it, own }
+  }
+  const judge = (tasks: { it: DelayIssue; own: LoadSpan }[], extra: LoadSpan[] = []) => {
+    const load = [...tasks.map((t) => t.own), ...extra]
+    return computeDelayMap(
+      tasks.map((t) => t.it),
+      new Map([['u1', load]]),
+    )
+  }
+
+  it('shares an overbooked week equally, so three full weeks of work take three weeks', () => {
+    // 96h of work planned for this week alone in a 32h week
+    const m = judge(['a', 'b', 'c'].map((id) => task(id, { start: T, end: T, remaining: 32 })))
+    for (const id of ['a', 'b', 'c']) expect(m.get(id)).toEqual({ status: 'behind', fin: T + 2 })
+  })
+  it('gives every task its ask when the asks fill the week exactly', () => {
+    const m = judge([
+      task('a', { start: T, end: T + 1, remaining: 32 }),
+      task('b', { start: T, end: T + 1, remaining: 32 }),
+    ])
+    expect(m.get('a')).toEqual({ status: 'ok', fin: T + 1 })
+    expect(m.get('b')).toEqual({ status: 'ok', fin: T + 1 })
+  })
+  it('moves the rest of an overbooked week on, where a squeezed task can still catch up', () => {
+    // T: asks 24h and 16h get 80%; T+1: a asks its 28.8h left, b its 3.2h
+    const m = judge([
+      task('a', { start: T, end: T + 1, remaining: 48 }),
+      task('b', { start: T, end: T, remaining: 16 }),
+    ])
+    expect(m.get('a')).toEqual({ status: 'ok', fin: T + 1 })
+    expect(m.get('b')).toEqual({ status: 'behind', fin: T + 1 })
+  })
+  it('lets a task whose plan has ended ask for all its hours left until they are done', () => {
+    // a's plan ended last week, yet 40h were left this week
+    const late = task('a', { start: T - 3, end: T - 1, remaining: 40 })
+    const m = judge([late, task('b', { start: T, end: T + 1, remaining: 32 })])
+    expect(m.get('a')).toEqual({ status: 'behind', fin: T + 2 })
+    expect(m.get('b')).toEqual({ status: 'behind', fin: T + 2 })
+  })
+  it('asks nothing for a task before its planned start', () => {
+    const m = judge([
+      task('a', { start: T, end: T, remaining: 32 }),
+      task('b', { start: T + 1, end: T + 1, remaining: 32 }),
+    ])
+    expect(m.get('a')).toEqual({ status: 'ok', fin: T })
+    expect(m.get('b')).toEqual({ status: 'ok', fin: T + 1 })
+  })
+  it('gives a task without a plan, or a paused one, only the hours the planned asks leave', () => {
+    const planned = task('a', { start: T, end: T + 1, remaining: 48 })
+    // 8h free in T and T+1, then the whole week
+    const unplanned = iss({ uuid: 'u', capacity: 32, dueWeek: T + 5, remaining: 20 })
+    const { it: paused } = task('p', { start: T, end: T, remaining: 20, paused: true })
+    const m = computeDelayMap([planned.it, unplanned, paused], new Map([['u1', [planned.own]]]))
+    expect(m.get('a')).toEqual({ status: 'ok', fin: T + 1 })
+    expect(m.get('u')).toEqual({ status: 'ok', fin: T + 2 })
+    expect(m.get('p')).toEqual({ status: 'behind', fin: T + 2 })
+  })
+  it("walks a task's own hours where its span in the load is older, as with a pending edit", () => {
+    const { it, own } = task('a', { start: T, end: T, remaining: 64 })
+    const stale = { ...own, remaining: 32 }
+    expect(delayOf(it, [stale])).toEqual({ status: 'behind', fin: T + 1 })
+    // and the load's span itself fits the week
+    expect(delayOf({ ...it, remaining: 32 }, [stale])).toEqual({ status: 'ok', fin: T })
+  })
+  it('gives the same verdicts however the load rows arrive', () => {
+    const week = fc.integer({ min: T - 6, max: T + 6 })
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            start: week,
+            length: fc.integer({ min: 0, max: 4 }),
+            remaining: fc.constantFrom(0.1, 0.2, 0.3, 7, 16.5, 32),
+            measured: fc.option(week, { nil: null }),
+            hidden: fc.boolean(),
+          }),
+          { minLength: 1, maxLength: 12 },
+        ),
+        fc.integer(),
+        (rows, seed) => {
+          const tasks = rows.map((r, i) =>
+            task(r.hidden ? `h${i}` : `t${i}`, {
+              start: r.start,
+              end: r.start + r.length,
+              remaining: r.remaining,
+              remainingSet: r.measured,
+              dueWeek: r.start + 2,
+            }),
+          )
+          const load = tasks.map((t) =>
+            t.it.uuid.startsWith('h') ? { ...t.own, issueUuid: null } : t.own,
+          )
+          const shuffled = load
+            .map((span, i) => ({ span, key: (i * 2654435761 + seed) % 1009 }))
+            .sort((a, b) => a.key - b.key)
+            .map(({ span }) => span)
+          const shown = tasks.map((t) => t.it).filter((it) => it.uuid.startsWith('t'))
+          expect(computeDelayMap(shown, new Map([['u1', shuffled]]))).toEqual(
+            computeDelayMap(shown, new Map([['u1', load]])),
+          )
+        },
+      ),
+      { seed: 20261125, numRuns: 300 },
+    )
+  })
+  it('stops a saturated owner at the bound, behind, and keeps a later plan end', () => {
+    const endless = task('a', { start: T, end: T, remaining: 1e12 })
+    const far = task('b', { start: T, end: T + 2000, remaining: 2000 })
+    const m = judge([endless, far])
+    expect(m.get('a')).toEqual({ status: 'behind', fin: T + 520 })
+    expect(m.get('b')).toEqual({ status: 'ok', fin: T + 2000 })
   })
 })
 
@@ -347,6 +476,10 @@ describe("delayBeforeLoads — the window without the owners' loads", () => {
     const agent = iss({ end: T - 1, dueWeek: T + 3, remaining: 400, capacity: Infinity })
     expect(delayBeforeLoads(agent, leaf)).toEqual({ status: 'behind', fin: T })
     expect(delayOf(agent, busy)).toEqual({ status: 'behind', fin: T })
+    // an agent's unlimited hours meet every ask, so it runs its plan out
+    const planned = { ...agent, start: T, end: T + 3, dueWeek: T + 3 }
+    expect(delayBeforeLoads(planned, leaf)).toEqual({ status: 'ok', fin: T + 3 })
+    expect(delayOf(planned, busy)).toEqual({ status: 'ok', fin: T + 3 })
     // a finite capacity with hours left still needs the load
     expect(delayBeforeLoads({ ...agent, capacity: 37.5 }, leaf)).toBe(DELAY_UNKNOWN)
   })

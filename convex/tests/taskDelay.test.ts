@@ -127,8 +127,9 @@ async function cases(fx: Fx) {
   // cannot see, which leaves the user 5 free hours a week
   await task(fx, { project_id: fx.sib.id, assignee_id: fx.user.id, ...scheduled(0, 1, 70) })
   return {
-    // staff count the hidden load and project the finish two weeks out;
-    // the guest does not see that load and projects it for this week
+    // staff count the hidden load, which shares the user's weeks, and
+    // project the finish two weeks out; the guest does not see that load
+    // and projects it for its planned end
     squeezed: await task(fx, {
       title: 'Squeezed',
       assignee_id: fx.user.id,
@@ -243,6 +244,7 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       isGroup,
       isDone: isIssueDone(vm, byId),
       partial: span?.partial ?? false,
+      paused: !isGroup && r.paused === true,
       owner,
       start: span ? span.start : (vm.start ?? null),
       end: span ? span.end : (vm.end ?? null),
@@ -364,14 +366,15 @@ describe('delay is the app’s projected delay for each reader', () => {
     )
     const guest = await everyRead(fx, fx.guest.id, [c.squeezed.id, c.group.id])
     expect(admin.get(c.squeezed.id)).toEqual(verdict('behind', 2))
-    expect(guest.get(c.squeezed.id)).toEqual(verdict('ok', 0))
-    expect(admin.get(c.agentic.id)).toEqual(verdict('ok', 0))
+    expect(guest.get(c.squeezed.id)).toEqual(verdict('ok', 1))
+    // every ask of an agent fits, so it finishes at its planned end
+    expect(admin.get(c.agentic.id)).toEqual(verdict('ok', 1))
     expect(admin.get(c.legacy.id)).toEqual(verdict('behind', 1))
-    // Legacy's 34 hours fill Lee's 32-hour week
+    // Legacy's 34 hours and Reviewed's 2 share Lee's 32-hour week
     expect(admin.get(c.reviewed.id)).toEqual(verdict('behind', 1))
     expect(admin.get(c.overdue.id)).toEqual(verdict('late', null))
     expect(admin.get(c.stale.id)).toEqual(verdict('behind', 0))
-    expect(admin.get(c.measured.id)).toEqual(verdict('ok', 0))
+    expect(admin.get(c.measured.id)).toEqual(verdict('ok', 1))
     expect(admin.get(c.group.id)).toEqual(verdict('late', 4))
     expect(guest.get(c.group.id)).toEqual(verdict('late', 4))
     for (const quiet of [c.done, c.nothing, c.pcb, c.archived]) {

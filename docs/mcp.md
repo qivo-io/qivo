@@ -2190,6 +2190,18 @@ work they can read or own, so two users can get different verdicts for one
 task. The server judges today's date in UTC, so near midnight or a week
 boundary it can differ from the app, which uses the browser's time zone.
 
+The projection shares the owner's plannable hours week by week among their
+unfinished tasks. Each task asks for its remaining hours divided by the
+weeks left in its plan, or for all of them once its plan has ended, from
+the week its remaining hours were last updated or its planned start,
+whichever is later. When a week is overbooked every task gets the same
+share of its ask, and the rest moves to the next week. So a task on track
+is projected to finish in its planned end week, and a task without a plan,
+or a paused one, gets the hours the planned tasks leave free. Until the
+end of November 2026 each task was projected alone against the plans of
+the owner's other tasks, so a task on track could be projected to finish
+before its planned end.
+
 `delay` can also be `{"status": "unavailable", "projected_end_week":
 null}`. Qivo says this when the owner's other open work is too large for it
 to read in one request, or it could not finish checking which projects you

@@ -31,8 +31,8 @@ The planning panel offers:
 
 - **Auto-fit end to workload**, on by default for tasks without subtasks, with
   an owner and positive Remaining hours. After each drag, Qivo computes the end
-  from the owner's free weekly capacity, starting no earlier than the estimate
-  measurement week. It uses the reviewer while a task is In Review with one
+  from the owner's free weekly capacity, the hours their other tasks' plans
+  leave, starting no earlier than the estimate measurement week. It uses the reviewer while a task is In Review with one
   and follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
@@ -112,6 +112,12 @@ Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after
 the planned end counts in the save week. These figures update while you drag
 bars; there is no separate allocation to enter.
+
+Team utilization shows the plan, so a week can read over 100%. Delay
+verdicts go further: in an overbooked week the person's tasks share their
+hours equally, and the rest moves to later weeks, so the projected finishes
+show where an overbooked plan ends up
+([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
 
 ## Team sync
 
