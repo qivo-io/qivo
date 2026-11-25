@@ -306,13 +306,17 @@ Use the row controls to change tasks without opening them:
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.
-- **Board / Roadmap** opens the task there. Board opens its task window and
-  shows its card behind it, scrolled into view and ringed until a moment
-  after the window closes ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
+- **Board / Roadmap** opens the task there. The rows of **On it** and
+  **Next**, **Later** included, have these controls. **Done since** and
+  **Waiting on review** rows have neither, and their title opens the task
+  window. Board opens its task window and shows its card behind it,
+  scrolled into view and ringed until a moment after the window closes
+  ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
   Roadmap finds its bar or unplanned row without starting a planning session.
-  For a Done task while **Hide Done in Roadmap** is on, the Roadmap says
-  that Done tasks are hidden and where to turn the setting off, and keeps
-  its window where it was ([The Roadmap](./the-roadmap.md)).
+  If the task has become Done since its row was drawn, for example in a
+  meeting that no longer updates, and **Hide Done in Roadmap** is on, the
+  Roadmap shows no row for it and says that Done tasks are hidden and where
+  to turn the setting off ([The Roadmap](./the-roadmap.md)).
 - The **review tick** marks the task reviewed without changing it.
 
 A row's **Board** and **Roadmap** links open the task's sub-project. The

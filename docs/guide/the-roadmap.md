@@ -34,9 +34,11 @@ unfinished tasks' remaining hours. Dependency arrows to and from a hidden task
 are not drawn. **Team utilization** still counts the people who own the hidden
 tasks, so it shows the same figures with the setting on and off. Where every
 task the Roadmap would show is Done, it says **Done tasks are hidden** and
-where to turn the setting off, with **Clear filters** while a filter is on. A jump from Team sync or **Plan on roadmap** for
-a hidden Done task says so instead of showing it, and the Roadmap keeps its
-window where it was. A planning session ends when its task becomes Done. The setting follows your account across
+where to turn the setting off, with **Clear filters** while a filter is on.
+**Plan on roadmap** or **Show on roadmap** for a hidden Done task says so
+instead of showing it, and the Roadmap keeps its window where it was. A Team
+sync jump to a task that has become Done since its row was drawn says so
+too. A planning session ends when its task becomes Done. The setting follows your account across
 organizations and devices, and applies in every project, in My view and on the
 phone.
 
