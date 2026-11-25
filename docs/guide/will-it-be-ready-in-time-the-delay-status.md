@@ -7,7 +7,8 @@ hours and owner's workload. Delay tracking highlights two warnings:
   exact due date has already passed.
 
 **On track** has no warning color. Finishing in the due week is not classed
-as late, though its roadmap due-date marker warns that the schedule is tight.
+as late, though the hover text of its roadmap due-date marker says that the
+schedule is tight.
 Done tasks have no delay verdict. Tasks without a plan or due date also have
 no verdict. A task with only a due date needs an owner and remaining hours
 for a projection; without them, it gets a warning only once overdue.
@@ -17,6 +18,14 @@ for a projection; without them, it gets a warning only once overdue.
 Each Remaining save records when you measured it. Qivo projects from that
 week or the planned start, whichever is later, using the owner's plannable
 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)) minus their other scheduled work. Paused work takes no capacity.
+
+The other scheduled work counts each of the owner's other tasks with a plan,
+its remaining hours spread evenly over its planned weeks, from its planned
+start or the week its Remaining was saved, whichever is later, or all in that
+week when it was saved after the plan ended. The projection
+assumes that those other tasks finish on their own plan: one of them running
+late does not move its hours into later weeks here, so the projected finish
+can be earlier than the owner's whole workload allows.
 Organization admins and users receive organization-wide commitments, with
 hidden-project hours kept anonymous. Viewers and guests receive only work
 from visible projects and tasks they own ([Project access](./who-sees-what-the-access-model.md)).
@@ -47,15 +56,20 @@ When Qivo cannot read all of a group's subtasks, such as for a very large
 group, the group can show only **Delayed**, and only when its due date has
 passed or the subtasks it read already end after the due week. Otherwise it has no verdict, because the
 plan it read cannot show whether the group is on track. For the same
-reason, its Roadmap due line is gray when that plan ends before the due
-date.
+reason, when that plan ends before the due date, the hover text of its
+Roadmap due line says that Qivo could not read all of its subtasks.
 
 ## Where you see it
 
-- **Roadmap** colors bars, unplanned markers, edge badges and due-date lines.
-  Hover a due-date line for its explanation. Its bars read the owner's other
-  work from the server too, and where that work cannot be read, a bar and
-  its due-date line turn gray and say **Delay unknown**.
+- **Roadmap** colors a bar yellow or red from the today line on, and its
+  unplanned marker and edge badges with it. A bar whose plan ended before
+  the current week runs on to the end of the current week. **Projected
+  delay**, on by default, adds diagonal stripes to the end of the projected
+  finish week ([Scheduling by hand](./the-roadmap.md#scheduling-by-hand)).
+  A due-date line is one neutral mark; hover it for its explanation. The
+  Roadmap reads the owner's other work from the server too, and where that
+  work cannot be read, a bar turns gray with a dashed outline and its hover
+  text, like its due-date line's, says **Delay unknown**.
 - **Board** shows **Slipping** or **Delayed** above the card. The due-date
   tooltip also explains projected misses. Qivo reads the owner's other work
   from the server for the Board's cards, so their delay shows without
@@ -103,8 +117,8 @@ date.
 ## Turning it on and off
 
 Change **Delay tracking** in Project settings. It defaults to on. Turning it
-off removes delay colors; roadmap due-date markers still compare the planned
-end with the due date. Done bars remain green.
+off removes delay colors and projected stripes; the hover text of roadmap
+due-date markers still compares the planned end with the due date.
 
 ## Review time
 

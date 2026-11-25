@@ -96,8 +96,8 @@
     "reason": "auto-fit control state and visible/hidden-project workload presentation"
   },
   "src/views/roadmap/TimelineMarks.tsx": {
-    "count": 6,
-    "reason": "task bar geometry and colors, edge chips, draggable milestone positions, and the milestone flag band's computed size and rows"
+    "count": 7,
+    "reason": "task bar geometry, its split at the today line and its run-on and projection tail, edge chips, draggable milestone positions, and the milestone flag band's computed size and rows"
   },
   "src/views/roadmap/TimelineRow.tsx": {
     "count": 10,

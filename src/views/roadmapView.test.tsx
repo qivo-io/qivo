@@ -806,12 +806,13 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       return text
     }
     // the owner's load reads: the bar is judged, never unknown
-    expect(bar()?.getAttribute('style')).not.toContain('--roadmap-bar-unknown')
+    expect(bar()?.dataset.barPaint).toBe('progress')
     expect(await tooltip()).not.toContain('Delay unknown')
     board.server.unavailable = [board.snapshot.profiles[0].id]
     await board.answer()
-    expect(bar()?.getAttribute('style')).toContain('--roadmap-bar-unknown')
+    expect(bar()?.dataset.barPaint).toBe('unknown')
     expect(await tooltip()).toContain('Delay unknown')
+    expect(bar()?.getAttribute('aria-label')).toContain('Delay unknown')
   })
 
   it('opens a task only its answer brings by a reference the window reads from the server', async () => {

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
+import { barShape } from './barShape'
 import {
   FLAG_LANE_H,
   type FlagPlace,
@@ -28,35 +29,49 @@ const projectKnown = (id: string) => {
 
 export const BAR_RING = 4
 
-// Done and delayed states choose the hue. Theme tokens set tint and rim;
-// paused work adds stripes without hiding that state. A task whose delay is
-// unknown, its owner's load unread (P.delayUnknown), takes the neutral hue,
-// never the planned blue that reads as on track.
-const roadmapBarPaint = (it: IssueVM) => {
+type BarPaint = 'done' | 'late' | 'behind' | 'unknown' | 'backlog' | 'todo' | 'progress' | 'review'
+const STATUS_PAINT: Record<string, BarPaint> = {
+  backlog: 'backlog',
+  todo: 'todo',
+  progress: 'progress',
+  review: 'review',
+}
+
+/* The paint of a task's bar from the today line on (Roadmap.css). A task
+   whose delay is unknown, its owner's load unread (P.delayUnknown), never
+   takes a status colour that would read as on track. A task with subtasks
+   shows no status of its own, so it reads as In Progress once one of its
+   subtasks has started (`started`), else as To Do. */
+const nowPaint = (it: IssueVM, started: boolean): BarPaint => {
+  if (P.isDone(it)) return 'done'
   const pressure = P.delayColor(it) && P.delayOf(it)?.status
-  const state = P.isDone(it)
-    ? 'done'
-    : pressure === 'late' || pressure === 'behind'
-      ? pressure
-      : P.delayUnknown(it)
-        ? 'unknown'
-        : 'planned'
-  const color = `var(--roadmap-bar-${state})`
-  const fill = `var(--roadmap-bar-${state}-fill, var(--roadmap-bar-fill))`
-  const tint = `color-mix(in oklab, ${color} ${fill}, transparent)`
-  return {
-    color,
-    rim: `var(--roadmap-bar-${state}-rim, color-mix(in oklab, ${color} var(--roadmap-bar-rim), transparent))`,
-    surface: P.isPaused(it)
-      ? `repeating-linear-gradient(135deg, ${tint} 0 3px, color-mix(in oklab, ${color} 12%, transparent) 3px 7px)`
-      : tint,
-  }
+  if (pressure === 'late' || pressure === 'behind') return pressure
+  if (P.delayUnknown(it)) return 'unknown'
+  if (P.isGroup(it)) return started ? 'progress' : 'todo'
+  return STATUS_PAINT[it.status] ?? 'todo'
+}
+
+/** What a bar's hover text and accessible name say of its delay. */
+const delayNoteOf = (it: IssueVM) => {
+  if (!P.tracksDelay(it)) return ''
+  const delay = P.delayOf(it)
+  return `, ${
+    delay
+      ? P.DELAY_LABELS[delay.status]
+      : P.isDone(it)
+        ? 'complete'
+        : P.delayUnknown(it)
+          ? 'Delay unknown'
+          : 'no delay signal'
+  }`
 }
 
 export function WeekCountEdge({
   it,
   edge,
   side,
+  past,
+  started,
   fade,
   ring,
   onReveal,
@@ -64,6 +79,10 @@ export function WeekCountEdge({
   it: IssueVM
   edge: RoadmapEdge
   side: 'before' | 'after'
+  /** the hidden week next to the window is before the current week */
+  past: boolean
+  /** a subtask of the task has started (Roadmap.tsx subtasksStarted) */
+  started: boolean
   fade: number
   ring?: string
   onReveal: () => void
@@ -72,7 +91,8 @@ export function WeekCountEdge({
   const outside = edge.kind === 'outside'
   // A detached task still occupies the nearest hidden week when there is no gap.
   const filled = !outside || edge.weeks === 0
-  const paint = roadmapBarPaint(it)
+  const paint = nowPaint(it, started)
+  const pressure = paint === 'behind' || paint === 'late'
   const relation = outside
     ? before
       ? 'Planned period ended before this window'
@@ -83,7 +103,7 @@ export function WeekCountEdge({
   const count = `${edge.weeks} ${edge.weeks === 1 ? 'week' : 'weeks'}`
   const explanation = outside
     ? `${count} between the planned period and this window`
-    : `${count} of this task ${before ? 'before' : 'after'} this window`
+    : `${count} of this task's plan ${before ? 'before' : 'after'} this window`
   const verb = outside ? (before ? 'Ended' : 'Starts') : before ? 'Started' : 'Ends'
   const endpoint = `${verb} ${P.weekLabel(edge.endpoint)}`
   return (
@@ -96,18 +116,18 @@ export function WeekCountEdge({
       data-edge-filled={filled}
       data-edge-side={side}
       data-offwin={outside ? it.id : undefined}
+      data-bar-paint={past && paint !== 'done' ? 'past' : paint}
+      data-paused={P.isPaused(it) || undefined}
       style={
         {
           opacity: fade,
-          '--roadmap-edge-color': filled ? paint.color : P.delayColor(it) || 'var(--text-3)',
-          '--roadmap-edge-surface': paint.surface,
-          '--roadmap-edge-rim': filled ? paint.rim : undefined,
+          '--roadmap-edge-color': pressure ? `var(--roadmap-bar-${paint}-rim)` : 'var(--text-3)',
           // a connected chip is the visible start or end of its bar, so a
           // ringed bar rings it too (Roadmap.css)
           '--roadmap-edge-ring': outside ? undefined : ring,
         } as CSSProperties
       }
-      aria-label={`${it.title}${P.isPaused(it) ? ', paused' : ''}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
+      aria-label={`${it.title}${P.isPaused(it) ? ', paused' : ''}${delayNoteOf(it)}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
       title={`${verb} ${P.weekNumLabel(edge.endpoint)}`}
       onClick={onReveal}
     >
@@ -126,6 +146,8 @@ export function Bar({
   w0,
   w1,
   weekW,
+  showProjection,
+  started,
   onSched,
   onCommit,
   onOpen,
@@ -137,27 +159,29 @@ export function Bar({
   w0: number
   w1: number
   weekW: number
+  /** whether the person shows a Slipping or Delayed task's projected finish */
+  showProjection: boolean
+  /** a subtask of the task has started (Roadmap.tsx subtasksStarted) */
+  started: boolean
   onSched: (id: string, start: number, end: number) => void
   onCommit: (id: string, epoch: number) => void
   onOpen: (id: string) => void
   ring?: string
 }) {
-  // Completed work is green, including its connected edge badges.
-  // Unfinished work keeps the accent unless delay tracking reports pressure.
-  const paint = roadmapBarPaint(it)
-  // Hover help includes on-track status even when paint shows no pressure.
-  const delay = P.tracksDelay(it) ? P.delayOf(it) : null
-  const delayNote = P.tracksDelay(it)
-    ? `, ${
-        delay
-          ? P.DELAY_LABELS[delay.status]
-          : P.isDone(it)
-            ? 'complete'
-            : P.delayUnknown(it)
-              ? 'Delay unknown'
-              : 'no delay signal'
-      }`
-    : ''
+  const paint = nowPaint(it, started)
+  const pressure = paint === 'behind' || paint === 'late'
+  const shape = barShape({
+    start,
+    end,
+    w0,
+    w1,
+    weekW,
+    todayWeek: P.TODAY_WEEK,
+    todayPos: P.TODAY_POS,
+    done: paint === 'done',
+    finish: pressure ? (P.delayOf(it)?.fin ?? null) : null,
+    showProjection,
+  })
   const drag = useRefR<{
     mode: 'move' | 'start' | 'end'
     x: number
@@ -173,35 +197,38 @@ export function Bar({
   // group's dates come from its subtasks, so its bar is never dragged either.
   const group = P.isGroup(it)
   const movable = P.canWrite(it.project) && !group
-  // Drawn across the visible weeks only: a span that continues past either
-  // end stops flush at the timeline edge, squared, where its edge chip joins
-  // it. Nothing the bar paints (ring, shadow) may cross that join.
-  const cutStart = start < w0
-  const cutEnd = end > w1
-  const left = (Math.max(start, w0) - w0) * weekW
-  const width = (cutEnd ? w1 - w0 + 1 : end - w0 + 1) * weekW - (cutEnd ? 0 : 6) - left
-  const spill = BAR_RING * 2
-  const clipPath =
-    cutStart || cutEnd
-      ? `inset(-${spill}px ${cutEnd ? 0 : -spill}px -${spill}px ${cutStart ? 0 : -spill}px)`
-      : undefined
+  const paused = P.isPaused(it)
+  const finishNote =
+    shape.stripesTo === null
+      ? ''
+      : `, projected to finish in the week of ${P.fmtDate(P.weekToDate(shape.stripesTo))}`
+  const label = `${it.title}, ${P.fmtRange(start, end)}${paused ? ', paused' : ''}${delayNoteOf(it)}${finishNote}${group ? ', dates from subtasks' : movable ? '' : projectKnown(it.project) ? ', read-only' : ', loading'}`
+  const { plan, runOn, projection } = shape
+  const tail = runOn ?? projection
+  const tailEnd = projection ?? runOn
+  // the plan and its run-on or stripes read as one shape: no rim, rounding
+  // or ring where they meet
+  const joined = !!plan && !!tail && !plan.cutEnd
 
-  const onDown = (mode: 'move' | 'start' | 'end') => (e: PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation()
-    e.currentTarget.setPointerCapture(e.pointerId)
-    // epoch: the grid can re-anchor mid-drag (another admin changes the org's
-    // week start; realtime rebuild) — the held indexes are then stale units
-    drag.current = {
-      mode,
-      x: landscape?.rotated ? e.clientY : e.clientX,
-      rotated: !!landscape?.rotated,
-      s: start,
-      e: end,
-      moved: false,
-      epoch: P.gridEpoch,
-      frozen: !movable,
+  // fixed: a press on the run-on or the stripes, which are no plan to drag
+  const onDown =
+    (mode: 'move' | 'start' | 'end', fixed = false) =>
+    (e: PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation()
+      e.currentTarget.setPointerCapture(e.pointerId)
+      // epoch: the grid can re-anchor mid-drag (another admin changes the org's
+      // week start; realtime rebuild) — the held indexes are then stale units
+      drag.current = {
+        mode,
+        x: landscape?.rotated ? e.clientY : e.clientX,
+        rotated: !!landscape?.rotated,
+        s: start,
+        e: end,
+        moved: false,
+        epoch: P.gridEpoch,
+        frozen: fixed || !movable,
+      }
     }
-  }
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!drag.current || drag.current.frozen) return
     if (drag.current.epoch !== P.gridEpoch) return
@@ -224,56 +251,116 @@ export function Bar({
     }
     drag.current = null
   }
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    onOpen(it.id)
+  }
+  // Nothing a part paints (ring, shadow) may cross a side that is cut at the
+  // timeline's edge, where an edge chip joins it, or one that meets another
+  // part.
+  const clip = (openStart: boolean, openEnd: boolean) =>
+    openStart || openEnd
+      ? `inset(-${BAR_RING * 2}px ${openEnd ? 0 : -BAR_RING * 2}px -${BAR_RING * 2}px ${openStart ? 0 : -BAR_RING * 2}px)`
+      : undefined
+  const ringStyle = ring ? ({ '--roadmap-bar-ring': ring } as CSSProperties) : null
 
   return (
-    <HoverTooltip
-      content={`${it.title}, ${P.fmtRange(start, end)}${P.isPaused(it) ? ', paused' : ''}${delayNote}${group ? ', dates from subtasks' : movable ? '' : projectKnown(it.project) ? ', read-only' : ', loading'}`}
-    >
-      <div
-        data-bar={it.id}
-        onPointerDown={onDown('move')}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-        style={{
-          left,
-          width,
-          borderTopLeftRadius: cutStart ? 0 : undefined,
-          borderBottomLeftRadius: cutStart ? 0 : undefined,
-          borderTopRightRadius: cutEnd ? 0 : undefined,
-          borderBottomRightRadius: cutEnd ? 0 : undefined,
-          clipPath,
-          cursor: movable ? 'grab' : 'pointer',
-          background: paint.surface,
-          // no rim on a cut side: the joined chip carries the outline on
-          borderColor: paint.rim,
-          borderWidth: `1px ${cutEnd ? 0 : 1}px 1px ${cutStart ? 0 : 1}px`,
-          boxShadow: ring
-            ? `0 0 0 ${BAR_RING}px ${ring}, var(--qivo-shadow-card)`
-            : 'var(--qivo-shadow-card)',
-        }}
-        className="[position:absolute] [top:8px] [height:20px] [border-style:solid] [border-radius:var(--r-sm)] [overflow:hidden] [touch-action:none] [user-select:none] [transition:filter_var(--dur-fast)_var(--ease-out),_box-shadow_var(--dur-fast)_var(--ease-out)]"
-        onMouseEnter={(e) => {
-          e.currentTarget.style.filter = 'brightness(1.05)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.filter = 'none'
-        }}
-      >
-        {movable && !cutStart && (
+    <>
+      {plan && (
+        <HoverTooltip content={label}>
+          {/* biome-ignore lint/a11y/useSemanticElements: a drag handle; a native button would also click at the end of every drag. */}
           <div
-            onPointerDown={onDown('start')}
-            className="[position:absolute] [left:0] [top:0] [bottom:0] [width:9px] [cursor:ew-resize]"
-          />
-        )}
-        {movable && !cutEnd && (
+            data-bar={it.id}
+            data-bar-paint={paint}
+            data-paused={paused || undefined}
+            data-open-start={plan.cutStart || undefined}
+            data-open-end={plan.cutEnd || joined || undefined}
+            role="button"
+            tabIndex={0}
+            aria-label={label}
+            onPointerDown={onDown('move')}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            onKeyDown={onKey}
+            style={
+              {
+                ...ringStyle,
+                '--bar-split': `${shape.past}px`,
+                left: plan.left,
+                width: plan.width,
+                clipPath: clip(plan.cutStart, plan.cutEnd || joined),
+                cursor: movable ? 'grab' : 'pointer',
+              } as CSSProperties
+            }
+            className="roadmap-bar"
+          >
+            {shape.past > 0 && (
+              <span
+                className="roadmap-bar-past"
+                data-split={shape.past < plan.width || undefined}
+              />
+            )}
+            {shape.past < plan.width && (
+              <span className="roadmap-bar-now" data-split={shape.past > 0 || undefined} />
+            )}
+            {paused && plan.width >= 20 && (
+              <span className="roadmap-bar-pause">
+                <span className="glyph glyph-pause" />
+              </span>
+            )}
+            {movable && !plan.cutStart && (
+              <div
+                onPointerDown={onDown('start')}
+                className="[position:absolute] [left:0] [top:0] [bottom:0] [width:9px] [cursor:ew-resize]"
+              />
+            )}
+            {movable && !plan.cutEnd && (
+              <div
+                onPointerDown={onDown('end')}
+                className="[position:absolute] [right:0] [top:0] [bottom:0] [width:9px] [cursor:ew-resize]"
+              />
+            )}
+          </div>
+        </HoverTooltip>
+      )}
+      {tail && tailEnd && (
+        <HoverTooltip content={label}>
           <div
-            onPointerDown={onDown('end')}
-            className="[position:absolute] [right:0] [top:0] [bottom:0] [width:9px] [cursor:ew-resize]"
-          />
-        )}
-      </div>
-    </HoverTooltip>
+            data-bar-tail={it.id}
+            data-bar-paint={paint}
+            data-open-start=""
+            data-open-end={tailEnd.cutEnd || undefined}
+            aria-hidden="true"
+            tabIndex={-1}
+            onPointerDown={onDown('move', true)}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            style={
+              {
+                ...ringStyle,
+                '--bar-run': `${runOn?.width ?? 0}px`,
+                left: tail.left,
+                width: tailEnd.left + tailEnd.width - tail.left,
+                clipPath: clip(true, tailEnd.cutEnd),
+              } as CSSProperties
+            }
+            className="roadmap-bar"
+          >
+            {runOn && (
+              <span
+                className="roadmap-bar-run"
+                data-plain={!pressure || undefined}
+                data-split={!!projection || undefined}
+              />
+            )}
+            {projection && <span className="roadmap-bar-stripes" />}
+          </div>
+        </HoverTooltip>
+      )}
+    </>
   )
 }
 

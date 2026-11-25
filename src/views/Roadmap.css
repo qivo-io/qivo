@@ -80,20 +80,29 @@
   flex-shrink: 0;
   color: var(--roadmap-edge-color);
 }
-/* A filled chip wears its bar's surface and rim (Roadmap.tsx passes
-   --roadmap-edge-surface and --roadmap-edge-rim), a paused task's hatch too. */
+/* A filled chip wears the paint of the bar's part next to the window's edge
+   (TimelineMarks.tsx WeekCountEdge), a paused task's stripes too. */
 .roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count {
   top: 8px;
   height: 20px;
   color: var(--text-1);
-  background: var(--roadmap-edge-surface);
-  border-color: var(
-    --roadmap-edge-rim,
-    color-mix(in oklab, var(--roadmap-edge-color) var(--roadmap-bar-rim), transparent)
-  );
+  background: var(--bar-fill);
+  border-color: var(--bar-rim);
 }
 .roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count > svg {
   color: inherit;
+}
+.roadmap-week-edge[data-edge-filled="true"]:is(
+    [data-bar-paint="backlog"],
+    [data-bar-paint="unknown"]
+  )
+  .roadmap-week-count {
+  border-style: dashed;
+}
+.roadmap-week-edge[data-edge-filled="true"][data-paused] .roadmap-week-count {
+  background:
+    repeating-linear-gradient(135deg, transparent 0 4px, var(--roadmap-bar-hatch) 4px 8px),
+    var(--bar-fill);
 }
 /* A connected chip joins its bar. A ringed bar rings the chip too
    (Roadmap.tsx passes --roadmap-edge-ring; 4px is BAR_RING there), open on
@@ -122,4 +131,225 @@
   background: none;
   border: 0;
   box-shadow: none;
+}
+
+/* A task bar (TimelineMarks.tsx Bar): its plan, split into past and present
+   at --bar-split, and a tail of the run-on to this week's end, --bar-run
+   wide, and the stripes to the projected finish. Each part paints its own
+   fill and rim, and leaves out its rim and rounding on a side where it meets
+   another part or is cut at the window's edge (data-open-start and
+   data-open-end). The ring is 4px, BAR_RING there. */
+[data-bar-paint="past"] {
+  --bar-fill: var(--roadmap-bar-past);
+  --bar-rim: var(--roadmap-bar-past-rim);
+}
+[data-bar-paint="backlog"] {
+  --bar-fill: var(--roadmap-bar-backlog);
+  --bar-rim: var(--roadmap-bar-backlog-rim);
+}
+[data-bar-paint="todo"] {
+  --bar-fill: var(--roadmap-bar-todo);
+  --bar-rim: var(--roadmap-bar-todo-rim);
+}
+[data-bar-paint="progress"] {
+  --bar-fill: var(--roadmap-bar-progress);
+  --bar-rim: var(--roadmap-bar-progress-rim);
+}
+[data-bar-paint="review"] {
+  --bar-fill: var(--roadmap-bar-review);
+  --bar-rim: var(--roadmap-bar-review-rim);
+}
+[data-bar-paint="behind"] {
+  --bar-fill: var(--roadmap-bar-behind);
+  --bar-rim: var(--roadmap-bar-behind-rim);
+  --bar-stripe: color-mix(in oklab, var(--roadmap-bar-behind) 82%, black);
+}
+[data-bar-paint="late"] {
+  --bar-fill: var(--roadmap-bar-late);
+  --bar-rim: var(--roadmap-bar-late-rim);
+  --bar-stripe: color-mix(in oklab, var(--roadmap-bar-late) 78%, black);
+}
+[data-bar-paint="unknown"] {
+  --bar-fill: var(--roadmap-bar-unknown);
+  --bar-rim: var(--roadmap-bar-unknown-rim);
+}
+[data-bar-paint="done"] {
+  --bar-fill: var(--roadmap-bar-done);
+  --bar-rim: var(--roadmap-bar-done-rim);
+}
+
+.roadmap-bar {
+  position: absolute;
+  top: 8px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  box-shadow:
+    0 0 0 4px var(--roadmap-bar-ring, transparent),
+    var(--qivo-shadow-card);
+  touch-action: none;
+  user-select: none;
+  transition:
+    filter var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.roadmap-bar:hover {
+  filter: brightness(1.05);
+}
+.roadmap-bar[data-bar-paint="done"] {
+  box-shadow: 0 0 0 4px var(--roadmap-bar-ring, transparent);
+}
+.roadmap-bar[data-open-start] {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.roadmap-bar[data-open-end] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.roadmap-bar > :is(.roadmap-bar-past, .roadmap-bar-now, .roadmap-bar-run, .roadmap-bar-stripes) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1px solid var(--bar-rim);
+  border-radius: inherit;
+  background: var(--bar-fill);
+}
+.roadmap-bar > .roadmap-bar-past {
+  left: 0;
+  width: var(--bar-split);
+  border-color: var(--roadmap-bar-past-rim);
+  background: var(--roadmap-bar-past);
+}
+.roadmap-bar > .roadmap-bar-now {
+  left: var(--bar-split);
+  right: 0;
+}
+.roadmap-bar > .roadmap-bar-run {
+  left: 0;
+  width: var(--bar-run);
+}
+.roadmap-bar > .roadmap-bar-stripes {
+  left: var(--bar-run);
+  right: 0;
+  border: 0;
+  background: repeating-linear-gradient(135deg, var(--bar-fill) 0 5px, var(--bar-stripe) 5px 10px);
+}
+.roadmap-bar:is([data-bar-paint="backlog"], [data-bar-paint="unknown"])
+  > :is(.roadmap-bar-now, .roadmap-bar-run) {
+  border-style: dashed;
+}
+/* A run-on without Slipping or Delayed to show, as where the project does not
+   track delay: a faint, dashed stretch, so it never reads as planned time. */
+.roadmap-bar > .roadmap-bar-run[data-plain] {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--bar-fill) 40%, var(--roadmap-bar-ground));
+}
+.roadmap-bar > :is(.roadmap-bar-past, .roadmap-bar-run)[data-split] {
+  border-right-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.roadmap-bar > :is(.roadmap-bar-now[data-split], .roadmap-bar-run, .roadmap-bar-stripes) {
+  border-left-width: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.roadmap-bar[data-open-start] > :first-child {
+  border-left-width: 0;
+}
+.roadmap-bar[data-open-end] > :is(.roadmap-bar-now, :not([data-split])) {
+  border-right-width: 0;
+}
+/* A paused bar keeps its paint under stripes, with a pause sign at its
+   start. */
+.roadmap-bar[data-paused]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 4px,
+    var(--roadmap-bar-hatch) 4px 8px
+  );
+  pointer-events: none;
+}
+.roadmap-bar-pause {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 3px;
+  translate: 0 -50%;
+  padding: 1px;
+  border-radius: 3px;
+  background: var(--roadmap-bar-ground);
+  color: var(--text-1);
+  pointer-events: none;
+}
+.roadmap-bar-pause > .glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.roadmap-due {
+  background: var(--roadmap-due);
+}
+
+/* Forced colors drop fills and gradients, which would leave a bar's past,
+   its run-on and its stripes looking alike, or not at all. */
+@media (forced-colors: active) {
+  .roadmap-bar,
+  .roadmap-week-edge,
+  .roadmap-due {
+    forced-color-adjust: none;
+  }
+  [data-bar-paint] {
+    --bar-fill: CanvasText;
+    --bar-rim: CanvasText;
+    --bar-stripe: Canvas;
+    --roadmap-bar-hatch: Canvas;
+    --roadmap-bar-ground: Canvas;
+  }
+  [data-bar-paint="past"] {
+    --bar-fill: GrayText;
+    --bar-rim: GrayText;
+  }
+  [data-bar-paint="done"],
+  [data-bar-paint="backlog"],
+  [data-bar-paint="unknown"] {
+    --bar-fill: Canvas;
+  }
+  [data-bar-paint="done"] {
+    --bar-rim: GrayText;
+  }
+  .roadmap-bar > .roadmap-bar-past {
+    border-color: GrayText;
+    background: GrayText;
+  }
+  .roadmap-bar > .roadmap-bar-run[data-plain] {
+    background: Canvas;
+  }
+  .roadmap-bar-pause {
+    color: CanvasText;
+  }
+  .roadmap-week-edge {
+    color: CanvasText;
+  }
+  .roadmap-week-count {
+    border-color: CanvasText;
+  }
+  .roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count {
+    color: Canvas;
+  }
+  .roadmap-week-edge[data-edge-filled="true"]:is(
+      [data-bar-paint="done"],
+      [data-bar-paint="backlog"],
+      [data-bar-paint="unknown"]
+    )
+    .roadmap-week-count {
+    color: CanvasText;
+  }
+  .roadmap-due {
+    background: CanvasText;
+  }
 }

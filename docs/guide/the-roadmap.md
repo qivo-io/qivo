@@ -62,8 +62,12 @@ separates the task from the window.
 Hover or keyboard-focus a badge to read its endpoint week. Click it to bring
 that endpoint into view without changing the number of visible weeks.
 **Ended W37** describes the plan, not whether the task is Done. Connected and
-adjacent badges match the bar's color. More distant badges stay neutral unless
-delay tracking marks them yellow or red ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)).
+adjacent badges match the bar where it meets the window's edge: gray for
+planned time before the current week, otherwise the bar's color. More distant
+badges are outlined, neutral unless delay tracking marks them yellow or red
+([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Badges
+count planned weeks only. A run-on or projected finish (below) that reaches
+past the window is cut at its edge.
 
 ## Weeks that match *your* calendar
 
@@ -94,11 +98,36 @@ shows the people who can take the task, 25 at a time with a search and
 **In Review** with a reviewer, the portrait and picker show the reviewer instead.
 
 Bars fill the whole planned period; their length does not show completion.
-**Done bars are green**, including groups whose descendant work is all Done.
-Other bars are blue unless delay tracking marks unfinished work yellow or red
-([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A bar is gray, and its hover text says **Delay unknown**, when
-Qivo could not read its owner's workload to judge it. A **paused** task keeps its color and gains diagonal lines, including on
-its connected and adjacent edge badges.
+The part of an unfinished task's bar before the today line is dark gray. From
+the today line on, a bar has the color of its status on the Board: To Do
+light gray, In Progress blue, In Review violet and Backlog a faint dashed
+outline. A task with subtasks has no status of its own, so its bar is In
+Progress blue once one of its subtasks has started, and To Do gray before.
+Where the project tracks delay, a **Slipping** task is yellow and a
+**Delayed** task red from the today line on, whatever its status
+([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). The hover
+text names the state. A bar is gray with a dashed outline, and its hover
+text says **Delay unknown**, when Qivo could not read its owner's workload to
+judge it.
+
+An unfinished task whose plan ended before the current week runs on from its
+planned end to the end of the current week, in its yellow or red. Where the
+project does not track delay, the run-on is a faint dashed stretch in the
+status color. The run-on is not part of the plan: it follows the bar, a drag
+on it moves nothing, and the plan still ends where the gray ends.
+
+**Projected delay** in the toolbar draws diagonal stripes in the same yellow
+or red from the end of a Slipping or Delayed bar, or its run-on, to the end of
+the task's projected finish week, which the hover text names
+([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+It is on by default. Switching it off hides only the stripes, for your
+account, in every project, in My view and on the phone's landscape timeline.
+
+**Done bars are dim gray**, including groups whose descendant work is all
+Done. A finished bar in the past never has a run-on, which tells it apart from
+unfinished work. A **paused** task keeps its color under diagonal lines and
+shows a pause sign at its start. Its connected and adjacent edge badges get
+the lines too.
 
 A task with subtasks takes its dates from them. Its bar runs from the
 earliest start to the latest end of its active scheduled subtasks, at any
@@ -176,8 +205,9 @@ the same way, and history stays.
 ## Dependencies you can see and safely fix
 
 **Blocks** links appear as finish-to-start arrows between two bars on the
-timeline. Green means the blocker ends before the blocked task starts. Red
-means it ends in or after the blocked task's start week. Arrows update while
+timeline. A gray arrow means the blocker ends before the blocked task starts.
+A red arrow means it ends in or after the blocked task's start week, and the
+blocked task's bar gets a red ring. Arrows update while
 you drag. A task you have just scheduled shows its arrows once its dates are
 saved. When Qivo cannot read the selection's links within the Roadmap's
 limits, no arrow shows, and a line above the timeline says why.

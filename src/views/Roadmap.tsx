@@ -21,6 +21,7 @@ import {
   useState as useStateR,
 } from 'react'
 import { Button } from '@/components/ui/button'
+import { Toggle } from '@/components/ui/toggle'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
@@ -30,6 +31,7 @@ import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { useViewVisibility } from '@/lib/viewVisibility'
 import type { PlannedTask } from '../../convex/lib/roadmap'
+import { groundRadius, toggleVariant } from '../components/ground'
 import { NoProjects } from '../components/NoProjects'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
@@ -185,6 +187,14 @@ function RoadmapRoot({
   )
 }
 
+/** Whether task `it` has a subtask the views hold that is In Progress, In
+    Review or Done. */
+const subtasksStarted = (it: IssueVM) =>
+  (it.children ?? []).some((id) => {
+    const sub = P.anyTask(id)
+    return !!sub && (sub.status === 'progress' || sub.status === 'review' || P.isDone(sub))
+  })
+
 /** A stretch of a track's task rows. It renders again only when `deps`
     changed or one of its rows did: another task, offset, height, bar or
     ring. `render` draws one row from the rows and deps it was given. */
@@ -216,6 +226,7 @@ const RowChunk = memo(
         x.start === y.start &&
         x.end === y.end &&
         x.stale === y.stale &&
+        x.started === y.started &&
         (!x.row.issue || a.rings[x.row.issue.id] === b.rings[x.row.issue.id])
       )
     }),
@@ -366,6 +377,13 @@ function Roadmap({
   const setWin = (w) => {
     setWinState(w)
     P.saveUI({ roadmapWin: w })
+  }
+  const [showProjection, setShowProjectionState] = useStateR(
+    () => P.loadUI().roadmapProjection !== false,
+  )
+  const setShowProjection = (show: boolean) => {
+    setShowProjectionState(show)
+    P.saveUI({ roadmapProjection: show })
   }
   const { w0, w1, capped } = P.resolveWin(win)
   const NW = w1 - w0 + 1
@@ -1513,6 +1531,17 @@ function Roadmap({
               Milestone
             </Button>
           )}
+          <Toggle
+            variant={toggleVariant('well')}
+            className={groundRadius('well')}
+            pressed={showProjection}
+            onPressedChange={setShowProjection}
+            data-roadmap-projection
+            title="Stripes to the projected finish of Slipping and Delayed tasks"
+          >
+            <Icon name="projection" size={16} />
+            Projected delay
+          </Toggle>
           {/* "Auto-move" (deviation #236; "Auto-correct" before that, and
             "Auto-schedule" before that): it MOVES the tasks whose dates
             contradict a dependency they already have — after their blockers —
@@ -1902,6 +1931,7 @@ function Roadmap({
       end: row.issue ? getE(row.issue) : null,
       stale:
         row.kind !== 'track' && row.kind !== 'sub' && !!row.issue && view.family.stale(row.issue),
+      started: row.kind === 'task' && P.isGroup(row.issue) && subtasksStarted(row.issue),
     })
     if (row.kind === 'task' && getS(row.issue) != null) {
       const s = getS(row.issue),
@@ -1987,7 +2017,6 @@ function Roadmap({
     const blocked = taskOf(dp.blocked)
     return !!blocker && !!blocked && getE(blocker) >= getS(blocked)
   }
-  const depColor = (dp) => (late(dp) ? 'var(--danger)' : 'var(--success)')
   const barRing: Record<string, string> = {}
   deps.forEach((dp) => {
     if (late(dp)) barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
@@ -2003,12 +2032,11 @@ function Roadmap({
   const dueX = (iso) =>
     ((P.isoToDate(iso).getTime() - P.weekToDate(w0).getTime()) / 86400000) * (weekW / 7)
 
-  // The due tick of a scheduled row: a day-precise line, colored by the
-  // judgment its hover text spells out. Null when the due date is outside
-  // the window (x === timelineW is the Monday AFTER the last visible week).
-  // The judgment is about the DUE date only: with delay tracking (0064) it
-  // uses the projected finish; 'behind' alone keeps a green tick — the bar
-  // already carries the against-plan warning.
+  // The due tick of a scheduled row: a day-precise line, whose hover text
+  // spells out the judgment. Null when the due date is outside the window
+  // (x === timelineW is the Monday AFTER the last visible week). The
+  // judgment is about the DUE date only: with delay tracking (0064) it uses
+  // the projected finish.
   const dueMark = (iss) => {
     const x = dueX(iss.due)
     if (x < 0 || x >= timelineW) return null
@@ -2017,42 +2045,24 @@ function Roadmap({
     const wkStart = endW != null ? P.weekToDate(endW).getTime() : null
     const wkEnd = endW != null ? P.weekToDate(endW + 1).getTime() - 86400000 : null
     const di = P.tracksDelay(iss) ? P.delayOf(iss) : null
-    let color: string, state: string
-    if (P.isDone(iss)) {
-      color = 'var(--text-3)'
-      state = 'complete'
-    } else if (P.delayUnknown(iss)) {
-      // the owner's load could not be read, so the plan says nothing either way
-      color = 'var(--text-3)'
-      state = 'Delay unknown'
-    } else if (di && di.status === 'late') {
-      color = 'var(--danger)'
+    let state: string
+    if (P.isDone(iss)) state = 'complete'
+    // the owner's load could not be read, so the plan says nothing either way
+    else if (P.delayUnknown(iss)) state = 'Delay unknown'
+    else if (di && di.status === 'late')
       state = iss.due < P.TODAY_ISO ? 'overdue' : 'projected to finish after the due date'
-    } else if (di && di.fin != null && di.fin === P.isoToWeek(iss.due)) {
-      color = 'var(--warn)'
+    else if (di && di.fin != null && di.fin === P.isoToWeek(iss.due))
       state = 'tight, projected to finish in the due week'
-    } else if (di) {
-      color = 'var(--success)'
-      state = 'on track, projected to finish before the due date'
-    } else if (iss.due < P.TODAY_ISO) {
-      color = 'var(--danger)'
-      state = 'overdue'
-    } else if (wkStart != null && dueT < wkStart) {
-      color = 'var(--danger)'
-      state = 'planned end is after the due date'
-    } else if (wkEnd != null && dueT <= wkEnd) {
-      color = 'var(--warn)'
-      state = 'tight, due falls in the final planned week'
-    } else if (P.isGroup(iss) && view.family.partial(iss)) {
-      // subtasks Qivo could not read may end later, so the plan it read
-      // cannot show the group finishing before its due date
-      color = 'var(--text-3)'
+    else if (di) state = 'on track, projected to finish before the due date'
+    else if (iss.due < P.TODAY_ISO) state = 'overdue'
+    else if (wkStart != null && dueT < wkStart) state = 'planned end is after the due date'
+    else if (wkEnd != null && dueT <= wkEnd) state = 'tight, due falls in the final planned week'
+    // subtasks Qivo could not read may end later, so the plan it read
+    // cannot show the group finishing before its due date
+    else if (P.isGroup(iss) && view.family.partial(iss))
       state = 'Qivo could not read all of its subtasks'
-    } else {
-      color = 'var(--success)'
-      state = 'on track, plan ends before the due date'
-    }
-    return { x, color, state }
+    else state = 'on track, plan ends before the due date'
+    return { x, state }
   }
 
   // every gridline sits on a week boundary — the first workday of that week:
@@ -2625,6 +2635,8 @@ function Roadmap({
                         due={due}
                         start={L.start}
                         end={L.end}
+                        showProjection={showProjection}
+                        started={L.started}
                         w0={w0}
                         w1={w1}
                         weekW={weekW}
@@ -2667,6 +2679,7 @@ function Roadmap({
                     weekW,
                     timelineW,
                     hasSubHeads,
+                    showProjection,
                     P.contextVersion,
                     P.TODAY_ISO,
                     rowObserver,
@@ -2764,19 +2777,20 @@ function Roadmap({
                         y2 = b.yc
                       const c = Math.max(16, Math.abs(x2 - x1) / 2)
                       const d = `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2 - 7} ${y2}`
-                      const col = depColor(dp)
+                      const conflict = late(dp)
+                      const end = conflict ? 'var(--danger)' : 'var(--roadmap-dep-end)'
                       return (
                         // one arrow per dedup'd pair, the same key dependencyPairs uses
                         <g key={`${dp.blocker}>${dp.blocked}`}>
-                          <circle cx={x1} cy={y1} r={3} fill={col} />
+                          <circle cx={x1} cy={y1} r={3} fill={end} />
                           <path
                             d={d}
                             fill="none"
-                            stroke={col}
-                            strokeWidth={1.6}
-                            strokeOpacity={0.9}
+                            stroke={conflict ? 'var(--danger)' : 'var(--roadmap-dep)'}
+                            strokeWidth={conflict ? 1.6 : 1.4}
+                            strokeOpacity={conflict ? 0.9 : 1}
                           />
-                          <path d={`M ${x2} ${y2} l -7 -4 l 0 8 Z`} fill={col} />
+                          <path d={`M ${x2} ${y2} l -7 -4 l 0 8 Z`} fill={end} />
                         </g>
                       )
                     })}
