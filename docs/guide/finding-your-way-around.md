@@ -25,7 +25,10 @@ a time, the one you are in. It stays expanded while you visit
 **Team sync**, **Inbox**, **All projects** or **Settings**, and opening
 another project collapses it. On **My view** the project you opened last
 is expanded, the one Qivo saves for you
-([The three views](#the-three-views)), also after a reload. Opening a task
+([The three views](#the-three-views)), also after a reload, once its row
+has loaded. On **My view** the tree does not load on toward that row, so
+where it is further down the list, the project expands once you scroll to
+it or press **Load more**. Opening a task
 by its link does not change that project, so after a task link has shown
 you another project, **My view** expands the one you opened before it.
 Until Qivo has checked a project you open from a link or the one you had
