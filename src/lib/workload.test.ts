@@ -5,8 +5,6 @@ import {
   canonicalLoad,
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
-  fitEndWeek,
-  fitEndWeekAgainst,
   fmtHours,
   hasPlannableWeek,
   issueLoadByPerson,
@@ -63,7 +61,7 @@ describe('plannableHoursOf', () => {
   })
   it('never yields a zero denominator', () => {
     // 0 can't come from the DB (check > 0) but would silently make every
-    // load percentage Infinity and stall fitEndWeek at its 520-week bound
+    // load percentage Infinity and overbook every week of the shared walk
     expect(plannableHoursOf({ plannableHours: 0 })).toBe(DEFAULT_PLANNABLE_HOURS)
     expect(plannableHoursOf({ plannableHours: null })).toBe(DEFAULT_PLANNABLE_HOURS)
   })
@@ -85,17 +83,6 @@ describe('plannableHoursOf', () => {
     expect(hasPlannableWeek(plannableHoursOf({ kind: 'agent', plannableHours: null }))).toBe(false)
     expect(hasPlannableWeek(plannableHoursOf({ plannableHours: 20 }))).toBe(true)
     expect(hasPlannableWeek(plannableHoursOf(null))).toBe(true)
-  })
-})
-
-describe('fitEndWeek with an unbounded capacity', () => {
-  it('finishes in the starting week however much work there is', () => {
-    // the whole point of "an agent has no plannable week": its work is never
-    // stretched over calendar weeks it does not need
-    const cap = plannableHoursOf({ kind: 'agent', plannableHours: null })
-    expect(fitEndWeek(5, 400, cap, new Map())).toBe(5)
-    // …even against a week that is already fully committed
-    expect(fitEndWeek(5, 400, cap, new Map([[5, 999]]))).toBe(5)
   })
 })
 
@@ -170,59 +157,6 @@ describe('committedByWeek', () => {
       [3, 7],
       [4, 2],
     ])
-  })
-})
-
-describe('fitEndWeek', () => {
-  it('returns start when there is no remaining time', () => {
-    expect(fitEndWeek(11, 0, 34, new Map())).toBe(11)
-  })
-  it('fits a free person by ceil(remaining/capacity)', () => {
-    // 60h at 34h/wk free → wk11:34 (rem26), wk12:34 (rem<0) → ends wk12 (2 weeks)
-    expect(fitEndWeek(11, 60, 34, new Map())).toBe(12)
-  })
-  it('pushes the end out when the person is partly committed', () => {
-    // 10h/wk already committed → 24h/wk free; 60h → wk11:24(36) wk12:24(12) wk13:24(<0) → wk13
-    const committed = new Map([
-      [11, 10],
-      [12, 10],
-      [13, 10],
-      [14, 10],
-    ])
-    expect(fitEndWeek(11, 60, 34, committed)).toBe(13)
-  })
-  it('does not loop forever when fully booked (capacity 0)', () => {
-    expect(fitEndWeek(11, 60, 0, new Map(), 50)).toBe(11 + 50 - 1)
-  })
-  it('skips saturated weeks then lands on the first week with free time', () => {
-    // wk11 fully booked (34), wk12 free → all 20h fit in wk12
-    const committed = new Map([[11, 34]])
-    expect(fitEndWeek(11, 20, 34, committed)).toBe(12)
-  })
-})
-
-describe('fitEndWeekAgainst', () => {
-  it('fits as fitEndWeek does over the whole load', () => {
-    fc.assert(
-      fc.property(
-        loads,
-        fc.integer({ min: -10, max: 15 }),
-        hours,
-        hours,
-        fc.integer({ min: 1, max: 30 }),
-        (load, start, remaining, capacity, maxWeeks) => {
-          expect(fitEndWeekAgainst(load, 'self', start, remaining, capacity, maxWeeks)).toBe(
-            fitEndWeek(start, remaining, capacity, committedByWeek(load, 'self'), maxWeeks),
-          )
-        },
-      ),
-      { seed: 20261015, numRuns: 400 },
-    )
-  })
-  it('fits against a plan that runs to the year 9999', () => {
-    const load = [item({ issueUuid: 'long', start: 0, end: LONG - 1, remaining: LONG * 30 })]
-    // 30 h a week of the owner's 34 are taken, so 10 h need three weeks
-    expect(fitEndWeekAgainst(load, 'self', 5, 10, 34)).toBe(7)
   })
 })
 

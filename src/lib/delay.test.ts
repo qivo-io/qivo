@@ -1,8 +1,9 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
+import { PROJECTION_WEEKS, walkStepsSoFar } from '../../convex/lib/workload'
 import { TODAY_WEEK } from './dates'
 import { computeDelayMap, DELAY_UNKNOWN, type DelayIssue, delayBeforeLoads, delayOf } from './delay'
-import type { LoadSpan } from './workload'
+import { autoFitEndWeek, type FitTask, type LoadSpan } from './workload'
 
 const T = TODAY_WEEK
 
@@ -455,6 +456,98 @@ describe('delayOf — task groups', () => {
       status: 'behind',
       fin: T + 1,
     })
+  })
+})
+
+describe('Auto-fit and the delay verdict', () => {
+  const fitted = (load: LoadSpan[], task: Omit<FitTask, 'issueUuid'>) =>
+    autoFitEndWeek(load, { issueUuid: 'self', ...task }, 32, T)
+
+  it('ends a task where the shared walk finishes it, so it reads On track', () => {
+    // 32h in T and in T+2 leave T+1 and T+3 free, which hold 64h, but the
+    // 64h spread from T to T+3 overbook T and T+2 and finish in T+4
+    const load = [
+      span({ issueUuid: 'a', start: T, end: T, remaining: 32 }),
+      span({ issueUuid: 'c', start: T + 2, end: T + 2, remaining: 32 }),
+    ]
+    const b = iss({ start: T, remaining: 64, capacity: 32 })
+    expect(fitted(load, { start: T, remaining: 64 })).toBe(T + 4)
+    expect(delayOf({ ...b, end: T + 4 }, load)).toEqual({ status: 'ok', fin: T + 4 })
+    expect(delayOf({ ...b, end: T + 3 }, load)).toEqual({ status: 'behind', fin: T + 4 })
+  })
+  it("ends an agent's task in its first week however much work there is", () => {
+    const busy = [span({ issueUuid: 'a', start: T, end: T + 3, remaining: 999 })]
+    const task = { issueUuid: 'self', remaining: 400 }
+    expect(autoFitEndWeek(busy, { ...task, start: T + 2 }, Infinity, T)).toBe(T + 2)
+    // and no earlier than this week, which an unfinished task cannot finish before
+    const measured = { ...task, start: T - 3, remainingSet: T - 2 }
+    expect(autoFitEndWeek(busy, measured, Infinity, T)).toBe(T)
+  })
+  it('gives the earliest end whose verdict is not Behind plan', () => {
+    const week = fc.integer({ min: T - 4, max: T + 6 })
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            start: week,
+            length: fc.integer({ min: 0, max: 3 }),
+            remaining: fc.constantFrom(4, 16, 30, 32, 48),
+            measured: fc.option(week, { nil: null }),
+          }),
+          { maxLength: 8 },
+        ),
+        fc.record({
+          start: week,
+          remaining: fc.constantFrom(1, 10, 32, 64, 100),
+          measured: fc.option(week, { nil: null }),
+          paused: fc.boolean(),
+          // the task's own span in the load, older than the task
+          stale: fc.boolean(),
+        }),
+        (rows, own) => {
+          const load = rows.map((r, i) =>
+            span({
+              issueUuid: `o${i}`,
+              start: r.start,
+              end: r.start + r.length,
+              remaining: r.remaining,
+              remainingSet: r.measured,
+            }),
+          )
+          if (own.stale) load.push(span({ issueUuid: 'self', start: T, end: T, remaining: 32 }))
+          const task = { start: own.start, remaining: own.remaining, remainingSet: own.measured }
+          const it = iss({ ...task, paused: own.paused, capacity: 32 })
+          const end = fitted(load, { ...task, paused: own.paused })
+          const verdict = (e: number) => delayOf({ ...it, end: e }, load)?.status
+          expect(verdict(end)).toBe('ok')
+          const first = Math.max(T, own.start, own.measured ?? T)
+          for (let e = first; e < end; e++) expect(verdict(e)).toBe('behind')
+        },
+      ),
+      { seed: 20261125, numRuns: 300 },
+    )
+  })
+  it('tries the ends for a saturated owner at the cost of one walk', () => {
+    const endless = [span({ issueUuid: 'a', start: T, end: T, remaining: 1e12 })]
+    const before = walkStepsSoFar()
+    expect(fitted(endless, { start: T, remaining: 10 })).toBe(T + PROJECTION_WEEKS - 1)
+    expect(walkStepsSoFar() - before).toBeLessThanOrEqual(PROJECTION_WEEKS)
+  })
+  it('stops trying ends after bounded walking where every other week is full', () => {
+    // 400 ten-year tasks take 16h a week, and a 16h task fills every other
+    // week, so many ends leave room in their own week and fail on the ones
+    // before. Trying every end walks over 50,000 steps.
+    const load = [
+      ...Array.from({ length: 400 }, (_, i) =>
+        span({ issueUuid: `l${i}`, start: T, end: T + 519, remaining: 0.04 * 520 }),
+      ),
+      ...Array.from({ length: 260 }, (_, i) =>
+        span({ issueUuid: `s${i}`, start: T + 2 * i + 1, end: T + 2 * i + 1, remaining: 16 }),
+      ),
+    ]
+    const before = walkStepsSoFar()
+    fitted(load, { start: T, remaining: 4000 })
+    expect(walkStepsSoFar() - before).toBeLessThan(10_000)
   })
 })
 

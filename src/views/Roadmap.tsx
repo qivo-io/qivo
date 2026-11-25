@@ -53,7 +53,7 @@ import { isoToWeek, monthStartWeeks, winWeeks } from '../lib/dates'
 import { isIssueGroup } from '../lib/issueGroups'
 import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
-import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
+import { autoFitEndWeek, type FitTask, type LoadItem, plannableHoursOf } from '../lib/workload'
 import {
   AGENDA_MILESTONE_SLOTS,
   type IssueFilters,
@@ -198,6 +198,14 @@ function RoadmapRoot({
     </div>
   )
 }
+
+const fitTask = (it: IssueVM, start: number): FitTask => ({
+  issueUuid: it.uuid,
+  start,
+  remaining: it.remaining,
+  remainingSet: it.remainingSet,
+  paused: it.paused,
+})
 
 /** Whether task `it` has a subtask the views hold that is In Progress, In
     Review or Done. */
@@ -872,8 +880,8 @@ function Roadmap({
     if (!l || !it || P.isGroup(it)) return
     const sess = sessionRef.current
     const load = planLoadRef.current
-    // auto-fit: the planned issue's end follows the owner's free capacity —
-    // a move sets the start and recomputes the end; dragging the end is
+    // auto-fit: the planned issue's end follows the owner's workload — a
+    // move sets the start and recomputes the end; dragging the end is
     // overridden by the same recompute ("checked against the rest of the plan")
     const cap = capacityFor(it)
     if (
@@ -885,11 +893,7 @@ function Roadmap({
       load &&
       cap !== null
     ) {
-      // the fit consumes capacity from the week the remaining hours were
-      // measured (never before the dragged start) — the same anchor the delay
-      // projection walks from, so the fitted end and the status agree
-      const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
-      const end = fitEndWeekAgainst(load, it.uuid, from, it.remaining, cap)
+      const end = autoFitEndWeek(load, fitTask(it, l.start), cap, P.TODAY_WEEK)
       if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
@@ -1094,15 +1098,11 @@ function Roadmap({
   // the projects of the owner's work, which the panel names (PlanCard), at
   // most the owner's open tasks' projects
   useProjects(planLoad?.items?.map((item) => item.projectId) ?? [])
-  const autoFitEnd = (id, startW, load, capacity, uuid, remaining) => {
-    // same measurement-week anchor as the drag commit and the delay projection
-    const rs = taskOf(id)?.remainingSet
-    const from = rs != null ? Math.max(startW, rs) : startW
-    sendDates(id, {
-      start: startW,
-      end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
+  const autoFitEnd = (it: IssueVM, load: LoadItem[], capacity: number) =>
+    sendDates(it.id, {
+      start: it.start,
+      end: autoFitEndWeek(load, fitTask(it, it.start), capacity, P.TODAY_WEEK),
     })
-  }
   /** Session `s`'s task as the Roadmap's answer names it, while no note
       takes the Roadmap's place and Hide Done in Roadmap does not hide it,
       else undefined. Auto-fit places only this task. One the answer no
@@ -1136,7 +1136,7 @@ function Roadmap({
     sessionRef.current = placed
     setSession(placed)
     const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
-    if (fits && cap !== null && load) autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
+    if (fits && cap !== null && load) autoFitEnd(it, load, cap)
   })
   const toggleAutoFit = () => {
     const s = sessionRef.current
@@ -1157,7 +1157,7 @@ function Roadmap({
       it.start != null &&
       cap !== null
     )
-      autoFitEnd(s.issueId, it.start, load, cap, it.uuid, it.remaining)
+      autoFitEnd(it, load, cap)
   }
   const confirmPlanning = () => {
     const s = sessionRef.current

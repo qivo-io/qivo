@@ -30,10 +30,20 @@ subtasks instead.
 The planning panel offers:
 
 - **Auto-fit end to workload**, on by default for tasks without subtasks, with
-  an owner and positive Remaining hours. After each drag, Qivo computes the end
-  from the owner's free weekly capacity, the hours their other tasks' plans
-  leave, starting no earlier than the estimate measurement week. It uses the reviewer while a task is In Review with one
-  and follows ownership changes during the session. While Qivo loads the
+  an owner and positive Remaining hours. After each drag, Qivo sets the end
+  to the earliest week by which the delay projection finishes the task, with
+  the owner's other tasks sharing their weekly hours
+  ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+  So the task you place is not Behind plan, though it is Late when that end
+  is after its due week. The end is no earlier than the start, the estimate
+  measurement week or the current week. A paused task asks for no hours, so
+  its end is where the hours the other tasks leave free cover it. Qivo tries
+  ends up to 520 weeks, ten years, after the first, and uses the last of
+  them when none works. Placing a task in weeks that are already full can
+  still make the owner's other tasks in those weeks read Behind plan, which
+  Team utilization shows as a week over 100%. It uses the reviewer while a
+  task is In Review with one and follows ownership changes during the
+  session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
   could not read their hours, it says **Capacity unknown, so auto-fit is
@@ -48,8 +58,9 @@ The planning panel offers:
 - **Confirm** to keep the dates or **Cancel** to restore the original dates,
   including an unscheduled state.
 
-Agents have no weekly capacity limit. Auto-fit ends in the start or measurement
-week, whichever is later, and shows **No weekly capacity limit for auto-fit**.
+Agents have no weekly capacity limit. Auto-fit ends in the start week, the
+measurement week or the current week, whichever is latest, and shows **No
+weekly capacity limit for auto-fit**.
 When Qivo cannot read the owner's workload, for example when they hold more
 open work than it reads at once, the panel shows **Workload is unavailable**
 and auto-fit pauses until Qivo can read it again. That applies to agents too.

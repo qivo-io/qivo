@@ -1043,11 +1043,17 @@ describe('Team utilization', () => {
             .map((b) => [b.projectId, b.name, Math.round(b.hours * 1e6) / 1e6])
         expect(buckets(after), `${profile.name}: ${one.owner_id}'s panel`).toEqual(buckets(before))
         // auto-fit places the same end against either
+        const fitted = (load: LoadItem[], remaining: number) =>
+          P.workload.autoFitEndWeek(
+            load,
+            { issueUuid: 'planned', start: P.dates.TODAY_WEEK, remaining },
+            40,
+            P.dates.TODAY_WEEK,
+          )
         for (const hours of [8, 40, 120])
-          expect(
-            P.workload.fitEndWeekAgainst(after, null, P.dates.TODAY_WEEK, hours, 40),
-            `${profile.name}: ${one.owner_id}'s fit of ${hours} h`,
-          ).toBe(P.workload.fitEndWeekAgainst(before, null, P.dates.TODAY_WEEK, hours, 40))
+          expect(fitted(after, hours), `${profile.name}: ${one.owner_id}'s fit of ${hours} h`).toBe(
+            fitted(before, hours),
+          )
         if (before.length > 0) compared++
       }
       expect(compared, profile.name).toBeGreaterThan(0)

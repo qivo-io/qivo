@@ -100,7 +100,8 @@ export function PlanCard({
   const ownerLoading = hoursLoading(owner)
   const canFit = !!owner && cap !== null && remaining > 0
   const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
-  // Match auto-fit: weeks before the measurement anchor cannot dilute load.
+  // As the task's hours spread (spreadWindow), weeks before the measurement
+  // week cannot dilute load.
   const fitStart =
     scheduled && issue.remainingSet != null
       ? Math.max(issue.start, issue.remainingSet)
@@ -112,7 +113,8 @@ export function PlanCard({
     !loading && load && scheduled ? loadByProject(load, fitStart, issue.end, issue.uuid) : []
   const committedInWindow = buckets.reduce((s, b) => s + b.hours, 0)
   // Use the same owner for capacity and existing commitments. Agents have
-  // no bounded capacity; auto-fit ends in the starting week.
+  // no bounded capacity; auto-fit ends in the task's first week
+  // (lib/workload.ts autoFitEndWeek).
   const bounded = cap !== null && hasPlannableWeek(cap)
   const freePerWk =
     cap === null ? 0 : scheduled ? Math.max(0, cap - committedInWindow / fitDur) : cap
