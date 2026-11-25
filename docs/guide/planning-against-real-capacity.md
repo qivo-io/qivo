@@ -29,10 +29,10 @@ subtasks instead.
 
 The planning panel offers:
 
-- **Auto-fit end to workload**, on by default for tasks without subtasks, with
-  an owner and positive Remaining hours. After each drag, Qivo sets the end
-  to the earliest week by which the delay projection finishes the task, with
-  the owner's other tasks sharing their weekly hours
+- **Auto-fit end to workload**, on by default for tasks without subtasks
+  that are not Done, with an owner and positive Remaining hours. After each
+  drag, Qivo sets the end to the earliest week by which the delay projection
+  finishes the task, with the owner's other tasks sharing their weekly hours
   ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
   An end Qivo sets this way is not Behind plan, though it is Late when it is
   after the task's due week. The end is no earlier than the start, the
@@ -52,7 +52,9 @@ The planning panel offers:
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
   could not read their hours, it says **Capacity unknown, so auto-fit is
-  off**.
+  off**. A Done task's dates record when the work happened, so a drag
+  moves or resizes it as you drop it, and the panel says **Done, so
+  auto-fit is off**.
 - The owner's committed hours by project, excluding paused work. Hidden
   projects appear as anonymous **Other projects** hours where your role allows
   it ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)). The free-hours summary uses that person's plannable week.

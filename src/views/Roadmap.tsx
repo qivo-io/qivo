@@ -200,8 +200,9 @@ function RoadmapRoot({
 }
 
 /** Whether Auto-fit places task `it`'s end: a task without subtasks, with
-    an owner and hours left. */
-const autoFits = (it: IssueVM) => !!it.owner && !P.isGroup(it) && it.remaining > 0
+    an owner and hours left, that is not Done, as a Done task's dates are
+    a record of when the work happened. */
+const autoFits = (it: IssueVM) => !!it.owner && !P.isGroup(it) && !P.isDone(it) && it.remaining > 0
 
 const fitTask = (it: IssueVM, start: number): FitTask => ({
   issueUuid: it.uuid,

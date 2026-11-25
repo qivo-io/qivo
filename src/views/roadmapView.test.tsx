@@ -1377,6 +1377,35 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     )
   })
 
+  it('moves a Done task as dropped, into the past too, with auto-fit off', async () => {
+    // one-1 is Done with 8 hours left as measured three weeks ago, when it
+    // was planned
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[0], {
+          status: 'done',
+          remaining_hours: 8,
+          remaining_set_at: `${week(-3)}T12:00:00.000Z`,
+          start_week: week(-3),
+          end_week: week(-3),
+        })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    const request = { ...planOne(board), start: TODAY_WEEK - 3, end: TODAY_WEEK - 3 }
+    await renderRoadmap(board, { focusPlan: request, hideDone: false })
+    await board.answer()
+    await settle()
+    await flush()
+    expect(planCard()?.textContent).toContain('Done, so auto-fit is off')
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    expect(datesSent('one-1')).toEqual([{ start_week: week(-2), end_week: week(-2) }])
+  })
+
   it("places an unscheduled task's end once its owner's load first answers, and never again", async () => {
     const board = await loadBoard(
       network,

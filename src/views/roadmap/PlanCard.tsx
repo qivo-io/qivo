@@ -15,6 +15,10 @@ export const OWNER_HOURS_LOADING = 'Loading the owner’s hours…'
     end (lib/workload.ts autoFitEndWeek) and left the end as it was. */
 export const NO_FIT_END = 'Auto-fit found no end within its limits, so the end stays as it is'
 
+/** What the planning panel says under auto-fit for a Done task, whose
+    dates auto-fit leaves alone. */
+export const DONE_NO_FIT = 'Done, so auto-fit is off'
+
 /* a small on/off switch for the PlanCard's auto-fit control; the off track
    reads the palette's --switch-off, else --surface-3 */
 function PlanSwitch({
@@ -105,7 +109,8 @@ export function PlanCard({
   // Roadmap then spends the first fit.
   const cap = owner ? capacityOf(owner) : null
   const ownerLoading = hoursLoading(owner)
-  const canFit = !!owner && cap !== null && remaining > 0
+  const done = P.isDone(issue)
+  const canFit = !!owner && cap !== null && remaining > 0 && !done
   const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
   // As the task's hours spread (spreadWindow), weeks before the measurement
   // week cannot dilute load.
@@ -189,19 +194,21 @@ export function PlanCard({
               Auto-fit end to workload
             </div>
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
-              {!owner
-                ? 'Assign someone to auto-fit'
-                : ownerLoading
-                  ? OWNER_HOURS_LOADING
-                  : cap === null
-                    ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
-                    : remaining <= 0
-                      ? 'Add remaining time to auto-fit'
-                      : !session.autoFit
-                        ? 'Drag the end freely'
-                        : session.noFit
-                          ? NO_FIT_END
-                          : `End follows ${first}’s free time on drop`}
+              {done
+                ? DONE_NO_FIT
+                : !owner
+                  ? 'Assign someone to auto-fit'
+                  : ownerLoading
+                    ? OWNER_HOURS_LOADING
+                    : cap === null
+                      ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
+                      : remaining <= 0
+                        ? 'Add remaining time to auto-fit'
+                        : !session.autoFit
+                          ? 'Drag the end freely'
+                          : session.noFit
+                            ? NO_FIT_END
+                            : `End follows ${first}’s free time on drop`}
             </div>
           </div>
         </div>
