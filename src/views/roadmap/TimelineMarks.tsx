@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
-import { barShape } from './barShape'
+import { barShape, type TailPress, tailClickOpens } from './barShape'
 import {
   FLAG_LANE_H,
   type FlagPlace,
@@ -273,29 +273,27 @@ export function Bar({
     if (!dragged.current) onOpen(it.id)
   }
   // The run-on and the stripes are no plan to drag: a press that travels
-  // across them moves nothing and opens nothing, also when it ends where it
-  // began, and neither does one released off them. The press holds the
-  // pointer, so the click of its release comes here and ends it. A click
-  // with no press of its own, as an assistive tool sends it, opens the task.
-  const tailPress = useRefR<{ x: number; y: number; far: boolean } | null>(null)
+  // across them moves nothing and opens nothing. The press holds the pointer,
+  // so its release and the click of that release come here (tailClickOpens).
+  const tailPress = useRefR<TailPress | null>(null)
   const onTailDown = (e: PointerEvent<HTMLDivElement>) => {
     // only the main button's release sends a click
     if (e.button !== 0) return
     e.currentTarget.setPointerCapture(e.pointerId)
-    tailPress.current = { x: e.clientX, y: e.clientY, far: false }
+    tailPress.current = { x: e.clientX, y: e.clientY, far: false, releasedAt: null }
   }
   const onTailMove = (e: PointerEvent<HTMLDivElement>) => {
     const press = tailPress.current
     if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) press.far = true
   }
+  const onTailUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (tailPress.current) tailPress.current.releasedAt = e.timeStamp
+  }
   const onTailClick = (e: MouseEvent<HTMLDivElement>) => {
     const press = tailPress.current
     tailPress.current = null
-    if (
-      !press ||
-      (!press.far && e.currentTarget.contains(document.elementFromPoint(e.clientX, e.clientY)))
-    )
-      onOpen(it.id)
+    const inside = e.currentTarget.contains(document.elementFromPoint(e.clientX, e.clientY))
+    if (tailClickOpens(press, { detail: e.detail, at: e.timeStamp, inside })) onOpen(it.id)
   }
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
@@ -387,6 +385,7 @@ export function Bar({
             tabIndex={plan ? -1 : 0}
             onPointerDown={onTailDown}
             onPointerMove={onTailMove}
+            onPointerUp={onTailUp}
             onPointerCancel={() => {
               tailPress.current = null
             }}

@@ -70,3 +70,27 @@ export function barShape(it: BarShapeInput): BarShape {
   const projection = stripesTo === null ? null : part(endX(solidEnd), endX(stripesTo))
   return { plan, past, runOn, projection, stripesTo }
 }
+
+/** A press on a bar's run-on or stripes: where it began, whether it ever
+    travelled more than a few pixels, and when it was released (event time,
+    null while it is held). */
+export type TailPress = { x: number; y: number; far: boolean; releasedAt: number | null }
+
+/** How long after a release its click can still come. A phone's browser can
+    hold a tap's click back for about a third of a second. */
+const CLICK_AFTER_RELEASE_MS = 1000
+
+/** Whether a click on a bar's run-on or stripes opens the task. A click
+    that belongs to no press opens it: one an assistive tool sends alone
+    (`detail` 0, or no press at all), or one that comes long after a
+    release that sent no click of its own, as a long press does. The click
+    of a press opens the task only where the press never travelled and
+    ended on the part (`inside`). */
+export function tailClickOpens(
+  press: TailPress | null,
+  click: { detail: number; at: number; inside: boolean },
+): boolean {
+  if (!press || click.detail === 0) return true
+  if (press.releasedAt !== null && click.at - press.releasedAt > CLICK_AFTER_RELEASE_MS) return true
+  return !press.far && click.inside
+}

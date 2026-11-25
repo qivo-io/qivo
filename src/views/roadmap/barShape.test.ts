@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type BarShapeInput, barShape } from './barShape'
+import { type BarShapeInput, barShape, tailClickOpens } from './barShape'
 
 /* Weeks 9 to 17 at 100 px a week, today in the middle of week 11: week w
    starts at (w - 9) * 100, and a bar ending in week w ends 6 px before the
@@ -77,5 +77,38 @@ describe('barShape', () => {
     const bar = shape({ start: 11, end: 11, weekW: 20, todayPos: 11 + 6 / 7 })
     expect(bar.plan).toEqual({ left: 40, width: 14, cutStart: false, cutEnd: false })
     expect(bar.past).toBe(11)
+  })
+})
+
+describe('a click on a run-on or stripes', () => {
+  const still = { x: 100, y: 10, far: false, releasedAt: 5000 }
+  const click = { detail: 1, at: 5010, inside: true }
+
+  it('opens the task after a press that stayed in place and ended on the part', () => {
+    expect(tailClickOpens(still, click)).toBe(true)
+  })
+
+  it('opens nothing after a press that travelled, also when it ended where it began', () => {
+    expect(tailClickOpens({ ...still, far: true }, click)).toBe(false)
+  })
+
+  it('opens nothing after a press released off the part', () => {
+    expect(tailClickOpens(still, { ...click, inside: false })).toBe(false)
+  })
+
+  it('opens the task on a click that belongs to no press, whatever press was left behind', () => {
+    expect(tailClickOpens(null, { detail: 1, at: 9000, inside: false })).toBe(true)
+    // an assistive tool's click
+    expect(tailClickOpens({ ...still, far: true }, { detail: 0, at: 5010, inside: false })).toBe(
+      true,
+    )
+    // a long press is released without a click, and the next click comes later
+    expect(tailClickOpens({ ...still, far: true }, { detail: 1, at: 9000, inside: false })).toBe(
+      true,
+    )
+  })
+
+  it("counts a phone's late click as the click of its press", () => {
+    expect(tailClickOpens({ ...still, far: true }, { ...click, at: 5350 })).toBe(false)
   })
 })
