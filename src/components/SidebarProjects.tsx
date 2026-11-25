@@ -26,10 +26,11 @@
      top-level project, from the project cache (P.project), which App
      names the scope with and the tree names the opened project with, the
      facts a navigation row seeded included, is the one expanded project
-     once a loaded row holds it. Once worked out it stays while the cache
-     no longer knows the opened project, as after a sub-project kept for
-     My view was archived, so its parent stays expanded while the list
-     holds the parent's row. Its sub-projects come from
+     once a loaded row holds it. On My view, while the cache has no facts
+     of the project opened last, as once it was archived, the top-level
+     project App saves beside it (UIPrefs.lastProject top_id) stands in,
+     so its parent stays expanded while the list holds the parent's row,
+     after a reload and a task link too. Its sub-projects come from
      projectNav.children the same way, at most SIDEBAR_MOST.children, past
      which it asks for a search. A change of the expanded project unmounts
      that list, which stops its read. Rows light by App's `lit`, never for
@@ -86,14 +87,7 @@
    hidden every read stops and the scope rule waits. */
 
 import { compareValues } from 'convex/values'
-import {
-  type MouseEvent,
-  type ReactNode,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react'
+import { type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef } from 'react'
 import { api } from '../../convex/_generated/api'
 import { nameKey } from '../../convex/lib/nameKey'
 import type {
@@ -139,25 +133,26 @@ function RowNamed({ id }: { id: string }) {
     requests apart, and the tree hands it back to App's onFocusRowDone. */
 export type FocusRow = { id: string; n: number }
 
-/** The opened project of the module header: `scope` while it names a
-    project, on My view the project the person opened last, else none. */
-function openedProject(scope: string): string | null {
+/** The opened project of the module header, `id`, with `top`, the
+    top-level project the tree expands for it while the project cache has
+    no facts of it: `scope` while it names a project, with none, on My view
+    the project the person opened last, with the one saved beside it, else
+    none. */
+function openedProject(scope: string): { id: string; top: string | null } | null {
   if (!scope) return null
-  return P.isMineScope(scope) ? (P.loadUI().lastProject?.project_id ?? null) : scope
+  if (!P.isMineScope(scope)) return { id: scope, top: null }
+  const last = P.loadUI().lastProject
+  return last?.project_id ? { id: last.project_id, top: last.top_id ?? null } : null
 }
 
-/** The top-level project of project `opened`, its own id or its parent's,
-    which it names with the project cache. Once worked out it stays while
-    the cache no longer knows `opened`, as after it was archived. */
-function useOwner(opened: string | null): string | null {
-  useProjects([opened])
-  const facts = opened ? P.project(opened) : undefined
-  const owner = facts ? (facts.type === 'meta' ? facts.id : (facts.parent ?? null)) : undefined
-  const [kept, setKept] = useState<{ opened: string; owner: string | null } | null>(null)
-  if (opened !== null && owner !== undefined && (kept?.opened !== opened || kept.owner !== owner))
-    setKept({ opened, owner })
-  if (owner !== undefined) return owner
-  return opened !== null && kept?.opened === opened ? kept.owner : null
+/** The top-level project of the opened project `opened`, its own id or
+    its parent's, which it names with the project cache, else its `top`. */
+function useOwner(opened: { id: string; top: string | null } | null): string | null {
+  useProjects([opened?.id])
+  if (!opened) return null
+  const facts = P.project(opened.id)
+  if (!facts) return opened.top
+  return facts.type === 'meta' ? facts.id : (facts.parent ?? null)
 }
 
 /** The top-level list's identity, one list across every seat. */
@@ -293,7 +288,7 @@ export function SidebarProjects({
   // scope's project, within the bound and while each batch moved
   const seek =
     owner !== null &&
-    opened === scope &&
+    opened?.id === scope &&
     !ownerRow &&
     visible &&
     end === 'more' &&

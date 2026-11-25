@@ -654,9 +654,13 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     [...document.querySelectorAll<HTMLElement>('[data-sidebar-children]')].map(
       (c) => c.dataset.sidebarChildren,
     )
-  /** Saves project `id` as the one the person opened last, as App does
-      once a view shows it. */
-  const saved = (id: string) => store.P.saveUINow({ lastProject: { org_id: ORG, project_id: id } })
+  /** Saves project `id` as the one the person opened last, with its
+      top-level project `top`, as App does once a view shows it, or
+      without one, as an earlier app saved it. */
+  const saved = (id: string, top?: string) =>
+    store.P.saveUINow({
+      lastProject: { org_id: ORG, project_id: id, ...(top ? { top_id: top } : {}) },
+    })
   /** Luma Sensor with 30 sub-projects, the figure under one project at its
       design size, and two everyday projects. */
   async function bigProject() {
@@ -700,7 +704,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     const frontend = snap.projects.find((p) => p.parent_id === cloud)?.id as string
     const current = () => document.querySelectorAll('[data-sidebar-projects] [aria-current]')
     await render(big)
-    saved(big)
+    saved(big, big)
     expect(lit()).toEqual([big])
     const reads = asked('children').length
     // My view keeps Luma Sensor's sub-projects, read once, and lights no row
@@ -716,14 +720,15 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
     // a sub-project opened last keeps its project expanded, unlit
     await render(frontend)
-    saved(frontend)
+    saved(frontend, cloud)
     expect(lit()).toEqual([frontend])
     await render('mine')
     expect(expanded()).toEqual([cloud])
     expect(childNames()).toEqual(['Frontend'])
     expect(lit()).toEqual([])
     // after a reload on My view, a new store whose project cache knows no
-    // project and which holds only the saved project expands that project
+    // project and which holds only the saved project, as an earlier app
+    // saved it, expands that project
     await act(async () => root.unmount())
     root = createRoot(container)
     localStorage.clear()
@@ -738,7 +743,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
   it('keeps the project of a sub-project opened last expanded on My view once the sub-project is archived', async () => {
     const { big, boards } = await bigProject()
     await render(boards[0])
-    saved(boards[0])
+    saved(boards[0], big)
     await render('mine')
     expect(expanded()).toEqual([big])
     // someone archives it, so the project cache answers it gone and the

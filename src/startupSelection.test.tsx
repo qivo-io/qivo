@@ -188,9 +188,11 @@ function world(o: { role?: 'user' | 'admin'; projects?: boolean } = {}): Snapsho
   return next
 }
 
-/** What the person remembered, as the server's preferences row holds it. */
-const remembering = (project: string, org = ORG) => ({
-  lastProject: { org_id: org, project_id: project },
+/** What the person remembered, as the server's preferences row holds it,
+    with `top` its top-level project, which one an earlier app saved
+    lacks. */
+const remembering = (project: string, org = ORG, top?: string) => ({
+  lastProject: { org_id: org, project_id: project, ...(top ? { top_id: top } : {}) },
 })
 
 /** Boots the real store on `snap` with the server's preferences `row`
@@ -417,12 +419,12 @@ afterEach(async () => {
 describe('opening the remembered project', { timeout: 60_000 }, () => {
   it('opens a remembered project of either seat, and a sub-project, at once, and mounts no view before the project cache answers it', async () => {
     const snap = world()
-    for (const [id, org] of [
-      [LUMA, ORG],
-      [PORTAL, PARTNER],
-      [FW, ORG],
+    for (const [id, org, top] of [
+      [LUMA, ORG, LUMA],
+      [PORTAL, PARTNER, PORTAL],
+      [FW, ORG, LUMA],
     ] as const) {
-      await app(structuredClone(snap), '/app/testbed', remembering(id, org), () =>
+      await app(structuredClone(snap), '/app/testbed', remembering(id, org, top), () =>
         cache({ byIdsLoading: true }),
       )
       const entries = history.length
@@ -599,7 +601,11 @@ describe('the chooser', { timeout: 60_000 }, () => {
     expect(location.pathname).toBe('/app/partner/board/p/13')
     expect(history.length).toBe(entries)
     await until(() => lastSent() === PORTAL, 'the pick remembered')
-    expect(saves.at(-1)?.lastProject).toEqual({ org_id: PARTNER, project_id: PORTAL })
+    expect(saves.at(-1)?.lastProject).toEqual({
+      org_id: PARTNER,
+      project_id: PORTAL,
+      top_id: PORTAL,
+    })
   })
 
   it('shows the chooser again when Forward returns to its entry, which Back left for the Inbox', async () => {
@@ -730,6 +736,15 @@ describe('what is remembered', { timeout: 60_000 }, () => {
     await click(q(`[data-directory-row="${LUMA}"] [data-directory-open]`))
     await until(() => lastSent() === LUMA, 'the directory row remembered')
     expect(sentProjects()).toEqual([LUMA, PORTAL, LUMA])
+  })
+
+  it('sends a project saved without its top-level project again with it, once', async () => {
+    await app(world(), '/app/testbed', remembering(FW))
+    await until(() => shown() === 'kanban', "Firmware's Board")
+    await until(() => lastSent() === FW, 'Firmware sent again')
+    await settle()
+    expect(sentProjects()).toEqual([FW])
+    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW, top_id: LUMA })
   })
 })
 
@@ -1196,6 +1211,26 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     expect(sentProjects()).toEqual([])
   })
 
+  it('expands the project of an archived sub-project opened last on My view after a task link showed another project', async () => {
+    const snap = world()
+    const api = snap.projects.find((p) => p.name === 'Portal API')
+    if (!api) throw new Error('no Portal API')
+    api.archived_at = NOW
+    await app(snap, '/app/testbed/board/tasks/qn-7', remembering(api.id, PARTNER, PORTAL))
+    await until(() => windowReads.length > 0, "the window's read")
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    await until(() => expanded()[0] === LUMA, "Firmware's project expanded")
+    await click(q('[data-task-close]'))
+    await until(() => !q('[data-task-close]'), 'the task window closed')
+    await click(q('[data-mine-nav]'))
+    await until(() => store.P.projectState(api.id) === 'gone', 'Portal API answered gone')
+    await painted()
+    // must fail for a sidebar that expands only a project the cache knows
+    expect(expanded()).toEqual([PORTAL])
+  })
+
   // KNOWN DEFECT: scopeForIssue (lib/router.ts) keeps a preferred project
   // for a task in it, and while the project cache reads the task's project,
   // but on the app's path the task's answer reaches App's pendingTask
@@ -1317,7 +1352,7 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     // the jump is the person's choice of that Roadmap, so it is remembered
     await until(() => lastSent() === FW, 'Firmware remembered')
     expect(sentProjects()).toEqual([FW])
-    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW })
+    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW, top_id: LUMA })
   })
 
   it('takes the startup rule once the task names no project', async () => {
@@ -1334,7 +1369,7 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
   })
 
   it('keeps the remembered scope while Back or Forward reaches such a task, and moves to the task’s own project once its answer names it', async () => {
-    await app(world(), '/app/testbed', remembering(PORTAL, PARTNER), () =>
+    await app(world(), '/app/testbed', remembering(PORTAL, PARTNER, PORTAL), () =>
       cache({ byIdsLoading: true }),
     )
     await chooser('checking')
@@ -1500,6 +1535,19 @@ describe('the sidebar’s expanded project', { timeout: 60_000 }, () => {
     await painted()
     expect(expanded()).toEqual([])
     expect(childReads()).toEqual([])
+  })
+
+  it('expands the project of an archived sub-project opened last on My view after a reload', async () => {
+    const snap = world()
+    const firmware = snap.projects.find((p) => p.id === FW)
+    if (firmware) firmware.archived_at = NOW
+    await app(snap, '/app/testbed/board/mine', remembering(FW, ORG, LUMA))
+    await until(() => shown() === 'kanban', 'My view’s Board')
+    await until(() => store.P.projectState(FW) === 'gone', 'Firmware answered gone')
+    await until(() => q(`aside [data-project-row="${LUMA}"]`), "Luma Sensor's row")
+    await painted()
+    // must fail for a sidebar that expands only a project the cache knows
+    expect(expanded()).toEqual([LUMA])
   })
 
   it('keeps the project opened last for My view when a link names a project the person cannot open', async () => {

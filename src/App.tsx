@@ -1414,11 +1414,13 @@ function App() {
   }, [view])
   /* The remembered project (UIPrefs.lastProject): a project scope whose
      project cache state is ok while the Overview, the Board or the Roadmap
-     shows it, however the person got there, sent at once, so a reload right
-     after a pick opens it. A scope that changes under the Inbox, Team sync,
-     the directory or Settings writes nothing until a view of it shows, and
-     neither do My view, no scope, and a scope a task's
-     address chose (taskScope). A loss never clears it. */
+     shows it, however the person got there, with its top-level project,
+     sent at once, so a reload right after a pick opens it. One saved
+     without its top-level project is sent again with it. A scope that
+     changes under the Inbox, Team sync, the directory or Settings writes
+     nothing until a view of it shows, and neither do My view, no scope,
+     and a scope a task's address chose (taskScope). A loss never clears
+     it. */
   const viewShown = !!shownPage && showsScope(shownPage)
   // the views' place shows the project chooser while no scope is chosen,
   // and while a project scope waits for the project cache (scopeShows)
@@ -1458,9 +1460,10 @@ function App() {
     if (!viewShown || !scope || P.isMineScope(scope) || taskScope.current === scope) return
     const p = P.project(scope)
     if (!p || !scopeOk) return
+    const top = p.parent ?? p.id
     const was = P.loadUI().lastProject
-    if (was?.project_id === p.id && was.org_id === p.org) return
-    P.saveUINow({ lastProject: { org_id: p.org, project_id: p.id } })
+    if (was?.project_id === p.id && was.org_id === p.org && was.top_id === top) return
+    P.saveUINow({ lastProject: { org_id: p.org, project_id: p.id, top_id: top } })
   })
 
   // url sync — every "page" (scope/view/open issue/settings) gets its own
