@@ -14,21 +14,39 @@ collapse it. The double chevron in the **Task** header collapses or expands
 all groups, including groups inside collapsed projects. Filters hide groups
 with no matching tasks; clearing a filter restores their previous collapsed state.
 
-**Backlog tasks are hidden**, even when scheduled. **Done tasks appear only
-when their planned period overlaps the visible window**, including its first
-and last weeks. Undated Done tasks are hidden. To Do, In Progress and In Review
-tasks outside the window remain available through edge badges or unplanned
-rows. Filters cannot bring hidden Backlog or Done tasks back. A task with
+**Backlog tasks are hidden**, even when scheduled. **Done tasks are hidden**
+too while **Hide Done in Roadmap** is on (below). With it off, **Done tasks
+appear only when their planned period overlaps the visible window**, including
+its first and last weeks. Undated Done tasks are hidden. To Do, In Progress
+and In Review tasks outside the window remain available through edge badges
+or unplanned rows. Filters cannot bring hidden Backlog or Done tasks back. A task with
 subtasks follows its subtasks instead of its own hidden status: it is never
 hidden as Backlog, and it counts as Done only when all its subtask work is
 Done. These rules also apply to the phone's landscape timeline and **Task
 schedule**, which uses the current roadmap window.
 
+**Hide Done in Roadmap**, under **Settings → Your preferences → Appearance**,
+is on until you turn it off. While it is on, Done tasks take no row, so they
+take no space between your unfinished work. That includes a task with
+subtasks once all its subtask work is Done, and a Done subtask under an
+unfinished parent. Project and sub-project headings stay, with their
+unfinished tasks' remaining hours. Dependency arrows to and from a hidden task
+are not drawn. **Team utilization** still counts the people who own the hidden
+tasks, so it shows the same figures with the setting on and off. Where every
+task the Roadmap would show is Done, it says **Done tasks are hidden** and
+where to turn the setting off, with **Clear filters** while a filter is on.
+**Plan on roadmap** or **Show on roadmap** for a hidden Done task says so
+instead of showing it, and the Roadmap keeps its window where it was. A Team
+sync jump to a task that has become Done since its row was drawn says so
+too, where the Roadmap can tell that the task is Done. A planning session ends when its task becomes Done. The setting follows your account across
+organizations and devices, and applies in every project, in My view and on the
+phone.
+
 The Roadmap shows at most 1,000 tasks at a time, counting each task with
 subtasks and each subtask, across the project or sub-project with its filters
-and window, or My view. A selection past that, or one Qivo could not read
-within the Roadmap's limits, shows no tasks and says so instead of showing
-part of it. Choose one of the sub-projects it offers or narrow your filters,
+and window, or My view. Done tasks that Hide Done in Roadmap hides count
+too. A selection past that, or one Qivo could not read within the Roadmap's
+limits, shows no tasks and says so instead of showing part of it. Choose one of the sub-projects it offers or narrow your filters,
 such as Priority or the text filter. A shorter window rarely helps, as
 unfinished tasks show whatever their dates and only Done tasks follow the
 window ([Limits](./limits.md)). When you move the window or type more of the
@@ -123,9 +141,9 @@ It is on by default. Switching it off hides the stripes and the projected
 finish week in the hover text, and nothing else, for your account, in every
 project, in My view and on the phone's landscape timeline.
 
-**Done bars are dim gray**, including groups whose descendant work is all
-Done. A finished bar in the past never has a run-on, which tells it apart from
-unfinished work. A **paused** task's planned bar keeps its color under diagonal
+With Hide Done in Roadmap off, **Done bars are dim gray**, including groups
+whose descendant work is all Done. A finished bar in the past never has a
+run-on, which tells it apart from unfinished work. A **paused** task's planned bar keeps its color under diagonal
 lines and, where it is wide enough, shows a pause sign at its start. A run-on
 and stripes after it have no lines. Its connected and adjacent edge badges get
 the lines too.
@@ -211,7 +229,8 @@ A red arrow means it ends in or after the blocked task's start week, and the
 blocked task's bar gets a red ring. Arrows update while
 you drag. A task you have just scheduled shows its arrows once its dates are
 saved. When Qivo cannot read the selection's links within the Roadmap's
-limits, no arrow shows, and a line above the timeline says why.
+limits, no arrow shows, and a line above the timeline says why. A link to or
+from a Done task that Hide Done in Roadmap hides has no arrow.
 
 **Auto-move** shifts blocked tasks to start after their blockers, including
 chains of dependent tasks. It works on the tasks linked to this Roadmap's

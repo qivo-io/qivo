@@ -1093,6 +1093,13 @@ export const recipes: Recipe[] = [
     act: (P) => P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {}),
   },
   {
+    mutation: 'appearance:setRoadmapHideDone',
+    mutator: 'setRoadmapHideDone',
+    what: 'a Hide Done in Roadmap choice',
+    pause: 'U-all',
+    act: (P) => P.setRoadmapHideDone(false).catch(() => {}),
+  },
+  {
     mutation: 'notifications:setDelivery',
     mutator: 'setNotificationDelivery',
     what: 'a notification delivery',

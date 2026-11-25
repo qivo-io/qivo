@@ -17,6 +17,7 @@ import {
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
+import { Appearance } from './views/appearanceStandIn.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
    on App and the real store. The Planner leads Plan. New sub-project opens
@@ -302,11 +303,16 @@ async function boot(
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('./App')
+  // the account's appearance as the sign-in gate hands it on, which the
+  // Roadmap waits for
+  const appearance = await import('./lib/appearanceContext')
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <App />
-      </TooltipProvider>,
+      <Appearance context={appearance}>
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
+      </Appearance>,
     ),
   )
 }

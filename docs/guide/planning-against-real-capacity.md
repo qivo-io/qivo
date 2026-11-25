@@ -7,8 +7,11 @@ stays on the timeline for the session whatever the filters, and the Roadmap
 moves its window to the task first if needed. Unscheduled tasks receive a starter bar.
 A Backlog task must first move to another status; trying to plan it leaves
 its dates unchanged.
-Done tasks that have dates can still be moved on the Roadmap. A Done task
-without dates cannot be planned there, so its button is off and says why.
+Done tasks that have dates can still be moved on the Roadmap while **Hide
+Done in Roadmap** is off. While it is on, the Roadmap says the task is Done
+and hidden, and where to turn the setting off, and starts no session. A Done
+task without dates cannot be planned there, so its button is off and says
+why.
 When the task cannot show on that Roadmap, for example because the project
 is past the Roadmap's 1,000-task limit, Qivo says why and starts no
 session. If the task leaves the Roadmap during the
@@ -99,7 +102,11 @@ click another week to move it. Click the selected person's name again, press
 
 Roadmap filter controls let you keep the selection while adjusting filters.
 If a filter hides the person, their highlights disappear. Changing scope,
-date window or layout clears the week lock.
+date window or layout clears the week lock. Team also lists a person whose
+tasks in the window all sit under collapsed projects or sub-projects, or are
+Done tasks that **Hide Done in Roadmap** hides. Selecting them dims no rows
+until one of their tasks shows a row, for example when you expand its
+sub-project.
 
 Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after
@@ -299,10 +306,20 @@ Use the row controls to change tasks without opening them:
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.
-- **Board / Roadmap** opens the task there. Board opens its task window and
-  shows its card behind it, scrolled into view and ringed until a moment
-  after the window closes ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
+- **Board / Roadmap** opens the task there. The rows of **On it** and
+  **Next**, **Later** included, have these controls. **Done since** and
+  **Waiting on review** rows have neither, and their title opens the task
+  window. Board opens its task window and shows its card behind it,
+  scrolled into view and ringed until a moment after the window closes
+  ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
   Roadmap finds its bar or unplanned row without starting a planning session.
+  If the task has become Done since its row was drawn, for example in a
+  meeting that no longer updates, and **Hide Done in Roadmap** is on, the
+  Roadmap shows no row for it. Where it can tell that the task is Done, it
+  says that Done tasks are hidden and where to turn the setting off
+  ([The Roadmap](./the-roadmap.md)). Otherwise, as for a Done task without
+  dates whose row still showed it open, it says that the task is not on the
+  roadmap any more.
 - The **review tick** marks the task reviewed without changing it.
 
 A row's **Board** and **Roadmap** links open the task's sub-project. The

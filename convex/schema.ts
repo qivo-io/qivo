@@ -642,6 +642,8 @@ export default defineSchema({
     mode: v.union(vAppearanceMode, v.literal('blue'), v.literal('image')),
     image_source: vImageSource,
     custom_image_id: v.optional(v.string()),
+    // Hide Done in Roadmap; absent reads as on (model/appearance.ts)
+    roadmap_hide_done: v.optional(v.boolean()),
     revision: v.string(), // upload replacement/removal fence, not a theme version
     updated_at: v.string(),
   }).index('by_auth_user', ['auth_user_id']),

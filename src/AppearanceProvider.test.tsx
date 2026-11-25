@@ -124,6 +124,7 @@ const preferences = (
 ): AppearancePreferences => ({
   mode: 'light',
   image_source,
+  roadmap_hide_done: true,
   custom_image:
     image_source === 'custom'
       ? {

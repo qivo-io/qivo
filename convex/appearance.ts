@@ -110,6 +110,18 @@ export const save = authedMutation({
   },
 })
 
+/* Hide Done in Roadmap alone, so a change of it never writes back a theme
+ * or Canvas choice from an older copy. */
+export const setRoadmapHideDone = authedMutation({
+  args: { roadmap_hide_done: v.boolean() },
+  handler: async (ctx, { roadmap_hide_done }): Promise<AppearanceSettings> => {
+    await requireAppearanceAccount(ctx, ctx.authUserId)
+    const settings = await ensureSettings(ctx, ctx.authUserId)
+    await ctx.db.patch(settings._id, { roadmap_hide_done, updated_at: new Date().toISOString() })
+    return appearanceSettings(ctx, ctx.authUserId)
+  },
+})
+
 export const createUpload = authedMutation({
   // the image's size in bytes. Only the demo reserves it; elsewhere
   // background_uploads keeps a person to five tickets and the receiver

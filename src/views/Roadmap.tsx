@@ -4,7 +4,9 @@
    and PlanCard shows workload while ResourceStrip shares the same week grid.
    Which tasks it shows, their headings' Remaining, the arrows and Auto-move's
    inputs come from the server's Roadmap reads (roadmap/useRoadmapView.ts),
-   and Team utilization and the
+   less the Done tasks while the person's Hide Done in Roadmap is on
+   (Settings › Appearance, lib/roadmapVisibility.ts withoutDone), and Team
+   utilization and the
    planning panel read people's loads from the owner-load cache. Its
    milestone flags come from the server's range read for the weeks on
    screen (roadmap/useRoadmapMilestones.ts), never from the workspace's
@@ -25,7 +27,14 @@ import { Toggle } from '@/components/ui/toggle'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
-import { DONE_WITHOUT_DATES, doneWithoutDates, isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
+import {
+  DONE_WITHOUT_DATES,
+  doneWithoutDates,
+  hideDoneSetting,
+  isRoadmapTaskVisible,
+  TURN_OFF_HIDE_DONE,
+  withoutDone,
+} from '@/lib/roadmapVisibility'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -39,6 +48,7 @@ import { useHolds } from '../components/useHolds'
 import { sortName, usePeople } from '../components/usePeople'
 import { useProjects } from '../components/useProjects'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
+import { useAppearance } from '../lib/appearanceContext'
 import { isoToWeek, monthStartWeeks, winWeeks } from '../lib/dates'
 import { isIssueGroup } from '../lib/issueGroups'
 import { type AutoMove, autoMoveTitle } from '../lib/schedule'
@@ -72,7 +82,7 @@ import {
 } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
-import { RoadmapNote } from './roadmap/RoadmapNote'
+import { DoneHiddenNote, RoadmapNote } from './roadmap/RoadmapNote'
 import { type MarkerState, markerLine, markerProjects } from './roadmap/roadmapMilestones'
 import { createRowObserver } from './roadmap/rowObserver'
 import { FlagBand, MilestoneFlag } from './roadmap/TimelineMarks'
@@ -133,8 +143,9 @@ const PANEL_GAP = 8
     roadmap (focusPlan) or Team sync's jump (revealTask): its handle, a
     nonce, the key a sentence names it by, and what its source knows of it,
     its uuid, sub-project and weeks, so the Roadmap pans to it and asks the
-    server to keep it before it looks it up, and for a plan request its
-    status, so a Done task without dates hears why it cannot be planned. */
+    server to keep it before it looks it up, for a plan request its status,
+    so a Done task without dates hears why it cannot be planned, and for a
+    reveal whether it is Done (lib/reveal.ts RevealRequest). */
 export type RoadmapRequest = {
   id: string
   n: number
@@ -144,6 +155,7 @@ export type RoadmapRequest = {
   start?: number | null
   end?: number | null
   status?: string
+  done?: boolean
 }
 
 /** A request the Roadmap takes and waits to resolve against an answer:
@@ -400,9 +412,34 @@ function Roadmap({
   const planned: PlannedTask | null =
     planAsk ??
     (session ? { id: session.uuid, project_id: sessionModel?.project ?? session.project } : null)
-  const view = useRoadmapView(info, filters, w0, w1, planned)
-  // the people the Roadmap shows, named while it shows: each row's
-  // assignee and reviewer in the rows' order, Team utilization's people
+  /* Hide Done in Roadmap, null until the account's appearance answered.
+     Meanwhile an answer with tasks shows as loading and the requests wait,
+     so neither a row, the note that Done tasks are hidden nor a request
+     follows the setting before the Roadmap knows it. */
+  const hideDone = hideDoneSetting(useAppearance())
+  const answered = useRoadmapView(info, filters, w0, w1, planned)
+  const view: RoadmapView =
+    hideDone === null && (answered.state === 'ok' || answered.state === 'refreshing')
+      ? {
+          ...answered,
+          state: 'loading',
+          busy: true,
+          tasks: [],
+          held: null,
+          current: false,
+          remaining: () => null,
+        }
+      : answered
+  /* The tasks with a row, here and on the phone: the answer's, less the
+     Done ones while Hide Done in Roadmap is on (`hiddenDone`). Team
+     utilization and a request's lookup still read every task of the
+     answer, so Team counts the same either way and a request for a hidden
+     task hears why it does not show. */
+  const { shown: rowTasks, hidden: hiddenDone } = withoutDone(view.tasks, !!hideDone, (it) =>
+    P.isDone(it),
+  )
+  // the people the Roadmap shows, named while it shows: each task's
+  // assignee and reviewer in the answer's order, Team utilization's people
   // and the planning panel's owner among them
   usePeople(
     useMemoR(
@@ -459,8 +496,11 @@ function Roadmap({
        project I hold no task in, each labelled with that project's whole
        remaining hours. The answer names them (held_sub_projects); null
        wherever the scope narrows nothing.
-     · `bucket`, which of them hold a task the answer shows that also passes
-       the TOOLBAR filters on screen, and which tasks those are. */
+     · `matched`, which of them hold a task the answer shows that also
+       passes the TOOLBAR filters on screen, Done tasks Hide Done in Roadmap
+       hides included, so a heading shows under a filter with the setting on
+       exactly where it does with it off.
+     · `bucket`, the tasks of each that have a row (`rowTasks`). */
   const held = view.held
   // whether the person sees any project or sub-project, which the server
   // answers (useHolds) only while My view's empty note could show
@@ -468,8 +508,9 @@ function Roadmap({
   // the rows show while an answer for this scope is on screen; any note
   // takes their place
   const showing = view.state === 'ok' || view.state === 'refreshing'
+  const matched = new Set(view.tasks.map((i) => i.project))
   const bucket = new Map()
-  for (const i of view.tasks) {
+  for (const i of rowTasks) {
     const b = bucket.get(i.project) || { dated: [], undated: [] }
     ;(i.start != null ? b.dated : b.undated).push(i)
     bucket.set(i.project, b)
@@ -483,10 +524,12 @@ function Roadmap({
        (deviation #50): a project or sub-project the filter empties drops off
        the rail entirely, the same rule the board's lanes and side-boards have
        always followed, rather than standing there as a heading over nothing.
+       One whose matches are all Done tasks Hide Done in Roadmap hides keeps
+       its place (`matched`), as it would with the setting off.
        Gated on `clearable` — with no filter on, every group keeps its place
        whether or not it holds work, so the rail's shape still reads as the
        scope's shape. */
-  const shows = (id) => (!held || held.has(id)) && (!clearable || bucket.has(id))
+  const shows = (id) => (!held || held.has(id)) && (!clearable || matched.has(id))
   /* …but only ASK when something is actually narrowing. With both gates open
      `shows` is identically true, so the filter would still differ from the
      whole list in one place: a project with no sub-project at all, whose
@@ -804,7 +847,9 @@ function Roadmap({
     const entries = Object.entries(liveRef.current)
     const shown = entries.filter(([id]) => {
       const it = taskOfRef.current(id)
-      return it && isRoadmapTaskVisible(it, P.isDone(it), w0, w1)
+      if (!it) return false
+      const done = P.isDone(it)
+      return isRoadmapTaskVisible(it, done, w0, w1) && !(hideDone && done)
     })
     if (shown.length === entries.length) return
     const next = Object.fromEntries(shown)
@@ -1059,13 +1104,16 @@ function Roadmap({
     })
   }
   /** Session `s`'s task as the Roadmap's answer names it, while no note
-      takes the Roadmap's place, else undefined. Auto-fit places only this
-      task. One the answer no longer names, as after another person moved
-      it out of the selection, keeps the dates it has, and the session ends
+      takes the Roadmap's place and Hide Done in Roadmap does not hide it,
+      else undefined. Auto-fit places only this task. One the answer no
+      longer names, as after another person moved it out of the selection,
+      or one that became Done, keeps the dates it has, and the session ends
       below with a word (the session-gone effect), though another view may
       still hold the task (taskOf). */
-  const sessionTask = (s: PlanSession): IssueVM | undefined =>
-    cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
+  const sessionTask = (s: PlanSession): IssueVM | undefined => {
+    const it = cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
+    return it && !(hideDone && P.isDone(it)) ? it : undefined
+  }
   // The first fit of an unscheduled task, once an answer names the task.
   // While the owner's weekly hours are unknown (capacityFor), it waits
   // only while a read for the owner is on its way (hoursLoading). Once
@@ -1224,24 +1272,60 @@ function Roadmap({
     req.kind === 'plan' && req.uuid && req.project
       ? { id: req.uuid, project_id: req.project }
       : null
+  /** Whether request `req`'s source showed its task Done: a plan request's
+      status, as it names a task without subtasks, or a reveal's `done`,
+      else undefined. */
+  const sourceDone = (req: PendingRequest): boolean | undefined =>
+    req.kind === 'plan' ? (req.status === undefined ? undefined : req.status === 'done') : req.done
+  /** Whether request `req` names a Done task Hide Done in Roadmap hides,
+      as its source showed it, which the Roadmap says at once. A Done task
+      without dates hears instead that it has nothing to plan. */
+  const hiddenAtOnce = (req: PendingRequest) =>
+    !!hideDone && sourceDone(req) === true && !(req.kind === 'plan' && doneWithoutDates(req))
   /** Takes request `req`: pans the window to the weeks its source knows,
       sends a task to plan with the Roadmap's read from now on, so the answer
       keeps it past the filter row, and waits until an answer on screen
-      resolves the request (below). */
+      resolves the request (below). The window waits for that answer while
+      Hide Done in Roadmap is on and the source did not show the task
+      unfinished, as only a Done task needs the window to be in the answer,
+      and the setting hides it, so a request for a hidden task leaves the
+      window where it was. */
   const take = (req: PendingRequest) => {
     if (mobile) setMobileLayout('timeline')
     const ask = askOf(req)
     if (ask) setPlanAsk(ask)
-    panTo(req.start, req.end ?? req.start)
+    if (!hideDone || sourceDone(req) === false) panTo(req.start, req.end ?? req.start)
     setPending({ ...pendingRef.current, [req.kind]: req })
   }
+  /** Says that request `req` names a Done task Hide Done in Roadmap hides,
+      and where to turn it off. */
+  const sayDoneHidden = (req: PendingRequest) =>
+    window.showToast?.(
+      `${req.key ?? 'This task'} is Done, and Done tasks are hidden on the Roadmap. To ${req.kind === 'plan' ? 'plan' : 'show'} it, ${TURN_OFF_HIDE_DONE}.`,
+      'info',
+    )
   /** Stops sending the task of plan request `req` with the read, once it
       resolved, unless a newer request sends its own, so an open session
       sends its task again. */
   const dropPlanAsk = (req: PendingRequest) =>
     setPlanAsk((was) => (was && was.id === req.uuid ? null : was))
+  /** Resolves request `req` for a Done task Hide Done in Roadmap hides at
+      once, without taking it, so the window stays: it replaces the request
+      of its kind the Roadmap still waits on, as taking it would, and says
+      why it does not show. An open planning session stays. */
+  const refuseHidden = (req: PendingRequest) => {
+    const was = pendingRef.current[req.kind]
+    if (was) {
+      setPending({ ...pendingRef.current, [req.kind]: null })
+      if (was.kind === 'plan') dropPlanAsk(was)
+    }
+    if (req.kind === 'plan') onFocusConsumed?.(req.n)
+    else onRevealConsumed?.(req.n)
+    // a reveal without a key, such as a task window's, says nothing
+    if (req.kind === 'plan' || req.key) sayDoneHidden(req)
+  }
   useEffectR(() => {
-    if (!revealTask) return
+    if (!revealTask || hideDone === null) return
     // App drops the request only while it is still this one
     const { n } = revealTask
     if (n === takenReveal.current) {
@@ -1249,25 +1333,29 @@ function Roadmap({
       return
     }
     takenReveal.current = n
-    take({ ...revealTask, kind: 'reveal' })
+    const req: PendingRequest = { ...revealTask, kind: 'reveal' }
+    if (hiddenAtOnce(req)) refuseHidden(req)
+    else take(req)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealTask?.n])
+  }, [revealTask?.n, hideDone === null])
   useEffectR(() => {
     if (!revealed) return
     const t = window.setTimeout(() => setRevealed(null), REVEAL_MS)
     return () => window.clearTimeout(t)
   }, [revealed?.n])
   useEffectR(() => {
-    if (!focusPlan) return
+    if (!focusPlan || hideDone === null) return
     const { n } = focusPlan
     if (n === takenPlan.current) {
       onFocusConsumed?.(n)
       return
     }
     takenPlan.current = n
-    take({ ...focusPlan, kind: 'plan' })
+    const req: PendingRequest = { ...focusPlan, kind: 'plan' }
+    if (hiddenAtOnce(req)) refuseHidden(req)
+    else take(req)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusPlan?.n])
+  }, [focusPlan?.n, hideDone === null])
   /* Resolves the request taken once the Roadmap can say: where the tasks on
      screen, from a current answer or the last one for this scope, hold its
      task, it acts at once; where the Roadmap shows a note instead, it says
@@ -1275,8 +1363,10 @@ function Roadmap({
      answer for the arguments on screen does not hold it, that it is not on
      the roadmap any more, or for a task its source showed Done without
      dates, which the Roadmap never shows, that it has nothing to plan. A
-     plan request that sends its task judges only an answer for arguments
-     that carry it. Meanwhile it waits. */
+     task the tasks on screen hold but Hide Done in Roadmap hides resolves
+     at once with a word of that and where to turn it off. A plan request
+     that sends its task judges only an answer for arguments that carry it.
+     Meanwhile it waits. */
   useEffectR(() => {
     for (const req of [pending.plan, pending.reveal]) {
       // A request taken since this render replaced this one, and the next
@@ -1286,18 +1376,22 @@ function Roadmap({
       if (ask && planned?.id !== ask.id) continue
       const done = () => setPending({ ...pendingRef.current, [req.kind]: null })
       const it = view.tasks.find((t) => (req.uuid ? t.uuid === req.uuid : t.id === req.id))
-      if (it) {
+      const hidden = !!it && hideDone && P.isDone(it)
+      if (it && !hidden) {
         done()
         setResolved((was) => ({ ...was, [req.kind]: { req, id: it.id } }))
         continue
       }
-      const why = cannotPlanReason(view)
-      if (!why && view.state !== 'ok') continue
+      const why = hidden ? null : cannotPlanReason(view)
+      if (!hidden && !why && view.state !== 'ok') continue
       done()
       if (req.kind === 'plan') dropPlanAsk(req)
       if (req.kind === 'plan') onFocusConsumed?.(req.n)
       else onRevealConsumed?.(req.n)
-      if (req.kind === 'plan' && doneWithoutDates(req))
+      if (hidden) {
+        // a reveal without a key, such as a task window's, says nothing
+        if (req.kind === 'plan' || req.key) sayDoneHidden(req)
+      } else if (req.kind === 'plan' && doneWithoutDates(req))
         window.showToast?.(
           `${req.key ?? 'This task'} can't be planned. ${DONE_WITHOUT_DATES}`,
           'error',
@@ -1327,11 +1421,11 @@ function Roadmap({
   }, [resolvedPlan?.req.n])
   /** Acts on request `req`, resolved to the task with handle `id`; answers
       the cleanup of the frames that bring it into view. A plan request
-      taken since replaces this one, which then does nothing. */
+      taken or refused since replaces this one, which then does nothing. */
   function act({ req, id }: { req: PendingRequest; id: string }) {
     const consumed = () =>
       req.kind === 'plan' ? onFocusConsumed?.(req.n) : onRevealConsumed?.(req.n)
-    if (req.kind === 'plan' && pendingRef.current.plan) {
+    if (req.kind === 'plan' && (pendingRef.current.plan || req.n !== takenPlan.current)) {
       consumed()
       return
     }
@@ -1387,20 +1481,29 @@ function Roadmap({
   /* A session whose task an answer for its arguments no longer holds, as it
      moved where the filter row hides it or left the selection, or whose
      Roadmap shows a note instead, ends with a word, writing nothing more.
-     While a plan request sends its own task instead, the answer cannot say
-     so, and the session stays until that request resolves. */
+     So does one whose task became Done while Hide Done in Roadmap hides it,
+     as soon as the tasks on screen say so. While a plan request sends its
+     own task instead, the answer cannot say so, and the session stays
+     until that request resolves. */
   useEffectR(() => {
     const s = sessionRef.current
     if (!s || planned?.id !== s.uuid) return
+    const hidden = hiddenDone.some((t) => t.uuid === s.uuid)
     const gone =
-      view.state === 'ok'
-        ? !view.tasks.some((t) => t.uuid === s.uuid)
-        : cannotPlanReason(view) !== null
+      hidden ||
+      (view.state === 'ok'
+        ? !rowTasks.some((t) => t.uuid === s.uuid)
+        : cannotPlanReason(view) !== null)
     if (!gone) return
     sessionRef.current = null
     plannedWrites.current = null
     setSession(null)
-    window.showToast?.(`${s.key} left this roadmap. Its dates stay as they were saved.`, 'info')
+    window.showToast?.(
+      hidden
+        ? `${s.key} is Done, and Done tasks are hidden on the Roadmap. Its dates stay as they were saved.`
+        : `${s.key} left this roadmap. Its dates stay as they were saved.`,
+      'info',
+    )
   })
 
   /* WHAT THE WINDOW IS, in words — the accessible name and the tooltip of a
@@ -1668,8 +1771,10 @@ function Roadmap({
     <MobileRoadmap
       info={info}
       selection={view.selection}
-      tasks={empty ? [] : view.tasks}
+      tasks={empty ? [] : rowTasks}
+      hiddenDone={empty ? [] : hiddenDone}
       settled={view.current}
+      filtered={clearable}
       filterControls={filterControls}
       actions={actions}
       onTimeline={() => setMobileLayout('timeline')}
@@ -1735,12 +1840,14 @@ function Roadmap({
   const chunkMemory = useRefR(new Map<string, ChunkMemory>())
 
   /* ---------- Team utilization: people owning work in the visible window ----------
-     Membership follows what the roadmap displays: the shown tasks with a
-     start and an owner that meet the window. Collapsed tracks still count,
-     as folding a track hides its rows but doesn't remove them from the
-     roadmap. Each person's load comes from the owner-load cache, registered
-     under the Roadmap's own slot with how many shown rows they own, so a
-     guest's or Viewer's capped calls keep the people with the most rows. */
+     Membership follows the tasks the answer shows: those with a start and
+     an owner that meet the window. Collapsed tracks still count, as folding
+     a track hides its rows but doesn't remove them from the roadmap, and so
+     do the Done tasks Hide Done in Roadmap gives no row, so Team reads the
+     same with the setting on and off. Each person's load comes from the
+     owner-load cache, registered under the Roadmap's own slot with how many
+     of those tasks they own, so a guest's or Viewer's capped calls keep the
+     people with the most rows. */
   const team: TeamPerson[] = []
   {
     const byOwner = new Map<string, { org: string; rows: number }>()
@@ -1916,6 +2023,9 @@ function Roadmap({
      on the tracks' rows, so they go with the tracks the filter prunes. */
   // only a current answer says nothing matches, never one on its way
   const noMatches = clearable && tracks.length === 0 && view.current
+  // every task a current answer brings is Done and Hide Done in Roadmap
+  // hides it, which the note says in place of an empty rail's silence
+  const allHidden = view.current && rowTasks.length === 0 && hiddenDone.length > 0
 
   // vertical layout + bar geometry for dependency arrows (windowed bars only)
   const laid: LaidRow[] = []
@@ -1956,6 +2066,11 @@ function Roadmap({
 
   // effective highlight: only while the selected person is actually in the strip
   const hl = hlUser && team.some((p) => p.id === hlUser) ? hlUser : null
+  // the rows ring and fade for it only while the person owns a task row
+  // shown: Team also counts the owners of tasks under a collapsed heading
+  // and of Done tasks Hide Done in Roadmap hides, and would otherwise fade
+  // every row with none to highlight
+  const hlRows = hl && rows.some((row) => row.issue?.owner === hl) ? hl : null
   const activeResourceWeek =
     stripMode !== 'min' &&
     team.length > 0 &&
@@ -2608,7 +2723,7 @@ function Roadmap({
                     const stale = !isGroup && L.stale
                     // a person highlighted in the strip fades everyone else's rows the
                     // same way; the planning row stays fully visible.
-                    const hlDim = hl && !isGroup && row.issue.owner !== hl && !spotlit
+                    const hlDim = hlRows && !isGroup && row.issue.owner !== hlRows && !spotlit
                     const fade = spotlit ? 1 : (stale ? 0.5 : 1) * (hlDim ? 0.3 : 1)
                     // due ticks belong to scheduled rows (spec §5) — the unsched
                     // pill carries its own due text instead
@@ -2617,7 +2732,7 @@ function Roadmap({
                     const ring =
                       row.kind !== 'task'
                         ? undefined
-                        : spotlit || (hl && row.issue.owner === hl)
+                        : spotlit || (hlRows && row.issue.owner === hlRows)
                           ? 'var(--primary)'
                           : barRing[row.issue.id]
                     return (
@@ -2673,7 +2788,7 @@ function Roadmap({
                   const chunkDeps = [
                     session?.issueId,
                     revealed?.id,
-                    hl,
+                    hlRows,
                     w0,
                     w1,
                     weekW,
@@ -2727,13 +2842,16 @@ function Roadmap({
                 {/* the rail pruned to nothing — sticky-left so the note sits in the
               visible pane, not centred somewhere out along the week grid. A
               scope with nothing to schedule says that instead (emptyNote). */}
-                {emptyNote ? (
+                {emptyNote || allHidden ? (
                   <div
                     className="[position:sticky] [left:0] [display:flex]"
-                    data-roadmap-empty
+                    data-roadmap-empty={emptyNote ? '' : undefined}
+                    data-roadmap-done-hidden={emptyNote ? undefined : ''}
                     style={{ width: paneW || GRID_X + timelineW + GUTTER_W }}
                   >
-                    {emptyNote}
+                    {emptyNote ?? (
+                      <DoneHiddenNote filtered={clearable} onClear={actions.clearFilters} />
+                    )}
                   </div>
                 ) : (
                   noMatches && (

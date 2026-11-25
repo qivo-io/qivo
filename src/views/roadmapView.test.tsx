@@ -10,6 +10,7 @@ import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { answerRoadmap } from '../store/roadmapStandIn.setup'
+import { Appearance } from './appearanceStandIn.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { RoadmapRequest } from './Roadmap'
 
@@ -132,7 +133,8 @@ const plan = (snap: Snapshot) => {
 type Board = Awaited<ReturnType<typeof loadBoard>>
 
 /** Renders the Roadmap of the board's scope with `filters` and the
-    requests and actions given. */
+    requests and actions given, and Hide Done in Roadmap as `hideDone`, on
+    by default, or null while the account's appearance has not loaded. */
 async function renderRoadmap(
   board: Board,
   {
@@ -140,31 +142,36 @@ async function renderRoadmap(
     focusPlan = null,
     revealTask = null,
     actions = {},
+    hideDone,
   }: {
     filters?: IssueFilters
     focusPlan?: RoadmapRequest | null
     revealTask?: RoadmapRequest | null
     actions?: Record<string, (...args: unknown[]) => void>
+    hideDone?: boolean | null
   } = {},
 ) {
   const { Roadmap } = await import('./Roadmap')
   const { WorkspaceShell } = await import('../components/WorkspaceShell')
+  const appearance = await import('../lib/appearanceContext')
   const all = new Proxy(actions, {
     get: (target, name: string) => target[name] ?? (() => {}),
   }) as Parameters<typeof Roadmap>[0]['actions']
   // the shell holds the toolbar row the Roadmap's toolbar portals into
   await board.renderView(root, (info) => (
-    <WorkspaceShell header={null}>
-      <Roadmap
-        info={info}
-        filters={filters}
-        actions={all}
-        filterControls={() => null}
-        focusPlan={focusPlan}
-        revealTask={revealTask}
-        onFocusConsumed={consumedPlans}
-      />
-    </WorkspaceShell>
+    <Appearance context={appearance} hide={hideDone}>
+      <WorkspaceShell header={null}>
+        <Roadmap
+          info={info}
+          filters={filters}
+          actions={all}
+          filterControls={() => null}
+          focusPlan={focusPlan}
+          revealTask={revealTask}
+          onFocusConsumed={consumedPlans}
+        />
+      </WorkspaceShell>
+    </Appearance>
   ))
 }
 
@@ -846,6 +853,404 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
+describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  /** plan, with OTHER's Done one-2 this week (QN-3), a task one-3 (QN-4)
+      whose one subtask one-4 (QN-5) is Done, and a task one-5 (QN-6) with a
+      Done subtask one-6 (QN-7) and an open one, one-7 (QN-8). */
+  const withDone = (snap: Snapshot) => {
+    plan(snap)
+    addOther(snap)
+    const now = { start_week: week(0), end_week: week(0) }
+    snap.issues.push(
+      { ...taskRow(snap, 'one-2', 'done', 3), ...now, assignee_id: OTHER },
+      { ...taskRow(snap, 'one-3', 'todo', 4) },
+      { ...taskRow(snap, 'one-4', 'done', 5), ...now, parent_id: 'one-3' },
+      { ...taskRow(snap, 'one-5', 'todo', 6) },
+      { ...taskRow(snap, 'one-6', 'done', 7), ...now, parent_id: 'one-5' },
+      { ...taskRow(snap, 'one-7', 'todo', 8), ...now, remaining_hours: 1, parent_id: 'one-5' },
+    )
+  }
+  const team = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-res-row]')].map((el) => el.dataset.resRow)
+
+  it('gives Done tasks no row until it is turned off, with Team the same either way', async () => {
+    const board = await loadBoard(network, withDone, { scope: 'plan' })
+    await renderRoadmap(board)
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2', 'QN-6', 'QN-8'])
+    const hidden = team()
+    expect(hidden).toContain(OTHER)
+    await renderRoadmap(board, { hideDone: false })
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2', 'QN-3', 'QN-4', 'QN-5', 'QN-6', 'QN-7', 'QN-8'])
+    expect(team()).toEqual(hidden)
+    expect(document.querySelector('[data-roadmap-done-hidden]')).toBeNull()
+  })
+
+  it('shows its tasks as loading until the setting answers, never saying meanwhile that Done tasks are hidden', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        for (const task of snap.issues) task.status = 'done'
+      },
+      { scope: 'plan' },
+    )
+    await renderRoadmap(board, { hideDone: null })
+    expect(state()).toBe('loading')
+    expect(title()).toBe('Loading tasks…')
+    expect(rows()).toEqual([])
+    expect(document.querySelector('[data-roadmap-done-hidden]')).toBeNull()
+    await renderRoadmap(board, { hideDone: false })
+    expect(state()).toBe('ok')
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2'])
+  })
+
+  it.each(['plan', 'reveal'] as const)(
+    'keeps a %s request for a Done task until the setting answers, then shows the task with the setting off',
+    async (kind) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          Object.assign(snap.issues[1], {
+            status: 'done',
+            start_week: week(30),
+            end_week: week(31),
+          })
+        },
+        { scope: 'plan' },
+      )
+      board.P.roadmapContext(true, false)
+      consumedPlans = vi.fn()
+      const request: RoadmapRequest = {
+        id: 'QN-2',
+        n: 1,
+        key: 'QN-2',
+        uuid: 'two-1',
+        project: 'two',
+        start: TODAY_WEEK + 30,
+        end: TODAY_WEEK + 31,
+        ...(kind === 'plan' ? { status: 'done' } : {}),
+      }
+      const asks = kind === 'plan' ? { focusPlan: request } : { revealTask: request }
+      await renderRoadmap(board, { hideDone: null, ...asks })
+      await board.answer()
+      await flush()
+      expect(window.showToast).not.toHaveBeenCalled()
+      expect(consumedPlans).not.toHaveBeenCalled()
+      await renderRoadmap(board, { hideDone: false, ...asks })
+      await board.answer()
+      await flush()
+      expect(window.showToast).not.toHaveBeenCalled()
+      if (kind === 'plan') expect(planCard('QN-2')).not.toBeNull()
+      else expect(document.querySelector('[data-roadmap-revealed="QN-2"]')).not.toBeNull()
+    },
+  )
+
+  it.each([
+    ['on, which hides their Done task in One', true, 'one'],
+    ['off, with their Done task in Two', false, 'two'],
+  ] as const)(
+    'dims no row for a Team person with no row shown, the setting %s and their open task in a collapsed Two, and fades the others once it shows',
+    async (_, hideDone, doneIn) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          addOther(snap)
+          const now = { start_week: week(0), end_week: week(0), assignee_id: OTHER }
+          snap.issues.push(
+            {
+              ...taskRow(snap, 'other-done', 'done', 3),
+              ...now,
+              ...(doneIn === 'two' ? { project_id: 'two' } : {}),
+            },
+            { ...taskRow(snap, 'other-open', 'todo', 4), ...now, project_id: 'two' },
+          )
+        },
+        { scope: 'plan' },
+      )
+      const fade = (id: string) =>
+        document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)?.parentElement
+          ?.style.opacity
+      const fold = () => document.querySelector<HTMLElement>('[data-row-fold="two"]')
+      await renderRoadmap(board, { hideDone })
+      await act(async () => fold()?.click())
+      expect(rows()).toEqual(['QN-1'])
+      const other = () => document.querySelector<HTMLElement>(`[data-res-person="${OTHER}"]`)
+      await act(async () => other()?.click())
+      expect(other()?.getAttribute('aria-pressed')).toBe('true')
+      expect(fade('QN-1')).toBe('1')
+      await act(async () => fold()?.click())
+      expect(fade('QN-4')).toBe('1')
+      expect(fade('QN-1')).toBe('0.3')
+    },
+  )
+
+  it('says Done tasks are hidden where they are all the Roadmap has, with Clear filters under a filter', async () => {
+    const clearFilters = vi.fn()
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        for (const task of snap.issues) task.status = 'done'
+      },
+      { scope: 'plan' },
+    )
+    const note = () => document.querySelector('[data-roadmap-done-hidden]')
+    await renderRoadmap(board, { actions: { clearFilters } })
+    expect(rows()).toEqual([])
+    expect(note()?.textContent).toContain('Done tasks are hidden')
+    expect(note()?.textContent).toContain(
+      'No other tasks are on this Roadmap. To show Done tasks, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+    )
+    // the scope's headings stay above it
+    expect(
+      [...document.querySelectorAll<HTMLElement>('[data-track]')].map((el) => el.textContent),
+    ).toEqual(['One', 'Two'])
+    expect(note()?.querySelector('button')).toBeNull()
+    await renderRoadmap(board, { filters: { ...ROW, priority: 'high' }, actions: { clearFilters } })
+    await board.answer()
+    expect(note()?.textContent).toContain('No other tasks match your filters.')
+    expect(document.querySelector('[data-no-match]')).toBeNull()
+    const clear = [...(note()?.querySelectorAll('button') ?? [])].find(
+      (b) => b.textContent === 'Clear filters',
+    )
+    await act(async () => clear?.click())
+    expect(clearFilters).toHaveBeenCalledTimes(1)
+    await renderRoadmap(board, { hideDone: false })
+    await board.answer()
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2'])
+    expect(note()).toBeNull()
+  })
+
+  it('keeps under a filter the headings and milestone flags it would show with the setting off', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // the only High task, two-1, is Done this week
+        snap.issues[1].status = 'done'
+        snap.milestones.push({
+          id: 'gate',
+          project_id: 'plan',
+          name: 'Gate',
+          week: week(1),
+          created_at: snap.issues[0].created_at,
+        })
+      },
+      { scope: 'mine' },
+    )
+    const filters = { ...ROW, mine: true, priority: 'high' as const }
+    const headings = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-track], [data-subtrack]')].map(
+        (el) => el.dataset.track ?? el.dataset.subtrack,
+      )
+    await renderRoadmap(board, { filters, hideDone: false })
+    await board.answer()
+    expect(rows()).toEqual(['QN-2'])
+    const off = headings()
+    expect(off).toEqual(['plan', 'two'])
+    expect(document.querySelector('[data-msflag="gate"]')).not.toBeNull()
+    await renderRoadmap(board, { filters })
+    await board.answer()
+    expect(rows()).toEqual([])
+    expect(headings()).toEqual(off)
+    expect(document.querySelector('[data-msflag="gate"]')).not.toBeNull()
+    expect(document.querySelector('[data-roadmap-done-hidden]')?.textContent).toContain(
+      'No other tasks match your filters.',
+    )
+  })
+
+  it.each([
+    ['Team sync, which says it is Done', 30, true],
+    ['a source that does not say whether it is Done', 6, undefined],
+  ] as const)(
+    'says a jump from %s that its task is hidden, keeping the window',
+    async (_, weeks, done) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          Object.assign(snap.issues[0], {
+            status: 'done',
+            start_week: week(weeks),
+            end_week: week(weeks),
+          })
+        },
+        { scope: 'plan' },
+      )
+      await renderRoadmap(board)
+      const asked = roadmapAsks(board).length
+      await renderRoadmap(board, {
+        revealTask: {
+          id: 'QN-1',
+          n: 1,
+          key: 'QN-1',
+          uuid: 'one-1',
+          start: TODAY_WEEK + weeks,
+          end: TODAY_WEEK + weeks,
+          ...(done === undefined ? {} : { done }),
+        },
+      })
+      await board.answer()
+      await flush()
+      expect(window.showToast).toHaveBeenCalledWith(
+        'QN-1 is Done, and Done tasks are hidden on the Roadmap. To show it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+        'info',
+      )
+      expect(rows()).toEqual(['QN-2'])
+      expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
+      // no other window was asked for, nor saved
+      expect(roadmapAsks(board)).toHaveLength(asked)
+      expect(board.P.loadUI().roadmapWin).toBeUndefined()
+    },
+  )
+
+  it('says Plan on roadmap for a Done task where to show it, keeping the window and the open session', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { status: 'done', start_week: week(30), end_week: week(31) })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await flush()
+    expect(planCard('QN-1')).not.toBeNull()
+    const asked = roadmapAsks(board).length
+    await renderRoadmap(board, {
+      focusPlan: {
+        id: 'QN-2',
+        n: 2,
+        key: 'QN-2',
+        uuid: 'two-1',
+        project: 'two',
+        start: TODAY_WEEK + 30,
+        end: TODAY_WEEK + 31,
+        status: 'done',
+      },
+    })
+    await board.answer()
+    await flush()
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-2 is Done, and Done tasks are hidden on the Roadmap. To plan it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+      'info',
+    )
+    expect(consumedPlans).toHaveBeenCalledWith(2)
+    // no new window or planned task was asked for, and the session stays
+    expect(roadmapAsks(board)).toHaveLength(asked)
+    expect(planCard('QN-1')).not.toBeNull()
+  })
+
+  it('drops a plan request still waiting for its task when Plan on roadmap names a hidden Done task', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // one-1 is unscheduled, and a High filter hides it; two-1 is Done
+        Reflect.deleteProperty(snap.issues[0], 'start_week')
+        Reflect.deleteProperty(snap.issues[0], 'end_week')
+        Object.assign(snap.issues[1], { status: 'done', start_week: week(30), end_week: week(31) })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const filters = { ...ROW, priority: 'high' as const }
+    await renderRoadmap(board, { filters })
+    network.mutation.mockClear()
+    // the first request waits for an answer that holds one-1
+    board.server.roadmap.hold = (name) => name === 'tasks:roadmap'
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { filters, focusPlan: unscheduled })
+    expect(roadmapAsks(board).at(-1)?.planned_task).toEqual({
+      id: 'one-1',
+      project_id: board.snapshot.projects[0].id,
+    })
+    await renderRoadmap(board, {
+      filters,
+      focusPlan: {
+        id: 'QN-2',
+        n: 2,
+        key: 'QN-2',
+        uuid: 'two-1',
+        project: 'two',
+        start: TODAY_WEEK + 30,
+        end: TODAY_WEEK + 31,
+        status: 'done',
+      },
+    })
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-2 is Done, and Done tasks are hidden on the Roadmap. To plan it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+      'info',
+    )
+    // the read asks for one-1 no more, and an answer that holds it plans nothing
+    expect(roadmapAsks(board).at(-1)?.planned_task).toBeUndefined()
+    board.server.roadmap.hold = false
+    await board.answer()
+    await flush()
+    expect(planCard()).toBeNull()
+    expect(datesSent('one-1')).toEqual([])
+  })
+
+  it('ends a planning session once its task is Done, writing nothing more', async () => {
+    const board = await loadBoard(network, plan, { scope: 'plan' })
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await flush()
+    expect(planCard()).not.toBeNull()
+    network.mutation.mockClear()
+    board.snapshot.issues[0].status = 'done'
+    await board.answer()
+    expect(planCard()).toBeNull()
+    expect(rows()).toEqual(['QN-2'])
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-1 is Done, and Done tasks are hidden on the Roadmap. Its dates stay as they were saved.',
+      'info',
+    )
+    expect(datesSent('one-1')).toEqual([])
+  })
+
+  it('fits no end for an unscheduled task that becomes Done as its owner’s load arrives', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        const one = snap.issues[0]
+        Reflect.deleteProperty(one, 'start_week')
+        Reflect.deleteProperty(one, 'end_week')
+        one.remaining_hours = 100
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    board.server.holdLoads = true
+    network.mutation.mockClear()
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { focusPlan: unscheduled })
+    await flush()
+    expect(planCard()?.textContent).toContain('Loading…')
+    const starter = { start_week: week(0), end_week: week(1) }
+    expect(datesSent('one-1')).toEqual([starter])
+    // the starter bar saved, and someone sets one-1 Done, which arrives with
+    // the first load
+    Object.assign(board.snapshot.issues[0], { ...starter, status: 'done' })
+    board.server.holdLoads = false
+    await board.deliver()
+    await settle()
+    await flush()
+    expect(datesSent('one-1')).toEqual([starter])
+    expect(planCard()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-1 is Done, and Done tasks are hidden on the Roadmap. Its dates stay as they were saved.',
+      'info',
+    )
+  })
+})
+
 describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('keeps the planned task past the filter row, sent with its sub-project, and ends the session when it leaves', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan' })
@@ -1423,7 +1828,7 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(roadmapAsks(board).at(-1)?.planned_task).toEqual({ id: 'one-1', project_id: one })
   })
 
-  it('pans to a Done task outside the window, then shows it', async () => {
+  it('pans to a Done task outside the window, then shows it, with Hide Done in Roadmap off', async () => {
     const board = await loadBoard(
       network,
       (snap) => {
@@ -1432,9 +1837,10 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
       },
       { scope: 'plan' },
     )
-    await renderRoadmap(board)
+    await renderRoadmap(board, { hideDone: false })
     expect(rows()).toEqual(['QN-2'])
     await renderRoadmap(board, {
+      hideDone: false,
       revealTask: {
         id: 'QN-1',
         n: 1,
@@ -1525,5 +1931,46 @@ describe('the phone over the answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
         .map((el) => el.dataset.roadmapTaskOpen)
         .sort(),
     ).toEqual(['QN-1', 'QN-3'])
+  })
+
+  it('offers Clear filters where a filter leaves only Done tasks in the Task schedule', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 760px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    )
+    // the only High task, two-1, is Done this week, and one-1 is open
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues[1].status = 'done'
+      },
+      { scope: 'plan' },
+    )
+    const clearFilters = vi.fn()
+    const note = () => document.querySelector('[data-roadmap-done-hidden]')
+    const clear = () =>
+      [...(note()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Clear filters')
+    await renderRoadmap(board, {
+      filters: { ...ROW, priority: 'high' },
+      actions: { clearFilters },
+    })
+    const schedule = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Task schedule',
+    )
+    await act(async () => schedule?.click())
+    expect(note()?.textContent).toContain('no other tasks match your filters')
+    await act(async () => clear()?.click())
+    expect(clearFilters).toHaveBeenCalledTimes(1)
+    // with no filter on and every task Done, there is nothing to clear
+    board.snapshot.issues[0].status = 'done'
+    await renderRoadmap(board, { actions: { clearFilters } })
+    await board.answer()
+    expect(note()?.textContent).toContain('Done tasks are hidden.')
+    expect(clear()).toBeUndefined()
   })
 })

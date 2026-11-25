@@ -391,7 +391,7 @@ describe('a task the workspace does not hold, in the store', () => {
       ]) {
         one('taskWindow:task').deliver(answer)
         const shown = detail('far-1')
-        expect(shown).toMatchObject({ datesKnown: false, partial: true, done: false })
+        expect(shown).toMatchObject({ datesKnown: false, partial: true, done: null })
         expect(shown?.view).toMatchObject({ isGroup: true, start: null, end: null })
         expect(shown?.view && P.familyOf(shown.view)).toBeNull()
       }
@@ -418,7 +418,7 @@ describe('a task the workspace does not hold, in the store', () => {
           subtasks: { rows: [leaf], complete: false },
         }),
       )
-      expect(detail('far-1')).toMatchObject({ datesKnown: false, done: false })
+      expect(detail('far-1')).toMatchObject({ datesKnown: false, done: null })
       expect(detail('far-1')?.view).toMatchObject({ start: null, end: null, isGroup: true })
       // a leaf's dates are its own
       one('taskWindow:task').deliver(
@@ -490,7 +490,7 @@ describe('a task the workspace does not hold, in the store', () => {
         ...archivedAnswer('far-1', 40),
         task: { ...archivedAnswer('far-1', 40).task, is_group: true },
       })
-      expect(detail('far-1')).toMatchObject({ datesKnown: false, done: false })
+      expect(detail('far-1')).toMatchObject({ datesKnown: false, done: null })
       expect(detail('far-1')?.view).toMatchObject({ isGroup: true, start: null, end: null })
       // an older backend answers the page row alone: the window says what
       // became of the task, and nothing more

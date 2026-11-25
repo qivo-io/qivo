@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
+import { TODAY_WEEK, weekToISO } from './lib/dates'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { oracleLevels } from './store/oracleScope.setup'
@@ -16,6 +17,7 @@ import {
 } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
+import { Appearance } from './views/appearanceStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
 
 /* The main pages stay loaded while the person moves between them, on App
@@ -278,11 +280,16 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('./App')
+  // the account's appearance as the sign-in gate hands it on, which the
+  // Roadmap waits for
+  const appearance = await import('./lib/appearanceContext')
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <App />
-      </TooltipProvider>,
+      <Appearance context={appearance}>
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
+      </Appearance>,
     ),
   )
   return location.pathname.split('/')[2]
@@ -973,5 +980,45 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
     )
     await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
     expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
+  })
+
+  it('says at once that Show on roadmap for a task whose subtasks are all Done is hidden, keeping the window', async () => {
+    const far = weekToISO(TODAY_WEEK + 30)
+    const org = await boot((snap) => {
+      underProgram(snap)
+      snap.issues.push(
+        { ...taskRow(snap, LAUNCH, 'todo', 5), title: 'Plan the launch' },
+        {
+          ...taskRow(snap, '01000000-0000-4000-8000-000000000006', 'done', 6),
+          parent_id: LAUNCH,
+          start_week: far,
+          end_week: far,
+        },
+      )
+    })
+    const { P } = await import('./store/planner')
+    const saved = P.loadUI().roadmapWin
+    await go(`/app/${org}/board/tasks/qn-5`)
+    const show = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
+      return button?.textContent === 'Show on roadmap' && button
+    }, 'Show on roadmap')
+    await act(async () => show.click())
+    await shownPage('roadmap')
+    // before the Roadmap's answer arrives
+    await waitFor(
+      () =>
+        [...document.querySelectorAll('[data-toast-tone]')].some((toast) =>
+          toast.textContent?.includes(
+            'QN-5 is Done, and Done tasks are hidden on the Roadmap. To show it, turn off Hide Done in Roadmap',
+          ),
+        ),
+      'the word that QN-5 is hidden',
+    )
+    expect(P.loadUI().roadmapWin).toEqual(saved)
+    await loadTheAnswer()
+    await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
+    expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
+    expect(P.loadUI().roadmapWin).toEqual(saved)
   })
 })

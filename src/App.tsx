@@ -951,9 +951,16 @@ function App() {
   // window (Team sync, the Inbox, the task crumb, search). { id, n } like
   // focusPlan; the nonce comes from the same counter.
   const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
-  const reveal = (id: string, atOnce = false, key?: string, place?: TaskPlace) => {
+  const reveal = (id: string, atOnce = false, key?: string, place?: TaskPlace, done?: boolean) => {
     focusN.current += 1
-    setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}), ...place })
+    setRevealTask({
+      id,
+      n: focusN.current,
+      atOnce,
+      ...(key ? { key } : {}),
+      ...place,
+      ...(done === undefined ? {} : { done }),
+    })
   }
   /* The nonce of a reveal planOnRoadmap asked for, dropped with the plan
      request once another page covers the Roadmap (below roadmapActive). */
@@ -2159,11 +2166,13 @@ function App() {
   // instead. That opens no session and writes nothing, and a group's dormant
   // status never stops it as Backlog. A task the window shows from its own
   // answer plans the same way (P.taskShown). The request carries the task's
-  // uuid, sub-project and weeks (TaskPlace) and its status. The Roadmap pans
-  // to those weeks, asks the server to keep the task past the filter row,
-  // waits for an answer that holds it, then spotlights it, or says it is
-  // not on the roadmap any more or why it cannot plan it there, as for a
-  // Done task without dates, whose window's button is off.
+  // uuid, sub-project and weeks (TaskPlace) and its status, or for a group
+  // whether the window's answer shows it Done (TaskDetailVM done). The
+  // Roadmap pans to those weeks, asks the server to keep the task past the
+  // filter row, waits for an answer that holds it, then spotlights it, or
+  // says it is not on the roadmap any more or why it cannot plan or show it
+  // there, as for a Done task without dates, whose window's button is off,
+  // or a Done task Hide Done in Roadmap hides (views/Roadmap.tsx).
   const planOnRoadmap = (id) => {
     const it = P.taskShown(id)
     if (!it) return
@@ -2176,7 +2185,6 @@ function App() {
     // window names; the Roadmap then opens as any scope does, at once
     const meta = P.topLevelOf(it.project)
     if (!meta) return
-    const place = taskPlaceOf(it)
     /* A Roadmap that holds the task's sub-project, that sub-project's or
        its top-level project's, stays; from anywhere else planning opens
        the task's top-level project. My view carries it
@@ -2201,21 +2209,29 @@ function App() {
         openIssue: null,
       },
       () => {
+        // the task as the window shows it once the move lands, as it can
+        // change while the move asks about unsent text, so its weeks and its
+        // status come from one answer. A task that had subtasks at the press
+        // or has them now is only shown, as planning it writes dates that
+        // Show on roadmap never asked for.
+        const now = P.taskShown(id) ?? it
+        const place = taskPlaceOf(now)
+        const reveals = group || P.isGroup(now)
         setScope(to)
         // a reveal does not bypass the toolbar filters, so clear them as Team
         // sync's jump does (Focus stays)
-        if (group) clearFilters()
+        if (reveals) clearFilters()
         setView('roadmap')
         setProjectsOpen(false)
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
-        if (group) {
-          reveal(id, false, it.key, place)
+        if (reveals) {
+          reveal(id, false, now.key, place, P.taskDetail(now.uuid, now.org)?.done ?? undefined)
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
-          setFocusPlan({ id, n: focusN.current, key: it.key, status: it.status, ...place })
+          setFocusPlan({ id, n: focusN.current, key: now.key, status: now.status, ...place })
         }
       },
     )
@@ -2342,7 +2358,18 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
-      reveal(handle, false, v === 'roadmap' ? it.key : undefined, taskPlaceOf(it))
+      // the task as the views hold it once the move lands, as it can
+      // change while the move asks about unsent text, so its weeks and
+      // whether it is Done come from one answer
+      const now = P.anyTask(handle)
+      const shown = now ?? it
+      reveal(
+        handle,
+        false,
+        v === 'roadmap' ? shown.key : undefined,
+        taskPlaceOf(shown),
+        v === 'roadmap' && now ? P.isDone(now) : undefined,
+      )
     })
   }
   /* A person header's Board or Roadmap jump: leave the page for that view

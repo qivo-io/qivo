@@ -5,7 +5,9 @@
    socket is down, the page says so in its state attribute and keeps the
    theme and image choices disabled, since appearance.save takes both with
    no base to check, and a change made from a stale copy could put back
-   another device's earlier choice. */
+   another device's earlier choice. Hide Done in Roadmap saves alone
+   (appearance.setRoadmapHideDone) and is disabled with them, so every
+   choice on the page waits for the same current copy. */
 import { ConvexError } from 'convex/values'
 import { ImageIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -24,8 +26,10 @@ import { announce } from '../lib/announce'
 import { useAppearance, usePreview } from '../lib/appearanceContext'
 import { assertDemoFileSize, DEMO_FILE_MIB } from '../lib/demoMode'
 import { useUnsaved } from '../lib/leaveGuard'
+import { hidesDone } from '../lib/roadmapVisibility'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { type AppearancePreferences, P } from '../store/planner'
+import { Toggle } from './settings/controls'
 
 /* Image of the week gets the same thumbnail frame a custom upload gets
    (deviation #237), from the provider's preview (lib/appearanceContext.ts
@@ -207,6 +211,8 @@ export function AppearanceSettings() {
   // a value held from before a reconnect or an outage, until it arrives again
   const stale = preferences !== null && !appearance.preferencesCurrent
   const [busy, setBusy] = useState(false)
+  // Hide Done in Roadmap's new value while it saves, which the switch shows
+  const [hideChosen, setHideChosen] = useState<boolean | null>(null)
   const [uploading, setUploading] = useState(false)
   useUpdateBlocker(busy || uploading)
   // an image on its way to the server is lost if the page closes
@@ -239,6 +245,23 @@ export function AppearanceSettings() {
       // toasted by the store
     } finally {
       if (alive.current) setBusy(false)
+    }
+  }
+  const hideDone = hideChosen ?? hidesDone(preferences)
+  const toggleHideDone = async () => {
+    if (!preferences || busy || loadError || stale) return
+    setBusy(true)
+    setHideChosen(!hideDone)
+    try {
+      await P.setRoadmapHideDone(!hideDone)
+      window.showToast?.('Appearance saved.')
+    } catch {
+      // toasted by the store
+    } finally {
+      if (alive.current) {
+        setBusy(false)
+        setHideChosen(null)
+      }
     }
   }
   const upload = async (file?: File) => {
@@ -383,6 +406,32 @@ export function AppearanceSettings() {
                 </div>
               )}
               <WeeklyPreview preferences={preferences} />
+            </div>
+          </SettingsGroup>
+          <SettingsGroup legend="Roadmap">
+            <div
+              data-appearance-hide-done={hideDone ? 'on' : 'off'}
+              className="flex items-center justify-between gap-6"
+            >
+              <div className="min-w-0">
+                <Label htmlFor={`${id}-hide-done`} className="text-base text-text-1">
+                  Hide Done in Roadmap
+                </Label>
+                <p
+                  id={`${id}-hide-done-hint`}
+                  className="mt-1.5 text-sm leading-normal text-text-2"
+                >
+                  Done tasks take no row on the Roadmap.
+                </p>
+              </div>
+              <Toggle
+                id={`${id}-hide-done`}
+                aria-label="Hide Done in Roadmap"
+                aria-describedby={`${id}-hide-done-hint`}
+                on={hideDone}
+                disabled={busy || stale}
+                onClick={() => void toggleHideDone()}
+              />
             </div>
           </SettingsGroup>
         </>

@@ -48,7 +48,7 @@ export function AccountPage({
   const stale = !!profile && P.rootStale()
   const sections = [
     { id: 'profile', label: 'Profile', icon: 'user', hint: 'Name, picture and sign out' },
-    { id: 'appearance', label: 'Appearance', icon: 'cog', hint: 'Theme and background' },
+    { id: 'appearance', label: 'Appearance', icon: 'cog', hint: 'Theme, background and Roadmap' },
     {
       id: 'notifications',
       label: 'Notifications',

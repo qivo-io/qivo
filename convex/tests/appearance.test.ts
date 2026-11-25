@@ -44,7 +44,7 @@ const USER_CONFLICT =
   'Documents read from or written to the "custom_backgrounds" table changed while this ' +
   'mutation was being run and on every subsequent retry. See https://docs.convex.dev/error#1'
 
-const DEFAULT = { mode: 'dark', image_source: 'daily', custom_image: null }
+const DEFAULT = { mode: 'dark', image_source: 'daily', roadmap_hide_done: true, custom_image: null }
 const headers = { 'Content-Type': 'image/jpeg', Origin: 'http://localhost:5199' }
 /* The size an upload ticket declares where a case sends no file of its own.
    Outside the demo only its shape is checked, and the receiver reads at
@@ -287,6 +287,34 @@ describe('account appearance preferences', () => {
       'forbidden',
     )
     await expectRefusal(t.mutation(api.appearance.removeCustom, {}), 'forbidden')
+    await expectRefusal(
+      t.mutation(api.appearance.setRoadmapHideDone, { roadmap_hide_done: false }),
+      'forbidden',
+    )
+  })
+
+  it('keeps Hide Done in Roadmap for the login across its seats, apart from its theme and Canvas', async () => {
+    const { t, owner, other, org } = await setup()
+    const guest = await plantSeat(t, {
+      org_id: org.otherOrg.id,
+      auth_user_id: owner.id,
+      org_role: 'guest',
+    })
+    await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'none' })
+    // a row written before the setting existed reads as on
+    expect(await settings(owner.caller)).toMatchObject({ roadmap_hide_done: true })
+    await owner.caller.mutation(api.appearance.setRoadmapHideDone, { roadmap_hide_done: false })
+    expect(await settings(as(t, guest))).toEqual({
+      ...DEFAULT,
+      mode: 'light',
+      image_source: 'none',
+      roadmap_hide_done: false,
+    })
+    await owner.caller.mutation(api.appearance.save, { mode: 'dark', image_source: 'daily' })
+    expect(await settings(owner.caller)).toMatchObject({ roadmap_hide_done: false })
+    expect(await settings(other.caller)).toEqual(DEFAULT)
+    await owner.caller.mutation(api.appearance.setRoadmapHideDone, { roadmap_hide_done: true })
+    expect(await settings(owner.caller)).toEqual(DEFAULT)
   })
 
   it.each(['light', 'dark'] as const)(
