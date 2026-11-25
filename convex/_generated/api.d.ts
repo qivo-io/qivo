@@ -138,6 +138,7 @@ import type * as lib_oauthRegistration from "../lib/oauthRegistration.js";
 import type * as lib_orgExport from "../lib/orgExport.js";
 import type * as lib_overview from "../lib/overview.js";
 import type * as lib_overviewNeeds from "../lib/overviewNeeds.js";
+import type * as lib_overviewWork from "../lib/overviewWork.js";
 import type * as lib_ownerLoads from "../lib/ownerLoads.js";
 import type * as lib_panorama from "../lib/panorama.js";
 import type * as lib_panoramaCuration from "../lib/panoramaCuration.js";
@@ -428,6 +429,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orgExport": typeof lib_orgExport;
   "lib/overview": typeof lib_overview;
   "lib/overviewNeeds": typeof lib_overviewNeeds;
+  "lib/overviewWork": typeof lib_overviewWork;
   "lib/ownerLoads": typeof lib_ownerLoads;
   "lib/panorama": typeof lib_panorama;
   "lib/panoramaCuration": typeof lib_panoramaCuration;

@@ -1844,7 +1844,9 @@ const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused'
  * the cut kept; Name and Lead never fall back. Outside Late and
  * Behind plan the judged rows grow with `limit`, so a Load more can turn a
  * row's Late into unavailable: for a guest or Viewer by the owner order,
- * for staff by the budget. Refuses a malformed clock, a `limit` that is not
+ * for staff by the budget. With `open_only` the table leaves out every row
+ * whose counts hold no task that is not Done, once the counts are given,
+ * and `total` counts the rows it keeps. Refuses a malformed clock, a `limit` that is not
  * a whole number from 1 to OVERVIEW.healthRows, and a search past
  * LIMITS.search.
  */
@@ -1861,6 +1863,7 @@ export async function readHealth(
     dir: 'asc' | 'desc'
     search?: string
     limit: number
+    open_only?: boolean
   },
 ): Promise<HealthAnswer> {
   const clock = clockOf(args)
@@ -1870,13 +1873,19 @@ export async function readHealth(
   const matches = allWordsMatcher(nameKey(limitedText(LIMITS.search, args.search ?? '')))
   return await overScope(ctx, profiles, args.scope, async (guard, at) => {
     const g = newGroups()
-    const items = (await healthItems(ctx, guard, at, g)).filter((r) => matches(r.key))
+    let items = (await healthItems(ctx, guard, at, g)).filter((r) => matches(r.key))
     const counts = await bounded(async (): Promise<Figure<{ of: Map<string, LeafCounts> }>> => {
       const read = await healthCounts(ctx, guard, at, items)
       return read === null
         ? { state: 'unavailable', reason: 'counting' }
         : { state: 'ok', of: read }
     })
+    // without the counts no row is known to have nothing left, so all stay
+    if (args.open_only === true && counts.state === 'ok')
+      items = items.filter((r) => {
+        const c = counts.of.get(r.project.id)
+        return c !== undefined && leafTotal(c) - c.leaves.done > 0
+      })
     const leads = sort === 'lead' ? await leadKeys(ctx, guard, items) : new Map<string, string>()
     let delays = new Map<string, Figure<{ late: number; behind: number }>>()
     const countsOf = (r: HealthItem): LeafCounts | null =>

@@ -1,12 +1,13 @@
 /* The Overview's live queries, which answer one scope's summary, its
  * projected delays, its two task lists, its health table and a project's
- * Needs attention list on the server. The app's Overview page reads them
- * through the store (src/store/overviewLists.ts): a project or
- * sub-project's page the summary, the health table and the Needs attention
- * list, each as one read of its first rows; My view's page the summary,
- * the delays, its lists a batch at a time with fixed ends, and its health
- * table. Readers and budgets are in lib/overview.ts and
- * lib/overviewNeeds.ts, on the shared view reader lib/viewReads.ts and
+ * Needs attention list and My view's Your work on the server. The app's
+ * Overview page reads them through the store (src/store/overviewLists.ts):
+ * a project or sub-project's page the summary, the health table and the
+ * Needs attention list, My view's page the summary, the health table with
+ * `open_only` and Your work, each as one read of its first rows. The app no
+ * longer calls risk, attention and paused, which stay for tabs loaded
+ * before. Readers and budgets are in lib/overview.ts, lib/overviewNeeds.ts
+ * and lib/overviewWork.ts, on the shared view reader lib/viewReads.ts and
  * the counts every task writer keeps (model/overviewCounts.ts). A scope is a
  * top-level project with its visible live sub-projects, one sub-project,
  * or My view across every seat of the login.
@@ -36,6 +37,11 @@
  * - needs: the Needs attention list's first `limit` rows of one kind,
  *   ranked over the whole scope, with each kind's count
  *   (lib/overviewNeeds.ts).
+ * - work: My view's Your work, each group's first rows, with each kind's
+ *   count and the Late tasks by due date (lib/overviewWork.ts). It reads
+ *   the person's To Do, In Progress and In Review tasks through their
+ *   assignee and reviewer ranges, their subtask checks, parents and
+ *   blockers, and their own loads.
  * - health: the health table's first `limit` rows, at most
  *   OVERVIEW.healthRows, a row a sub-project of a project scope or in My
  *   view a top-level project above the person's own tasks, with the search
@@ -78,6 +84,7 @@ import { v } from 'convex/values'
 import { authedQuery } from './lib/functions'
 import { readAttention, readHealth, readPaused, readRisk, readSummary } from './lib/overview'
 import { readNeeds, vNeedsFilter } from './lib/overviewNeeds'
+import { readWork } from './lib/overviewWork'
 import { vClock } from './lib/viewLoads'
 
 const vScope = v.union(
@@ -121,6 +128,11 @@ export const needs = authedQuery({
   handler: (ctx, args) => readNeeds(ctx, ctx.myProfiles, args),
 })
 
+export const work = authedQuery({
+  args: { ...vClock, progress: v.number(), review: v.number(), next: v.number() },
+  handler: (ctx, args) => readWork(ctx, ctx.myProfiles, args),
+})
+
 /* A health table column (lib/overview.ts HealthSort). */
 const vHealthSort = v.union(
   v.literal('name'),
@@ -141,6 +153,7 @@ export const health = authedQuery({
     dir: v.union(v.literal('asc'), v.literal('desc')),
     search: v.optional(v.string()),
     limit: v.number(),
+    open_only: v.optional(v.boolean()),
   },
   handler: (ctx, args) => readHealth(ctx, ctx.myProfiles, args),
 })
