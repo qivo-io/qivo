@@ -17,17 +17,31 @@
      projects. It loads 25 at first and 25 more as its end scrolls into
      view or Load more is pressed, at most SIDEBAR_MOST.list
      (lib/projectPick.ts), past which it points to All projects.
-   - The scope's top-level project, from the project cache (P.project),
-     which App names the scope with, the facts a navigation row seeded
-     included, is the one expanded project once a loaded row holds it. Its sub-projects come
-     from projectNav.children the same way, at most SIDEBAR_MOST.children,
-     past which it asks for a search. A scope move to another project, My
-     view or All projects unmounts that list, which stops its read.
+   - The opened project (openedProject) is the scope while it names a
+     project. On My view it is the project the person opened last, the one
+     App saves for them (UIPrefs.lastProject, store/preferences.ts) and
+     the front door opens, so a reload on My view expands the same
+     project. A scope that names nothing, as while App looks up the
+     project a link names or shows the project chooser, has none. Its
+     top-level project, from the project cache (P.project), which App
+     names the scope with and the tree names the opened project with, the
+     facts a navigation row seeded included, is the one expanded project
+     once a loaded row holds it. On My view, while the cache has no facts
+     of the project opened last, as once it was archived, the top-level
+     project App saves beside it (UIPrefs.lastProject top_id) stands in,
+     so its parent stays expanded while the list holds the parent's row,
+     after a reload and a task link too. Its sub-projects come from
+     projectNav.children the same way, at most SIDEBAR_MOST.children, past
+     which it asks for a search. A change of the expanded project unmounts
+     that list, which stops its read. Rows light by App's `lit`, never for
+     being expanded.
    - When the scope's project is not among the loaded rows, the tree reads
      its next batches, one at a time, until one holds it, the list ends,
      reaches its bound, a batch fails or stops without moving, or the rows
      have passed its place in the server's order; the expanded list does
-     the same for a scoped sub-project. The row the scope names scrolls
+     the same for a scoped sub-project. The project opened last is not
+     read toward on My view: its row expands once the list holds it. The
+     row the scope names scrolls
      into the tree's view once, the first time it renders after a scope
      change or the boot, by the tree's own scrollTop, so nothing else
      scrolls and the person's own scrolling is left alone. Every scope
@@ -118,6 +132,28 @@ function RowNamed({ id }: { id: string }) {
 /** App's request to focus row `id` once the tree shows it; `n` tells two
     requests apart, and the tree hands it back to App's onFocusRowDone. */
 export type FocusRow = { id: string; n: number }
+
+/** The opened project of the module header, `id`, with `top`, the
+    top-level project the tree expands for it while the project cache has
+    no facts of it: `scope` while it names a project, with none, on My view
+    the project the person opened last, with the one saved beside it, else
+    none. */
+function openedProject(scope: string): { id: string; top: string | null } | null {
+  if (!scope) return null
+  if (!P.isMineScope(scope)) return { id: scope, top: null }
+  const last = P.loadUI().lastProject
+  return last?.project_id ? { id: last.project_id, top: last.top_id ?? null } : null
+}
+
+/** The top-level project of the opened project `opened`, its own id or
+    its parent's, which it names with the project cache, else its `top`. */
+function useOwner(opened: { id: string; top: string | null } | null): string | null {
+  useProjects([opened?.id])
+  if (!opened) return null
+  const facts = P.project(opened.id)
+  if (!facts) return opened.top
+  return facts.type === 'meta' ? facts.id : (facts.parent ?? null)
+}
 
 /** The top-level list's identity, one list across every seat. */
 const TREE_KEY = JSON.stringify(['sidebar'])
@@ -214,14 +250,8 @@ export function SidebarProjects({
   })
   const end = listEnd(list, false)
 
-  // the scope's top-level project, its own id or its parent's, from the
-  // project cache, which App names the scope with
-  const scopeProject = scope ? P.project(scope) : undefined
-  const owner = scopeProject
-    ? scopeProject.type === 'meta'
-      ? scopeProject.id
-      : (scopeProject.parent ?? null)
-    : null
+  const opened = openedProject(scope)
+  const owner = useOwner(opened)
   const ownerName = owner === null ? undefined : P.project(owner)?.name
   const ownerRow = owner === null ? undefined : list.rows.find((r) => r.id === owner)
 
@@ -258,6 +288,7 @@ export function SidebarProjects({
   // scope's project, within the bound and while each batch moved
   const seek =
     owner !== null &&
+    opened?.id === scope &&
     !ownerRow &&
     visible &&
     end === 'more' &&
@@ -687,10 +718,10 @@ function TreeEnd({
    are siblings in one container with each batch's note after its rows, so
    the branch line ends on the last row (styles/appearance.css), and the
    marker and the end line follow it. It reads only while it is mounted, so
-   a scope move away stops it. A scoped sub-project the rows do not hold is
-   read on toward, as the top-level list reads on toward the scope's
-   project, and `onSeeking` tells the tree whether it still is. After each
-   of its commits it hands the rows to the tree's `onCommit`. */
+   a change of the expanded project stops it. A scoped sub-project the rows
+   do not hold is read on toward, as the top-level list reads on toward the
+   scope's project, and `onSeeking` tells the tree whether it still is.
+   After each of its commits it hands the rows to the tree's `onCommit`. */
 function SidebarChildren({
   parent,
   scope,

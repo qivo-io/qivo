@@ -317,6 +317,8 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  // the saved preferences, the remembered project among them
+  localStorage.clear()
   Reflect.deleteProperty(document, 'visibilityState')
   Reflect.deleteProperty(HTMLElement.prototype, 'scrollTop')
   if (pickLib) Object.assign(pickLib.SIDEBAR_MOST, { list: 200, children: 100 })
@@ -647,6 +649,18 @@ describe('the projects figure', { timeout: 60_000 }, () => {
 })
 
 describe('the expanded list', { timeout: 60_000 }, () => {
+  /** The projects whose sub-projects show. */
+  const expanded = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-sidebar-children]')].map(
+      (c) => c.dataset.sidebarChildren,
+    )
+  /** Saves project `id` as the one the person opened last, with its
+      top-level project `top`, as App does once a view shows it, or
+      without one, as an earlier app saved it. */
+  const saved = (id: string, top?: string) =>
+    store.P.saveUINow({
+      lastProject: { org_id: ORG, project_id: id, ...(top ? { top_id: top } : {}) },
+    })
   /** Luma Sensor with 30 sub-projects, the figure under one project at its
       design size, and two everyday projects. */
   async function bigProject() {
@@ -660,7 +674,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     return { big, boards, cloud, empty }
   }
 
-  it("lists the scope's 30 sub-projects 25 first and the rest on Load more, as siblings, and stops when the scope moves", async () => {
+  it("lists the scope's 30 sub-projects 25 first and the rest on Load more, as siblings, and stops when another project opens", async () => {
     const { big, cloud } = await bigProject()
     await render(big)
     expect(childNames()).toHaveLength(25)
@@ -683,10 +697,67 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render(cloud)
     expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
     expect(childNames()).toEqual(['Frontend'])
-    // My view ends every one
+  })
+
+  it("expands the project opened last on My view, unlit, and the scope's own project elsewhere", async () => {
+    const { big, cloud } = await bigProject()
+    const frontend = snap.projects.find((p) => p.parent_id === cloud)?.id as string
+    const current = () => document.querySelectorAll('[data-sidebar-projects] [aria-current]')
+    await render(big)
+    saved(big, big)
+    expect(lit()).toEqual([big])
+    const reads = asked('children').length
+    // My view keeps Luma Sensor's sub-projects, read once, and lights no row
     await render('mine')
-    expect(open('projectNav:children')).toEqual([])
-    expect(document.querySelector('[data-sidebar-children]')).toBeNull()
+    expect(expanded()).toEqual([big])
+    expect(childNames()).toHaveLength(25)
+    expect(asked('children')).toHaveLength(reads)
+    expect(lit()).toEqual([])
+    expect(current()).toHaveLength(0)
+    // another project collapses it and shows its own
+    await render(cloud)
+    expect(expanded()).toEqual([cloud])
+    expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
+    // a sub-project opened last keeps its project expanded, unlit
+    await render(frontend)
+    saved(frontend, cloud)
+    expect(lit()).toEqual([frontend])
+    await render('mine')
+    expect(expanded()).toEqual([cloud])
+    expect(childNames()).toEqual(['Frontend'])
+    expect(lit()).toEqual([])
+    // after a reload on My view, a new store whose project cache knows no
+    // project and which holds only the saved project, as an earlier app
+    // saved it, expands that project
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    localStorage.clear()
+    await load(snap)
+    saved(big)
+    expect(store.P.projectState(big)).toBe('loading')
+    await render('mine')
+    expect(expanded()).toEqual([big])
+    expect(lit()).toEqual([])
+  })
+
+  it('keeps the project of a sub-project opened last expanded on My view once the sub-project is archived', async () => {
+    const { big, boards } = await bigProject()
+    await render(boards[0])
+    saved(boards[0], big)
+    await render('mine')
+    expect(expanded()).toEqual([big])
+    // someone archives it, so the project cache answers it gone and the
+    // expanded list drops its row
+    const board = snap.projects.find((p) => p.id === boards[0])
+    if (board) board.archived_at = NOW
+    const whole = subs.find((s) => s.name === 'workspace:whole' && s.open)
+    await act(async () => whole?.next(structuredClone(snap)))
+    await republish()
+    await vi.waitFor(() => expect(store.P.projectState(boards[0])).toBe('gone'))
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await settle()
+    expect(expanded()).toEqual([big])
+    expect(childNames()[0]).toBe(named(1, 'Board'))
   })
 
   it('reads on to a scoped sub-project, lights it and stops at a lowered bound', async () => {
@@ -1005,18 +1076,20 @@ describe('the reveal', { timeout: 60_000 }, () => {
     await render(a)
     expect(scrolled).toEqual([into])
     // the person scrolls back to the top and goes to My view, which names
-    // no row, and back to A, whose row comes into view again; A's
-    // sub-projects load no more from here on
+    // no row, and back to A, whose row comes into view again
     tops.set(list(), 0)
     await render('mine')
     expect(scrolled).toEqual([into])
-    holding = (s) => s.name === 'projectNav:children'
     await render(a)
     expect(scrolled).toEqual([into, into])
     expect(lit()).toEqual([a])
     // the same through a sub-project of A the tree does not hold yet, its
-    // list still loading
+    // list still loading: the first project, in view, collapses A, whose
+    // sub-projects load no more from here on
     tops.set(list(), 0)
+    await render(ids[0])
+    expect(scrolled).toEqual([into, into])
+    holding = (s) => s.name === 'projectNav:children'
     await render(part)
     expect(childNames()).toEqual([])
     expect(lit()).toEqual([])

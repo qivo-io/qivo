@@ -267,17 +267,28 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
   })
 
   it('releases the project once no view or scope names it', async () => {
-    // Plan's task is no one's, so My view shows nothing of Plan
+    // Home, a project the person leads, shows nothing of Plan, and opening
+    // it collapses Plan in the sidebar, which names it until then
     const snap = world({ planLevel: 'user' })
-    for (const task of snap.issues) if (task.id === 't-plan') task.assignee_id = undefined
+    snap.projects.push({
+      ...snap.projects[0],
+      id: 'home',
+      type: 'meta',
+      key: 'HOME',
+      num: 5,
+      name: 'Home',
+      lead_id: snap.profiles[0].id,
+    })
     const { P } = await app(snap, '/app/~/roadmap/p/2')
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
     await act(async () => {
-      history.pushState(null, '', '/app/~/roadmap/mine')
+      history.pushState(null, '', '/app/~/roadmap/p/5')
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     await settle()
-    await waitFor(() => P.cacheStats().reads.length === 0, 'the reads stopped')
+    const read = () => P.cacheStats().reads.flat()
+    await waitFor(() => read().includes('home'), "Home's read")
+    await waitFor(() => !read().includes('plan') && !read().includes('plan-a'), 'the reads stopped')
     expect(P.canWrite('plan')).toBe(false)
   })
 })

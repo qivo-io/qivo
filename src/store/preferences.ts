@@ -20,8 +20,12 @@ export type UIPrefs = Partial<{
       All projects, the directory, the Inbox, Team sync, Settings and a
       scope a task's address chose never do, and a loss never clears it.
       `org_id` is the project's organization, which startup does not
-      read, as resolve takes the id alone. */
-  lastProject: { org_id: string; project_id: string }
+      read, as resolve takes the id alone. `top_id` is its top-level
+      project, itself for a top-level project, which the sidebar expands
+      on My view while the project cache has no facts of the project
+      (components/SidebarProjects.tsx); one an earlier app saved lacks it
+      until the save effect writes the project again. */
+  lastProject: { org_id: string; project_id: string; top_id?: string }
   /** the Team sync scope the person last picked; only a pick writes it */
   teamSyncScope: string
 }>
