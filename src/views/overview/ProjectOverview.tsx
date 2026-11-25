@@ -1080,8 +1080,10 @@ function LoadPanel({
 
 /** The line under an upcoming milestone: how many Late tasks are due on or
     before the first day of its week, in the calendar of its organization,
-    whose weeks start on `weekStart`, so every reader counts the same
-    tasks; those of the milestones above it left out. */
+    whose weeks start on `weekStart`, so every reader cuts at the same day;
+    those due by the cut-off day of `before`, the milestone shown above it,
+    left out. Which milestone is shown above it follows the reader's own
+    weeks. */
 function lateLine(
   days: readonly { due: string; count: number }[],
   m: MilestoneVM,

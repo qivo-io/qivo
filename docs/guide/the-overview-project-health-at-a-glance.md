@@ -109,11 +109,18 @@ shows hours only. A person whose load Qivo could not read shows
 **unknown**. It shows 8 people, and **Show all** the rest.
 
 **Milestones** lists upcoming milestones with a line under each, such as
-"2 late tasks are due before it": the tasks here whose verdict is
-**Late** and whose due date is on or before the first day of the
-milestone's week, as the project's organization starts its weeks, so
-every reader counts the same tasks, and under each later milestone the
-ones due since the milestone above it. Where Qivo could not work out
+"2 late tasks are due before it". Each milestone has one cut-off day, the
+first day of its week as the project's organization starts its weeks,
+and that day is the same for every reader. The line under the first
+milestone shown counts the tasks here whose verdict is **Late** and
+whose due date is on or before its cut-off day. The line under each
+later milestone counts only those due after the cut-off day of the
+milestone shown above it, such as "1 more late task is due before it".
+Which milestones are upcoming follows your own weeks. If you work as a
+guest in another organization whose weeks start on another day than your
+own, its list can start one milestone earlier or later for you than for
+its own people, and a line can then count from another milestone above
+it, or from none, and give another number. Where Qivo could not work out
 every projected delay the line says it could not count them. A project
 without delay tracking shows no such line.
 
