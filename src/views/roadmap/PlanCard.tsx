@@ -208,7 +208,7 @@ export function PlanCard({
                           ? 'Drag the end freely'
                           : session.noFit
                             ? NO_FIT_END
-                            : `End follows ${first}’s free time on drop`}
+                            : `On drop, ends in the earliest week ${first} is projected to finish it`}
             </div>
           </div>
         </div>
