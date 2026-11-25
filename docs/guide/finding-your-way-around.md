@@ -83,9 +83,9 @@ or that project's archived tasks.
 
 ## Top bar
 
-The view selector reads **Inbox**, **Board**, **Roadmap** and **Overview**.
+The view selector reads **Inbox**, **Overview**, **Board** and **Roadmap**.
 Use **Inbox** and its unread count to open notifications ([Your inbox](./working-together.md#your-inbox)). Select
-**Board**, **Roadmap** or **Overview** to return to that view in the current
+**Overview**, **Board** or **Roadmap** to return to that view in the current
 scope. Team sync is a separate page ([Team sync](./planning-against-real-capacity.md#team-sync)).
 
 Board filters and its layout switcher sit below the view selector. Roadmap

@@ -27,7 +27,7 @@ import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import { CommandChoiceEnd } from './pickerParts'
 import { ESCAPE_CLEARS, escapeClearsFirst, OWNER_WORDS, REVIEWER_WORDS } from './pickerWords'
-import { useOrgPeople, usePeople } from './usePeople'
+import { personLabel, useOrgPeople, usePeople } from './usePeople'
 
 export type OwnerField = 'assignee' | 'reviewer'
 
@@ -502,9 +502,11 @@ export function OwnerField({
  * a task whose reviewer owns it; "Needs a reviewer" names a reviewer on a
  * task its assignee owns). `onPick` runs once the write is saved. `variant` picks the
  * trigger: the board's bare portrait, a 20px portrait with a chevron (a sync
- * row), or a select-look "Assign" / "Reviewer" button (the sync's opening).
- * Without write access the portrait variant is the plain portrait and the
- * others are disabled, with the task window's read-only hover text.
+ * row), a select-look "Assign" / "Reviewer" button (the sync's opening), or
+ * a "Reassign" button (an Overview row's action, `className` its look).
+ * Without write access the portrait variant is the plain portrait, the
+ * Reassign button is not there, and the others are disabled, with the task
+ * window's read-only hover text.
  * `backLayer` gives the open list a phone Back step (the Team sync page).
  * The list reads nothing until it opens, and Escape in its search clears
  * the typed text before it closes the list. */
@@ -517,12 +519,15 @@ export function AssigneeAvatar({
   backLayer = false,
   offTitle,
   editable,
+  className,
 }: {
   issue: IssueVM
   compact?: boolean
   field?: OwnerField
   onPick?: (profileId: string | null) => void
-  variant?: 'portrait' | 'chevron' | 'label'
+  variant?: 'portrait' | 'chevron' | 'label' | 'action'
+  /** the Reassign button's look */
+  className?: string
   backLayer?: boolean
   /** the person's right on the task from the view's own answer, as Team
       sync's agenda answers `editable`, which decides in place of the
@@ -551,10 +556,16 @@ export function AssigneeAvatar({
   const canWrite = editor && !waits
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !editor) return portrait
+  if (variant === 'action' && !editor) return null
 
   const face =
     variant === 'portrait' ? (
       portrait
+    ) : variant === 'action' ? (
+      <>
+        <Icon name="user" size={14} color="var(--text-2)" />
+        <span data-action-label>Reassign</span>
+      </>
     ) : variant === 'chevron' ? (
       <>
         <Avatar id={who} size={20} />
@@ -574,11 +585,13 @@ export function AssigneeAvatar({
       </>
     )
   const faceClass =
-    variant === 'portrait'
-      ? PORTRAIT_CLASS
-      : variant === 'chevron'
-        ? 'inline-flex h-control-sm shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-transparent pr-2 pl-1 hover:border-border hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent'
-        : 'gap-1.5 pr-2 pl-2.5 font-normal'
+    variant === 'action'
+      ? className
+      : variant === 'portrait'
+        ? PORTRAIT_CLASS
+        : variant === 'chevron'
+          ? 'inline-flex h-control-sm shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-transparent pr-2 pl-1 hover:border-border hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent'
+          : 'gap-1.5 pr-2 pl-2.5 font-normal'
   return (
     <span {...OWNER_WRAP}>
       <Popover
@@ -591,8 +604,13 @@ export function AssigneeAvatar({
             type="button"
             variant={variant === 'label' ? 'default' : 'unstyled'}
             size={variant === 'label' ? 'sm' : undefined}
-            data-field-trigger={variant === 'portrait' ? undefined : ''}
+            data-field-trigger={variant === 'portrait' || variant === 'action' ? undefined : ''}
             {...ownerTrigger(issue, shown, canWrite, toggle, off)}
+            {...(variant === 'action'
+              ? {
+                  'aria-label': `Reassign ${issue.title}, ${shown} ${personLabel(P.person(who, issue.org), shown === 'reviewer' ? 'No reviewer' : 'Unassigned')}`,
+                }
+              : {})}
             className={faceClass}
           >
             {face}

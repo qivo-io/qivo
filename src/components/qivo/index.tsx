@@ -1148,6 +1148,8 @@ function DateCtl({
   disabled = false,
   title,
   className,
+  face,
+  label,
 }: {
   display: string
   value?: string | null
@@ -1157,6 +1159,11 @@ function DateCtl({
   disabled?: boolean
   title?: string
   className?: string
+  /** what the trigger shows in place of the date field, as a row's Move
+      due date button, which then takes `className` alone */
+  face?: ReactNode
+  /** the trigger's accessible name, with `face` */
+  label?: string
 }) {
   const [pop, setPop] = useState(null)
   const landscape = useContext(LandscapeContext)
@@ -1180,13 +1187,18 @@ function DateCtl({
         type="button"
         // a select-look field: lit while focused or while its calendar is open
         // (tokens.css's field rule keys on data-field-trigger + aria-expanded)
-        data-field-trigger
+        data-field-trigger={face === undefined ? '' : undefined}
         aria-haspopup="dialog"
         aria-expanded={!!pop}
-        className={cn(
-          'datectl inline-flex items-center gap-2 h-control px-2.5 bg-surface-1 border border-border rounded-sm text-text-1 text-sm font-mono whitespace-nowrap cursor-pointer disabled:cursor-default disabled:opacity-100',
-          className,
-        )}
+        aria-label={label}
+        className={
+          face === undefined
+            ? cn(
+                'datectl inline-flex items-center gap-2 h-control px-2.5 bg-surface-1 border border-border rounded-sm text-text-1 text-sm font-mono whitespace-nowrap cursor-pointer disabled:cursor-default disabled:opacity-100',
+                className,
+              )
+            : className
+        }
         disabled={disabled}
         title={title}
         onClick={(e) => {
@@ -1201,10 +1213,14 @@ function DateCtl({
         style={style}
         variant="unstyled"
       >
-        <span className={cn('flex-1 text-left', display ? 'text-inherit' : 'text-text-2')}>
-          {display || (P.org.dateFormat || 'YYYY-MM-DD').toLowerCase()}
-        </span>
-        <Icon name="calendar" size={16} color="var(--text-3)" />
+        {face ?? (
+          <>
+            <span className={cn('flex-1 text-left', display ? 'text-inherit' : 'text-text-2')}>
+              {display || (P.org.dateFormat || 'YYYY-MM-DD').toLowerCase()}
+            </span>
+            <Icon name="calendar" size={16} color="var(--text-3)" />
+          </>
+        )}
       </Button>
       {pop && (
         <CalendarPop
@@ -1275,6 +1291,8 @@ function DateInput({
   disabled = false,
   title,
   className,
+  face,
+  label,
 }: {
   value?: string | null
   onChange: (iso: string | null) => void
@@ -1283,6 +1301,9 @@ function DateInput({
   disabled?: boolean
   title?: string
   className?: string
+  /** DateCtl's `face` and `label`: a trigger of the caller's own look */
+  face?: ReactNode
+  label?: string
 }) {
   return (
     <DateCtl
@@ -1290,6 +1311,8 @@ function DateInput({
       disabled={disabled}
       title={title}
       className={className}
+      face={face}
+      label={label}
       display={value ? P.fmtISO(value) : ''}
       value={value || null}
       onPick={(iso) => onChange(iso)}

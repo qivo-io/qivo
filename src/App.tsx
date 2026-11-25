@@ -361,9 +361,9 @@ const VIEW_CLASS =
 const PAGE_CLASS = '[flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
 
 const VIEWS = [
+  { id: 'overview', label: 'Overview', icon: 'chart' },
   { id: 'kanban', label: 'Board', icon: 'board' },
   { id: 'roadmap', label: 'Roadmap', icon: 'timeline' },
-  { id: 'overview', label: 'Overview', icon: 'chart' },
 ]
 
 /* The desktop top bar: the Inbox glyph and the three views in one switch,

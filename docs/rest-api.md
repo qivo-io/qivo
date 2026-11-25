@@ -640,7 +640,7 @@ finds an object; read its `projects` and follow `next_cursor` until it is
 - `review_hours` is the project's own **Review time**, or `null` when it uses
   its parent's or the 2-hour default. `effective_review_hours` is the time a
   task entering `review` gets.
-- `completion` is the project's **Completion** on the app's Overview. It
+- `completion` is how much of the project is Done. It
   counts the active tasks without subtasks in the project, or for a
   top-level project in its sub-projects you can read that are not archived,
   and `done` counts those that are Done. A task with an active subtask

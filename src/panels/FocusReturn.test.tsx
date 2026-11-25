@@ -299,13 +299,14 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
     }
     await board.renderView(root, (info) => <Screen info={info} />)
   }
-  /** The Overview's paused rows, by the task each names. */
+  /** The Overview's Needs attention rows, by the task each names. */
   const pausedRows = () =>
-    [...document.querySelectorAll<HTMLElement>('[data-ovrow]')].map((row) => row.dataset.ovrow)
+    [...document.querySelectorAll<HTMLElement>('[data-need]')].map((row) => row.dataset.need)
+  /** The button that opens row `task`'s task. */
   const pausedRow = (task: string | undefined) =>
-    [...document.querySelectorAll<HTMLElement>('[data-ovrow]')].find(
-      (row) => row.dataset.ovrow === task,
-    )
+    [...document.querySelectorAll<HTMLElement>('[data-need]')]
+      .find((row) => row.dataset.need === task)
+      ?.querySelector<HTMLElement>('[data-focus-key="row"]')
 
   it('gives focus to the row now in its place in the list it was opened from', async () => {
     const board = await load([
@@ -327,9 +328,9 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
     ])
     await renderOverview(board)
     await archiveFrom(pausedRow(pausedRows()[0]))
-    expect(document.querySelector('[data-ovrow]')).toBeNull()
+    expect(document.querySelector('[data-need]')).toBeNull()
     // the row leaves with the answers that hold the archive, and the
-    // heading's count is the server's summary of them
-    expect(focused()).toBe('Paused tasks')
+    // heading's count is the list's own, its answer's
+    expect(focused()).toBe('Needs attention0')
   })
 })

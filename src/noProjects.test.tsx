@@ -576,7 +576,7 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
 })
 
 /** The milestone rows of the Overview's Milestones section. */
-const milestoneRows = () => [...document.querySelectorAll('main .overview-milestone')]
+const milestoneRows = () => [...document.querySelectorAll('main [data-overview-milestone]')]
 
 describe('the Overview of a scope with nothing to summarize', () => {
   it('keeps the scope’s milestones under the note on a computer', async () => {
@@ -592,7 +592,7 @@ describe('the Overview of a scope with nothing to summarize', () => {
     expect(button('New sub-project')).toBeDefined()
     expect(document.querySelector('main [aria-label="New milestone"]')).not.toBeNull()
     // nothing counted, so no summary and no status strip
-    expect(document.querySelector('[data-ov-summary], [data-ov-strip]')).toBeNull()
+    expect(document.querySelector('[data-ov-summary], [data-ov-strip], [data-ov-head]')).toBeNull()
     // My view whose sub-project holds no task of the person's lists no
     // milestone, as it covers only the projects that hold their own work,
     // so its note is the whole page

@@ -5,10 +5,11 @@ access, your favorites first ([All projects](./finding-your-way-around.md#all-pr
 a project opens on the one you used last, the **Board** at first
 ([The three views](./finding-your-way-around.md#the-three-views)):
 
+- **Overview** shows what is left and what needs attention: overdue,
+  late, blocked and paused tasks, each person's load and the milestones.
 - **Board** groups tasks by status.
 - **Roadmap** schedules tasks by week and shows each person's workload in
   the **Team** strip.
-- **Overview** summarizes progress, risks and milestones.
 
 To plan work, create a task, add an assignee, remaining hours and a due date,
 then drag its bar on the Roadmap. The assignee can be a person or an agent
@@ -197,8 +198,8 @@ project. It appears when you belong to an organization.
 
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in
-the landscape Roadmap. The exceptions are the **Overview**'s health cards,
-which show a search once there are more than 10, **Projects**, whose search
+the landscape Roadmap. The exceptions are My view's **Overview** health
+cards, which show a search once there are more than 10, **Projects**, whose search
 asks the server, and **Archived tasks** and **Deleted items** in Settings,
 which keep their search boxes. Status and
 other filters remain available, as do searches inside people, label and
@@ -220,8 +221,10 @@ has **People & settings**; in project settings, **Manage people** opens
 user, team and email invitation controls. Its **…** menu holds **Archived
 tasks** and, where you may add one, **New sub-project…**.
 
-**Overview** shows sortable health cards, 10 at a time with **Load more**,
-and a search once there are more than 10. **Roadmap** starts on milestones,
+**Overview** shows a project's Needs attention list first, in one column,
+and My view's sortable health cards, 10 at a time with **Load more** and a
+search once there are more than 10. The view switch reads **Overview**,
+**Tasks** and **Roadmap**. **Roadmap** starts on milestones,
 listed as the Overview lists them, 10 upcoming at a time with **Load more**
 and a collapsed **Past** ([Overview
 milestones](./the-overview-project-health-at-a-glance.md)), My view's from

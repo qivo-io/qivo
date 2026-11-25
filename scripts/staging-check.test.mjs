@@ -121,13 +121,13 @@ import {
   ORG_EXPORT_READY_MS,
   ORG_EXPORT_STEP,
   OVERVIEW_EXPECTED,
-  OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_MILESTONES_STEP,
   OVERVIEW_OVERDUE_DAYS,
   OWN_READS_STEP,
   OWNER_PICKERS_NAMES,
   OWNER_PICKERS_PERSON,
   OWNER_PICKERS_STEP,
+  overviewSubLabel,
   PARENT_READ_STEP,
   PEOPLE_PAGE,
   PEOPLE_REFUSALS,
@@ -244,13 +244,18 @@ describe('staging check REST contract', () => {
     // overdue on every client's day, whatever its time zone
     expect(Number.isInteger(OVERVIEW_OVERDUE_DAYS)).toBe(true)
     expect(OVERVIEW_OVERDUE_DAYS).toBeGreaterThan(1)
-    const page = readFileSync(new URL('../src/views/Overview.tsx', import.meta.url), 'utf8')
-    expect(page).toMatch(/`\$\{done\} of \$\{leaves\} tasks done`/)
-    expect(page).toContain("{late === 1 ? 'is' : 'are'} overdue")
+    const page = readFileSync(
+      new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(page).toContain('label="Tasks left"')
+    expect(page).toContain('syncSentence({ overdue: c.overdue')
+    const sentence = readFileSync(new URL('../src/lib/teamSync.ts', import.meta.url), 'utf8')
+    expect(sentence).toMatch(/` \$\{tasks\(f\.overdue\)\} \$\{is\(f\.overdue\)\} overdue`/)
     expect(OVERVIEW_EXPECTED).toEqual({
-      completion: '0 of 2 tasks done',
-      paused: '1',
+      tasksLeft: 'Tasks left2',
       sentence: '1 task is overdue.',
+      kinds: ['overdue', 'paused'],
     })
   })
   it("checks its own label in Settings › Labels on its one task, in the page's words", () => {
@@ -2220,22 +2225,21 @@ describe('staging check REST contract', () => {
     for (const mark of [PICKER_EXPECTED.open, PICKER_EXPECTED.chip]) expect(page).toContain(mark)
     expect(pick).toContain(`\`\${p.parent.name}${PICKER_EXPECTED.place}\${p.name}\``)
   })
-  it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
-    const table = readFileSync(
-      new URL('../src/views/overview/HealthTable.tsx', import.meta.url),
+  it("checks its sub-project's row in Sub-projects on what its two tasks give, in the row's words", () => {
+    const page = readFileSync(
+      new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
       'utf8',
     )
-    expect(table).toMatch(/`\$\{f\.pct\}%`/)
-    expect(table).toMatch(/`\$\{f\.done\}\/\$\{f\.total\}`/)
-    // a blank where a trouble column or Left counts nothing
-    expect(table).toContain("n > 0 ? n : '—'")
-    expect(OVERVIEW_HEALTH_EXPECTED).toEqual({
-      progress: '0%',
-      done: '0/2',
-      left: '—',
-      behind: '—',
-      paused: '1',
-    })
+    expect(page).toMatch(
+      /`\$\{plural\(left \?\? 0, 'task'\)\} left, \$\{fmtHours\(c\.left_tenths \/ 10\)\} hours left`/,
+    )
+    expect(page).toMatch(/c \? `\$\{c\.paused\} paused` : null/)
+    expect(overviewSubLabel('Overview', true)).toBe(
+      'Overview, 2 tasks left, 0 hours left, 1 late, 0 behind plan, 1 paused',
+    )
+    expect(overviewSubLabel('Overview', false)).toBe(
+      'Overview, 2 tasks left, 0 hours left, 0 late, 0 behind plan, 1 paused',
+    )
   })
   it('fills a task to the page sizes of its thread', () => {
     expect(THREAD_PAGE).toEqual({
@@ -3102,7 +3106,6 @@ describe('the phone dropdowns step', () => {
     expect(pages.map((page) => page.path)).toEqual([
       'board/p/12',
       'overview/mine',
-      'overview/p/12',
       'roadmap/p/12',
       'settings/org-users',
       'settings/org-general',

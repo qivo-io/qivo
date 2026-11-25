@@ -1780,8 +1780,8 @@ once, as an array in key order, and took only `archived`.
 
 A sub-project without a lead of its own is led by its parent's lead.
 `review_hours` is the project's own review time, and `effective_review_hours`
-the time a task entering `review` gets. `completion` is the project's
-**Completion** on the app's Overview. It counts the active tasks without
+the time a task entering `review` gets. `completion` is how much of the
+project is Done. It counts the active tasks without
 subtasks in the project, or for a top-level project in its sub-projects you
 can read that are not archived, and `done` counts those that are Done. A
 task with an active subtask counts as a group and is left out, as in the

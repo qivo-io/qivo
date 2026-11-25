@@ -452,7 +452,7 @@ describe('people the workspace does not hold, on each page', () => {
       const actions = new Proxy({}, { get: () => () => {} }) as never
       await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
       await repaint()
-      expect(document.querySelector('[data-ovcard="elsewhere"]')).not.toBeNull()
+      expect(document.querySelector('[data-ov-sub="elsewhere"]')).not.toBeNull()
       // the placed row's lead is named in its organization once the project
       // cache places the row, and Hal not at all, since a read in another
       // organization would answer him gone

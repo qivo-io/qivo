@@ -19,7 +19,9 @@
    top-level projects above the person's tasks) with their counts and
    delays, searched, ordered by the server's total order (name keys by
    their bytes, convex/lib/nameKey.ts) with its name fallback and cut at
-   `limit`, at most HEALTH_ROWS. Its positions are plain text with each
+   `limit`, at most HEALTH_ROWS, and a project's Needs attention list from
+   its stored facts alone (Overdue, No reviewer and Paused, no verdict or
+   blocker). Its positions are plain text with each
    list's prefix, refused with bad_request under another list, scope,
    reader or clock. It reads no access rule or read budget of its own, so a
    state the workspace cannot reach, such as `counting`, `budget`,
@@ -43,6 +45,7 @@ import type {
   RiskAnswer,
   SummaryAnswer,
 } from '../../convex/lib/overview'
+import type { NeedsAnswer } from '../../convex/lib/overviewNeeds'
 import { taskOwnerId } from '../../convex/lib/review'
 import { allWordsMatcher } from '../../convex/lib/search'
 import type { ViewRow } from '../../convex/lib/viewReads'
@@ -74,6 +77,9 @@ export type ForcedOverview = {
   projected?: 'budget' | 'loads'
   list?: 'incomplete' | 'over_budget'
   unknown?: readonly string[]
+  /** the Needs attention list: past its budget, or with verdicts it could
+      not read, whose counts read unavailable for `loads` */
+  needs?: 'over_budget' | 'unknown'
   health?: {
     scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
     counts?: 'counting' | 'budget'
@@ -182,6 +188,8 @@ export type OverviewArgs = {
   dir?: 'asc' | 'desc'
   search?: string
   limit?: number
+  /** the Needs attention list's kind, `all` for every kind */
+  kind?: string
 }
 
 /* The columns whose order needs every row's counts. */
@@ -212,7 +220,7 @@ export function overviewStandIn(
   query: OverviewQuery,
   args: OverviewArgs,
   { sees, force = {} }: { sees?: (projectId: string) => boolean; force?: ForcedOverview } = {},
-): SummaryAnswer | RiskAnswer | ListAnswer | HealthAnswer {
+): SummaryAnswer | RiskAnswer | ListAnswer | HealthAnswer | NeedsAnswer {
   const mine = new Set(workspace.myProfileIds)
   const projectById = new Map(workspace.projects.map((p) => [p.id, p]))
   const profileById = new Map(workspace.profiles.map((p) => [p.id, p]))
@@ -220,7 +228,11 @@ export function overviewStandIn(
     const p = projectById.get(id)
     return p !== undefined && p.archived_at === undefined && (sees ? sees(id) : true)
   }
-  const scope = args.scope
+  // the Needs attention list names a project scope by its ids alone
+  const scope: OverviewScope =
+    query === 'needs' && !('kind' in args.scope)
+      ? { kind: 'project', ...(args.scope as { org_id: string; project_id: string }) }
+      : args.scope
 
   // the selection's sub-projects, in creation order, or null for none
   let subProjects: Project[] | null = null
@@ -278,10 +290,14 @@ export function overviewStandIn(
     const day = args.day as string
     const leaves = { backlog: 0, todo: 0, progress: 0, review: 0, done: 0 }
     let paused = 0
+    // the remaining hours of the leaves not Done, in whole tenths, each
+    // task's rounded as model/overviewCounts.ts stores it
+    let left_tenths = 0
     for (const t of scoped)
       if (!isGroup(t)) {
         leaves[t.status]++
         if (t.paused) paused++
+        if (t.status !== 'done') left_tenths += Math.round((t.remaining_hours ?? 0) * 10)
       }
     const budget = force.counts === 'budget'
     const unavailable = { state: 'unavailable' as const, reason: 'budget' as const }
@@ -291,7 +307,7 @@ export function overviewStandIn(
         ? unavailable
         : force.counts === 'counting'
           ? { state: 'unavailable', reason: 'counting' }
-          : { state: 'ok', leaves, paused },
+          : { state: 'ok', leaves, paused, left_tenths },
       any_task: budget ? unavailable : { state: 'ok', value: scoped.length > 0 },
       overdue:
         budget || force.overdue === 'budget'
@@ -592,6 +608,96 @@ export function overviewStandIn(
       return verdictOf(t, id === null ? [] : loadOf(t.org_id, id))?.status === 'late'
     }).length
     return { state: 'ok', projected: { state: 'ok', count: late } }
+  }
+
+  // ---- the Needs attention list (convex/lib/overviewNeeds.ts), from the
+  // stored facts alone: Overdue, No reviewer and Paused, which rank in that
+  // order, then by due date, undated last, and task number. It judges no
+  // verdict and reads no blocker; the server's own suite tests the whole
+  // rule
+  if (query === 'needs') {
+    if (scope.kind !== 'project') return { state: 'unavailable' }
+    if (force.needs === 'over_budget') return { state: 'over_budget' }
+    const day = args.day as string
+    const shownIds = new Set(workspace.issues.map((t) => t.id))
+    const order = ['overdue', 'no_reviewer', 'paused'] as const
+    const kindsOf = (t: Task) => {
+      const leaf = !isGroup(t)
+      return order.filter((k) =>
+        k === 'overdue'
+          ? t.due_date !== undefined && t.due_date < day
+          : k === 'no_reviewer'
+            ? leaf && t.status === 'review' && !t.reviewer_id
+            : leaf && t.paused,
+      )
+    }
+    const listed = scoped
+      .filter((t) => !done(t) && kindsOf(t).length > 0)
+      .sort(
+        (a, b) =>
+          order.indexOf(kindsOf(a)[0] as (typeof order)[number]) -
+            order.indexOf(kindsOf(b)[0] as (typeof order)[number]) ||
+          (a.due_date ?? '\uffff').localeCompare(b.due_date ?? '\uffff') ||
+          a.num - b.num,
+      )
+    const filter = args.kind as string
+    const kept =
+      filter === 'all' ? listed : listed.filter((t) => (kindsOf(t) as string[]).includes(filter))
+    const unknown = force.needs === 'unknown'
+    const verdict = (count: number) =>
+      unknown
+        ? { state: 'unavailable' as const, reason: 'loads' as const }
+        : { state: 'ok' as const, count }
+    const people = new Map<string, number>()
+    for (const t of scoped)
+      if (!isGroup(t) && ['todo', 'progress', 'review'].includes(t.status)) {
+        const id = owner(t)
+        if (id && !people.has(id)) people.set(id, 0)
+      }
+    for (const t of listed) {
+      const id = owner(t)
+      if (id) people.set(id, (people.get(id) ?? 0) + 1)
+    }
+    const late = new Map<string, number>()
+    for (const t of listed)
+      if (tracks(t) && t.due_date !== undefined && t.due_date < day)
+        late.set(t.due_date, (late.get(t.due_date) ?? 0) + 1)
+    return {
+      state: 'ok',
+      rows: kept.slice(0, args.limit as number).map((t) => {
+        const { description: _text, parent_id: parent, has_subtasks: _flag, ...rest } = t
+        const kinds = kindsOf(t)
+        return {
+          ...rest,
+          ...(parent !== undefined && shownIds.has(parent) ? { parent_id: parent } : {}),
+          has_subtasks: isGroup(t),
+          needs: { kind: kinds[0], also: kinds.slice(1), blocked_by: 0, blocks: null },
+        }
+      }),
+      total: kept.length,
+      most: 1000,
+      counts: {
+        overdue: listed.filter((t) => kindsOf(t).includes('overdue')).length,
+        blocked: 0,
+        no_reviewer: listed.filter((t) => kindsOf(t).includes('no_reviewer')).length,
+        paused: listed.filter((t) => kindsOf(t).includes('paused')).length,
+        projected: verdict(0),
+        behind: verdict(0),
+        all: verdict(listed.length),
+      },
+      tracks_delay: (subProjects ?? []).some((p) => p.track_delay === true),
+      people: [...people.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([id, n]) => ({ id, listed: n })),
+      late_due: unknown
+        ? { state: 'unavailable', reason: 'loads' }
+        : {
+            state: 'ok',
+            days: [...late.entries()]
+              .sort(([a], [b]) => (a < b ? -1 : 1))
+              .map(([due, count]) => ({ due, count })),
+          },
+    }
   }
 
   // ---- a list batch

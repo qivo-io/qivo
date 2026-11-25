@@ -1,0 +1,692 @@
+/* A project or sub-project's Overview (ProjectOverview.tsx). Every list
+   lays its rows on fixed columns, so a value of one kind sits at the same
+   place in every row: a row's flag, its fact's right edge and its owner; a
+   sub-project's hours and each of its Late, Behind plan and Paused counts
+   in a slot of its own; a person's line and percentage. Two columns where
+   the page has room, else one, Needs attention first. */
+
+.pov {
+  container-type: inline-size;
+  --pov-line: color-mix(in oklab, var(--text-1) 11%, transparent);
+  --pov-on-warn: #1b1400;
+  /* on the dark panels the danger red is lightened for text and darkened
+     under white text, so both keep 4.5 to 1 */
+  --pov-late-ink: color-mix(in oklab, var(--danger) 72%, white);
+  --pov-late-fill: color-mix(in oklab, var(--danger) 84%, black);
+}
+:root[data-appearance="light"] .pov {
+  --pov-on-warn: #ffffff;
+  --pov-late-ink: var(--danger);
+  --pov-late-fill: var(--danger);
+}
+
+.pov-page {
+  max-width: var(--workspace-content-max);
+  margin: 0 auto;
+  padding: 0 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-gap);
+}
+
+.pov-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--panel-gap);
+  align-items: start;
+}
+.pov-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-gap);
+  min-width: 0;
+}
+@container (min-width: 960px) {
+  .pov-cols {
+    grid-template-columns: minmax(0, 1fr) 400px;
+  }
+}
+
+/* --- the top row ------------------------------------------------------- */
+
+.pov-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 32px;
+  padding: 16px 20px;
+}
+.pov-sentence {
+  flex: 1 1 320px;
+  margin: 0;
+  font-size: var(--fs-lg, 17px);
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.pov-num {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.pov-num[data-tone="danger"] {
+  color: var(--pov-late-ink);
+}
+.pov-num[data-tone="warning"] {
+  color: var(--warn);
+}
+.pov-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+.pov-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 20px;
+  border-left: 1px solid var(--pov-line);
+  line-height: 1.25;
+}
+.pov-fact:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.pov-fact:last-child {
+  padding-right: 0;
+}
+.pov-fact-label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.pov-fact-value {
+  font-family: var(--mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.pov-lead {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pov-lead-name {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-1);
+}
+.pov-page-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* --- sections ---------------------------------------------------------- */
+
+.pov .overview-section-heading h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.pov-count {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--text-2);
+}
+.pov-head-note {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.pov-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pov-list > li + li {
+  border-top: 1px solid var(--pov-line);
+}
+.pov-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.pov-empty {
+  margin: 4px 0 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.pov-placeholder {
+  min-height: 200px;
+  padding: 8px 0;
+  font-size: var(--fs-sm);
+  font-style: italic;
+  color: var(--text-2);
+}
+.pov-placeholder-short {
+  min-height: 96px;
+}
+.pov-more {
+  margin: 4px 0 8px -8px;
+  height: var(--control-sm, 32px);
+  padding: 0 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* --- the tabs ---------------------------------------------------------- */
+
+.pov-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 -8px 6px;
+}
+.pov-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pov-tab:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+.pov-tab span {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+.pov-tab[aria-selected="true"] {
+  background: var(--lit);
+  color: var(--text-1);
+  font-weight: 600;
+}
+.pov-tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* --- a Needs attention row ---------------------------------------------- */
+
+.pov-need {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto 28px;
+  grid-template-areas: "flag main actions fact owner";
+  align-items: center;
+  column-gap: 12px;
+  min-height: 52px;
+  margin: 0 -10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.pov-need:hover {
+  background: var(--hover);
+}
+.pov-need:has(.pov-need-open:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.pov-flag {
+  grid-area: flag;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: var(--pov-late-fill);
+}
+.pov-flag[data-kind="behind"] {
+  background: var(--warn);
+  color: var(--pov-on-warn);
+}
+.pov-flag:is([data-kind="blocked"], [data-kind="no_reviewer"], [data-kind="paused"]) {
+  background: color-mix(in oklab, var(--text-1) 13%, transparent);
+  color: var(--text-1);
+}
+.pov-need-main {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* The title's button opens the task from anywhere on the row: its box
+   covers the row, under the actions. */
+.pov-need-open {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  font-size: var(--fs-base, 14px);
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pov-need-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.pov-need-open:focus-visible {
+  outline: none;
+}
+.pov-need-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pov-need-place {
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pov-need-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pov-need-reason svg {
+  flex-shrink: 0;
+}
+.pov-need-fact {
+  grid-area: fact;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  color: var(--text-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.pov-fact-top {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.pov-need-fact:is([data-kind="overdue"], [data-kind="projected"]) .pov-fact-top {
+  color: var(--pov-late-ink);
+}
+.pov-need-fact[data-kind="behind"] .pov-fact-top {
+  color: var(--warn);
+}
+.pov-need-owner {
+  grid-area: owner;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* The actions take no room until the row is under the pointer or holds
+   keyboard focus; on a touch screen they always show, as icons. */
+.pov-need-actions {
+  grid-area: actions;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  width: 0;
+  overflow: hidden;
+}
+.pov-need:is(:hover, :focus-within) .pov-need-actions {
+  width: auto;
+  overflow: visible;
+}
+.pov-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pov-action:hover {
+  border-color: var(--border-strong);
+}
+.pov-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+@media (hover: none) {
+  .pov-need-actions {
+    width: auto;
+    overflow: visible;
+  }
+  .pov-action {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+  .pov-action [data-action-label] {
+    display: none;
+  }
+}
+
+/* --- a sub-project ------------------------------------------------------ */
+
+.pov-sub {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  width: calc(100% + 20px);
+  min-height: 52px;
+  margin: 0 -10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.pov-sub:hover {
+  background: var(--hover);
+}
+.pov-sub:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.pov-sub-lead {
+  display: flex;
+}
+.pov-sub-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pov-sub-name {
+  font-size: var(--fs-base, 14px);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+.pov-sub-num {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.pov-sub-fig {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-1);
+}
+/* the tasks figure takes the same width in every row, so the hours start
+   at one place */
+.pov-sub-tasks {
+  display: inline-block;
+  min-width: 9ch;
+}
+.pov-sub-num i {
+  width: 1px;
+  height: 11px;
+  background: var(--border);
+}
+.pov-slots {
+  display: grid;
+  grid-template-columns: repeat(3, 38px);
+  column-gap: 4px;
+}
+.pov-slot {
+  display: flex;
+  justify-content: flex-end;
+}
+.pov-sub-unknown {
+  grid-column: span 2;
+  justify-self: end;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.pov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px 0 5px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: color-mix(in oklab, var(--text-1) 13%, transparent);
+  color: var(--text-1);
+}
+.pov-chip[data-kind="late"] {
+  background: var(--pov-late-fill);
+  color: #ffffff;
+}
+.pov-chip[data-kind="behind"] {
+  background: var(--warn);
+  color: var(--pov-on-warn);
+}
+
+/* --- a person ---------------------------------------------------------- */
+
+.pov-person {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 96px 52px;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 48px;
+  padding: 6px 0;
+}
+.pov-person-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: var(--fs-base, 14px);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-1);
+}
+.pov-person-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pov-person-name small {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--text-2);
+}
+.pov-meter {
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--text-1) 13%, transparent);
+  overflow: hidden;
+}
+.pov-meter i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+}
+.pov-person[data-tone="near"] .pov-meter i {
+  background: var(--warn);
+}
+.pov-person[data-tone="over"] .pov-meter i {
+  background: var(--danger);
+}
+.pov-person-pct {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: right;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.pov-person[data-tone="over"] .pov-person-pct {
+  color: var(--pov-late-ink);
+}
+
+/* --- a milestone ------------------------------------------------------- */
+
+.pov-miles {
+  display: flex;
+  flex-direction: column;
+}
+.pov-miles > * + * {
+  border-top: 1px solid var(--pov-line);
+}
+.pov-mile {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  width: calc(100% + 20px);
+  min-height: 52px;
+  margin: 0 -10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.pov-mile:hover {
+  background: var(--hover);
+}
+.pov-mile:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.pov-diamond {
+  width: 9px;
+  height: 9px;
+  margin: 0 auto;
+  rotate: 45deg;
+  border-radius: 1.5px;
+  background: var(--milestone);
+}
+.pov-diamond[data-past] {
+  opacity: 0.45;
+}
+.pov-mile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pov-mile-name {
+  font-size: var(--fs-base, 14px);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-1);
+}
+.pov-mile[data-next] .pov-mile-name {
+  font-weight: 600;
+}
+.pov-mile-line {
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  color: var(--text-2);
+}
+.pov-mile-when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.pov-mile-rel {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-1);
+}
+.pov-mile:not([data-next]) .pov-mile-rel {
+  color: var(--text-2);
+}
+.pov-past-toggle {
+  align-self: flex-start;
+  gap: 6px;
+  margin: 4px 0 4px -8px;
+  padding: 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+/* --- narrow ------------------------------------------------------------ */
+
+@container (max-width: 560px) {
+  .pov-head {
+    gap: 14px;
+    padding: 16px;
+  }
+  .pov-sentence {
+    flex-basis: 100%;
+    font-size: var(--fs-md);
+  }
+  .pov-need {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "flag main owner"
+      ". fact actions";
+    row-gap: 4px;
+    align-items: start;
+  }
+  .pov-need-fact {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+    align-self: center;
+  }
+  .pov-need-sub {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+  .pov-need-open {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .pov-need-actions {
+    justify-self: end;
+  }
+}

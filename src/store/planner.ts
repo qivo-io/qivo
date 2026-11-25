@@ -51,6 +51,7 @@ import {
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
 import type { ListAnswer } from '../../convex/lib/overview'
+import type { NeedsAnswer } from '../../convex/lib/overviewNeeds'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -223,6 +224,8 @@ import {
   createOverviewReads,
   type HealthTable,
   type ListKind,
+  type NeedsAsk,
+  type OverviewPage,
   type OverviewQuery,
   type OverviewView,
   splitAt,
@@ -3907,6 +3910,17 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
       return answer.state === 'ok' && answer.rows ? answer.rows.map((r) => r.project_id) : null
     },
   },
+  needs: {
+    ref: api.overview.needs,
+    rows: (value) => {
+      const answer = value as NeedsAnswer
+      return answer.state === 'ok' ? answer.rows.map(({ needs: _needs, ...row }) => row) : null
+    },
+    projects: (value) => {
+      const answer = value as NeedsAnswer
+      return answer.state === 'ok' ? projectsOf(answer.rows) : null
+    },
+  },
 }
 
 /** Team sync's view slot (P.watchSync), its agenda's read and rows. */
@@ -3915,6 +3929,8 @@ const SYNC_SLOT: ViewSlot = 'sync'
 /** The owner-load cache's view key of the people an organization Viewer's
     Team sync shows (P.watchSyncPeople). */
 const SYNC_PEOPLE = 'sync:people'
+/* The owner-load cache's view key of the Overview's Load this week. */
+const OVERVIEW_PEOPLE = 'overview:people'
 
 /** Team sync's read (convex/teamSync.ts agenda). An ok answer brings its
     rows, without the blockers and verdicts the page reads from the answer
@@ -9156,9 +9172,10 @@ function reviewHoursOfWrite(): ReviewHours {
 
 /* The fields updateViewTask writes: the Board's drop and owner picker
    (status, assignee and reviewer), Team sync's Remaining box and Pause
-   (remaining and paused), and the Roadmap's drag, Cancel and Auto-move
-   (start and end). */
+   (remaining and paused), the Roadmap's drag, Cancel and Auto-move (start
+   and end), and the Overview's Move due date (due). */
 const VIEW_WRITES = new Set([
+  'due',
   'status',
   'assignee',
   'reviewer',
@@ -9170,9 +9187,10 @@ const VIEW_WRITES = new Set([
 
 /** P.updateIssue on a task only an open view's answer brings
     (store/viewRows.ts), which the Board's drop and owner picker, Team
-    sync's cards and the Roadmap's bars send: its status, assignee and
-    reviewer, Team sync's Remaining and Pause, and the Roadmap's dates,
-    with the roster check every task write gets. A Remaining patch on a
+    sync's cards, the Roadmap's bars and the Overview's Needs attention
+    rows send: its status, assignee and reviewer, Team sync's Remaining
+    and Pause, the Roadmap's dates and the Overview's due date, with the
+    roster check every task write gets. A Remaining patch on a
     group drops, since a group has no hours of its own. The write paints
     the views' rows of the task and the task window's own answer of it
     (`detail`), which shows once a window opens on the task while the write
@@ -12129,12 +12147,12 @@ export const PLANNER = {
       store has not reached the new day yet, as before its day watch ran
       after sleep (lib/localDay.ts), it moves to it, so the page renders
       again on the new day. */
-  watchOverview: (key: string | null, owner = 0, attempt = 0) => {
+  watchOverview: (key: string | null, owner = 0, attempt = 0, page: OverviewPage = 'classic') => {
     const base = key === null ? null : baseOfKey(key)
     const now = new Date()
     const today = isoFromDate(now)
     const stale = base !== null && base.clock.day !== today
-    overviewStep(() => overview.watch(stale ? null : base, owner, attempt))
+    overviewStep(() => overview.watch(stale ? null : base, owner, attempt, page))
     if (stale && PLANNER.loaded && PLANNER.TODAY_ISO !== today) {
       rebuild(now)
       emit()
@@ -12147,27 +12165,57 @@ export const PLANNER = {
       the Overview's reads ask (P.watchOverview). */
   watchOverviewTable: (table: HealthTable | null, owner = 0) =>
     overviewStep(() => overview.watchTable(table, owner)),
+  /** Registers the kind of the Needs attention list a project or
+      sub-project's Overview shows, `ask`, or none with null, for the page
+      `owner` names, as P.watchOverviewTable registers the health table: a
+      new kind starts again at the first rows. It reads only while the
+      Overview's reads ask. */
+  watchOverviewNeeds: (ask: NeedsAsk | null, owner = 0) =>
+    overviewStep(() => overview.watchNeeds(ask, owner)),
+  /** Registers with the owner-load cache, under the Overview's own view
+      key, the people its Load this week shows, `owners`, each with how
+      many of the listed tasks are theirs, which orders a guest's or
+      Viewer's capped calls, and whether it reads now (`live`, while the
+      page and the tab show). P.releaseOverview releases them. */
+  watchOverviewPeople: (owners: readonly OwnerNeed[], live: boolean) => {
+    if (owners.length === 0) ownerLoads.release(OVERVIEW_PEOPLE)
+    else ownerLoads.register(OVERVIEW_PEOPLE, owners, live)
+  },
   /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
       the summary's and the delays' answers for the Overview asked now and
       whether each is current, each list's batches and state, and the
       health table's answer. */
   overviewRead: (): OverviewView => overview.view(),
-  /** Load more on Overview list `list`, or on the health table. */
-  overviewMore: (list: ListKind | 'health') =>
-    overviewStep(() => (list === 'health' ? overview.moreHealth() : overview.more(list))),
+  /** Load more on Overview list `list`, the health table or the Needs
+      attention list. */
+  overviewMore: (list: ListKind | 'health' | 'needs') =>
+    overviewStep(() =>
+      list === 'health'
+        ? overview.moreHealth()
+        : list === 'needs'
+          ? overview.moreNeeds()
+          : overview.more(list),
+    ),
   /** Shows Overview list `list` from its first batch again. */
   overviewFromStart: (list: ListKind) => overviewStep(() => overview.fromStart(list)),
   /** Asks batch `batch` of Overview list `list` afresh (Try again, Retry),
       or the health table, with no batch (its Try again, or a failed Load
       more's Retry). */
-  overviewRetry: (list: ListKind | 'health', batch = 0) =>
-    overviewStep(() => (list === 'health' ? overview.retryHealth() : overview.retry(list, batch))),
+  overviewRetry: (list: ListKind | 'health' | 'needs', batch = 0) =>
+    overviewStep(() =>
+      list === 'health'
+        ? overview.retryHealth()
+        : list === 'needs'
+          ? overview.retryNeeds()
+          : overview.retry(list, batch),
+    ),
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
       longer kept. */
   releaseOverview: () => {
     overviewStep(() => overview.release())
+    ownerLoads.release(OVERVIEW_PEOPLE)
     for (const slot of [
       ...OVERVIEW_MILESTONE_SLOTS.upcoming,
       ...OVERVIEW_MILESTONE_SLOTS.past,

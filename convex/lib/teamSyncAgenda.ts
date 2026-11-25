@@ -80,6 +80,7 @@ import {
   type Selection,
   type StepRange,
   SUB_COUNTS,
+  type Subtasks,
   selectionOf,
   selectionTasks,
   settled,
@@ -751,6 +752,15 @@ async function doneOf(
 
 // --- blockers -------------------------------------------------------------------------------
 
+/** What blockersOf reads from: the rows whose blockers it reads, the
+ * tasks the view read already, by id, all in the reader's working set, and
+ * what the view knows of their subtasks, which it adds to. */
+export type BlockerRead = {
+  rows: readonly Doc<'issues'>[]
+  tasks: ReadonlyMap<string, Doc<'issues'>>
+  known: Subtasks
+}
+
 /**
  * The blockers of the scope's rows, from each row's blocks links as their target
  * (issue_links by_target, each row at LINK_ROW_BYTES, relates links
@@ -759,15 +769,21 @@ async function doneOf(
  * any check of it, and kept only where it is in the reader's working set
  * (lib/viewReads.ts ViewAccess holds). A kept blocker's group check, and a
  * group's facts, say whether it is done (src/lib/issueGroups.ts
- * isIssueDone). `of` answers a row's blocked_by; `ids` names every kept
- * blocker, and those outside the agenda count toward AGENDA.context.
+ * isIssueDone). `of` answers a row's blocked_by; `open` the same blockers
+ * as tasks; `ids` names every kept blocker, and those outside the agenda
+ * count toward AGENDA.context. Team sync's agenda and the Overview's
+ * Needs attention list (lib/overviewNeeds.ts) read blockers through it.
  */
-async function blockersOf(
+export async function blockersOf(
   ctx: QueryCtx,
   guard: ViewBudget,
   seats: ViewSeats,
-  read: ScopeRead,
-): Promise<{ of: (row: Doc<'issues'>) => string[]; ids: string[] }> {
+  read: BlockerRead,
+): Promise<{
+  of: (row: Doc<'issues'>) => string[]
+  open: (row: Doc<'issues'>) => Doc<'issues'>[]
+  ids: string[]
+}> {
   const links = new Map<string, Doc<'issue_links'>[]>()
   const ranges: StepRange<Doc<'issue_links'>>[] = read.rows.map((row) => ({
     open: (from) =>
@@ -824,12 +840,14 @@ async function blockersOf(
     isGroupKnown(read.known, t.id) === true ? facts.get(t.id)?.done === true : t.status === 'done'
   const byCreation = (a: Doc<'issue_links'>, b: Doc<'issue_links'>) =>
     order(a.created_at, b.created_at) || order(a.id, b.id)
+  const open = (row: Doc<'issues'>) =>
+    [...(links.get(row.id) ?? [])].sort(byCreation).flatMap((link) => {
+      const b = kept.get(link.source_id)
+      return b === undefined || isDone(b) ? [] : [b]
+    })
   return {
-    of: (row) =>
-      [...(links.get(row.id) ?? [])].sort(byCreation).flatMap((link) => {
-        const b = kept.get(link.source_id)
-        return b === undefined || isDone(b) ? [] : [issueKey(b.num)]
-      }),
+    of: (row) => open(row).map((b) => issueKey(b.num)),
+    open,
     ids: [...kept.keys()],
   }
 }

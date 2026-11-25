@@ -10,7 +10,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    views/overview/OverviewMilestones.tsx): Upcoming 10 at a time with Load
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
-   Next milestone cell in each state, a kept answer's included, the Retry
+   Next milestone cell of My view's page in each state, a kept answer's
+   included, the Retry
    of its one-row read, the empty lines and My view's own sentences, My
    view's `mine` read, the note pages, the section staying under a note while
    Retry and Show from the start read again, another person's rename, move
@@ -208,16 +209,14 @@ async function setVisibility(value: 'visible' | 'hidden') {
 }
 
 describe("a project's Upcoming", { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('asks 10 and shows them in the answer order, Load more asks 20, and Next milestone is the first row', async () => {
+  it('asks 10 and shows them in the answer order, Load more asks 20, and the next milestone is the first row', async () => {
     const { board, store } = await overview(plan({ up: 14 }))
     expect(stateOf('upcoming')).toBe('ok')
     expect(rowsOf('upcoming')).toEqual(Array.from({ length: 10 }, (_, i) => `u${i + 1}`))
     const first = sectionAsks(board)[0]
     expect(first).toMatchObject({ projects: ['plan'], side: 'upcoming', limit: 10 })
     expect(first).not.toHaveProperty('mine')
-    // the next milestone, from Upcoming's first row, with its emphasis
-    expect(cell()?.dataset.ovFigureState).toBe('ok')
-    expect(cell()?.textContent).toContain('Step 1')
+    // the next milestone, Upcoming's first row, with its emphasis
     expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
     expect(q('[data-overview-milestone="u2"]')?.hasAttribute('data-next')).toBe(false)
     await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
@@ -233,7 +232,7 @@ describe("a project's Upcoming", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('moves on at a lowered cap with Show from the start, and takes Next milestone from a one-row read', async () => {
-    const loaded = await overview(plan({ up: 7 }))
+    const loaded = await overview(plan({ up: 7 }), { scope: 'mine' })
     const { board, section, store } = loaded
     Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
     try {
@@ -323,11 +322,11 @@ describe("a project's Past", { timeout: BOARD_TEST_TIMEOUT }, () => {
 
 describe('the Next milestone cell and the section states', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('says loading, none scheduled and unavailable, never none for a failed, refused or stopped read', async () => {
-    const loaded = await overview(plan({ up: 0 }))
+    const loaded = await overview(plan({ up: 0 }), { scope: 'mine' })
     const { board } = loaded
-    // a project whose whole Upcoming is empty and holds no past milestone
+    // projects whose whole Upcoming is empty and hold no past milestone
     expect(cell()?.textContent).toContain('None scheduled')
-    expect(noteOf('upcoming')).toEqual(['empty: No milestones yet. Add one with the + button.'])
+    expect(noteOf('upcoming')).toEqual(['empty: No milestones in any of your projects yet.'])
     // a new page each time, after App let the last one go, as it frees
     // a page it no longer keeps (P.releaseOverview)
     const again = async (force: Record<string, unknown>) => {
@@ -364,7 +363,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 
   it('keeps the next milestone and its emphasis while a failed Load more says so', async () => {
-    const { board } = await overview(plan({ up: 12 }))
+    const { board } = await overview(plan({ up: 12 }), { scope: 'mine' })
     board.server.milestones.force = { more: 'error' }
     await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
     expect(noteOf('upcoming').some((n) => n.startsWith('more-failed'))).toBe(true)
@@ -377,7 +376,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 
   it('marks a kept None scheduled refreshing until the fresh answer comes', async () => {
-    const { board } = await overview(plan({ up: 0 }))
+    const { board } = await overview(plan({ up: 0 }), { scope: 'mine' })
     expect(cell()?.textContent).toContain('None scheduled')
     expect(cell()?.dataset.ovFigureState).toBe('ok')
     await setVisibility('hidden')
@@ -393,7 +392,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 
   it('keeps the next milestone refreshing while a Load more over a kept answer fails', async () => {
-    const { board } = await overview(plan({ up: 12 }))
+    const { board } = await overview(plan({ up: 12 }), { scope: 'mine' })
     await setVisibility('hidden')
     // the shown read gets no fresh answer, and the Load more's read fails
     board.server.milestones.force = { upcoming: 'loading', more: 'error' }
@@ -411,7 +410,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 
   it('offers a Retry of the one-row read that fails while Upcoming answers, which reads it again', async () => {
-    const loaded = await overview(plan({ up: 7 }))
+    const loaded = await overview(plan({ up: 7 }), { scope: 'mine' })
     const { board, section, store } = loaded
     Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
     /** The one-row reads of the next milestone asked so far. */
@@ -457,7 +456,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 
   it('shows a past milestone project as having history, and Retry asks again', async () => {
-    const { board, render, store } = await overview(plan({ past: 1 }))
+    const { board, render, store } = await overview(plan({ past: 1 }), { scope: 'mine' })
     expect(noteOf('upcoming')).toEqual(['empty: No upcoming milestones.'])
     expect(cell()?.textContent).toContain('None scheduled')
     board.server.milestones.force = { upcoming: 'error' }
@@ -618,7 +617,7 @@ describe('the note pages through a new read', { timeout: BOARD_TEST_TIMEOUT }, (
 
 describe("another person's changes", { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('arrive in Upcoming, Next milestone and an open Past while the page shows, and wait while the tab hides', async () => {
-    const { board } = await overview(plan({ up: 4, past: 2 }))
+    const { board } = await overview(plan({ up: 4, past: 2 }), { scope: 'mine' })
     await click(q('[data-overview-milestones] [data-milestone-past-toggle]'))
     expect(rowsOf('upcoming')).toEqual(['u1', 'u2', 'u3', 'u4'])
     expect(rowsOf('past')).toEqual(['p1', 'p2'])

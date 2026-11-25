@@ -8,15 +8,17 @@ import type { ScopeInfo } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
-/* The Overview from the server's answers (views/Overview.tsx): the summary,
-   the delays and the two lists read through the store (P.watchOverview),
-   answered by the Overview's stand-in over the fixture's workspace
-   (store/overviewStandIn.setup.ts). Every root, figure and list state with
-   its markers; a figure that is not given never shows a number; the
-   sentence; the lists' batches, notes and Load more; the health table's
-   rows, states, cells, notes, search and Load more; the chooser of All
-   projects; My view's notes; the phone; opening a row; an own archive; a
-   hidden tab, a kept page and a new day. */
+/* My view's Overview from the server's answers (views/Overview.tsx): the
+   summary, the delays and the two lists read through the store
+   (P.watchOverview), answered by the Overview's stand-in over the
+   fixture's workspace (store/overviewStandIn.setup.ts). Every root, figure
+   and list state with its markers; a figure that is not given never shows
+   a number; the sentence; the lists' batches, notes and Load more; the
+   health table's rows, states, cells, notes, search and Load more; My
+   view's notes; the phone; opening a row; an own archive; a hidden tab, a
+   kept page and a new day. The root notes of a project or sub-project's
+   page (views/overview/ProjectOverview.tsx), which it shares, are read on
+   theirs. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -146,7 +148,7 @@ type Board = Awaited<ReturnType<typeof loadBoard>>
     from the first subscription on. */
 async function overview(
   prepare: (snap: Snapshot) => void,
-  { scope = 'plan', force = {} as ForcedOverview, hold = false } = {},
+  { scope = 'mine', force = {} as ForcedOverview, hold = false } = {},
 ) {
   const board = await loadBoard(network, prepare, { scope })
   board.server.overview.force = force
@@ -243,7 +245,7 @@ describe('the Overview from its answers', { timeout: BOARD_TEST_TIMEOUT }, () =>
         )
       } else {
         expect(document.querySelector('[data-ov-counts-note]')?.textContent).toBe(
-          'Qivo could not count the tasks here in one request. Open a sub-project to see its figures.',
+          'Qivo could not count the tasks here in one request. Open a project to see its figures.',
         )
         // the counts' budget takes Overdue with it
         expect(sentence()).toBe('Qivo could not check every deadline here.')
@@ -260,7 +262,7 @@ describe('the Overview from its answers', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(note?.dataset.ovFigureState).toBe('unavailable')
     expect(note?.dataset.ovReason).toBe('budget')
     expect(note?.textContent).toBe(
-      'Qivo could not count every overdue task here in one request. Done tasks count toward that until the nightly archive takes them, 30 days after they were done. Open a sub-project to see its figures.',
+      'Qivo could not count every overdue task here in one request. Done tasks count toward that until the nightly archive takes them, 30 days after they were done. Open a project to see its figures.',
     )
     expect(figure('at-risk')?.dataset.ovFigureState).toBe('unavailable')
     expect(figure('at-risk')?.textContent).toBe('')
@@ -287,7 +289,7 @@ describe('the Overview from its answers', { timeout: BOARD_TEST_TIMEOUT }, () =>
     root = createRoot(container)
     await overview(work(), { force: { projected: 'loads' } })
     expect(figure('projected')?.textContent).toBe(
-      'Someone here has more open work than Qivo reads at once, so projected delays are not available.',
+      'Qivo could not read everyone’s other work, so projected delays are not available here.',
     )
     void board
   })
@@ -428,7 +430,7 @@ describe('the root states', { timeout: BOARD_TEST_TIMEOUT }, () => {
       ],
     ]
     for (const [force, expected, title] of cases) {
-      await overview(withMilestone, { force })
+      await overview(withMilestone, { scope: 'plan', force })
       expect(state()).toBe(expected)
       expect(message()).toBe(title)
       expect(document.querySelector('[data-overview-milestone]')).not.toBeNull()
@@ -451,7 +453,7 @@ describe('the root states', { timeout: BOARD_TEST_TIMEOUT }, () => {
       await act(async () => root.unmount())
       root = createRoot(container)
     }
-    const { board } = await overview(withMilestone)
+    const { board } = await overview(withMilestone, { scope: 'plan' })
     board.server.overview.fail = new Error('network')
     board.server.overview.failing = (query) => query === 'summary'
     await board.answer()
@@ -467,12 +469,7 @@ describe('the root states', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(state()).toBe('ok')
   })
 
-  it("shows one sub-project's status distribution from the counts, and its own note past the budget", async () => {
-    await overview(work(), { scope: '' })
-    expect(figure('status')?.dataset.ovFigureState).toBe('ok')
-    expect(figure('status')?.textContent).toContain('In Progress 3')
-    await act(async () => root.unmount())
-    root = createRoot(container)
+  it("shows one sub-project's own note past the budget", async () => {
     const { actions } = await overview(work(), { scope: '', force: { scope: 'over_budget' } })
     expect(document.body.textContent).toContain('Open its Board, or find its tasks with Search.')
     await click(
@@ -583,7 +580,7 @@ describe('hidden, kept and a new day', { timeout: BOARD_TEST_TIMEOUT }, () => {
       expect(message()).toBe(note)
     }
     // a top-level project with sub-projects and no task
-    let { board } = await overview(plan)
+    let { board } = await overview(plan, { scope: 'plan' })
     await hideAndShow(board, 'No tasks yet')
     await act(async () => root.unmount())
     root = createRoot(container)
@@ -819,22 +816,46 @@ const heading = (label: string) =>
 const healthAsked = (board: Board) =>
   board.server.overview.asked.filter((a) => a.query === 'health').map((a) => a.args)
 
-/** `n` sub-projects of Plan, One and Two first, then Part 03 to Part `n`,
-    with the work of `work()` in One and Two. */
+/* The health table is My view's (views/Overview.tsx), a row for each
+   top-level project above the person's own tasks. */
+
+/** `n` top-level projects with the person's tasks, as My view's health
+    table lists them: One, which is Plan over its sub-project One with the
+    work of `work()`, and Two over the sub-project Two, first, then Part 03
+    to Part `n`, each over a sub-project with one task of the person's. */
 const parts =
   (n: number) =>
   (snap: Snapshot): void => {
     work()(snap)
-    const base = snap.projects.find((p) => p.name === 'One') as Snapshot['projects'][number]
-    for (let i = 3; i <= n; i++)
+    const top = snap.projects.find((p) => p.id === 'plan') as Snapshot['projects'][number]
+    const sub = snap.projects.find((p) => p.id === 'two') as Snapshot['projects'][number]
+    top.name = 'One'
+    snap.projects.push({ ...top, id: 'two-top', key: 'TWOT', num: 4, name: 'Two' })
+    sub.parent_id = 'two-top'
+    for (let i = 3; i <= n; i++) {
       snap.projects.push({
-        ...base,
+        ...top,
         id: `part${i}`,
         key: `P${i}`,
         num: 10 + i,
         name: `Part ${String(i).padStart(2, '0')}`,
       })
+      snap.projects.push({
+        ...sub,
+        id: `part${i}-sub`,
+        key: `PS${i}`,
+        num: 100 + i,
+        parent_id: `part${i}`,
+      })
+      snap.issues.push({
+        ...taskRow(snap, `part${i}-task`, 'todo', 200 + i),
+        project_id: `part${i}-sub`,
+      })
+    }
   }
+
+/** The two top-level projects One and Two of `parts`. */
+const tops = parts(2)
 
 /** Types `text` into the health table's search, as a person does, and
     waits for it to rest. */
@@ -852,13 +873,12 @@ async function typeSearch(text: string) {
 
 describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it("shows the server's rows in its order with their figures and markers, and opens a row's Board", async () => {
-    const { board, actions } = await overview(work())
+    const { actions } = await overview(tops)
     expect(healthState()).toBe('ok')
     expect(table()?.getAttribute('aria-busy')).toBeNull()
     expect(table()?.dataset.ovHealthEnd).toBe('')
     // most Late first: One holds three overdue tasks, Two one
-    const one = board.snapshot.projects.find((p) => p.name === 'One')?.id
-    expect(cardIds()).toEqual([one, 'two'])
+    expect(cardIds()).toEqual(['plan', 'two-top'])
     expect(cell(cards()[0], 'late')?.textContent).toBe('3')
     expect(cell(cards()[0], 'paused')?.textContent).toBe('3')
     expect(cell(cards()[0], 'done')?.textContent).toBe('1/7')
@@ -870,17 +890,17 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector('[data-ov-health-search]')).toBeNull()
     expect(document.querySelector('[data-ov-health-more]')).toBeNull()
     await click(cards()[1]?.querySelector('button'))
-    expect(actions.setScope).toHaveBeenCalledWith('two')
+    expect(actions.setScope).toHaveBeenCalledWith('two-top')
     expect(actions.setView).toHaveBeenCalledWith('kanban')
   })
 
   it('shows Left from whole tenths: 1.5h in a row and 1.5h left on a phone card', async () => {
     const tenths = (snap: Snapshot) => {
-      work()(snap)
+      tops(snap)
       const task = snap.issues.find((t) => t.id === 'two-late')
       if (task) task.remaining_hours = 1.5
     }
-    const two = () => cards().find((c) => c.dataset.ovcard === 'two')
+    const two = () => cards().find((c) => c.dataset.ovcard === 'two-top')
     await overview(tenths)
     expect(cell(two(), 'left')?.textContent).toBe('1.5h')
     await act(async () => root.unmount())
@@ -891,11 +911,11 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('asks only the health read for a new order, keeping the rows shown, dimmed, until the answer', async () => {
-    const { board } = await overview(work())
+    const { board } = await overview(tops)
     const open = [...board.server.overview.open].filter((sub) => sub.query !== 'health')
     const asked = board.server.overview.asked.length
     board.server.overview.hold = (query) => query === 'health'
-    await click(heading('Sub-project')?.querySelector('button'))
+    await click(heading('Project')?.querySelector('button'))
     expect(board.server.overview.asked.slice(asked).map((a) => a.query)).toEqual(['health'])
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'name', dir: 'asc', limit: 10 })
     // the summary's, the delays' and the lists' subscriptions stay
@@ -910,15 +930,15 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(table()?.dataset.ovHealthKept).toBeUndefined()
     expect(healthState()).toBe('ok')
     expect(cards().map((c) => c.textContent?.slice(0, 3))).toEqual(['One', 'Two'])
-    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    expect(heading('Project')?.getAttribute('aria-sort')).toBe('ascending')
     // a second press flips the direction the rows are in
-    await click(heading('Sub-project')?.querySelector('button'))
+    await click(heading('Project')?.querySelector('button'))
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'name', dir: 'desc' })
   })
 
   it('never shows a digit in a cell whose figure is counting or unavailable', async () => {
     for (const health of [{ counts: 'counting' }, { counts: 'budget' }] as const) {
-      await overview(work(), { force: { health } })
+      await overview(tops, { force: { health } })
       for (const card of cards())
         for (const name of ['progress', 'done', 'left', 'paused']) {
           const c = cell(card, name)
@@ -936,7 +956,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
       await act(async () => root.unmount())
       root = createRoot(container)
     }
-    await overview(work(), { force: { health: { delays: 'loads' } } })
+    await overview(tops, { force: { health: { delays: 'loads' } } })
     for (const card of cards())
       for (const name of ['late', 'behind']) {
         expect(cell(card, name)?.textContent).toBe('unknown')
@@ -946,11 +966,11 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('says why it sorts by name, for staff, for a guest and while the counts are counting', async () => {
     const note = () => document.querySelector('[data-ov-health-by-name]')?.textContent
-    const { board } = await overview(work(), { force: { health: { delays: 'budget' } } })
+    const { board } = await overview(tops, { force: { health: { delays: 'budget' } } })
     expect(note()).toBe(
-      'Sorted by name, because Qivo could not work out the delays of every sub-project here.',
+      'Sorted by name, because Qivo could not work out the delays of every project here.',
     )
-    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    expect(heading('Project')?.getAttribute('aria-sort')).toBe('ascending')
     // a press on Late asks Late, which the server answers by name again
     await click(heading('Late')?.querySelector('button'))
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc' })
@@ -985,13 +1005,13 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     await act(async () => root.unmount())
     root = createRoot(container)
-    const counting = await overview(work(), { force: { health: { counts: 'counting' } } })
+    const counting = await overview(tops, { force: { health: { counts: 'counting' } } })
     await click(heading('Progress')?.querySelector('button'))
     await counting.board.answer()
     expect(note()).toBe('Sorted by name while Qivo counts the tasks here.')
     await act(async () => root.unmount())
     root = createRoot(container)
-    await overview(work(), { force: { health: { counts: 'budget' } } })
+    await overview(tops, { force: { health: { counts: 'budget' } } })
     await click(heading('Progress')?.querySelector('button'))
     expect(note()).toBe(
       'Sorted by name, because Qivo could not count the tasks here in one request.',
@@ -999,37 +1019,37 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it("says why rows read unknown under the counts' name-order note too", async () => {
-    await overview(work(), { force: { health: { counts: 'counting', delays: 'loads' } } })
+    await overview(tops, { force: { health: { counts: 'counting', delays: 'loads' } } })
     await click(heading('Progress')?.querySelector('button'))
     expect(document.querySelector('[data-ov-health-by-name]')?.textContent).toBe(
       'Sorted by name while Qivo counts the tasks here.',
     )
     expect(cell(cards()[0], 'late')?.textContent).toBe('unknown')
     expect(document.querySelector('[data-ov-health-unknown]')?.textContent).toBe(
-      'Qivo could not work out the delays of the sub-projects marked unknown.',
+      'Qivo could not work out the delays of the projects marked unknown.',
     )
   })
 
   it('says why counts read counting or unknown in an order that needs none, unless its name-order note does', async () => {
     const note = () => document.querySelector<HTMLElement>('[data-ov-health-counts]')
-    const { board } = await overview(work())
+    const { board } = await overview(tops)
     expect(note()).toBeNull()
     // counting under the default order, Late, which needs no count
     await reanswer(board, { health: { counts: 'counting' } })
     expect(heading('Late')?.getAttribute('aria-sort')).toBe('descending')
     expect(note()?.dataset.ovHealthCounts).toBe('counting')
     expect(note()?.textContent).toBe(
-      'Qivo is counting the tasks of these sub-projects. Their figures show once it is done.',
+      'Qivo is counting the tasks of these projects. Their figures show once it is done.',
     )
     // past their budget under Name, which never falls back to say why
-    await click(heading('Sub-project')?.querySelector('button'))
+    await click(heading('Project')?.querySelector('button'))
     await reanswer(board, { health: { counts: 'budget' } })
-    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    expect(heading('Project')?.getAttribute('aria-sort')).toBe('ascending')
     expect(cell(cards()[0], 'progress')?.textContent).toBe('unknown')
     expect(document.querySelector('[data-ov-health-by-name]')).toBeNull()
     expect(note()?.dataset.ovHealthCounts).toBe('budget')
     expect(note()?.textContent).toBe(
-      'Qivo could not count the tasks of the sub-projects marked unknown in one request.',
+      'Qivo could not count the tasks of the projects marked unknown in one request.',
     )
     // Progress falls back to name order, whose note says it alone
     await click(heading('Progress')?.querySelector('button'))
@@ -1043,7 +1063,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const { board } = await overview(parts(25))
     expect(cards()).toHaveLength(10)
     expect(document.querySelector('[data-ov-health-search]')?.getAttribute('aria-label')).toBe(
-      'Search sub-projects',
+      'Search projects',
     )
     await typeSearch('part 2')
     expect(healthAsked(board).at(-1)).toMatchObject({ search: 'part 2', limit: 10 })
@@ -1065,7 +1085,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthAsked(board).length).toBe(before)
     await typeSearch('nothing like it')
     expect(document.querySelector('[data-ov-health-none]')?.textContent).toBe(
-      'No sub-project matches this search.',
+      'No project matches this search.',
     )
     expect(cards()).toHaveLength(0)
     await typeSearch('')
@@ -1096,8 +1116,8 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await typeSearch('part 2')
     const plan = board.P.scopeInfo('plan') as ScopeInfo
     const mine = board.P.scopeInfo('mine') as ScopeInfo
-    await render(() => <Overview info={mine} actions={actions} />)
     await render(() => <Overview info={plan} actions={actions} />)
+    await render(() => <Overview info={mine} actions={actions} />)
     expect(document.querySelector<HTMLInputElement>('[data-ov-health-search]')?.value).toBe('')
     await act(async () => new Promise((resolve) => setTimeout(resolve, 300)))
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
@@ -1132,7 +1152,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(cards()).toHaveLength(5)
     expect(document.querySelector('[data-ov-health-more]')).toBeNull()
     expect(document.querySelector('[data-ov-health-cap]')?.textContent).toBe(
-      'Qivo shows the first 5 sub-projects here. Search to find the others.',
+      'Qivo shows the first 5 projects here. Search to find the others.',
     )
     await act(async () => root.unmount())
     root = createRoot(container)
@@ -1144,7 +1164,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await click(more)
     await board.answer()
     expect(document.querySelector('[data-ov-health] [role="alert"]')?.textContent).toContain(
-      "Couldn't load more sub-projects.",
+      "Couldn't load more projects.",
     )
     expect(cards()).toHaveLength(10)
     const retry = document.querySelector<HTMLButtonElement>('[data-ov-health-retry]')
@@ -1156,7 +1176,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('shows each state with its sentence and Try again where it helps', async () => {
-    const { board } = await overview(work(), { hold: true })
+    const { board } = await overview(tops, { hold: true })
     expect(healthState()).toBe('loading')
     expect(table()?.getAttribute('aria-busy')).toBe('true')
     expect(table()?.textContent).toContain('Loading…')
@@ -1175,14 +1195,14 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
       [
         { scope: 'over_budget' },
         'over_budget',
-        "This table could not be loaded within the Overview's limits. Open a sub-project to see its figures.",
+        "This table could not be loaded within the Overview's limits. Open a project to see its sub-projects.",
         true,
       ],
     ] as const
     for (const [health, state, text, again] of cases) {
       await act(async () => root.unmount())
       root = createRoot(container)
-      await overview(work(), { force: { health } })
+      await overview(tops, { force: { health } })
       expect(healthState()).toBe(state)
       expect(document.querySelector('[data-ov-health-note]')?.textContent).toBe(
         again ? `${text}Try again` : text,
@@ -1191,10 +1211,10 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
     await act(async () => root.unmount())
     root = createRoot(container)
-    const failing = await overview(work())
+    const failing = await overview(tops)
     failing.board.server.overview.fail = new Error('down')
     failing.board.server.overview.failing = (query) => query === 'health'
-    await click(heading('Sub-project')?.querySelector('button'))
+    await click(heading('Project')?.querySelector('button'))
     expect(healthState()).toBe('error')
     expect(document.querySelector('[data-ov-health-note]')?.textContent).toBe(
       'The health table could not be loaded.Try again',
@@ -1211,7 +1231,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it("shows the phone's cards with their figures, unknown delays and counting", async () => {
     phone = true
-    await overview(work(), { force: { health: { delays: 'loads', counts: 'counting' } } })
+    await overview(tops, { force: { health: { delays: 'loads', counts: 'counting' } } })
     expect(document.querySelector('.mobile-health-list')).not.toBeNull()
     expect(cards()).toHaveLength(2)
     expect(cell(cards()[0], 'late')?.textContent).toBe('delays unknown')
@@ -1222,7 +1242,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it("builds the phone's Sort by and direction button on the order asked while its rows load", async () => {
     phone = true
-    const { board } = await overview(work())
+    const { board } = await overview(tops)
     const select = () => document.querySelector<HTMLSelectElement>('#overview-health-sort')
     const direction = () =>
       document.querySelector<HTMLButtonElement>('.mobile-health-sort button[aria-label^="Sort"]')
@@ -1249,15 +1269,8 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(direction()?.getAttribute('aria-label')).toBe('Sort descending')
   })
 
-  it('shows Status distribution for one sub-project and asks no health read', async () => {
-    const { board } = await overview(work(), { scope: 'two' })
-    expect(document.querySelector('[data-ov-health]')).toBeNull()
-    expect(figure('status')).not.toBeNull()
-    expect(healthAsked(board)).toEqual([])
-  })
-
   it('holds no health subscription while hidden and shows it refreshing on return', async () => {
-    const { board } = await overview(work())
+    const { board } = await overview(tops)
     await setVisibility('hidden')
     expect([...board.server.overview.open].some((sub) => sub.query === 'health')).toBe(false)
     board.server.overview.hold = true
@@ -1272,7 +1285,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('asks the health read once a page that mounted in a hidden tab shows', async () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
-    const { board } = await overview(work())
+    const { board } = await overview(tops)
     expect(board.server.overview.open.size).toBe(0)
     expect(healthState()).toBe('loading')
     await setVisibility('visible')
