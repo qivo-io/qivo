@@ -2165,10 +2165,12 @@ the week its remaining hours were last updated or its planned start,
 whichever is later. When a week is overbooked every task gets the same
 share of its ask, and the rest moves to the next week. A task is projected
 to finish in the first week that gives it all its remaining hours, which an
-overbooked week never does. So a task with remaining hours that gets its
-ask every week is projected to finish in its planned end week, while an
-owned task with 0 remaining hours is projected to finish in the current
-week, or in its planned start week if that is later. A task without a plan,
+overbooked week never does. An unfinished task is never projected to
+finish before the current week. So a task with remaining hours that gets
+its ask every week is projected to finish in its planned end week, or in
+the current week once that end has passed. An owned task with 0 remaining
+hours is projected to finish in the current week, or in its planned start
+week if that is later. A task without a plan,
 or a paused one, is fitted on its own into the hours the planned tasks
 leave free, so two such tasks can each be projected into the same free
 hours. Until the end
