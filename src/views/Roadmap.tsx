@@ -30,7 +30,7 @@ import { REVEAL_MS } from '@/lib/reveal'
 import {
   DONE_WITHOUT_DATES,
   doneWithoutDates,
-  hidesDone,
+  hideDoneSetting,
   isRoadmapTaskVisible,
   TURN_OFF_HIDE_DONE,
   withoutDone,
@@ -410,14 +410,30 @@ function Roadmap({
   const planned: PlannedTask | null =
     planAsk ??
     (session ? { id: session.uuid, project_id: sessionModel?.project ?? session.project } : null)
-  const view = useRoadmapView(info, filters, w0, w1, planned)
+  /* Hide Done in Roadmap, null until the account's appearance answered.
+     Meanwhile an answer with tasks shows as loading and the requests wait,
+     so neither a row, the note that Done tasks are hidden nor a request
+     follows the setting before the Roadmap knows it. */
+  const hideDone = hideDoneSetting(useAppearance())
+  const answered = useRoadmapView(info, filters, w0, w1, planned)
+  const view: RoadmapView =
+    hideDone === null && (answered.state === 'ok' || answered.state === 'refreshing')
+      ? {
+          ...answered,
+          state: 'loading',
+          busy: true,
+          tasks: [],
+          held: null,
+          current: false,
+          remaining: () => null,
+        }
+      : answered
   /* The tasks with a row, here and on the phone: the answer's, less the
      Done ones while Hide Done in Roadmap is on (`hiddenDone`). Team
      utilization and a request's lookup still read every task of the
      answer, so Team counts the same either way and a request for a hidden
      task hears why it does not show. */
-  const hideDone = hidesDone(useAppearance().preferences)
-  const { shown: rowTasks, hidden: hiddenDone } = withoutDone(view.tasks, hideDone, (it) =>
+  const { shown: rowTasks, hidden: hiddenDone } = withoutDone(view.tasks, !!hideDone, (it) =>
     P.isDone(it),
   )
   // the people the Roadmap shows, named while it shows: each task's
@@ -1270,7 +1286,7 @@ function Roadmap({
   const dropPlanAsk = (req: PendingRequest) =>
     setPlanAsk((was) => (was && was.id === req.uuid ? null : was))
   useEffectR(() => {
-    if (!revealTask) return
+    if (!revealTask || hideDone === null) return
     // App drops the request only while it is still this one
     const { n } = revealTask
     if (n === takenReveal.current) {
@@ -1280,14 +1296,14 @@ function Roadmap({
     takenReveal.current = n
     take({ ...revealTask, kind: 'reveal' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealTask?.n])
+  }, [revealTask?.n, hideDone === null])
   useEffectR(() => {
     if (!revealed) return
     const t = window.setTimeout(() => setRevealed(null), REVEAL_MS)
     return () => window.clearTimeout(t)
   }, [revealed?.n])
   useEffectR(() => {
-    if (!focusPlan) return
+    if (!focusPlan || hideDone === null) return
     const { n } = focusPlan
     if (n === takenPlan.current) {
       onFocusConsumed?.(n)
@@ -1304,7 +1320,7 @@ function Roadmap({
     }
     take({ ...focusPlan, kind: 'plan' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusPlan?.n])
+  }, [focusPlan?.n, hideDone === null])
   /* Resolves the request taken once the Roadmap can say: where the tasks on
      screen, from a current answer or the last one for this scope, hold its
      task, it acts at once; where the Roadmap shows a note instead, it says

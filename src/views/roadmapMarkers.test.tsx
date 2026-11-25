@@ -22,6 +22,7 @@ import {
   projectNavStandIn,
 } from '../store/projectNavStandIn.setup'
 import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
+import { Appearance } from './appearanceStandIn.setup'
 
 /* The Roadmap's milestone flags on App and the real store, from the
    server's range read (convex/milestones.ts between) as the milestone
@@ -298,11 +299,16 @@ async function app(
   const { syncStatus } = await import('../lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('../App')
+  // the account's appearance as the sign-in gate hands it on, which the
+  // Roadmap waits for
+  const appearance = await import('../lib/appearanceContext')
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <App />
-      </TooltipProvider>,
+      <Appearance context={appearance}>
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
+      </Appearance>,
     ),
   )
   return { store, deliver }

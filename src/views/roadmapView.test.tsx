@@ -133,8 +133,8 @@ const plan = (snap: Snapshot) => {
 type Board = Awaited<ReturnType<typeof loadBoard>>
 
 /** Renders the Roadmap of the board's scope with `filters` and the
-    requests and actions given, and Hide Done in Roadmap as `hideDone`, or
-    no appearance loaded yet. */
+    requests and actions given, and Hide Done in Roadmap as `hideDone`, on
+    by default, or null while the account's appearance has not loaded. */
 async function renderRoadmap(
   board: Board,
   {
@@ -148,7 +148,7 @@ async function renderRoadmap(
     focusPlan?: RoadmapRequest | null
     revealTask?: RoadmapRequest | null
     actions?: Record<string, (...args: unknown[]) => void>
-    hideDone?: boolean
+    hideDone?: boolean | null
   } = {},
 ) {
   const { Roadmap } = await import('./Roadmap')
@@ -875,11 +875,8 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('gives Done tasks no row until it is turned off, with Team the same either way', async () => {
     const board = await loadBoard(network, withDone, { scope: 'plan' })
-    // before the account's appearance loads, and with the setting on
-    for (const hideDone of [undefined, true]) {
-      await renderRoadmap(board, { hideDone })
-      expect(rows().sort()).toEqual(['QN-1', 'QN-2', 'QN-6', 'QN-8'])
-    }
+    await renderRoadmap(board)
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2', 'QN-6', 'QN-8'])
     const hidden = team()
     expect(hidden).toContain(OTHER)
     await renderRoadmap(board, { hideDone: false })
@@ -887,6 +884,67 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(team()).toEqual(hidden)
     expect(document.querySelector('[data-roadmap-done-hidden]')).toBeNull()
   })
+
+  it('shows its tasks as loading until the setting answers, never saying meanwhile that Done tasks are hidden', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        for (const task of snap.issues) task.status = 'done'
+      },
+      { scope: 'plan' },
+    )
+    await renderRoadmap(board, { hideDone: null })
+    expect(state()).toBe('loading')
+    expect(title()).toBe('Loading tasks…')
+    expect(rows()).toEqual([])
+    expect(document.querySelector('[data-roadmap-done-hidden]')).toBeNull()
+    await renderRoadmap(board, { hideDone: false })
+    expect(state()).toBe('ok')
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2'])
+  })
+
+  it.each(['plan', 'reveal'] as const)(
+    'keeps a %s request for a Done task until the setting answers, then shows the task with the setting off',
+    async (kind) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          Object.assign(snap.issues[1], {
+            status: 'done',
+            start_week: week(30),
+            end_week: week(31),
+          })
+        },
+        { scope: 'plan' },
+      )
+      board.P.roadmapContext(true, false)
+      consumedPlans = vi.fn()
+      const request: RoadmapRequest = {
+        id: 'QN-2',
+        n: 1,
+        key: 'QN-2',
+        uuid: 'two-1',
+        project: 'two',
+        start: TODAY_WEEK + 30,
+        end: TODAY_WEEK + 31,
+        ...(kind === 'plan' ? { status: 'done' } : {}),
+      }
+      const asks = kind === 'plan' ? { focusPlan: request } : { revealTask: request }
+      await renderRoadmap(board, { hideDone: null, ...asks })
+      await board.answer()
+      await flush()
+      expect(window.showToast).not.toHaveBeenCalled()
+      expect(consumedPlans).not.toHaveBeenCalled()
+      await renderRoadmap(board, { hideDone: false, ...asks })
+      await board.answer()
+      await flush()
+      expect(window.showToast).not.toHaveBeenCalled()
+      if (kind === 'plan') expect(planCard('QN-2')).not.toBeNull()
+      else expect(document.querySelector('[data-roadmap-revealed="QN-2"]')).not.toBeNull()
+    },
+  )
 
   it('says Done tasks are hidden where they are all the Roadmap has, with Clear filters under a filter', async () => {
     const clearFilters = vi.fn()

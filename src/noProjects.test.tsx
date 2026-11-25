@@ -16,6 +16,7 @@ import {
   queryProjectNav,
 } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
+import { Appearance } from './views/appearanceStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
    and App: with nothing remembered they land on the project chooser, whose
@@ -179,11 +180,16 @@ async function app(snap: Snapshot, path = '/app/testbed') {
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('./App')
+  // the account's appearance as the sign-in gate hands it on, which the
+  // Roadmap waits for
+  const appearance = await import('./lib/appearanceContext')
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <App />
-      </TooltipProvider>,
+      <Appearance context={appearance}>
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
+      </Appearance>,
     ),
   )
   return (next: Snapshot) => act(async () => publish(next))

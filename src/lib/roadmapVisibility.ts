@@ -24,6 +24,17 @@ export const DONE_WITHOUT_DATES = 'A Done task without dates has nothing to plan
 export const hidesDone = (preferences: { roadmap_hide_done?: boolean } | null | undefined) =>
   preferences?.roadmap_hide_done !== false
 
+/** Hide Done in Roadmap as the Roadmap applies it, for the appearance the
+    app's provider holds (lib/appearanceContext.ts): hidesDone once its
+    read answered, and also once it failed, and null while it loads. */
+export const hideDoneSetting = (appearance: {
+  preferences: { roadmap_hide_done?: boolean } | null
+  preferencesState: 'loading' | 'ok' | 'failed' | 'retrying'
+}): boolean | null =>
+  appearance.preferences === null && appearance.preferencesState === 'loading'
+    ? null
+    : hidesDone(appearance.preferences)
+
 /** The tasks of `tasks` the Roadmap gives a row, in their order, and the
     ones Hide Done in Roadmap hides, while `hide` is on: those `isDone`
     calls Done, as P.isDone does for the bars, so a task with subtasks

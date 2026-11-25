@@ -16,6 +16,7 @@ import {
 } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
+import { Appearance } from './views/appearanceStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
 
 /* The main pages stay loaded while the person moves between them, on App
@@ -278,11 +279,16 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('./App')
+  // the account's appearance as the sign-in gate hands it on, which the
+  // Roadmap waits for
+  const appearance = await import('./lib/appearanceContext')
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <App />
-      </TooltipProvider>,
+      <Appearance context={appearance}>
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
+      </Appearance>,
     ),
   )
   return location.pathname.split('/')[2]

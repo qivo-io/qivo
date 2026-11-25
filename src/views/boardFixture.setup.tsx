@@ -6,6 +6,7 @@ import type { RevealRequest } from '../lib/reveal'
 import { type ServerRule, viewReadsOver } from '../store/guard/viewReads.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import { Appearance } from './appearanceStandIn.setup'
 
 /* The Board on the real store for jsdom tests. A test file mocks
    ../lib/convex with `network` and ../lib/auth as memoRows.test.tsx does,
@@ -17,7 +18,10 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    stand-ins (store/guard/viewReads.setup.ts), at once and again on each
    delivery, unless a test holds, forces, fails or edits them (`server`),
    so renderView shows the Overview, Team sync and the Roadmap over the
-   same store. Every other one-shot read answers null. The store holds
+   same store. renderView hands its view the account's appearance as
+   loaded, Hide Done in Roadmap on (views/appearanceStandIn.setup.tsx), as
+   the Roadmap shows its tasks only once that answered. Every other
+   one-shot read answers null. The store holds
    nobody but the signed-in person (the live double's root,
    convex/lib/workspaceJoin.ts rootOf), so everyone else the views name
    reaches it through people:byIds. */
@@ -152,6 +156,7 @@ export async function loadBoard(
   }
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')
+  const appearance = await import('../lib/appearanceContext')
   const { Kanban } = await import('./Kanban')
   const { MobileTaskList } = await import('../components/MobileWorkspace')
   const { P } = store
@@ -229,7 +234,11 @@ export async function loadBoard(
   function View({ view }: { view: (info: ScopeInfo) => ReactNode }) {
     usePlannerVersion()
     const info = P.scopeInfo(scope)
-    return <TooltipProvider>{view(info)}</TooltipProvider>
+    return (
+      <Appearance context={appearance}>
+        <TooltipProvider>{view(info)}</TooltipProvider>
+      </Appearance>
+    )
   }
   return {
     P,

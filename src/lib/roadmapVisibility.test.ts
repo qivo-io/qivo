@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hidesDone, isRoadmapTaskVisible, withoutDone } from './roadmapVisibility'
+import { hideDoneSetting, hidesDone, isRoadmapTaskVisible, withoutDone } from './roadmapVisibility'
 
 describe('roadmap task visibility', () => {
   // Both boundary weeks belong to the visible window.
@@ -113,6 +113,19 @@ describe('Hide Done in Roadmap', () => {
     expect(hidesDone({})).toBe(true)
     expect(hidesDone({ roadmap_hide_done: true })).toBe(true)
     expect(hidesDone({ roadmap_hide_done: false })).toBe(false)
+  })
+
+  it('is unknown to the Roadmap only while the appearance loads, and on once its read failed', () => {
+    expect(hideDoneSetting({ preferences: null, preferencesState: 'loading' })).toBeNull()
+    expect(hideDoneSetting({ preferences: null, preferencesState: 'failed' })).toBe(true)
+    expect(hideDoneSetting({ preferences: null, preferencesState: 'retrying' })).toBe(true)
+    expect(
+      hideDoneSetting({ preferences: { roadmap_hide_done: false }, preferencesState: 'ok' }),
+    ).toBe(false)
+    // a later failure keeps the answer the provider holds
+    expect(
+      hideDoneSetting({ preferences: { roadmap_hide_done: false }, preferencesState: 'failed' }),
+    ).toBe(false)
   })
 
   const tasks = [
