@@ -449,8 +449,9 @@ describe('staging check REST contract', () => {
     ])
       expect(modals).toContain(mark)
     expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
+    // the step presses the row on M's Overview, a project's page
     const overview = readFileSync(
-      new URL('../src/views/overview/OverviewMilestones.tsx', import.meta.url),
+      new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
       'utf8',
     )
     expect(overview).toContain('data-overview-milestone={m.id}')
@@ -516,24 +517,29 @@ describe('staging check REST contract', () => {
   it("checks the Overview's Upcoming and collapsed Past on the deployment's section read, and My view's with mine", () => {
     expect(OVERVIEW_MILESTONES_STEP).toBe('ui/overview-milestones')
     expect(MILESTONES_SECTION_QUERY).toBe('milestones:section')
-    // the marks the step waits on and presses
-    const source = [
-      '../src/views/overview/OverviewMilestones.tsx',
-      '../src/components/MilestoneSectionPart.tsx',
-    ]
-      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
-      .join('\n')
+    // the marks the step waits on and presses: on M's Overview, a
+    // project's page, its rows and Past's disclosure, on My view's its
+    // rows, and on both the sections they share
+    const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
+    const project = read('../src/views/overview/ProjectOverview.tsx')
+    const myView = read('../src/views/overview/OverviewMilestones.tsx')
+    const sections = read('../src/components/MilestoneSectionPart.tsx')
     for (const mark of [
       'data-overview-milestones',
       'data-overview-milestone={m.id}',
       'data-milestone-past-toggle',
       'aria-expanded={ms.pastOpen}',
+    ])
+      expect(project, mark).toContain(mark)
+    for (const mark of ['data-overview-milestones', 'data-overview-milestone={m.id}'])
+      expect(myView, mark).toContain(mark)
+    for (const mark of [
       'data-milestone-section={side}',
       'data-milestone-section-state={open ? view.state : undefined}',
       'data-milestone-more',
       "aria-busy={view.more === 'loading' || undefined}",
     ])
-      expect(source, mark).toContain(mark)
+      expect(sections, mark).toContain(mark)
     // it runs after ui/roadmap-milestones and before ui/team-sync
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     const main = script.slice(script.indexOf('await roadmapMilestonesCheck()\n'))
@@ -2234,11 +2240,13 @@ describe('staging check REST contract', () => {
       /`\$\{plural\(left \?\? 0, 'task'\)\} left, \$\{fmtHours\(c\.left_tenths \/ 10\)\} hours left`/,
     )
     expect(page).toMatch(/c \? `\$\{c\.paused\} paused` : null/)
-    expect(overviewSubLabel('Overview', true)).toBe(
-      'Overview, 2 tasks left, 0 hours left, 1 late, 0 behind plan, 1 paused',
+    expect(page).toMatch(/`\$\{personLabel\(lead, 'No lead assigned'\)\}, Lead`/)
+    expect(page).toContain(": 'No lead assigned',")
+    expect(overviewSubLabel('Overview', 'Nora', true)).toBe(
+      'Overview, Nora, Lead, 2 tasks left, 0 hours left, 1 late, 0 behind plan, 1 paused',
     )
-    expect(overviewSubLabel('Overview', false)).toBe(
-      'Overview, 2 tasks left, 0 hours left, 0 late, 0 behind plan, 1 paused',
+    expect(overviewSubLabel('Overview', null, false)).toBe(
+      'Overview, No lead assigned, 2 tasks left, 0 hours left, 0 late, 0 behind plan, 1 paused',
     )
   })
   it('fills a task to the page sizes of its thread', () => {

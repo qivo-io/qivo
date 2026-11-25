@@ -776,6 +776,17 @@ function SubProjectsPanel({
   onOpen: (id: string) => void
 }) {
   const answer = health?.value?.state === 'ok' ? health.value : null
+  // where the list stands, as its root's data-ov-subs-state names it
+  const state =
+    health === null || (health.value === undefined && health.error === undefined)
+      ? 'loading'
+      : health.value === undefined
+        ? 'error'
+        : health.value.state !== 'ok'
+          ? health.value.state
+          : health.current && !health.kept
+            ? 'ok'
+            : 'refreshing'
   const root = useRef<HTMLDivElement>(null)
   // Load more leaves at the end of the list or where its rows failed:
   // focus it left nowhere goes to Retry, else to the list
@@ -864,7 +875,13 @@ function SubProjectsPanel({
     )
   return (
     <OvSection title="Sub-projects">
-      <div ref={root} tabIndex={-1} className="outline-none">
+      <div
+        ref={root}
+        tabIndex={-1}
+        data-ov-subs-state={state}
+        aria-busy={state === 'loading' || state === 'refreshing' || undefined}
+        className="outline-none"
+      >
         {body}
       </div>
     </OvSection>
@@ -925,75 +942,92 @@ function LoadPanel({
       personLabel(a.person, '').localeCompare(personLabel(b.person, '')),
   )
   const shown = all ? rows : rows.slice(0, PEOPLE_FIRST)
+  // where the panel stands, as its root's data-ov-people-state names it:
+  // loading until every person's load and name has answered
+  const state =
+    people === null
+      ? failed
+        ? 'unavailable'
+        : 'loading'
+      : rows.some((r) => r.hours === 'waiting' || r.person.state === 'loading')
+        ? 'loading'
+        : 'ok'
   return (
     <OvSection
       title="Load this week"
       action={<span className="pov-head-note">{`${weekNumLabel(week)}, all projects`}</span>}
     >
-      {people === null && failed ? (
-        <p className="pov-note">Qivo could not list the people with work here.</p>
-      ) : people === null ? (
-        <div role="status" className="pov-placeholder pov-placeholder-short">
-          Loading…
-        </div>
-      ) : rows.length === 0 ? (
-        <p className="pov-empty">No one has open work here.</p>
-      ) : (
-        <>
-          <ul className="pov-list" data-ov-people>
-            {shown.map(({ p, person, hours, pct }) => {
-              const tone = pct === null ? 'normal' : loadTone(pct)
-              const name = personLabel(person, 'Unknown user')
-              const value =
-                hours === 'waiting'
-                  ? '…'
-                  : hours === 'unknown'
-                    ? 'unknown'
-                    : pct === null
-                      ? `${fmtHours(hours)}h`
-                      : `${pct}%`
-              const said =
-                hours === 'waiting'
-                  ? 'loading'
-                  : hours === 'unknown'
-                    ? 'load unknown'
-                    : pct === null
-                      ? `${fmtHours(hours)} hours this week`
-                      : `${pct}% of their week, ${fmtHours(hours)} hours`
-              return (
-                <li
-                  key={p.id}
-                  className="pov-person"
-                  data-tone={tone}
-                  data-ov-person={p.id}
-                  aria-label={`${name}, ${said}${p.listed ? `, ${plural(p.listed, 'listed task')}` : ''}`}
-                >
-                  <Avatar id={p.id} size={28} />
-                  <span className="pov-person-name">
-                    <span>{name}</span>
-                    {p.listed > 0 && <small>{p.listed} of the listed tasks</small>}
-                  </span>
-                  {pct !== null ? (
-                    <span className="pov-meter" aria-hidden="true">
-                      <i style={{ width: `${Math.min(pct, 100)}%` }} />
+      <div data-ov-people-state={state} aria-busy={state === 'loading' || undefined}>
+        {people === null && failed ? (
+          <p className="pov-note">Qivo could not list the people with work here.</p>
+        ) : people === null ? (
+          <div role="status" className="pov-placeholder pov-placeholder-short">
+            Loading…
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="pov-empty">No one has open work here.</p>
+        ) : (
+          <>
+            <ul className="pov-list" data-ov-people>
+              {shown.map(({ p, person, hours, pct }) => {
+                const tone = pct === null ? 'normal' : loadTone(pct)
+                const name = personLabel(person, 'Unknown user')
+                const value =
+                  hours === 'waiting'
+                    ? '…'
+                    : hours === 'unknown'
+                      ? 'unknown'
+                      : pct === null
+                        ? `${fmtHours(hours)}h`
+                        : `${pct}%`
+                const said =
+                  hours === 'waiting'
+                    ? 'loading'
+                    : hours === 'unknown'
+                      ? 'load unknown'
+                      : pct === null
+                        ? `${fmtHours(hours)} hours this week`
+                        : `${pct}% of their week, ${fmtHours(hours)} hours`
+                return (
+                  <li
+                    key={p.id}
+                    className="pov-person"
+                    data-tone={tone}
+                    data-ov-person={p.id}
+                    aria-label={`${name}, ${said}${p.listed ? `, ${plural(p.listed, 'listed task')}` : ''}`}
+                  >
+                    <Avatar id={p.id} size={28} />
+                    <span className="pov-person-name">
+                      <span>{name}</span>
+                      {p.listed > 0 && <small>{p.listed} of the listed tasks</small>}
                     </span>
-                  ) : (
-                    <span aria-hidden="true" />
-                  )}
-                  <b className="pov-person-pct" aria-hidden="true">
-                    {value}
-                  </b>
-                </li>
-              )
-            })}
-          </ul>
-          {rows.length > PEOPLE_FIRST && (
-            <Button type="button" variant="ghost" className="pov-more" onClick={() => setAll(!all)}>
-              {all ? 'Show fewer' : `Show all ${rows.length}`}
-            </Button>
-          )}
-        </>
-      )}
+                    {pct !== null ? (
+                      <span className="pov-meter" aria-hidden="true">
+                        <i style={{ width: `${Math.min(pct, 100)}%` }} />
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
+                    <b className="pov-person-pct" aria-hidden="true">
+                      {value}
+                    </b>
+                  </li>
+                )
+              })}
+            </ul>
+            {rows.length > PEOPLE_FIRST && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="pov-more"
+                onClick={() => setAll(!all)}
+              >
+                {all ? 'Show fewer' : `Show all ${rows.length}`}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
     </OvSection>
   )
 }

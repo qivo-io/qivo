@@ -8583,8 +8583,8 @@ export const OVERVIEW_EXPECTED = {
  *  hours, no task behind plan and the paused one. It counts the overdue
  *  task as Late where the sub-project tracks delay, which the REST
  *  answer's track_delay says, and none where it does not. */
-export const overviewSubLabel = (name, tracksDelay) =>
-  `${name}, 2 tasks left, 0 hours left, ${tracksDelay ? 1 : 0} late, 0 behind plan, 1 paused`
+export const overviewSubLabel = (name, lead, tracksDelay) =>
+  `${name}, ${lead === null ? 'No lead assigned' : `${lead}, Lead`}, 2 tasks left, 0 hours left, ${tracksDelay ? 1 : 0} late, 0 behind plan, 1 paused`
 
 /** The Overview of a sub-project the run makes under its project M, with an
  *  overdue task and a paused one, opens on the deployment's answers
@@ -8660,10 +8660,12 @@ async function overviewCheck() {
       await until(async () => (await subRow.count()) === 1),
       `Sub-projects holds no row for ${sub.name}`,
     )
-    eq(
-      await subRow.getAttribute('aria-label'),
-      overviewSubLabel(sub.name, sub.track_delay === true),
-      "the sub-project's row",
+    // the row names its lead once the lead's name has loaded
+    const label = overviewSubLabel(sub.name, sub.lead_name ?? null, sub.track_delay === true)
+    const said = async () => (await subRow.getAttribute('aria-label')) ?? ''
+    expect(
+      await until(async () => (await said()) === label),
+      `the sub-project's row reads "${await said()}", not "${label}"`,
     )
     // the row opens the sub-project's Board
     await subRow.click()
