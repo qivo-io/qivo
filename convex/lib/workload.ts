@@ -151,6 +151,10 @@ export const PROJECTION_WEEKS = 520
 /* Hours left at or below this count as none, as in fitEndWeek. */
 const DONE = 1e-9
 
+/* Asks over the weekly hours by no more than this still fit them, as
+   asks that fill a week exactly can add up a little over it. */
+const FITS = 1e-9
+
 let walkSteps = 0
 
 /** How many steps shareOwnerWeeks has taken so far, in this module
@@ -202,11 +206,13 @@ export type OwnerWeeks = {
  * week from the earliest task's first week. In each week every task that
  * has started and has hours left asks for its hours left divided by the
  * weeks left in its plan, this week included, or for all its hours left
- * once its plan has ended. When the asks fit in the capacity every task
- * gets its ask; when they do not, every task gets the same share of its ask
- * and keeps the rest for the next week. A task finishes in the week its
- * hours left reach zero. So a task that gets its ask every week finishes in
- * its plan's last week.
+ * once its plan has ended. When the asks fit in the capacity, or exceed it
+ * by no more than rounding, every task gets its ask; when they do not, the
+ * week is overbooked, every task gets the same share of its ask and keeps
+ * the rest for the next week. A task finishes in the first week in which it
+ * gets all its hours left, so in a week whose asks fit and in which it asks
+ * for all it has left. An overbooked week finishes no task, and a task that
+ * gets its ask every week finishes in its plan's last week.
  *
  * A stretch of weeks in which the asks fit and no task starts takes one
  * step, so a plan that runs to the year 9999 costs no more than its start
@@ -235,22 +241,21 @@ export function shareOwnerWeeks(spans: readonly SharedSpan[], capacity: number):
       t.ask = week < t.end ? t.left / (t.end - week + 1) : t.left
       total += t.ask
     }
-    if (total > cap && overbooked === PROJECTION_WEEKS) {
+    const fits = total <= cap + FITS
+    if (!fits && overbooked === PROJECTION_WEEKS) {
       for (const t of [...active, ...tasks.slice(next)]) t.fin = Math.max(t.end, week)
       break
     }
     walkSteps += 1
-    if (total > cap) {
+    if (!fits) {
+      // The week gives out all the capacity, so the hours left of the
+      // started tasks fall by the capacity, and their asks fit once those
+      // hours are no more than it.
       overbooked += 1
       const share = cap / total
       used.push({ from: week, to: week, hours: cap })
-      active = active.filter((t) => {
-        // an endless ask makes the share 0, and Infinity * 0 is NaN
-        if (share > 0) t.left -= t.ask * share
-        if (t.left > DONE) return true
-        t.fin = week
-        return false
-      })
+      // an endless ask makes the share 0, and Infinity * 0 is NaN
+      if (share > 0) for (const t of active) t.left -= t.ask * share
       week += 1
       continue
     }

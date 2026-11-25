@@ -32,7 +32,9 @@ has ended asks for all its remaining hours.
   share of its ask. The hours a task did not get stay as its remaining hours
   and move to the next week, where it asks again.
 
-A task's projected finish is the week its remaining hours reach zero. For
+A task's projected finish is the first week in which it gets all its
+remaining hours, which only a week that is not overbooked can give. So no
+task finishes in an overbooked week, however few hours it has left. For
 example, a person with 32 hours a week has three tasks of 32 hours each, all
 planned for this week only. Each gets a third of the week, and all three are
 projected to finish in the third week, Behind plan. A task squeezed in one

@@ -288,6 +288,18 @@ describe("the shared walk of an owner's tasks", () => {
     const m = judge(['a', 'b', 'c'].map((id) => task(id, { start: T, end: T, remaining: 32 })))
     for (const id of ['a', 'b', 'c']) expect(m.get(id)).toEqual({ status: 'behind', fin: T + 2 })
   })
+  it('finishes no task in a week that stays overbooked, however few hours it has left', () => {
+    // 1h and 4h for this week and 384h over twelve weeks overbook 32h in
+    // each of those weeks, and the 5h of all three left fit only in T+12
+    const m = judge([
+      task('a', { start: T, end: T, dueWeek: T + 5, remaining: 1 }),
+      task('b', { start: T, end: T, dueWeek: T + 5, remaining: 4 }),
+      task('c', { start: T, end: T + 11, remaining: 384 }),
+    ])
+    expect(m.get('a')).toEqual({ status: 'late', fin: T + 12 })
+    expect(m.get('b')).toEqual({ status: 'late', fin: T + 12 })
+    expect(m.get('c')).toEqual({ status: 'behind', fin: T + 12 })
+  })
   it('gives every task its ask when the asks fill the week exactly', () => {
     const m = judge([
       task('a', { start: T, end: T + 1, remaining: 32 }),

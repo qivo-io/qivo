@@ -2195,9 +2195,11 @@ unfinished tasks. Each task asks for its remaining hours divided by the
 weeks left in its plan, or for all of them once its plan has ended, from
 the week its remaining hours were last updated or its planned start,
 whichever is later. When a week is overbooked every task gets the same
-share of its ask, and the rest moves to the next week. So a task on track
-is projected to finish in its planned end week, and a task without a plan,
-or a paused one, gets the hours the planned tasks leave free. Until the
+share of its ask, and the rest moves to the next week. A task is projected
+to finish in the first week that gives it all its remaining hours, which an
+overbooked week never does. So a task on track is projected to finish in
+its planned end week, and a task without a plan, or a paused one, gets the
+hours the planned tasks leave free. Until the
 end of November 2026 each task was projected alone against the plans of
 the owner's other tasks, so a task on track could be projected to finish
 before its planned end.
