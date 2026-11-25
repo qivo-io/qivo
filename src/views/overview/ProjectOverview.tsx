@@ -525,7 +525,7 @@ function NeedsPanel({
   useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () =>
     focused.current ? focused.current.target() : null,
   )
-  // Show more leaves at the end of the list or where its rows failed:
+  // Load more leaves at the end of the list or where its rows failed:
   // focus it left nowhere goes to Retry, else to the list
   useFocusWhenGone(
     (needs?.more ?? null) !== null,
@@ -611,7 +611,7 @@ function NeedsPanel({
               if (needs.more === 'ready') P.overviewMore('needs')
             }}
           >
-            {needs.more === 'loading' ? 'Loading…' : 'Show more'}
+            {needs.more === 'loading' ? 'Loading…' : 'Load more'}
           </Button>
         )}
         {needs.moreFailed && (
@@ -777,7 +777,7 @@ function SubProjectsPanel({
 }) {
   const answer = health?.value?.state === 'ok' ? health.value : null
   const root = useRef<HTMLDivElement>(null)
-  // Show more leaves at the end of the list or where its rows failed:
+  // Load more leaves at the end of the list or where its rows failed:
   // focus it left nowhere goes to Retry, else to the list
   useFocusWhenGone(
     (health?.more ?? null) !== null,
@@ -857,7 +857,7 @@ function SubProjectsPanel({
               if (health.more === 'ready') P.overviewMore('health')
             }}
           >
-            {health.more === 'loading' ? 'Loading…' : 'Show more'}
+            {health.more === 'loading' ? 'Loading…' : 'Load more'}
           </Button>
         )}
       </>

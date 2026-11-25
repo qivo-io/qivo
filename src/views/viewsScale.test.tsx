@@ -127,7 +127,7 @@ const paused = (n: number) => (snap: Snapshot) => {
 }
 
 describe('a long list on another view', () => {
-  it("shows the first 20 rows of the Overview's Needs attention at once, and 20 more on Show more", async () => {
+  it("shows the first 20 rows of the Overview's Needs attention at once, and 20 more on Load more", async () => {
     const board = await loadBoard(network, paused(LONG))
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<

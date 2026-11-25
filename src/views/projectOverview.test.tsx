@@ -320,7 +320,7 @@ describe('keyboard focus on a project Overview', { timeout: BOARD_TEST_TIMEOUT }
     )
   })
 
-  it('keeps focus on the list when Show more loads the last rows, and on the next row when a row leaves', async () => {
+  it('keeps focus on the list when Load more loads the last rows, and on the next row when a row leaves', async () => {
     const { board } = await overview((snap) => {
       plan(snap)
       for (let n = 5; n <= 26; n++)

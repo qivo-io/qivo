@@ -73,7 +73,7 @@ between days and **Esc** closes it. After a change the row moves to its
 new place, or leaves the list when the task no longer needs attention and
 keyboard focus goes to the next row. These changes have no undo; change
 the field back the same way. The list shows its first 20 tasks, and
-**Show more** adds 20 more, up to 1,000.
+**Load more** adds 20 more, up to 1,000.
 
 The projected delays depend on the other work of each task's owner. Where
 Qivo could not work that out, as when an owner has more open work than it
@@ -93,7 +93,7 @@ counts, each in a place of its own, Late first and then by name. **Late**
 counts its overdue and projected-to-miss tasks where delay tracking is on.
 Where Qivo could not work out Late and Behind plan, the row says
 **unknown** and the list is in name order with a line that says why. It
-shows 10 sub-projects, and **Show more** adds 10; where that fails,
+shows 10 sub-projects, and **Load more** adds 10; where that fails,
 **Retry** asks again and the rows already shown stay. Past 200 the list
 says how many of how many it shows. Select a row to open that
 sub-project's Board. A sub-project's own Overview has no such list.
