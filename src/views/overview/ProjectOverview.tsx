@@ -33,10 +33,10 @@ import {
   weekToISO,
 } from '@/lib/dates'
 import { DELAY_LABELS } from '@/lib/delay'
-import { focusAround } from '@/lib/focusWhenGone'
+import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { usePagedList } from '@/lib/pagedList'
-import { shownEmptyState } from '@/lib/taskFocus'
+import { headingTarget, shownEmptyState } from '@/lib/taskFocus'
 import { type SentencePart, syncSentence } from '@/lib/teamSync'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -378,11 +378,14 @@ function NeedRow({
   day,
   inProject,
   onOpen,
+  onFocusIn,
 }: {
   row: NeedsRow
   day: string
   inProject: boolean
   onOpen: (id: string) => void
+  /** focus entered the row, also its calendar or picker */
+  onFocusIn: (handle: string, uuid: string) => void
 }) {
   const it = modelOf(row)
   // the handle the row names its task by, as the task window and its focus
@@ -408,7 +411,14 @@ function NeedRow({
     .filter(Boolean)
     .join(', ')
   return (
-    <li ref={root} {...controls.rootProps} className="pov-need" data-need={handle} data-kind={kind}>
+    <li
+      ref={root}
+      {...controls.rootProps}
+      onFocusCapture={() => onFocusIn(handle, row.id)}
+      className="pov-need"
+      data-need={handle}
+      data-kind={kind}
+    >
       <StaticControlsContext.Provider value={controls.value}>
         <span className="pov-flag" data-kind={kind} aria-hidden="true">
           <Icon name={KIND_ICON[kind]} size={13} strokeWidth={2.4} />
@@ -494,6 +504,33 @@ function NeedsPanel({
   ]
   const unknown = c !== undefined && c.all.state !== 'ok' ? c.all : null
   const rows = answer?.rows ?? []
+  const listRoot = useRef<HTMLDivElement>(null)
+  // the row focus was in last, and where focus goes once a change takes it
+  // out of the tab: the next row, else the one before, else the heading
+  const focused = useRef<{ uuid: string; target: () => HTMLElement | null } | null>(null)
+  const heading = () =>
+    headingTarget(listRoot.current?.closest('section')?.querySelector<HTMLElement>('h2')) ?? null
+  const focusIn = (handle: string, uuid: string) => {
+    focused.current = {
+      uuid,
+      target: focusAround(
+        'data-need',
+        handle,
+        (row) => row.querySelector<HTMLElement>('[data-focus-key="row"]'),
+        heading,
+      ),
+    }
+  }
+  const was = focused.current
+  useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () =>
+    focused.current ? focused.current.target() : null,
+  )
+  // Show more leaves at the end of the list or where its rows failed:
+  // focus it left nowhere goes to Retry, else to the list
+  useFocusWhenGone(
+    (needs?.more ?? null) !== null,
+    () => listRoot.current?.querySelector<HTMLElement>('[data-ov-needs-retry]') ?? listRoot.current,
+  )
   // the rows the answer shown answers, so a tab on its way keeps the last
   // answer's rows, dimmed, rather than none
   const shownKind = needs?.ask.kind ?? filter
@@ -512,7 +549,10 @@ function NeedsPanel({
           type="button"
           variant="ghost"
           className="h-control-sm text-sm"
-          onClick={() => P.overviewRetry('needs')}
+          onClick={() => {
+            P.overviewRetry('needs')
+            listRoot.current?.focus()
+          }}
         >
           Try again
         </Button>
@@ -540,7 +580,14 @@ function NeedsPanel({
             data-ov-needs-state={needs.kept ? 'refreshing' : 'ok'}
           >
             {rows.map((row) => (
-              <NeedRow key={row.id} row={row} day={day} inProject={info.isMeta} onOpen={onOpen} />
+              <NeedRow
+                key={row.id}
+                row={row}
+                day={day}
+                inProject={info.isMeta}
+                onOpen={onOpen}
+                onFocusIn={focusIn}
+              />
             ))}
           </ul>
         ) : (
@@ -573,8 +620,12 @@ function NeedsPanel({
             <Button
               type="button"
               variant="ghost"
+              data-ov-needs-retry
               className="h-control-sm text-sm"
-              onClick={() => P.overviewRetry('needs')}
+              onClick={() => {
+                P.overviewRetry('needs')
+                listRoot.current?.focus()
+              }}
             >
               Retry
             </Button>
@@ -609,8 +660,11 @@ function NeedsPanel({
         </p>
       )}
       <div
+        ref={listRoot}
         id={panel}
         role="tabpanel"
+        tabIndex={-1}
+        className="outline-none"
         aria-labelledby={idOf(filter)}
         aria-busy={needs?.kept || needs?.more === 'loading' || undefined}
         data-ov-needs
@@ -650,6 +704,9 @@ function SubRow({ row, onOpen }: { row: HealthRow; onOpen: (id: string) => void 
   const [lead] = useOrgPeople(org ?? '', [org ? row.lead_id : null])
   const parts = [
     row.name,
+    lead && lead.state !== 'gone'
+      ? `${personLabel(lead, 'No lead assigned')}, Lead`
+      : 'No lead assigned',
     c
       ? `${plural(left ?? 0, 'task')} left, ${fmtHours(c.left_tenths / 10)} hours left`
       : 'counts not known',
@@ -719,6 +776,18 @@ function SubProjectsPanel({
   onOpen: (id: string) => void
 }) {
   const answer = health?.value?.state === 'ok' ? health.value : null
+  const root = useRef<HTMLDivElement>(null)
+  // Show more leaves at the end of the list or where its rows failed:
+  // focus it left nowhere goes to Retry, else to the list
+  useFocusWhenGone(
+    (health?.more ?? null) !== null,
+    () => root.current?.querySelector<HTMLElement>('[data-ov-subs-retry]') ?? root.current,
+  )
+  /** `step` for a button that goes with its press, with focus on the list. */
+  const inList = (step: () => void) => () => {
+    step()
+    root.current?.focus()
+  }
   let body: ReactNode
   if (health === null || (health.value === undefined && health.error === undefined))
     body = (
@@ -734,7 +803,7 @@ function SubProjectsPanel({
           type="button"
           variant="ghost"
           className="h-control-sm text-sm"
-          onClick={() => P.overviewRetry('health')}
+          onClick={inList(() => P.overviewRetry('health'))}
         >
           Try again
         </Button>
@@ -765,7 +834,7 @@ function SubProjectsPanel({
               variant="ghost"
               data-ov-subs-retry
               className="h-control-sm text-sm"
-              onClick={() => P.overviewRetry('health')}
+              onClick={inList(() => P.overviewRetry('health'))}
             >
               Retry
             </Button>
@@ -793,7 +862,13 @@ function SubProjectsPanel({
         )}
       </>
     )
-  return <OvSection title="Sub-projects">{body}</OvSection>
+  return (
+    <OvSection title="Sub-projects">
+      <div ref={root} tabIndex={-1} className="outline-none">
+        {body}
+      </div>
+    </OvSection>
+  )
 }
 
 const PEOPLE_FIRST = 8

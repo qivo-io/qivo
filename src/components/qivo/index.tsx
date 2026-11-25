@@ -8,6 +8,7 @@ import {
   Fragment,
   isValidElement,
   type ReactElement,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
   useContext,
@@ -997,6 +998,8 @@ function CalendarPop({
   onPick,
   onClear,
   onClose,
+  label,
+  takesFocus,
 }: {
   x: number
   y: number
@@ -1005,6 +1008,11 @@ function CalendarPop({
   onPick: (iso: string) => void
   onClear?: () => void
   onClose: () => void
+  /** the dialog's name */
+  label: string
+  /** whether it takes keyboard focus as it opens, on the picked day or
+      today, with the arrow keys moving between days and Tab kept inside */
+  takesFocus: boolean
 }) {
   const [view, setView] = useState(() => {
     const d = value ? P.isoToDate(value) : new Date()
@@ -1013,6 +1021,45 @@ function CalendarPop({
   const ws = P.org.weekStart ?? 1 // JS getDay numbering — the org's first workday
   // Read the clock when rendering the picker, including immediately after resume.
   const todayIso = P.isoFromDate(new Date())
+  // the day the arrow keys move from: the picked one, else today; and the
+  // day to focus once it renders
+  const [current, setCurrent] = useState(value || todayIso)
+  const toFocus = useRef<string | null>(takesFocus ? current : null)
+  useLayoutEffect(() => {
+    const iso = toFocus.current
+    if (iso === null) return
+    toFocus.current = null
+    const root = contentRef.current
+    const day =
+      root?.querySelector<HTMLElement>(`[data-cal-day="${iso}"]`) ??
+      root?.querySelector<HTMLElement>('[data-cal-day]')
+    day?.focus({ preventScroll: true })
+  })
+  const STEPS: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }
+  const moveFrom = (iso: string, e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const step = STEPS[e.key]
+    if (step === undefined) return
+    e.preventDefault()
+    const d = P.isoToDate(iso)
+    d.setDate(d.getDate() + step)
+    const next = P.isoFromDate(d)
+    setCurrent(next)
+    toFocus.current = next
+    // a day the grid does not show turns the page to its month
+    if (!contentRef.current?.querySelector(`[data-cal-day="${next}"]`))
+      setView(new Date(d.getFullYear(), d.getMonth(), 1))
+  }
+  // Tab stays in the calendar, from its last control to its first and back
+  const keepTab = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return
+    const controls = [
+      ...e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled)'),
+    ].filter((b) => b.tabIndex >= 0)
+    const edge = e.shiftKey ? controls[0] : controls.at(-1)
+    if (document.activeElement !== edge) return
+    e.preventDefault()
+    ;(e.shiftKey ? controls.at(-1) : controls[0])?.focus()
+  }
   // rows of 7 days from the week containing the 1st through the week
   // containing the last day of the viewed month (4–6 rows). Compared as
   // calendar days, not epoch ms: in zones whose DST skips midnight (Havana,
@@ -1031,6 +1078,11 @@ function CalendarPop({
       rows.push(row)
     }
   }
+  // the day Tab reaches: `current` where the grid shows it, else the first
+  // of the month on the page
+  const tabDay = rows.some((row) => row.some((d) => P.isoFromDate(d) === current))
+    ? current
+    : P.isoFromDate(view)
   const cell = (d) => {
     const iso = P.isoFromDate(d)
     const isSel = value === iso
@@ -1042,6 +1094,9 @@ function CalendarPop({
         type="button"
         data-cal-day={iso}
         title={P.fmtFull(d)}
+        tabIndex={takesFocus ? (iso === tabDay ? 0 : -1) : undefined}
+        aria-current={isToday ? 'date' : undefined}
+        onKeyDown={takesFocus ? (e) => moveFrom(iso, e) : undefined}
         onClick={() => onPick(iso)}
         onMouseEnter={(e) => {
           if (!isSel) e.currentTarget.style.background = 'var(--hover)'
@@ -1063,7 +1118,14 @@ function CalendarPop({
   }
   return (
     <AnchoredPop x={x} y={y} width={280} onClose={onClose}>
-      <div ref={contentRef} data-calendar className="p-2 flex flex-col gap-2">
+      <div
+        ref={contentRef}
+        data-calendar
+        role="dialog"
+        aria-label={label}
+        onKeyDown={takesFocus ? keepTab : undefined}
+        className="p-2 flex flex-col gap-2"
+      >
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -1160,7 +1222,9 @@ function DateCtl({
   title?: string
   className?: string
   /** what the trigger shows in place of the date field, as a row's Move
-      due date button, which then takes `className` alone */
+      due date button, which then takes `className` alone. Its calendar
+      takes keyboard focus as it opens, as a dialog named `label`, since
+      Tab from such a trigger would walk on through the rows around it */
   face?: ReactNode
   /** the trigger's accessible name, with `face` */
   label?: string
@@ -1228,6 +1292,8 @@ function DateCtl({
           y={pop.y}
           value={value}
           contentRef={calendarRef}
+          label={label ?? 'Choose a date'}
+          takesFocus={face !== undefined}
           onClose={close}
           onPick={(iso) => {
             close()

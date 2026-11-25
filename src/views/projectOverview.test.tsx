@@ -288,3 +288,62 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector('[data-need] [aria-label^="Move due date"]')).toBeNull()
   })
 })
+
+describe('keyboard focus on a project Overview', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  /** Presses `key` on what has focus, as a keyboard does. */
+  const key = (key: string) =>
+    act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      )
+    })
+
+  it("gives Move due date's calendar focus on the due date, moves it by arrow keys, and gives it back to the action", async () => {
+    await overview(plan)
+    const action = rows()[0]?.querySelector<HTMLElement>('[aria-label^="Move due date"]')
+    await act(async () => {
+      action?.focus()
+      action?.click()
+    })
+    // the row's task is 10 days overdue
+    expect(document.activeElement?.getAttribute('data-cal-day')).toBe(day(-10))
+    expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull()
+    await key('ArrowDown')
+    expect(document.activeElement?.getAttribute('data-cal-day')).toBe(day(-3))
+    // the first Escape closes the focused day's tooltip, the second the
+    // calendar
+    await key('Escape')
+    await key('Escape')
+    expect(q('[data-calendar]')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toMatch(
+      /^Move due date of Task later/,
+    )
+  })
+
+  it('keeps focus on the list when Show more loads the last rows, and on the next row when a row leaves', async () => {
+    const { board } = await overview((snap) => {
+      plan(snap)
+      for (let n = 5; n <= 26; n++)
+        snap.issues.push({ ...taskRow(snap, `p${n}`, 'todo', n), paused: true })
+    })
+    expect(rows()).toHaveLength(20)
+    const more = q('[data-ov-needs] [data-ov-more]')
+    await act(async () => {
+      more?.focus()
+      more?.click()
+    })
+    expect(rows()).toHaveLength(25)
+    expect(q('[data-ov-more]')).toBeNull()
+    expect(document.activeElement).toBe(q('[data-ov-needs]'))
+    // the first row's task is no longer overdue
+    const open = (row: HTMLElement | undefined) =>
+      row?.querySelector<HTMLElement>('[data-focus-key="row"]')
+    const [first, second] = rows()
+    await act(async () => open(first)?.focus())
+    const task = board.snapshot.issues.find((t) => t.id === 'later')
+    if (task) task.due_date = day(30)
+    await board.deliver()
+    expect(rows()[0]).toBe(second)
+    expect(document.activeElement).toBe(open(second))
+  })
+})

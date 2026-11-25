@@ -67,10 +67,13 @@ Select a row to open its task. A row under the pointer, or with keyboard
 focus in it, offers **Reassign**, which changes the owner the portrait
 shows, and **Move due date**; on a touch screen they always show as icons.
 They use the task window's own controls and rules, and are not there for a
-task you may only view. After a change the row moves to its new place or
-leaves the list when the task no longer needs attention. These changes
-have no undo; change the field back the same way. The list shows its first
-20 tasks, and **Show more** adds 20 more, up to 1,000.
+task you may only view. Move due date's calendar takes keyboard focus on
+the due date, or today for a task without one; the arrow keys move
+between days and **Esc** closes it. After a change the row moves to its
+new place, or leaves the list when the task no longer needs attention and
+keyboard focus goes to the next row. These changes have no undo; change
+the field back the same way. The list shows its first 20 tasks, and
+**Show more** adds 20 more, up to 1,000.
 
 The projected delays depend on the other work of each task's owner. Where
 Qivo could not work that out, as when an owner has more open work than it

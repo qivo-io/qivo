@@ -296,7 +296,7 @@ function besideCell(cell: HTMLElement, pick: (cell: HTMLElement) => HTMLElement 
 
 /** `heading`, or a title that stands for one, focusable until it loses
     focus unless it already was, or undefined once it is gone. */
-function headingTarget(heading: HTMLElement | null | undefined) {
+export function headingTarget(heading: HTMLElement | null | undefined) {
   if (!usable(heading)) return undefined
   if (heading.tabIndex < 0 && !heading.hasAttribute('tabindex')) {
     heading.tabIndex = -1
