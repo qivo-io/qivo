@@ -71,9 +71,10 @@ They use the task window's own controls and rules, and are not there for a
 task you may only view. Move due date's calendar takes keyboard focus on
 the due date, or today for a task without one; the arrow keys move
 between days and **Esc** closes it. After a change the row moves to its
-new place, or leaves the list when the task no longer needs attention. If
-the row had keyboard focus, focus goes to the next row, else to the one
-before it, else to the list's heading. These changes have no undo; change
+new place, or leaves the list when the task no longer needs attention.
+When a row with keyboard focus leaves the list, focus goes to the next
+remaining row, then to the one before it if there is no next row, or to the
+list's heading if neither remains. These changes have no undo; change
 the field back the same way. The list shows its first 20 tasks, and
 **Load more** adds 20 more, up to 1,000.
 

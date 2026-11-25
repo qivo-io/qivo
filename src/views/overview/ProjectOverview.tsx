@@ -453,6 +453,7 @@ function NeedRow({
       onBlurCapture={onFocusOut}
       className="pov-need"
       data-need={handle}
+      data-need-id={row.id}
       data-kind={kind}
     >
       <StaticControlsContext.Provider value={controls.value}>
@@ -562,9 +563,14 @@ function NeedsPanel({
     if (document.activeElement !== e.target) focused.current = null
   }
   const was = focused.current
-  useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () =>
-    focused.current ? focused.current.target() : null,
-  )
+  useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () => {
+    const to = focused.current ? focused.current.target() : null
+    // a window in the background sends no focus event for the row focus
+    // moves to, so the mark follows it here
+    const row = to?.closest<HTMLElement>('[data-need]')
+    if (row?.dataset.need && row.dataset.needId) focusIn(row.dataset.need, row.dataset.needId)
+    return to
+  })
   // Load more leaves at the end of the list or where its rows failed:
   // where it held focus, focus goes to Retry, else to the list
   const more = useHeldFocus()
@@ -618,8 +624,8 @@ function NeedsPanel({
       <>
         {rows.length > 0 ? (
           <ul
-            className={cn('pov-list', needs.kept && 'opacity-60')}
-            data-ov-needs-state={needs.kept ? 'refreshing' : 'ok'}
+            className={cn('pov-list', (!needs.current || needs.kept) && 'opacity-60')}
+            data-ov-needs-state={!needs.current || needs.kept ? 'refreshing' : 'ok'}
           >
             {rows.map((row) => (
               <NeedRow
@@ -710,7 +716,9 @@ function NeedsPanel({
         tabIndex={-1}
         className="outline-none"
         aria-labelledby={idOf(filter)}
-        aria-busy={needs?.kept || needs?.more === 'loading' || undefined}
+        aria-busy={
+          (needs && (!needs.current || needs.kept)) || needs?.more === 'loading' || undefined
+        }
         data-ov-needs
       >
         {body}
