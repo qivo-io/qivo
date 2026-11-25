@@ -2210,11 +2210,13 @@ function App() {
       },
       () => {
         // the task as the window shows it once the move lands, as it can
-        // change while the move asks about unsent text, so its weeks, its
-        // status and whether it has subtasks come from one answer
+        // change while the move asks about unsent text, so its weeks and its
+        // status come from one answer. A task that had subtasks at the press
+        // or has them now is only shown, as planning it writes dates that
+        // Show on roadmap never asked for.
         const now = P.taskShown(id) ?? it
         const place = taskPlaceOf(now)
-        const reveals = P.isGroup(now)
+        const reveals = group || P.isGroup(now)
         setScope(to)
         // a reveal does not bypass the toolbar filters, so clear them as Team
         // sync's jump does (Focus stays)
