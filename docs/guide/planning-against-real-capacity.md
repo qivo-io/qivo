@@ -46,9 +46,11 @@ The planning panel offers:
   the panel says **Auto-fit found no end within its limits, so the end
   stays as it is**. The task can then read Behind plan. Placing a task
   in weeks that are already full can still make the owner's other tasks in
-  those weeks read Behind plan. Team utilization shows the load of such a
-  week for the projects you can see, so with **All projects** chosen it
-  reads full or over unless work you cannot see fills the week. Auto-fit uses the reviewer while a task is In Review with one and
+  those weeks read Behind plan. With **All projects** chosen, Team
+  utilization shows the hours planned in each week in the projects you can
+  see. The delay projection also counts unfinished hours that move on from
+  earlier weeks, and work you cannot see, so a week can be full for the
+  projection while Team utilization shows it below 100%. Auto-fit uses the reviewer while a task is In Review with one and
   follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
