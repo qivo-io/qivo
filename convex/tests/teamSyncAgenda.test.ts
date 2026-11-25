@@ -684,7 +684,7 @@ const weekOf = (t: T, me: Doc<'profiles'>, owner: Doc<'profiles'>, clock = NOW_C
 
 describe('delays and the week', () => {
   /* FW tracks delay and PCB does not. The user holds a late row, a
-   * slipping one and one on track in FW and a late one in PCB; the agent a
+   * behind-plan one and one on track in FW and a late one in PCB; the agent a
    * row in FW. */
   async function delayed() {
     const t = newT()
@@ -700,7 +700,7 @@ describe('delays and the week', () => {
       remaining_hours: 120,
     })
     const behind = await task(t, sub, {
-      title: 'Slipping',
+      title: 'Behind plan',
       assignee_id: f.user.id,
       start_week: NOW_WEEK,
       end_week: NOW_WEEK,
@@ -744,7 +744,7 @@ describe('delays and the week', () => {
     const delay = new Map(ok.rows.map((r) => [r.title, r.delay]))
     expect(Object.fromEntries(delay)).toEqual({
       Late: 'late',
-      Slipping: 'behind',
+      'Behind plan': 'behind',
       'On track': null,
       'Late in PCB': null,
       'Past due, no hours': 'late',
@@ -769,7 +769,7 @@ describe('delays and the week', () => {
     const delay = new Map(ok.rows.map((r) => [r.title, r.delay]))
     expect(Object.fromEntries(delay)).toEqual({
       Late: 'unknown',
-      Slipping: 'unknown',
+      'Behind plan': 'unknown',
       'On track': 'unknown',
       'Late in PCB': null,
       // past due needs no load

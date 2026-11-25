@@ -255,7 +255,7 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
       for (const shape of ['data-paused', 'data-focus-key="due"', 'data-parent-heading'])
         expect(html).toContain(shape)
       expect(html).toContain('Unassigned')
-      expect(html).toMatch(/Delayed|Slipping/)
+      expect(document.querySelector('[data-delay="late"]')?.textContent).toBe('Late')
       expect(document.querySelectorAll('[data-focus-key="owner"]').length > 0).toBe(!readOnly)
       const staticMarkup = markup()
       const staticKeys = focusKeys()

@@ -174,9 +174,10 @@ The owner is the assignee, or the reviewer for In Review tasks with one.
 Inactive people remain listed while they own open work. Backlog tasks are
 excluded from people's pages.
 
-**The team summary** shows overdue, projected-to-miss, slipping, blocked and
-paused tasks, plus upcoming milestones. Projected misses and slipping counts
-include only projects with delay tracking. Where Qivo could not read
+**The team summary** shows how many tasks are overdue, projected to miss
+their due date, behind plan, blocked and paused, plus upcoming milestones.
+The **Projected to miss** and **Behind plan** counts include only projects
+with delay tracking. Where Qivo could not read
 someone's other work, they read **unknown**, never 0, and the sentence above
 them says Qivo could not work out every projected delay. It also lists
 people at **90% or more** capacity this week, and says for how many people
@@ -218,8 +219,8 @@ hours and can exceed the Team strip's visible-project total, and changes you
 make on the page count at once. Organization viewers see the load of the
 person on screen from the projects they can see, which shows **…** while it
 loads and **unknown** where Qivo cannot read it. For them the team summary's
-capacity list says the load is unknown, and its projected misses and
-slipping counts read unknown wherever they need someone's other work.
+capacity list says the load is unknown, and its **Projected to miss** and
+**Behind plan** counts read unknown wherever they need someone's other work.
 
 The page has three columns, which stack on phones:
 

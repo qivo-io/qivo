@@ -85,8 +85,8 @@ owner, as the task window's **Assignee** does
 works for parent tasks. While a task is In Review with a reviewer, its
 portrait picker changes the reviewer and offers **No reviewer** to clear it.
 
-Paused tasks show an amber mark. Delay banners identify slipping or delayed
-tasks ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A
+Paused tasks show an amber mark. Delay banners mark tasks that are **Behind
+plan** or **Late** ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A
 muted **Delay unknown** banner marks a task whose delay depends on its
 owner's other work when Qivo could not read that work, so such a task never
 looks on track without a check. When the last

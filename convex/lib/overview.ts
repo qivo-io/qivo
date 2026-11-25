@@ -72,7 +72,7 @@
  * top-level project above the person's own tasks, with the search and the
  * asked column's order applied on the server before it answers the first
  * `limit` rows, at most OVERVIEW.healthRows. Each row's counts come from the
- * count rows; its Delayed and Slipping from its tasks' verdicts, read only
+ * count rows; its Late and Behind plan from its tasks' verdicts, read only
  * for the rows the order needs (every row for those two columns, else the
  * rows it answers). No position is needed, as each answer is one moment's
  * order of the whole table. */
@@ -158,11 +158,11 @@ export { type Figure, type Missing, WEEK_STARTS } from './viewLoads'
  * answers unavailable while the counts stay whole.
  *
  * tests/overviewHealth.test.ts ("real limits") logs what the health table
- * (readHealth) reads the same way, sorted by Delayed and then by Name,
+ * (readHealth) reads the same way, sorted by Late and then by Name,
  * every figure given in each case. Sorted by Name it judges only the rows
  * it answers.
  *
- * Delayed and Slipping read the loads of the owners the order needs. A
+ * Late and Behind plan read the loads of the owners the order needs. A
  * figure that depends on people's workloads may answer unavailable past its
  * measured size inside the design size, and these two do past this one.
  * An everyday project's 10 owners hold the organization's open tasks, half
@@ -1493,7 +1493,7 @@ export async function readPaused(
 // --- the health table ------------------------------------------------------------------------
 
 /** A health table column (src/views/overview/HealthTable.tsx HEALTH_COLS):
- * the name, the lead, Progress, Done, Left, Delayed (`late`), Slipping
+ * the name, the lead, Progress, Done, Left, Late (`late`), Behind plan
  * (`behind`) and Paused. */
 export type HealthSort =
   | 'name'
@@ -1518,7 +1518,7 @@ export type HealthRow = {
    * unrounded: My view's row adds up the person's counts of its
    * sub-projects, and the page divides Left by 10 once */
   counts: Figure<LeafCounts>
-  /** Delayed (late) and Slipping (behind): the tasks, groups included,
+  /** Late (late) and Behind plan (behind): the tasks, groups included,
    * whose verdict is late or behind in a project that tracks delay; zero
    * in one that does not */
   delays: Figure<{ late: number; behind: number }>
@@ -1731,7 +1731,7 @@ async function leadKeys(
   return out
 }
 
-/* Delayed and Slipping of each of `judged`, rows of the scope `at`, by
+/* Late and Behind plan of each of `judged`, rows of the scope `at`, by
  * project id. It reads their tasks in projects that track delay (a project
  * scope's every active task of each such judged sub-project,
  * lib/viewReads.ts selectionTasks; in My view the person's own tasks the
@@ -1818,12 +1818,12 @@ const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused'
  * 4. for the Lead sort, each lead's name (leadKeys), before any delay, so
  *    that sort never meets a guard the delays spent, and over_budget past
  *    the budget;
- * 5. for every sort but Delayed and Slipping, the order and the cut, so
+ * 5. for every sort but Late and Behind plan, the order and the cut, so
  *    only the rows the answer returns are judged;
  * 6. the delays of the judged rows (healthDelays), every kept row for
- *    Delayed and Slipping, whose order needs each one: one figure that past
+ *    Late and Behind plan, whose order needs each one: one figure that past
  *    the budget answers `budget` on every judged row;
- * 7. for Delayed and Slipping, the order and the cut.
+ * 7. for Late and Behind plan, the order and the cut.
  *
  * One total order: the column's value in `dir`, then the name key and then
  * the project id ascending, as Convex orders values (strings in UTF-8 byte
@@ -1831,13 +1831,13 @@ const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused'
  * id. A row without a lead, or whose lead's profile is gone or of another
  * organization, sorts after every lead ascending and before them
  * descending. Where the order asked needs a figure some row lacks
- * (Delayed's and Slipping's the judged rows' delays, Progress's, Done's,
+ * (Late's and Behind plan's the judged rows' delays, Progress's, Done's,
  * Left's and Paused's the counts), the rows are in name order and `sort`
  * says so (`by_name`) and why (`missing`), from every judged row and not
  * only the ones returned, so the page's note never depends on which rows
- * the cut kept; Name and Lead never fall back. Outside Delayed and
- * Slipping the judged rows grow with `limit`, so a Load more can turn a
- * row's Delayed into unavailable: for a guest or Viewer by the owner order,
+ * the cut kept; Name and Lead never fall back. Outside Late and
+ * Behind plan the judged rows grow with `limit`, so a Load more can turn a
+ * row's Late into unavailable: for a guest or Viewer by the owner order,
  * for staff by the budget. Refuses a malformed clock, a `limit` that is not
  * a whole number from 1 to OVERVIEW.healthRows, and a search past
  * LIMITS.search.

@@ -34,7 +34,7 @@ export type BarShapeInput = {
   /** today as a fractional week index, where the today line is drawn */
   todayPos: number
   done: boolean
-  /** the projected finish week of a Slipping or Delayed task, else null */
+  /** the projected finish week of a Behind plan or Late task, else null */
   finish: number | null
   showProjection: boolean
 }

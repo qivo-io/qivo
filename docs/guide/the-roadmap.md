@@ -103,9 +103,8 @@ From the today line on, a bar has the color of its status on the Board: To Do
 a stronger gray, In Progress blue and In Review violet. A task with subtasks
 has no status of its own, so its bar is In Progress blue once one of its
 subtasks has started, and To Do gray before. Where the project tracks delay,
-a **Currently delayed** task, which the Board calls Slipping, is yellow and a
-**Delayed** task red from the today line on, whatever its status
-([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). The hover
+a **Behind plan** task is yellow and a **Late** task red from the today line
+on, whatever its status ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). The hover
 text names the status and the delay. A bar is gray with a dashed outline, and its hover
 text says **Delay unknown**, when Qivo could not read its owner's workload to
 judge it.
@@ -117,7 +116,7 @@ status color. The run-on is not part of the plan: it follows the bar, a drag
 on it moves nothing, and the plan still ends where the gray ends.
 
 **Projected delay** in the toolbar draws diagonal stripes in the same yellow
-or red from the end of a Currently delayed or Delayed bar, or its run-on, to the end of
+or red from the end of a Behind plan or Late bar, or its run-on, to the end of
 the task's projected finish week, which the hover text names
 ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
 It is on by default. Switching it off hides the stripes and the projected

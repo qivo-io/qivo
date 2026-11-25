@@ -24,7 +24,7 @@
    the exception (tokens.css), and so does presence: a column of noughts is
    a column of decorations of exactly the weight of the one number that
    matters. A figure the server did not give never shows a digit or that
-   blank: Delayed and Slipping it could not work out read a muted
+   blank: Late and Behind plan it could not work out read a muted
    "unknown", and counts it is still counting read "Counting…" and "…". */
 
 import { type ReactNode, type RefObject, useRef } from 'react'
@@ -62,17 +62,17 @@ const HEALTH_COLS = [
   },
   {
     id: 'late',
-    label: 'Delayed',
+    label: 'Late',
     align: 'right',
     dir: 'desc',
-    title: 'Tasks projected to miss their due date',
+    title: 'Where delay tracking is on, tasks past their due date or projected to miss it',
   },
   {
     id: 'behind',
-    label: 'Slipping',
+    label: 'Behind plan',
     align: 'right',
     dir: 'desc',
-    title: 'Tasks running past their planned end',
+    title: 'Where delay tracking is on, tasks projected to finish after their planned end',
   },
   { id: 'paused', label: 'Paused', align: 'right', dir: 'desc', title: 'Tasks on hold' },
 ] as const satisfies readonly {
@@ -276,7 +276,7 @@ export function OvHealthTable({
      why for every row the order needed, also those past the rows shown,
      and, unless that order already says it, why rows shown count or read
      unknown, whatever the order. The counts are one figure for the whole
-     table, so an order that needs none (Name, Lead, Delayed, Slipping)
+     table, so an order that needs none (Name, Lead, Late, Behind plan)
      shows every count counting or unknown without falling back. */
   const notes: ReactNode[] = []
   const uncounted = rows.find((r) => r.counts.state !== 'ok')?.counts
@@ -735,13 +735,13 @@ function HealthCard({
         {row.delays.state === 'ok' ? (
           <>
             <span data-ovcell="late" className={cn(row.delays.late && troubleToneClasses.late)}>
-              {row.delays.late} delayed
+              {row.delays.late} late
             </span>
             <span
               data-ovcell="behind"
               className={cn(row.delays.behind && troubleToneClasses.behind)}
             >
-              {row.delays.behind} slipping
+              {row.delays.behind} behind plan
             </span>
           </>
         ) : (

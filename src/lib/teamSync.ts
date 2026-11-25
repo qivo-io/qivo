@@ -90,7 +90,7 @@ export type SyncPerson = {
   week: Figure<{ hours: number }>
 }
 
-/** The board banner's verdict: Slipping (`behind`), Delayed (`late`), or nothing. */
+/** The board banner's verdict: Behind plan (`behind`), Late (`late`), or nothing. */
 export type Verdict = 'behind' | 'late' | null
 
 /** A row's verdict as the agenda gives it: the banner's, or `unknown` where
@@ -483,13 +483,13 @@ function sinceMark(
 export type OpeningFacts = {
   /** due before today */
   overdue: number
-  /** Delayed and not yet past due: projected to miss the due date; null
+  /** Late and not yet past due: projected to miss the due date; null
       where some row's verdict is unknown, so the count is not known */
   projected: number | null
-  /** the board's Delayed, past due or not; null as `projected` */
-  delayed: number | null
-  /** the board's Slipping; null as `projected` */
-  slipping: number | null
+  /** the board's Late, past due or not; null as `projected` */
+  late: number | null
+  /** the board's Behind plan; null as `projected` */
+  behind: number | null
   /** with an open blocker the agenda names */
   blocked: number
   paused: number
@@ -511,28 +511,28 @@ export function openingFacts<I extends SyncIssue>(
 ): OpeningFacts {
   let overdue = 0
   let projected = 0
-  let delayed = 0
-  let slipping = 0
+  let late = 0
+  let behind = 0
   let blocked = 0
   let paused = 0
   let unknown = false
   for (const it of rows) {
     if (it.status === 'done' || isIssueGroup(it)) continue
-    const late = !!it.due && it.due < o.today
+    const pastDue = !!it.due && it.due < o.today
     const verdict = o.verdictOf(it)
-    if (late) overdue++
+    if (pastDue) overdue++
     if (verdict === 'unknown') unknown = true
-    if (verdict === 'late') delayed++
-    if (verdict === 'late' && !late) projected++
-    if (verdict === 'behind') slipping++
+    if (verdict === 'late') late++
+    if (verdict === 'late' && !pastDue) projected++
+    if (verdict === 'behind') behind++
     if (o.blockedOf(it).length) blocked++
     if (it.paused) paused++
   }
   return {
     overdue,
     projected: unknown ? null : projected,
-    delayed: unknown ? null : delayed,
-    slipping: unknown ? null : slipping,
+    late: unknown ? null : late,
+    behind: unknown ? null : behind,
     blocked,
     paused,
   }

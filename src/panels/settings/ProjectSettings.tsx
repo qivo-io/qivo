@@ -401,12 +401,12 @@ function ProjectSettingsFields({
           hint={
             trackDelay ? (
               <>
-                Yellow: projected to miss the planned end.
+                Behind plan, in yellow, is projected to finish after the planned end.
                 <br />
-                Red: projected to miss the due date.
+                Late, in red, is past the due date or projected to miss it.
               </>
             ) : (
-              'Turn on to highlight tasks projected to miss their planned end or due date.'
+              'Turn on to highlight tasks that are past their due date, or projected to miss it or their planned end.'
             )
           }
         >

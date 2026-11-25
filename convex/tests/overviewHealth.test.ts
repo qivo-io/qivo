@@ -73,7 +73,7 @@ type Ask = {
   limit: number
 }
 
-/** The table's defaults: the client's clock on DAY, most Delayed first, the
+/** The table's defaults: the client's clock on DAY, most Late first, the
  * first 10 rows. */
 const ASK: Ask = { ...WEEKS, sort: 'late', dir: 'desc', limit: 10 }
 
@@ -410,7 +410,7 @@ describe('rows', () => {
 // -------------------------------------------------------------------- figures
 
 describe('figures', () => {
-  it("counts each row's leaves, paused leaves, Left, Delayed and Slipping from its tasks", async () => {
+  it("counts each row's leaves, paused leaves, Left, Late and Behind plan from its tasks", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
@@ -448,7 +448,7 @@ describe('figures', () => {
       counts: { state: 'ok', leaves: { todo: 1 }, paused: 0, left_tenths: 0 },
       delays: { state: 'ok', late: 0, behind: 0 },
     })
-    // most Delayed first
+    // most Late first
     expect(names(answer)).toEqual(['Firmware', 'Board rev'])
   })
 
@@ -670,7 +670,7 @@ async function twoOwners() {
 }
 
 describe('the name fallback', () => {
-  it("sorts a guest's table by name where a row's Delayed needs a second owner, and keeps a sort by Progress", async () => {
+  it("sorts a guest's table by name where a row's Late needs a second owner, and keeps a sort by Progress", async () => {
     const { t, f } = await twoOwners()
     const scope = scopeOf(f.guest, f.meta)
     for (const sort of ['late', 'behind'] as const) {
@@ -854,7 +854,7 @@ describe('the cut and the cap', () => {
 // ---------------------------------------------------------- which rows judged
 
 describe('which rows are judged', () => {
-  it('reads no task of a row outside the answer sorted by Progress, and every row sorted by Delayed', async () => {
+  it('reads no task of a row outside the answer sorted by Progress, and every row sorted by Late', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const subs: Doc<'projects'>[] = []
@@ -887,7 +887,7 @@ describe('which rows are judged', () => {
 // --------------------------------------------------------------- continuation
 
 describe('continuation', () => {
-  it('moves a row whose Delayed changed in the next answer, with no row twice', async () => {
+  it('moves a row whose Late changed in the next answer, with no row twice', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const third = await subOf(t, f.meta, 'Third')
@@ -965,7 +965,7 @@ describe('owner reads', () => {
     expect(answers[0]).toEqual(answers[1])
   })
 
-  it("can turn a row's Delayed unknown as Load more judges more rows: a guest's by the owner order, staff's by the budget", async () => {
+  it("can turn a row's Late unknown as Load more judges more rows: a guest's by the owner order, staff's by the budget", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     for (const p of [f.sub, f.sub2])
@@ -1147,7 +1147,7 @@ const record = (label: string, took: Took, answer: HealthAnswer) =>
     )}`,
   )
 
-/** Reads the health table of `scope` for `profiles` sorted by Delayed and
+/** Reads the health table of `scope` for `profiles` sorted by Late and
  * by Name, logs what each took and answers them. */
 async function readSorts(
   t: T,
@@ -1324,7 +1324,7 @@ describe('real limits', () => {
  * projects the reader is not shared. That work keeps everyday values, in
  * sub-projects of 30 open tasks, three to a project, so each owner's
  * scheduled work spans every one of them. It logs what the table read
- * sorted by Delayed and by Name, and whether Delayed was given. */
+ * sorted by Late and by Name, and whether Late was given. */
 describe.runIf(process.env.QIVO_HEALTH_ORG_OPEN === '1')(
   "the organization's open tasks, on demand",
   () => {

@@ -10,7 +10,7 @@ export type UIPrefs = Partial<{
   metaViz: string
   roadmapWin: RoadmapWin
   roadmapWinDefault: RoadmapWin
-  /** whether the Roadmap draws Slipping and Delayed tasks' projected
+  /** whether the Roadmap draws Behind plan and Late tasks' projected
       finish as stripes; absent means it does */
   roadmapProjection: boolean
   /** the last specific project or sub-project the person was in, which

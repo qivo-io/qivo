@@ -44,7 +44,7 @@
 }
 
 /* The delay banner's block (kanbanCards.tsx DelayBanner): 30px of the
-   roadmap's yellow (Slipping) or red (Delayed) at the band's end, carrying
+   roadmap's yellow (Behind plan) or red (Late) at the band's end, carrying
    Lucide's clock-8 in white at stroke 2.4, 14px square. */
 .delay-banner {
   position: relative;
@@ -108,7 +108,7 @@
   .glyph {
     background: CanvasText;
   }
-  /* as specific as the Slipping rule above, which would keep its yellow */
+  /* as specific as the Behind plan rule above, which would keep its yellow */
   .delay-banner[data-delay]::after {
     background: CanvasText;
     mask:

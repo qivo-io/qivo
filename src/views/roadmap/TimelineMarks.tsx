@@ -168,7 +168,7 @@ export function Bar({
   w0: number
   w1: number
   weekW: number
-  /** whether the person shows a Slipping or Delayed task's projected finish */
+  /** whether the person shows a Behind plan or Late task's projected finish */
   showProjection: boolean
   /** a subtask of the task has started (Roadmap.tsx subtasksStarted) */
   started: boolean
