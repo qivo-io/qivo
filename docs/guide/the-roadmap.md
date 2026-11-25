@@ -98,15 +98,15 @@ shows the people who can take the task, 25 at a time with a search and
 **In Review** with a reviewer, the portrait and picker show the reviewer instead.
 
 Bars fill the whole planned period; their length does not show completion.
-The part of an unfinished task's bar before the today line is dark gray. From
-the today line on, a bar has the color of its status on the Board: To Do
-light gray, In Progress blue, In Review violet and Backlog a faint dashed
-outline. A task with subtasks has no status of its own, so its bar is In
-Progress blue once one of its subtasks has started, and To Do gray before.
-Where the project tracks delay, a **Slipping** task is yellow and a
+The part of an unfinished task's bar before the today line is a quiet gray.
+From the today line on, a bar has the color of its status on the Board: To Do
+a stronger gray, In Progress blue and In Review violet. A task with subtasks
+has no status of its own, so its bar is In Progress blue once one of its
+subtasks has started, and To Do gray before. Where the project tracks delay,
+a **Currently delayed** task, which the Board calls Slipping, is yellow and a
 **Delayed** task red from the today line on, whatever its status
 ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). The hover
-text names the state. A bar is gray with a dashed outline, and its hover
+text names the status and the delay. A bar is gray with a dashed outline, and its hover
 text says **Delay unknown**, when Qivo could not read its owner's workload to
 judge it.
 
@@ -117,16 +117,18 @@ status color. The run-on is not part of the plan: it follows the bar, a drag
 on it moves nothing, and the plan still ends where the gray ends.
 
 **Projected delay** in the toolbar draws diagonal stripes in the same yellow
-or red from the end of a Slipping or Delayed bar, or its run-on, to the end of
+or red from the end of a Currently delayed or Delayed bar, or its run-on, to the end of
 the task's projected finish week, which the hover text names
 ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
-It is on by default. Switching it off hides only the stripes, for your
-account, in every project, in My view and on the phone's landscape timeline.
+It is on by default. Switching it off hides the stripes and the projected
+finish week in the hover text, and nothing else, for your account, in every
+project, in My view and on the phone's landscape timeline.
 
 **Done bars are dim gray**, including groups whose descendant work is all
 Done. A finished bar in the past never has a run-on, which tells it apart from
-unfinished work. A **paused** task keeps its color under diagonal lines and
-shows a pause sign at its start. Its connected and adjacent edge badges get
+unfinished work. A **paused** task's planned bar keeps its color under diagonal
+lines and, where it is wide enough, shows a pause sign at its start. A run-on
+and stripes after it have no lines. Its connected and adjacent edge badges get
 the lines too.
 
 A task with subtasks takes its dates from them. Its bar runs from the

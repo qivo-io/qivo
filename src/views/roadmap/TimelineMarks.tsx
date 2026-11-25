@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
 import { useContext, useLayoutEffect, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -29,9 +29,8 @@ const projectKnown = (id: string) => {
 
 export const BAR_RING = 4
 
-type BarPaint = 'done' | 'late' | 'behind' | 'unknown' | 'backlog' | 'todo' | 'progress' | 'review'
+type BarPaint = 'done' | 'late' | 'behind' | 'unknown' | 'todo' | 'progress' | 'review'
 const STATUS_PAINT: Record<string, BarPaint> = {
-  backlog: 'backlog',
   todo: 'todo',
   progress: 'progress',
   review: 'review',
@@ -49,6 +48,15 @@ const nowPaint = (it: IssueVM, started: boolean): BarPaint => {
   if (P.delayUnknown(it)) return 'unknown'
   if (P.isGroup(it)) return started ? 'progress' : 'todo'
   return STATUS_PAINT[it.status] ?? 'todo'
+}
+
+/** What a bar's hover text and accessible name say of its status, which its
+    colour shows. A finished task in a project that tracks delay says
+    "complete" with its delay (delayNoteOf). */
+const statusNoteOf = (it: IssueVM, started: boolean) => {
+  if (P.isDone(it)) return P.tracksDelay(it) ? '' : ', Done'
+  if (P.isGroup(it)) return started ? ', In Progress' : ', To Do'
+  return `, ${P.statusOf(it.status)?.name ?? 'To Do'}`
 }
 
 /** What a bar's hover text and accessible name say of its delay. */
@@ -117,6 +125,7 @@ export function WeekCountEdge({
       data-edge-side={side}
       data-offwin={outside ? it.id : undefined}
       data-bar-paint={past && paint !== 'done' ? 'past' : paint}
+      data-unknown={paint === 'unknown' || undefined}
       data-paused={P.isPaused(it) || undefined}
       style={
         {
@@ -127,7 +136,7 @@ export function WeekCountEdge({
           '--roadmap-edge-ring': outside ? undefined : ring,
         } as CSSProperties
       }
-      aria-label={`${it.title}${P.isPaused(it) ? ', paused' : ''}${delayNoteOf(it)}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
+      aria-label={`${it.title}${statusNoteOf(it, started)}${P.isPaused(it) ? ', paused' : ''}${delayNoteOf(it)}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
       title={`${verb} ${P.weekNumLabel(edge.endpoint)}`}
       onClick={onReveal}
     >
@@ -202,7 +211,7 @@ export function Bar({
     shape.stripesTo === null
       ? ''
       : `, projected to finish in the week of ${P.fmtDate(P.weekToDate(shape.stripesTo))}`
-  const label = `${it.title}, ${P.fmtRange(start, end)}${paused ? ', paused' : ''}${delayNoteOf(it)}${finishNote}${group ? ', dates from subtasks' : movable ? '' : projectKnown(it.project) ? ', read-only' : ', loading'}`
+  const label = `${it.title}, ${P.fmtRange(start, end)}${statusNoteOf(it, started)}${paused ? ', paused' : ''}${delayNoteOf(it)}${finishNote}${group ? ', dates from subtasks' : movable ? '' : projectKnown(it.project) ? ', read-only' : ', loading'}`
   const { plan, runOn, projection } = shape
   const tail = runOn ?? projection
   const tailEnd = projection ?? runOn
@@ -210,25 +219,24 @@ export function Bar({
   // or ring where they meet
   const joined = !!plan && !!tail && !plan.cutEnd
 
-  // fixed: a press on the run-on or the stripes, which are no plan to drag
-  const onDown =
-    (mode: 'move' | 'start' | 'end', fixed = false) =>
-    (e: PointerEvent<HTMLDivElement>) => {
-      e.stopPropagation()
-      e.currentTarget.setPointerCapture(e.pointerId)
-      // epoch: the grid can re-anchor mid-drag (another admin changes the org's
-      // week start; realtime rebuild) — the held indexes are then stale units
-      drag.current = {
-        mode,
-        x: landscape?.rotated ? e.clientY : e.clientX,
-        rotated: !!landscape?.rotated,
-        s: start,
-        e: end,
-        moved: false,
-        epoch: P.gridEpoch,
-        frozen: fixed || !movable,
-      }
+  const dragged = useRefR(false)
+  const onDown = (mode: 'move' | 'start' | 'end') => (e: PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragged.current = false
+    // epoch: the grid can re-anchor mid-drag (another admin changes the org's
+    // week start; realtime rebuild) — the held indexes are then stale units
+    drag.current = {
+      mode,
+      x: landscape?.rotated ? e.clientY : e.clientX,
+      rotated: !!landscape?.rotated,
+      s: start,
+      e: end,
+      moved: false,
+      epoch: P.gridEpoch,
+      frozen: !movable,
     }
+  }
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!drag.current || drag.current.frozen) return
     if (drag.current.epoch !== P.gridEpoch) return
@@ -244,12 +252,34 @@ export function Bar({
     const r = P.clampBarDrag(mode, os, oe, d, w0, w1)
     onSched(it.id, r.start, r.end)
   }
-  const onUp = () => {
-    if (drag.current) {
-      if (!drag.current.moved) onOpen(it.id)
-      else onCommit(it.id, drag.current.epoch)
-    }
+  const endDrag = () => {
+    const moved = !!drag.current?.moved
+    if (drag.current && moved) onCommit(it.id, drag.current.epoch)
     drag.current = null
+    return moved
+  }
+  // The click that follows a drag's release opens nothing. That click comes
+  // before any timer, and a release off the bar sends none, so the mark is
+  // dropped after it either way. Any other click opens the task, also one an
+  // assistive tool sends alone.
+  const onUp = () => {
+    if (!endDrag()) return
+    dragged.current = true
+    setTimeout(() => {
+      dragged.current = false
+    }, 0)
+  }
+  const onClick = () => {
+    if (!dragged.current) onOpen(it.id)
+  }
+  // The run-on and the stripes are no plan to drag: a press that travels
+  // across them moves nothing and opens nothing.
+  const tailPress = useRefR<{ x: number; y: number } | null>(null)
+  const onTailClick = (e: MouseEvent<HTMLDivElement>) => {
+    const from = tailPress.current
+    tailPress.current = null
+    if (from && Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return
+    onOpen(it.id)
   }
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
@@ -282,7 +312,8 @@ export function Bar({
             onPointerDown={onDown('move')}
             onPointerMove={onMove}
             onPointerUp={onUp}
-            onPointerCancel={onUp}
+            onPointerCancel={endDrag}
+            onClick={onClick}
             onKeyDown={onKey}
             style={
               {
@@ -327,17 +358,22 @@ export function Bar({
       )}
       {tail && tailEnd && (
         <HoverTooltip content={label}>
+          {/* biome-ignore lint/a11y/useSemanticElements: it sits beside the plan's bar, which is no native button either. */}
           <div
             data-bar-tail={it.id}
             data-bar-paint={paint}
             data-open-start=""
             data-open-end={tailEnd.cutEnd || undefined}
-            aria-hidden="true"
-            tabIndex={-1}
-            onPointerDown={onDown('move', true)}
-            onPointerMove={onMove}
-            onPointerUp={onUp}
-            onPointerCancel={onUp}
+            role="button"
+            aria-label={label}
+            // the plan's bar speaks for both parts wherever it is in the window
+            aria-hidden={plan ? true : undefined}
+            tabIndex={plan ? -1 : 0}
+            onPointerDown={(e) => {
+              tailPress.current = { x: e.clientX, y: e.clientY }
+            }}
+            onClick={onTailClick}
+            onKeyDown={onKey}
             style={
               {
                 ...ringStyle,

@@ -383,7 +383,7 @@ function Roadmap({
   )
   const setShowProjection = (show: boolean) => {
     setShowProjectionState(show)
-    P.saveUI({ roadmapProjection: show })
+    P.saveUINow({ roadmapProjection: show })
   }
   const { w0, w1, capped } = P.resolveWin(win)
   const NW = w1 - w0 + 1
@@ -1537,7 +1537,7 @@ function Roadmap({
             pressed={showProjection}
             onPressedChange={setShowProjection}
             data-roadmap-projection
-            title="Stripes to the projected finish of Slipping and Delayed tasks"
+            title="Stripes to a delayed task's projected finish"
           >
             <Icon name="projection" size={16} />
             Projected delay

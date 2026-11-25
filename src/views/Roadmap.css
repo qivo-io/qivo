@@ -92,11 +92,7 @@
 .roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count > svg {
   color: inherit;
 }
-.roadmap-week-edge[data-edge-filled="true"]:is(
-    [data-bar-paint="backlog"],
-    [data-bar-paint="unknown"]
-  )
-  .roadmap-week-count {
+.roadmap-week-edge[data-edge-filled="true"][data-unknown] .roadmap-week-count {
   border-style: dashed;
 }
 .roadmap-week-edge[data-edge-filled="true"][data-paused] .roadmap-week-count {
@@ -142,10 +138,6 @@
 [data-bar-paint="past"] {
   --bar-fill: var(--roadmap-bar-past);
   --bar-rim: var(--roadmap-bar-past-rim);
-}
-[data-bar-paint="backlog"] {
-  --bar-fill: var(--roadmap-bar-backlog);
-  --bar-rim: var(--roadmap-bar-backlog-rim);
 }
 [data-bar-paint="todo"] {
   --bar-fill: var(--roadmap-bar-todo);
@@ -195,6 +187,33 @@
 .roadmap-bar:hover {
   filter: brightness(1.05);
 }
+/* The plan's bar lies above the due date's hover strip, so a drag starts
+   anywhere on it. A run-on and stripes take no drag and lie below the strip. */
+.roadmap-bar:not([data-bar-tail]) {
+  z-index: 2;
+}
+.roadmap-bar[data-bar-tail] {
+  touch-action: auto;
+  cursor: pointer;
+}
+/* A side that meets another part or the window's edge clips what is drawn
+   outside the bar, and the bar's parts cover an outline drawn inside it, so
+   the focus ring is a layer above them. */
+.roadmap-bar:focus-visible {
+  outline: none;
+}
+html:not([data-focus-modality="pointer"]) .roadmap-bar:focus-visible::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  border-radius: inherit;
+  /* the inner line keeps the ring in sight on a bar of the ring's own blue */
+  box-shadow:
+    inset 0 0 0 2px var(--primary),
+    inset 0 0 0 3px var(--roadmap-bar-ground);
+  pointer-events: none;
+}
 .roadmap-bar[data-bar-paint="done"] {
   box-shadow: 0 0 0 4px var(--roadmap-bar-ring, transparent);
 }
@@ -234,8 +253,8 @@
   border: 0;
   background: repeating-linear-gradient(135deg, var(--bar-fill) 0 5px, var(--bar-stripe) 5px 10px);
 }
-.roadmap-bar:is([data-bar-paint="backlog"], [data-bar-paint="unknown"])
-  > :is(.roadmap-bar-now, .roadmap-bar-run) {
+.roadmap-bar[data-bar-paint="unknown"]
+  > :is(.roadmap-bar-past, .roadmap-bar-now, .roadmap-bar-run) {
   border-style: dashed;
 }
 /* A run-on without Slipping or Delayed to show, as where the project does not
@@ -315,7 +334,6 @@
     --bar-rim: GrayText;
   }
   [data-bar-paint="done"],
-  [data-bar-paint="backlog"],
   [data-bar-paint="unknown"] {
     --bar-fill: Canvas;
   }
@@ -343,7 +361,6 @@
   }
   .roadmap-week-edge[data-edge-filled="true"]:is(
       [data-bar-paint="done"],
-      [data-bar-paint="backlog"],
       [data-bar-paint="unknown"]
     )
     .roadmap-week-count {

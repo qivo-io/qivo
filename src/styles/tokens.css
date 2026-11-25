@@ -159,8 +159,6 @@
   --roadmap-bar-ground: var(--workspace-panel);
   --roadmap-bar-past: color-mix(in oklab, var(--text-1) 13%, var(--roadmap-bar-ground));
   --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 28%, var(--roadmap-bar-ground));
-  --roadmap-bar-backlog: color-mix(in oklab, var(--text-1) 4%, var(--roadmap-bar-ground));
-  --roadmap-bar-backlog-rim: color-mix(in oklab, var(--text-1) 34%, var(--roadmap-bar-ground));
   --roadmap-bar-todo: color-mix(in oklab, var(--text-1) 44%, var(--roadmap-bar-ground));
   --roadmap-bar-todo-rim: color-mix(in oklab, var(--text-1) 68%, var(--roadmap-bar-ground));
   --roadmap-bar-progress: color-mix(
@@ -350,7 +348,6 @@
      beside them. Rims are a step darker than their fills. */
   --roadmap-bar-past: color-mix(in oklab, var(--text-1) 14%, var(--roadmap-bar-ground));
   --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 30%, var(--roadmap-bar-ground));
-  --roadmap-bar-backlog-rim: color-mix(in oklab, var(--text-1) 40%, var(--roadmap-bar-ground));
   --roadmap-bar-todo: color-mix(in oklab, var(--text-1) 50%, var(--roadmap-bar-ground));
   --roadmap-bar-todo-rim: color-mix(in oklab, var(--text-1) 70%, var(--roadmap-bar-ground));
   --roadmap-bar-progress: #2f6fe4;

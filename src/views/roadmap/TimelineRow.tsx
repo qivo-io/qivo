@@ -330,12 +330,13 @@ function TimelineRowView({
           >
             {renderGuides()}
             {renderFlags?.()}
-            {/* The due hover strip stays below bars and inside the grid. */}
+            {/* The due hover strip stays inside the grid, below a plan's bar
+                and above its run-on and stripes (Roadmap.css). */}
             {due && (
               <HoverTooltip content={`Due ${P.fmtISO(row.issue.due)}, ${due.state}`}>
                 <div
                   style={{ left: Math.min(Math.max(due.x - 4, 0), timelineW - 8) }}
-                  className="[position:absolute] [top:3px] [bottom:3px] [width:8px] [cursor:help]"
+                  className="[position:absolute] [top:3px] [bottom:3px] [width:8px] [cursor:help] [z-index:1]"
                 />
               </HoverTooltip>
             )}
@@ -360,7 +361,7 @@ function TimelineRowView({
             {due && (
               <div
                 style={{ left: Math.min(Math.max(due.x - 1, 0), timelineW - 2) }}
-                className="roadmap-due [position:absolute] [top:0] [bottom:0] [width:2px] [pointer-events:none] [z-index:1]"
+                className="roadmap-due [position:absolute] [top:0] [bottom:0] [width:2px] [pointer-events:none] [z-index:3]"
               />
             )}
             {row.kind === 'unsched' &&
