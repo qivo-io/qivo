@@ -171,7 +171,7 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(text('[data-task-title]')).toBe('Task later')
   })
 
-  it("stops the people's load reads while its kept page hides, and reads them again when it shows", async () => {
+  it("stops the people's load reads while its kept page hides, reads them again when it shows, and stops them once the page gives way to a note", async () => {
     const { board, show } = await overview(plan, { kept: true })
     expect(q('[data-ov-people]')).not.toBeNull()
     expect(board.server.loads.size).toBeGreaterThan(0)
@@ -179,6 +179,24 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.server.loads.size).toBe(0)
     await show(true)
     expect(board.server.loads.size).toBeGreaterThan(0)
+    board.server.overview.force = { scope: 'unavailable' }
+    await board.deliver()
+    expect(text('[data-overview-root]')).toContain('This Overview is not available')
+    expect(board.server.loads.size).toBe(0)
+  })
+
+  it("keeps the people's load reads open when a task leaves Needs attention while its owner still has open work", async () => {
+    const { board } = await overview(plan)
+    const person = () => text('[data-ov-person]')
+    expect(person()).toContain('3 of the listed tasks')
+    const before = [...board.server.loads]
+    expect(before.length).toBeGreaterThan(0)
+    const task = board.snapshot.issues.find((t) => t.id === 'later')
+    if (task) task.due_date = day(30)
+    await board.deliver()
+    expect(person()).toContain('2 of the listed tasks')
+    expect([...board.server.loads]).toHaveLength(before.length)
+    for (const call of before) expect(board.server.loads.has(call)).toBe(true)
   })
 
   it('asks a failed Load more of the sub-projects again with Retry, and says how many it shows past the cap', async () => {

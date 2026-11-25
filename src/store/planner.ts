@@ -12181,12 +12181,18 @@ export const PLANNER = {
       many of the listed tasks are theirs, which orders a guest's or
       Viewer's capped calls, and whether it reads now (`live`, while the
       panel and the tab show). Not live, the cache keeps their last
-      answers without reading them, for the panel's return.
-      P.releaseOverview releases them. */
+      answers without reading them, for the panel's return. A new list
+      replaces the one before, and a call it keeps stays open.
+      P.stopOverviewPeople stops the reads and P.releaseOverview releases
+      them. */
   watchOverviewPeople: (owners: readonly OwnerNeed[], live: boolean) => {
     if (owners.length === 0) ownerLoads.release(OVERVIEW_PEOPLE)
     else ownerLoads.register(OVERVIEW_PEOPLE, owners, live)
   },
+  /** Stops the load reads of the people P.watchOverviewPeople registered,
+      keeping them and their last answers for the panel's return: the
+      panel left. */
+  stopOverviewPeople: () => ownerLoads.setLive(OVERVIEW_PEOPLE, false),
   /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
       the summary's and the delays' answers for the Overview asked now and
       whether each is current, each list's batches and state, and the
