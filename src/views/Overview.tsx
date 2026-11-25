@@ -1,8 +1,10 @@
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
-/* Overview: a dashboard rollup of what to do, the scope's state in one box,
-   health per group as a sortable table, then at-risk tasks, paused tasks and
-   milestones.
+/* Overview: a project or sub-project's page is views/overview/
+   ProjectOverview.tsx, which this module's Overview chooses for them. My
+   view's page is here: a dashboard rollup of what to do, the scope's state
+   in one box, health per project as a sortable table, then at-risk tasks,
+   paused tasks and milestones.
 
    The summary, the projected delays, the two lists and the health table
    come from the server (convex/overview.ts), through the reads the store
@@ -33,132 +35,46 @@ import {
 } from 'react'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
-import { usePagedList } from '@/lib/pagedList'
 import { SCROLL_ANCHORING } from '@/lib/scrollAnchoring'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { useRested } from '@/lib/useRested'
 import { cn } from '@/lib/utils'
-import { useViewVisibility } from '@/lib/viewVisibility'
 import { STALL } from '@/store/liveParts'
-import type {
-  FigureView,
-  HealthTable,
-  ListKind,
-  ListView,
-  OverviewView,
-} from '@/store/overviewLists'
+import type { ListKind, ListView } from '@/store/overviewLists'
 import type { StoreVersion } from '@/store/updates'
-import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
-import type { Figure, Missing, OverviewRow } from '../../convex/lib/overview'
-import type { NavChildRow, NavChildren } from '../../convex/model/projectNavReads'
+import type { OverviewRow } from '../../convex/lib/overview'
 import { NoProjects } from '../components/NoProjects'
-import { navCursors } from '../components/projectNavRows'
-import {
-  Avatar,
-  EmptyState,
-  Icon,
-  PausedMark,
-  ProgressBar,
-  ProjectName,
-  StatusDot,
-} from '../components/qivo'
+import { Avatar, EmptyState, Icon, PausedMark, ProgressBar, ProjectName } from '../components/qivo'
 import { useHolds } from '../components/useHolds'
-import { personLabel, useOrgPeople, usePeople } from '../components/usePeople'
+import { usePeople } from '../components/usePeople'
 import { ViewNote } from '../components/ViewNote'
 import { OVERVIEW_BATCH } from '../store/overviewLists'
 import { type IssueVM, OVERVIEW_MILESTONE_SLOTS, P, type ScopeInfo } from '../store/planner'
 import { BOARD_SEARCH_DELAY_MS } from './board/boardArgs'
 import { type HealthOrder, OvHealthTable } from './overview/HealthTable'
 import { OverviewMilestones } from './overview/OverviewMilestones'
-import { overviewRequest } from './overview/overviewArgs'
-import { OvStatusBar } from './overview/StatusBar'
+import { OvSection } from './overview/OvSection'
+import {
+  figureAttrs,
+  given,
+  narrower,
+  type OverviewActions,
+  type OverviewState,
+  onePersonAtATime,
+  placeholder,
+  type Shown,
+  shownOf,
+  useOverviewRead,
+  WAITING,
+} from './overview/overviewParts'
+import { ProjectOverview } from './overview/ProjectOverview'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import { type NextMilestone, useScopeMilestones } from './useScopeMilestones'
-import { useViewsNews } from './useViewsNews'
 import './Overview.css'
 import '../styles/mobile-views.css'
-
-function OvSection({
-  title,
-  action,
-  children,
-}: {
-  title: ReactNode
-  action?: ReactNode
-  children?: ReactNode
-}) {
-  return (
-    <section className="overview-section">
-      <div className="overview-section-body">
-        <div className="overview-section-heading [display:flex] [align-items:center] [min-height:32px] [gap:8px] [margin-bottom:8px]">
-          <h2 className="m-0 text-md font-semibold text-text-1">{title}</h2>
-          {action && (
-            <>
-              <div className="[flex:1]" />
-              {action}
-            </>
-          )}
-        </div>
-        {children}
-      </div>
-      <div className="overview-section-foot" aria-hidden="true" />
-    </section>
-  )
-}
-
-/* ═══ The figures as the page shows them ════════════════════════════════════
-   Each figure is on its way, kept from before and refreshing, given,
-   counting, unavailable for a reason, or failed. A figure that is not
-   given never shows a number, so a count the server could not read whole
-   never reads as a smaller one or as zero. */
-
-/** What a figure's element says of its state (data-ov-figure-state). */
-type FigureState = 'loading' | 'refreshing' | 'ok' | 'counting' | 'unavailable' | 'error'
-
-/** A figure as the page shows it. `scope` is a refusal of the read's whole
-    scope, which only the figure shows where the read is not the summary. */
-type Shown<T> =
-  | { state: 'loading' | 'error' | 'counting' }
-  | { state: 'ok' | 'refreshing'; value: T }
-  | { state: 'unavailable'; reason: Exclude<Missing, 'counting'> | 'scope' }
-
-/** The figure `pick` takes from read `read`'s ok answer, as the page shows
-    it: refreshing where the answer was kept, not current. */
-function shownOf<A extends { state: string }, F extends object>(
-  read: FigureView<A>,
-  pick: (ok: Extract<A, { state: 'ok' }>) => Figure<F>,
-): Shown<F> {
-  if (read === null) return { state: 'loading' }
-  if (read.error !== undefined) return { state: 'error' }
-  const answer = read.value as A
-  if (answer.state !== 'ok') return { state: 'unavailable', reason: 'scope' }
-  const figure = pick(answer as Extract<A, { state: 'ok' }>)
-  if (figure.state === 'ok') return { state: read.current ? 'ok' : 'refreshing', value: figure }
-  if (figure.reason === 'counting') return { state: 'counting' }
-  return { state: 'unavailable', reason: figure.reason }
-}
-
-/** The value of `figure` where it is given, else null. */
-const given = <T,>(figure: Shown<T>): T | null =>
-  figure.state === 'ok' || figure.state === 'refreshing' ? figure.value : null
-
-/** The data attributes of figure `name` in `figure`'s state. */
-const figureAttrs = (name: string, figure: Shown<unknown>) => ({
-  'data-ov-figure': name,
-  'data-ov-figure-state': figure.state satisfies FigureState,
-  ...(figure.state === 'unavailable' && figure.reason !== 'scope'
-    ? { 'data-ov-reason': figure.reason }
-    : {}),
-})
-
-/** What a figure cell shows where no number is given: "…" on its way,
-    "Counting…" while the counts are not whole, and the dash the page uses
-    for a missing value otherwise. */
-const placeholder = (figure: Shown<unknown>) =>
-  figure.state === 'loading' ? '…' : figure.state === 'counting' ? 'Counting…' : '—'
 
 /* ═══ The status strip ══════════════════════════════════════════════════════
    One box carrying every scope-level fact, where a row of five separate tiles
@@ -218,65 +134,6 @@ function OvStat({
       </div>
       {children && <div className="[margin-top:8px]">{children}</div>}
       {sub && <div className={statSubClass}>{sub}</div>}
-    </div>
-  )
-}
-
-/* Who is accountable for this scope — the strip's first cell, and the one that
-   names a PERSON rather than a number.
-   Only a scope that NAMES a project has a lead: across all of them there is no
-   such person, so the cell is absent and the strip closes over the gap. A
-   project whose lead seat is empty has none either. */
-function OvLeadStat({ info }: { info: ScopeInfo }) {
-  const proj = info.proj
-  const leadId = proj ? P.leadOf(proj.id) : null
-  // named while the strip shows; a lead not loaded yet shows as loading,
-  // and only one the server's answer leaves out takes the cell away
-  const [u] = useOrgPeople(proj?.org ?? '', [leadId])
-  if (!u || u.state === 'gone') return null
-  // Inheritance changes who is accountable, so keep it explicit. The owning
-  // team remains in project settings; repeating it here dilutes the identity.
-  // P.leadOf names no lead from a seed's facts, so the cell shows only once
-  // the project cache's rows say who leads.
-  const meta = info.meta
-  const inherited = !proj.lead && !!meta && meta.id !== proj.id
-  return (
-    <div data-ov-lead={u.id} className="flex min-w-0 items-center gap-3">
-      <Avatar id={u.id} size={40} />
-      <div className="min-w-0 break-words">
-        <div className="mb-1 text-sm text-text-2">Lead</div>
-        <div className="text-md font-semibold leading-snug text-text-1">
-          {personLabel(u, 'No lead')}
-        </div>
-        {inherited && <div className={statSubClass}>Inherited from {meta.name}</div>}
-      </div>
-    </div>
-  )
-}
-
-/** The legend of `counts`, each status with its count, or `missing` in
-    place of every count while they are not given (null). */
-function OvStatusLegend({
-  counts,
-  missing,
-}: {
-  counts: Record<string, number> | null
-  missing: string
-}) {
-  return (
-    <div className="[display:flex] [flex-wrap:wrap] [gap:4px_16px]">
-      {P.STATUSES.map((s) => (
-        <span
-          key={s.id}
-          className="[display:inline-flex] [align-items:center] [gap:5px] [font-size:var(--fs-xs)] [color:var(--text-2)]"
-        >
-          <StatusDot status={s.id} size={12} />
-          {s.name}{' '}
-          <span className="!font-mono [color:var(--text-3)]">
-            {counts ? (counts[s.id] ?? 0) : missing}
-          </span>
-        </span>
-      ))}
     </div>
   )
 }
@@ -934,24 +791,6 @@ function OvSummary({
   )
 }
 
-/** Where a figure that does not fit one request can still be read: a
-    top-level project's sub-projects, My view's projects. */
-const narrower = (info: ScopeInfo) =>
-  info.isMeta
-    ? ' Open a sub-project to see its figures.'
-    : info.mine
-      ? ' Open a project to see its figures.'
-      : ''
-
-/** Whether every seat of the login that `info` reads is a guest's or an
-    organization Viewer's, whose reads see other people's work one person
-    at a time (convex/lib/viewLoads.ts verdicts). */
-function onePersonAtATime(info: ScopeInfo): boolean {
-  const seats = P.myProfileIds.map((id) => P.user(id)).filter((u) => !!u)
-  const read = info.mine ? seats : seats.filter((u) => u.org === info.proj?.org)
-  return read.length > 0 && read.every((u) => u.orgRole !== 'admin' && u.orgRole !== 'user')
-}
-
 /** Why a figure is not given, as the strip's last row, each line naming
     its figure (data-ov-figure): the counts while Qivo counts them or could
     not, Overdue, and the projection. */
@@ -1027,98 +866,19 @@ function OvFigureNotes({
   )
 }
 
-/* the slice of the app's action surface this view calls */
-type OverviewActions = {
-  setScope: (id: string) => void
-  setView: (view: string) => void
-  openIssue: (id: string) => void
-  newIssue: (init: { project?: string }) => void
-  newProject: (init: { parent?: string; kind?: 'program' }) => void
-  newMilestone: (init: { week?: number }) => void
-  /** `focusAfterClose` is what takes focus as the Milestones window closes */
-  editMilestone: (id: string, focusAfterClose?: () => HTMLElement | null, project?: string) => void
-  /** opens Search, on the project `searchIn` names */
-  openPalette?: (searchIn?: unknown) => void
-}
-
-/** Where the Overview stands, as its root's data-overview-state names it. */
-type OverviewState =
-  /** no answer of the summary for these arguments yet */
-  | 'loading'
-  /** the answers kept for these arguments while the reads stopped, or
-      before they arrived again after a reconnect */
-  | 'refreshing'
-  | 'ok'
-  | 'unavailable'
-  | 'over_budget'
-  /** the summary failed */
-  | 'error'
-
-/* How many Overviews mounted, each one's read owner (P.watchOverview). */
-let overviewReaders = 0
-
-/** The Overview's reads for `info`, which the page registers with the store
-    while it and the tab show, with Try again, and its health table
-    `table` (null for none, as for one sub-project), registered apart so a
-    new sort, search or Load more asks the health read alone; the store's
-    answers for the arguments on screen. Renders again on the store's
-    `views` news. */
-function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
-  const { visible } = useViewVisibility()
-  const [attempt, setAttempt] = useStateO(0)
-  // this mounted page, which owns the reads while it asks
-  const [owner] = useStateO(() => ++overviewReaders)
-  useViewsNews()
-  const request = overviewRequest(info)
-  const key = request.key
-  const ask = visible ? key : null
-  useEffect(() => {
-    P.watchOverview(ask, owner, attempt)
-    return () => P.watchOverview(null, owner, attempt)
-  }, [ask, owner, attempt])
-  /* The table, registered again after each registration of the scope's
-     reads. The store takes a table only from the page that owns the reads,
-     and a page that mounts while hidden, or on a day the store has not
-     reached yet, owns them only once it asks for a key. An unchanged table
-     asks nothing again, so a return keeps the rows loaded. Its reads stop
-     with the scope's. */
-  const sort = table?.sort
-  const dir = table?.dir
-  const search = table?.search
-  useEffect(() => {
-    P.watchOverviewTable(
-      sort === undefined || dir === undefined || search === undefined
-        ? null
-        : { sort, dir, search },
-      owner,
-    )
-  }, [sort, dir, search, owner, ask])
-  const view: OverviewView = P.overviewRead()
-  // answers count only for the arguments on screen
-  const mine = key !== null && view.key === key
-  return {
-    request,
-    view,
-    summary: mine ? view.summary : null,
-    risk: mine ? view.risk : null,
-    lists: mine ? { attention: view.attention, paused: view.paused } : null,
-    health: mine ? view.health : null,
-    retry: () => setAttempt((n) => n + 1),
-  }
-}
-
-/** A list before any answer for the arguments on screen. */
-const WAITING: ListView = {
-  state: 'loading',
-  batches: [],
-  dropped: false,
-  end: false,
-  more: null,
-  failed: false,
-  reads: 0,
-}
-
+/** The Overview of `info`: My view's page here, a project or sub-project's
+    in views/overview/ProjectOverview.tsx. App mounts the page anew for
+    each scope, so one mount shows one of them. */
 function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
+  return info.mine ? (
+    <MineOverview info={info} actions={actions} />
+  ) : (
+    <ProjectOverview info={info} actions={actions} />
+  )
+}
+
+/** My view's Overview. */
+function MineOverview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
   // App makes its actions again every render; the rows keep one identity.
@@ -1175,14 +935,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // The Overview renders no filter row, so it takes no `filters`. The
   // scope's own `only` predicate is the whole narrowing, and nothing
   // invisible can be left switched on.
-  const mine = info.mine
-  // "grouped" scopes get the health table, a lone sub-project gets the
-  // status distribution: one project's sub-projects, or My view's projects
-  const grouped = mine || info.isMeta
-  const read = useOverviewRead(
-    info,
-    grouped ? { sort: sort.key, dir: sort.dir, search: rested } : null,
-  )
+  const mine = true
+  const read = useOverviewRead(info, { sort: sort.key, dir: sort.dir, search: rested })
   // the milestone sections, read here, above the decision whether a note
   // is the whole page, which waits for Upcoming's first answer
   const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
@@ -1198,7 +952,6 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   else if (summaryAnswer?.state === 'unavailable') state = 'unavailable'
   else if (summaryAnswer?.state === 'over_budget') state = 'over_budget'
   else state = read.summary.current ? 'ok' : 'refreshing'
-  const ok = summaryAnswer?.state === 'ok' ? summaryAnswer : null
   const counts = shownOf(read.summary, (s) => s.counts)
   const overdue = shownOf(read.summary, (s) => s.overdue)
   const anyTask = shownOf(read.summary, (s) => s.any_task)
@@ -1206,9 +959,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // the day the answers were asked for
   const day = read.request.base.clock.day
 
-  /* Why a scope has no task to summarize, once the answer that decides it
-     arrived: a project without sub-projects, one without tasks, My view
-     with no project, no sub-project or nothing of the person's. Until
+  /* Why My view has no task to summarize, once the answer that decides it
+     arrived: no project, no sub-project or nothing of the person's. Until
      Upcoming's first answer, and where it says the scope holds no
      milestone at all, the note is the page. Once it holds a row or says
      the scope holds a past milestone, or Upcoming failed, was refused or
@@ -1220,71 +972,32 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // a kept answer still decides it while it refreshes, so the note stays
   // through a return or a reconnect
   const noTasks = given(anyTask)?.value === false
-  const holds = useHolds(mine && (state === 'ok' || state === 'refreshing') && noTasks)
-  // the sub-projects a top-level project's Overview past its limits offers,
-  // whose summary names none: the first batch of the person's sub-projects
-  // of it (projectNav.children), read only while that note shows; past the
-  // batch the sidebar lists the rest
-  const overBudgetChoices = usePagedList<NavChildren, NavChildRow>({
-    key: state === 'over_budget' && info.isMeta ? JSON.stringify(['ov-children', info.id]) : null,
-    source: {
-      kind: 'live',
-      query: api.projectNav.children,
-      args: (at) => ({ project_id: info.id, ...navCursors(at) }),
-    },
-    batch: (a) => (a.state === 'ok' ? a : null),
-    id: (row) => row.id,
-    most: 25,
-  })
-  if (mine) {
-    // whether the person sees any project or sub-project at all is the
-    // server's word (useHolds), read only while My view holds none of the
-    // person's tasks; until it confirms one, the page says what its own
-    // answer says, which is true whatever the projects
-    if (holds === 'none')
-      emptyNote = (
-        <NoProjects
-          icon="chart"
-          title="Nothing to summarize yet"
-          onNewProject={() => actions.newProject({ kind: 'program' })}
-        />
-      )
-    else if (holds === 'no_sub')
-      emptyNote = (
-        <EmptyState
-          icon="chart"
-          title="Nothing to summarize yet"
-          hint="Tasks live in sub-projects."
-        />
-      )
-    else if ((state === 'ok' || state === 'refreshing') && noTasks)
-      // My view can be empty while the projects around it are full — say which
-      // of the two it is rather than claiming nobody has created anything
-      emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
-  } else if (ok && (state === 'ok' || state === 'refreshing')) {
-    if (ok.sub_projects?.length === 0)
-      emptyNote = (
-        <EmptyState
-          icon="chart"
-          title="Nothing to summarize yet"
-          hint="Tasks live in sub-projects."
-          actionLabel={P.canManageOwnProjectAccess(info.id) ? 'New sub-project' : undefined}
-          onAction={() => actions.newProject({ parent: info.id })}
-        />
-      )
-    else if (noTasks)
-      emptyNote = (
-        <EmptyState
-          icon="chart"
-          title="No tasks yet"
-          actionLabel={P.canWrite(info.id) ? 'New task' : undefined}
-          onAction={() => actions.newIssue({ project: ok.sub_projects?.[0] ?? info.id })}
-        />
-      )
-  }
+  const holds = useHolds((state === 'ok' || state === 'refreshing') && noTasks)
+  // whether the person sees any project or sub-project at all is the
+  // server's word (useHolds), read only while My view holds none of the
+  // person's tasks; until it confirms one, the page says what its own
+  // answer says, which is true whatever the projects
+  if (holds === 'none')
+    emptyNote = (
+      <NoProjects
+        icon="chart"
+        title="Nothing to summarize yet"
+        onNewProject={() => actions.newProject({ kind: 'program' })}
+      />
+    )
+  else if (holds === 'no_sub')
+    emptyNote = (
+      <EmptyState
+        icon="chart"
+        title="Nothing to summarize yet"
+        hint="Tasks live in sub-projects."
+      />
+    )
+  else if ((state === 'ok' || state === 'refreshing') && noTasks)
+    // My view can be empty while the projects around it are full — say which
+    // of the two it is rather than claiming nobody has created anything
+    emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
 
-  // a project the narrowing offers opens its own Overview
-  const open = (id: string) => actions.setScope(id)
   let note: ReactNode = null
   if (state === 'unavailable')
     note = (
@@ -1300,33 +1013,17 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         }
       />
     )
-  else if (state === 'over_budget') {
-    const sub = !mine && !info.isMeta
+  else if (state === 'over_budget')
     note = (
       <ViewNote
         hooks="ov"
         phone={mobile}
         icon="filter"
         title="This view could not be loaded within the Overview's limits."
-        hint={
-          info.isMeta
-            ? overBudgetChoices.next || overBudgetChoices.stopped
-              ? 'Choose a sub-project to see its figures. The sidebar lists the rest.'
-              : 'Choose a sub-project to see its figures.'
-            : mine
-              ? 'Open a project or sub-project.'
-              : 'Open its Board, or find its tasks with Search.'
-        }
-        projects={info.isMeta ? overBudgetChoices.rows : undefined}
-        onProject={open}
-        action={
-          sub && actions.openPalette
-            ? { label: 'Search this sub-project', onClick: () => actions.openPalette?.(info.id) }
-            : undefined
-        }
+        hint="Open a project or sub-project."
       />
     )
-  } else if (state === 'error')
+  else if (state === 'error')
     note = (
       <ViewNote
         hooks="ov"
@@ -1397,7 +1094,6 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                   data-ov-strip-cells
                   className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] items-start gap-x-6 gap-y-6"
                 >
-                  <OvLeadStat info={info} />
                   <OvStat
                     label="Completion"
                     figure={{ name: 'completion', shown: counts }}
@@ -1434,38 +1130,26 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 />
               </div>
 
-              {grouped ? (
-                <OvSection title={mine ? 'Project health' : 'Sub-project health'}>
-                  <OvHealthTable
-                    view={health}
-                    mine={mine}
-                    asked={sort}
-                    onSort={setSort}
-                    search={search}
-                    onSearch={(text) => setTyped({ scope: info.id, text })}
-                    searching={
-                      search !== '' || (unsearched.current.get(info.id) ?? 0) > OVERVIEW_BATCH
-                    }
-                    searched={rested !== ''}
-                    onePerson={onePersonAtATime(info)}
-                    mobile={mobile}
-                    onOpen={(id: string) => {
-                      actions.setScope(id)
-                      actions.setView('kanban')
-                    }}
-                  />
-                </OvSection>
-              ) : (
-                <OvSection title="Status distribution">
-                  <div
-                    {...figureAttrs('status', counts)}
-                    className="[background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [padding:20px] [box-shadow:var(--qivo-shadow-card)] [display:flex] [flex-direction:column] [gap:8px]"
-                  >
-                    <OvStatusBar counts={c ? c.leaves : null} height={8} />
-                    <OvStatusLegend counts={c ? c.leaves : null} missing={placeholder(counts)} />
-                  </div>
-                </OvSection>
-              )}
+              <OvSection title="Project health">
+                <OvHealthTable
+                  view={health}
+                  mine={mine}
+                  asked={sort}
+                  onSort={setSort}
+                  search={search}
+                  onSearch={(text) => setTyped({ scope: info.id, text })}
+                  searching={
+                    search !== '' || (unsearched.current.get(info.id) ?? 0) > OVERVIEW_BATCH
+                  }
+                  searched={rested !== ''}
+                  onePerson={onePersonAtATime(info)}
+                  mobile={mobile}
+                  onOpen={(id: string) => {
+                    actions.setScope(id)
+                    actions.setView('kanban')
+                  }}
+                />
+              </OvSection>
 
               <OvSection
                 title={

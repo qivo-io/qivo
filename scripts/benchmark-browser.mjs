@@ -546,7 +546,11 @@ async function openPage(origin, tasks, metrics, query = '') {
    (data-overview-state ok) with the first batch of each of its lists
    (data-ov-list-state no longer loading or refreshing) and its health
    table's first answer for the table on screen (data-ov-health-state
-   neither loading nor refreshing, and no data-ov-health-kept), and the
+   neither loading nor refreshing, and no data-ov-health-kept), a project's
+   Needs attention list (data-ov-needs-state neither loading nor
+   refreshing), its Sub-projects (data-ov-subs-state neither loading nor
+   refreshing) and its Load this week, every person's load and name
+   answered (data-ov-people-state not loading), and the
    Roadmap's answer for the selection on screen (data-roadmap-state ok, not
    the last answer kept while a new one loads) with no Team utilization
    cell waiting for its owner's load (data-load-waiting), and the Overview's
@@ -571,6 +575,9 @@ const boardComplete = () => {
   const overview = document.querySelector('[data-workspace-view] [data-overview-root]')
   const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
   const health = document.querySelector('[data-workspace-view] [data-ov-health]')
+  const needs = document.querySelector('[data-workspace-view] [data-ov-needs-state]')
+  const subs = document.querySelector('[data-workspace-view] [data-ov-subs-state]')
+  const people = document.querySelector('[data-workspace-view] [data-ov-people-state]')
   const roadmap = document.querySelector('[data-workspace-view] [data-roadmap-root]')
   const upcoming = document.querySelector(
     '[data-workspace-view] [data-overview-milestones] [data-milestone-section="upcoming"]',
@@ -594,6 +601,11 @@ const boardComplete = () => {
     lists.every(
       (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
     ) &&
+    (needs === null ||
+      !['loading', 'refreshing'].includes(needs.getAttribute('data-ov-needs-state'))) &&
+    (subs === null ||
+      !['loading', 'refreshing'].includes(subs.getAttribute('data-ov-subs-state'))) &&
+    (people === null || people.getAttribute('data-ov-people-state') !== 'loading') &&
     (overview === null || healthDone)
   )
 }
@@ -1411,7 +1423,9 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     'variedOverview',
     'Overview',
     OVERVIEW_SHOWN,
-    '[data-atrisk], [data-ovrow]',
+    // Needs attention's rows or its empty line, or on a build from before
+    // it, the rows of the two lists it replaced
+    '[data-need], [data-ov-needs-state="empty"], [data-atrisk], [data-ovrow]',
   )
   await switchTo(
     opened,

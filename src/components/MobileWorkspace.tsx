@@ -112,8 +112,8 @@ export function MobileHeader({
               value={view}
               onChange={actions.setView}
               options={[
-                { value: 'kanban', label: 'Tasks', icon: 'board' },
                 { value: 'overview', label: 'Overview', icon: 'chart' },
+                { value: 'kanban', label: 'Tasks', icon: 'board' },
                 { value: 'roadmap', label: 'Roadmap', icon: 'timeline' },
               ]}
             />

@@ -781,14 +781,14 @@ describe('the view a project opens on', { timeout: 60_000 }, () => {
     expect(location.pathname).toBe('/app/testbed/board/p/10')
   })
 
-  it("reads Inbox, Board, Roadmap, Overview in the top bar's switch", async () => {
+  it("reads Inbox, Overview, Board, Roadmap in the top bar's switch", async () => {
     await app(world(), '/app/testbed/board/p/10')
     await until(() => shown() === 'kanban', "Luma Sensor's Board")
     expect(
       [...document.querySelectorAll('[data-view-switch] button')].map(
         (b) => b.getAttribute('aria-label')?.split(',')[0] ?? b.textContent?.trim(),
       ),
-    ).toEqual(['Inbox', 'Board', 'Roadmap', 'Overview'])
+    ).toEqual(['Inbox', 'Overview', 'Board', 'Roadmap'])
   })
 })
 

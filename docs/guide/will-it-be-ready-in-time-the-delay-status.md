@@ -127,13 +127,17 @@ Roadmap due line says that Qivo could not read all of its subtasks.
   Where Qivo could not read someone's other work, the team summary's
   **Projected to miss** and **Behind plan** counts read **unknown**, never 0
   ([Team sync](./planning-against-real-capacity.md#team-sync)).
-- **Overview** includes projected misses in **Overdue & at risk**, which
-  Qivo works out on the server with each owner's other work. A row says
-  **risk unknown** where Qivo could not read that work, so the task may not
-  be late, and the projected count says it is not available where it could
-  not work out every projection. The health table's **Late** and
-  **Behind plan** counts come from the server too, and read **unknown** where
-  Qivo could not read an owner's other work.
+- **Overview** lists projected misses under **Projected to miss** and
+  tasks behind plan under **Behind plan** in a project's **Needs
+  attention**, and counts **Late** and **Behind plan** for each
+  sub-project, all worked out on the server with each owner's other work.
+  Where Qivo could not read that work, the Projected to miss and Behind
+  plan tabs show a dash for their count and say that they may leave tasks
+  out, and a sub-project's Late and Behind plan read **unknown**, never 0
+  ([Needs attention](./the-overview-project-health-at-a-glance.md#needs-attention)).
+  My view's **Overdue & at risk** marks such a row **risk unknown**, so
+  the task may not be late, and its health table's counts read **unknown**
+  too.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
   today's date in UTC. A task's verdict says it is unavailable when Qivo
   cannot read the owner's other open work in one request. A row of a task

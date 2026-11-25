@@ -127,24 +127,22 @@ const paused = (n: number) => (snap: Snapshot) => {
 }
 
 describe('a long list on another view', () => {
-  it("shows the first batch of each of the Overview's lists at once, and the next on Load more", async () => {
+  it("shows the first 20 rows of the Overview's Needs attention at once, and 20 more on Load more", async () => {
     const board = await loadBoard(network, paused(LONG))
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
     >[0]['actions']
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
-    // every task is in both lists, which show a batch of 10 each, with
-    // nothing left to mount in slices
-    expect(count('[data-ovrow]')).toBe(10)
-    expect(count('[data-atrisk]')).toBe(10)
+    // every task is overdue and paused, a row each, with nothing left to
+    // mount in slices
+    expect(count('[data-need]')).toBe(20)
     await finish()
-    expect(count('[data-ovrow]')).toBe(10)
+    expect(count('[data-need]')).toBe(20)
     await act(async () =>
-      document.querySelector<HTMLElement>('[data-ov-list="paused"] [data-ov-more]')?.click(),
+      document.querySelector<HTMLElement>('[data-ov-needs] [data-ov-more]')?.click(),
     )
-    expect(count('[data-ovrow]')).toBe(20)
-    expect(count('[data-atrisk]')).toBe(10)
+    expect(count('[data-need]')).toBe(40)
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
@@ -203,13 +201,13 @@ describe('an Overview row', () => {
       typeof Overview
     >[0]['actions']
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
-    const row = () => document.querySelector<HTMLElement>('[data-ovrow]')
+    const row = () => document.querySelector<HTMLElement>('[data-need] [data-focus-key="row"]')
     const before = row()
     expect(before?.closest('[data-card-live]')).toBeNull()
     await act(async () => before?.focus())
-    // the live row's button carries its tooltip, so it is a new element
+    // the live row mounts its Reassign picker's popover, and focus stays on
+    // the row's button
     expect(row()?.closest('[data-card-live]')).not.toBeNull()
-    expect(row()).not.toBe(before)
     expect(document.activeElement).toBe(row())
   })
 })
@@ -905,14 +903,14 @@ describe("the Overview's group health", () => {
       typeof Overview
     >[0]['actions']
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
-    expect(count('[data-ov-strip]')).toBe(1)
-    expect(count('[data-ovcard]')).toBe(10)
+    expect(count('[data-ov-head]')).toBe(1)
+    expect(count('[data-ov-sub]')).toBe(10)
     for (const rows of [20, 30]) {
       await act(async () =>
-        document.querySelector<HTMLButtonElement>('[data-ov-health-more]')?.click(),
+        document.querySelector<HTMLButtonElement>('[data-ov-subs-more]')?.click(),
       )
-      expect(count('[data-ovcard]')).toBe(rows)
+      expect(count('[data-ov-sub]')).toBe(rows)
     }
-    expect(count('[data-ov-health-more]')).toBe(0)
+    expect(count('[data-ov-subs-more]')).toBe(0)
   })
 })

@@ -66,7 +66,15 @@
      answer. A Load more that fails goes back to the rows it showed, asking
      their arguments again so they keep updating, and offers Retry. Where
      those rows fail too, the table shows its error, whose Try again asks
-     it afresh. */
+     it afresh.
+   - A project or sub-project's page (`page` 'status') asks the summary,
+     the health table and the Needs attention list (overview.needs), and
+     no delays or lists; My view's page ('classic') asks the summary, the
+     delays, the two lists and the health table. The Needs attention list
+     is one read of its first rows of the kind the page shows
+     (`watchNeeds`), with Load more, a kept answer and a failed Load more's
+     Retry by the health table's rules, NEEDS_FIRST rows at first and
+     NEEDS_STEP more each time. */
 
 import { ConvexError, type Value } from 'convex/values'
 import type {
@@ -78,6 +86,7 @@ import type {
   RiskAnswer,
   SummaryAnswer,
 } from '../../convex/lib/overview'
+import type { NeedsAnswer, NeedsFilter } from '../../convex/lib/overviewNeeds'
 
 /** The rows one batch holds, the page's Load more step
     (convex/lib/overview.ts OVERVIEW.batch, pinned by
@@ -97,10 +106,22 @@ export const LIST_ROWS = 50
     3 + 2 * LIST_READS reads. */
 export const LIST_READS = 5
 
+/** The Needs attention list's first rows and its Load more step
+    (convex/lib/overviewNeeds.ts NEEDS). */
+export const NEEDS_FIRST = 20
+export const NEEDS_STEP = 20
+
 /** The Overview's two lists. */
 export type ListKind = 'attention' | 'paused'
-/** The Overview's five queries (convex/overview.ts). */
-export type OverviewQuery = 'summary' | 'risk' | ListKind | 'health'
+/** The Overview's six queries (convex/overview.ts). */
+export type OverviewQuery = 'summary' | 'risk' | ListKind | 'health' | 'needs'
+
+/** Which Overview page asks: a project or sub-project's ('status') or My
+    view's ('classic'). */
+export type OverviewPage = 'status' | 'classic'
+
+/** The Needs attention list the page asks for: the kind it shows. */
+export type NeedsAsk = { kind: NeedsFilter }
 
 /** The health table the page asks for: the column it sorts by, the
     direction and the search, trimmed, '' for none. */
@@ -148,6 +169,7 @@ export function overviewArgs(
   cursor: string | null = null,
   end: string | null = null,
   table: HealthAsk | null = null,
+  needs: (NeedsAsk & { limit: number }) | null = null,
 ): Record<string, Value> {
   const scope = scopeArgs(base.scope)
   const at = {
@@ -163,6 +185,16 @@ export function overviewArgs(
       return { scope, ...clockArgs(base.clock), ...at }
     case 'paused':
       return { scope, ...at }
+    case 'needs': {
+      const n = needs ?? { kind: 'all', limit: NEEDS_FIRST }
+      const at = base.scope.kind === 'project' ? base.scope : { org_id: '', project_id: '' }
+      return {
+        scope: { org_id: at.org_id, project_id: at.project_id },
+        ...clockArgs(base.clock),
+        kind: n.kind,
+        limit: n.limit,
+      }
+    }
     case 'health': {
       const t = table ?? { sort: 'late', dir: 'desc', search: '', limit: OVERVIEW_BATCH }
       return {
@@ -289,6 +321,20 @@ export type HealthView = {
   moreFailed: boolean
 } | null
 
+/** What the Needs attention list shows, by the health table's rules
+    (HealthView): its answer, or nothing (null) before the first one for
+    the scope and clock asked now. */
+export type NeedsView = {
+  value?: NeedsAnswer
+  error?: unknown
+  /** the kind and rows the answer or the error shown answers */
+  ask: NeedsAsk & { limit: number }
+  current: boolean
+  kept: boolean
+  more: 'ready' | 'loading' | null
+  moreFailed: boolean
+} | null
+
 /** What the Overview's reads hold for the page. */
 export type OverviewView = {
   /** the Overview the reads are for, null for none */
@@ -298,6 +344,7 @@ export type OverviewView = {
   attention: ListView
   paused: ListView
   health: HealthView
+  needs: NeedsView
 }
 
 type OkList = Extract<ListAnswer, { state: 'ok' }>
@@ -360,6 +407,22 @@ const codeOf = (error: unknown): string | undefined =>
 const SUMMARY_SLOT = 'overview:summary'
 const RISK_SLOT = 'overview:risk'
 const HEALTH_SLOT = 'overview:health'
+const NEEDS_SLOT = 'overview:needs'
+
+/** An answer of first rows with Load more: its rows, how many there are
+    and the most one answer holds. */
+type Limited = { state: string; rows?: readonly unknown[]; total?: number; most?: number }
+
+/** What a limited read shows, before the page's own names for it. */
+type LimitedView<Ask, Answer> = {
+  value?: Answer
+  error?: unknown
+  ask: Ask & { limit: number }
+  current: boolean
+  kept: boolean
+  more: 'ready' | 'loading' | null
+  moreFailed: boolean
+} | null
 
 /* Whether two health tables ask the same. */
 const sameTable = (a: HealthTable | null, b: HealthTable | null) =>
@@ -380,16 +443,8 @@ export function createOverviewReads(transport: OverviewTransport) {
     attention: emptyList('attention'),
     paused: emptyList('paused'),
   }
-  // the health table the page asks for (null for none), how many rows it
-  // asks for and its Try again count
-  let table: HealthTable | null = null
-  let limit = OVERVIEW_BATCH
-  let healthTries = 0
-  // the last answer the table showed, with the Overview and the table
-  // arguments it answered
-  let shownHealth: { base: string; ask: HealthAsk; value: HealthAnswer } | null = null
-  // a Load more that failed: the limit it asked for, which Retry asks again
-  let failedMore: number | null = null
+  // which page asks: its reads (OverviewPage)
+  let page: OverviewPage = 'classic'
 
   function emptyList(kind: ListKind): List {
     return { kind, key: null, shown: [], swaps: [], dropped: false, restarted: null, failed: false }
@@ -644,123 +699,211 @@ export function createOverviewReads(transport: OverviewTransport) {
       do {
         again = false
         for (const list of Object.values(lists)) settleList(list)
-        settleHealth()
+        health.settle()
+        needs.settle()
       } while (again)
     } finally {
       settling = false
     }
   }
 
-  /** The health read's arguments now, null where it asks for none. */
-  const healthKey = () =>
-    base === null || table === null
-      ? null
-      : JSON.stringify(overviewArgs('health', base, null, null, { ...table, limit }))
+  /**
+   * One read of an answer's first rows with Load more, as the health table
+   * and the Needs attention list take theirs (the module header): what the
+   * page asks (`ask`, null for none), how many rows, `first` at first and
+   * `step` more for each Load more up to the answer's `most`, its Try again
+   * count, the last answer it showed for the Overview and the arguments it
+   * answered, and a Load more that failed, whose Retry asks it again.
+   */
+  function limitedRead<Ask, Answer extends Limited>(o: {
+    slot: string
+    query: OverviewQuery
+    first: number
+    step: number
+    same: (a: Ask, b: Ask) => boolean
+    args: (at: OverviewBase, ask: Ask, limit: number) => Record<string, Value>
+  }) {
+    let ask: Ask | null = null
+    let limit = o.first
+    let tries = 0
+    let shown: { base: string; ask: Ask; limit: number; value: Answer } | null = null
+    let failedMore: number | null = null
+    const same = (a: Ask | null, b: Ask | null) => a !== null && b !== null && o.same(a, b)
 
-  /** Registers the health read as the reads stand: live while asking with
-      a table. */
-  const watchHealth = () =>
-    transport.watch(HEALTH_SLOT, 'health', asking ? healthKey() : null, healthTries)
+    /** The read's arguments now, null where it asks for none. */
+    const key = () =>
+      base === null || ask === null ? null : JSON.stringify(o.args(base, ask, limit))
 
-  /** Takes the health read's news in: an answer for the table asked now is
-      the one it shows, and a Load more that failed goes back to the rows
-      it showed, asking their arguments again. Where those rows fail too,
-      it forgets the Load more, so the table shows its error and Try again
-      asks it afresh. */
-  function settleHealth() {
-    const key = healthKey()
-    if (key === null || baseKey === null || table === null) return
-    const held = transport.read(HEALTH_SLOT)
-    if (held.key !== key) return
-    if (held.error === undefined) {
-      if (held.value !== undefined)
-        shownHealth = { base: baseKey, ask: { ...table, limit }, value: held.value as HealthAnswer }
-      return
-    }
-    // the rows a failed Load more went back to failed as well: while it is
-    // set, the table asks those rows' arguments
-    if (failedMore !== null) {
-      failedMore = null
-      return
-    }
-    const before = shownHealth
-    if (
-      before !== null &&
-      before.base === baseKey &&
-      sameTable(before.ask, table) &&
-      before.ask.limit < limit
-    ) {
-      failedMore = limit
-      limit = before.ask.limit
-      watchHealth()
-    }
-  }
+    /** Registers the read as the reads stand: live while asking. */
+    const watch = () => transport.watch(o.slot, o.query, asking ? key() : null, tries)
 
-  /** What the health table shows (HealthView). */
-  function healthView(): HealthView {
-    const key = healthKey()
-    if (key === null || table === null) return null
-    const held = transport.read(HEALTH_SLOT)
-    const ask = { ...table, limit }
-    const more = (value: HealthAnswer, pressed: boolean): NonNullable<HealthView>['more'] => {
-      if (failedMore !== null) return null
-      if (pressed) return 'loading'
-      return value.state === 'ok' &&
-        value.rows.length < value.total &&
-        value.rows.length < value.most
-        ? 'ready'
-        : null
+    /** Takes the read's news in: an answer for the arguments asked now is
+        the one it shows, and a Load more that failed goes back to the rows
+        it showed, asking their arguments again. Where those rows fail too,
+        it forgets the Load more, so the read shows its error and Try again
+        asks it afresh. */
+    function settleRead() {
+      const now = key()
+      if (now === null || baseKey === null || ask === null) return
+      const held = transport.read(o.slot)
+      if (held.key !== now) return
+      if (held.error === undefined) {
+        if (held.value !== undefined)
+          shown = { base: baseKey, ask, limit, value: held.value as Answer }
+        return
+      }
+      if (failedMore !== null) {
+        failedMore = null
+        return
+      }
+      if (shown !== null && shown.base === baseKey && same(shown.ask, ask) && shown.limit < limit) {
+        failedMore = limit
+        limit = shown.limit
+        watch()
+      }
     }
-    if (held.key === key && held.value !== undefined) {
-      const value = held.value as HealthAnswer
+
+    /** What the read shows. */
+    function view(): LimitedView<Ask, Answer> {
+      const now = key()
+      if (now === null || ask === null) return null
+      const held = transport.read(o.slot)
+      const asked = { ...ask, limit }
+      const more = (value: Answer, pressed: boolean): 'ready' | 'loading' | null => {
+        if (failedMore !== null) return null
+        if (pressed) return 'loading'
+        const rows = value.rows?.length ?? 0
+        return value.state === 'ok' && rows < (value.total ?? 0) && rows < (value.most ?? 0)
+          ? 'ready'
+          : null
+      }
+      if (held.key === now && held.value !== undefined) {
+        const value = held.value as Answer
+        return {
+          value,
+          ask: asked,
+          current: held.current,
+          kept: false,
+          more: more(value, false),
+          moreFailed: failedMore !== null,
+        }
+      }
+      // the last answer shown for this scope and clock, and whether the
+      // arguments asked now are its own with more rows (a Load more)
+      const before = shown !== null && shown.base === baseKey ? shown : null
+      const sameAsk = before !== null && same(before.ask, ask)
+      const pressed = sameAsk && before !== null && before.limit < limit
+      const keptAsk = before === null ? asked : { ...before.ask, limit: before.limit }
+      if (held.key === now && held.error !== undefined)
+        // a Load more that failed shows the rows before it from the first
+        // render, as settleRead takes the read back to them; any other
+        // error is the read's own, also where the rows a failed Load more
+        // went back to failed, which settleRead then forgets
+        return pressed && before !== null
+          ? {
+              value: before.value,
+              ask: keptAsk,
+              current: false,
+              kept: false,
+              more: null,
+              moreFailed: true,
+            }
+          : {
+              error: held.error,
+              ask: asked,
+              current: held.current,
+              kept: false,
+              more: null,
+              moreFailed: false,
+            }
+      // waiting: the last answer shown for this scope and clock, which
+      // offers Load more only where it answers what is asked now, so a press
+      // never raises the rows of another sort, search or kind on its way
+      if (before === null) return null
+      const exact = sameAsk && before.limit === limit
       return {
-        value,
-        table: ask,
-        current: held.current,
-        kept: false,
-        more: more(value, false),
+        value: before.value,
+        ask: keptAsk,
+        current: false,
+        kept: !exact,
+        more: exact || pressed ? more(before.value, pressed) : null,
         moreFailed: failedMore !== null,
       }
     }
-    // the last answer shown for this scope and clock, and whether the
-    // arguments asked now are its table with more rows (a Load more)
-    const before = shownHealth !== null && shownHealth.base === baseKey ? shownHealth : null
-    const same = before !== null && sameTable(before.ask, ask) && before.ask.limit === ask.limit
-    const pressed = before !== null && sameTable(before.ask, ask) && before.ask.limit < ask.limit
-    if (held.key === key && held.error !== undefined)
-      // a Load more that failed shows the rows before it from the first
-      // render, as settleHealth takes the read back to them; any other
-      // error is the table's, also where the rows a failed Load more went
-      // back to failed, which settleHealth then forgets
-      return pressed && before !== null
-        ? {
-            value: before.value,
-            table: before.ask,
-            current: false,
-            kept: false,
-            more: null,
-            moreFailed: true,
-          }
-        : {
-            error: held.error,
-            table: ask,
-            current: held.current,
-            kept: false,
-            more: null,
-            moreFailed: false,
-          }
-    // waiting: the last answer shown for this scope and clock, which offers
-    // Load more only where it answers the table asked now, so a press never
-    // raises the rows of a sort or search on its way
-    if (before === null) return null
+
     return {
-      value: before.value,
-      table: before.ask,
-      current: false,
-      kept: !same,
-      more: same || pressed ? more(before.value, pressed) : null,
-      moreFailed: failedMore !== null,
+      watch,
+      settle: settleRead,
+      view,
+      /** Asks for `next` (null for none), the first rows again where it
+          changed. Answers whether it changed. */
+      set(next: Ask | null): boolean {
+        if (next === null ? ask === null : same(next, ask)) return false
+        limit = o.first
+        failedMore = null
+        ask = next
+        watch()
+        return true
+      },
+      /** Load more: `step` more rows, at most the answer's `most`, keeping
+          the rows shown until they answer. */
+      more() {
+        const v = view()
+        if (v?.more !== 'ready' || v.value?.state !== 'ok') return
+        limit = Math.min(limit + o.step, v.value.most ?? limit)
+        watch()
+      },
+      /** Asks afresh (Try again), or after a Load more that failed, that
+          Load more again (Retry). */
+      retry() {
+        if (failedMore !== null) {
+          limit = failedMore
+          failedMore = null
+        }
+        tries++
+        watch()
+      },
+      /** Forgets what the page asked, as for a new scope. */
+      forget() {
+        ask = null
+        limit = o.first
+        failedMore = null
+      },
+      /** Forgets everything without asking the store. */
+      clear() {
+        ask = null
+        limit = o.first
+        tries = 0
+        shown = null
+        failedMore = null
+      },
     }
+  }
+
+  const health = limitedRead<HealthTable, HealthAnswer>({
+    slot: HEALTH_SLOT,
+    query: 'health',
+    first: OVERVIEW_BATCH,
+    step: OVERVIEW_BATCH,
+    same: (a, b) => sameTable(a, b),
+    args: (at, table, limit) => overviewArgs('health', at, null, null, { ...table, limit }),
+  })
+
+  const needs = limitedRead<NeedsAsk, NeedsAnswer>({
+    slot: NEEDS_SLOT,
+    query: 'needs',
+    first: NEEDS_FIRST,
+    step: NEEDS_STEP,
+    same: (a, b) => a.kind === b.kind,
+    args: (at, ask, limit) => overviewArgs('needs', at, null, null, null, { ...ask, limit }),
+  })
+
+  /** What the health table shows (HealthView). */
+  function healthView(): HealthView {
+    const v = health.view()
+    if (v === null) return null
+    const { ask, ...rest } = v
+    return { ...rest, table: ask }
   }
 
   /** Registers every read as the reads stand. */
@@ -773,8 +916,10 @@ export function createOverviewReads(transport: OverviewTransport) {
         attempt,
       )
     figure(SUMMARY_SLOT, 'summary')
-    figure(RISK_SLOT, 'risk')
-    watchHealth()
+    if (page === 'classic') figure(RISK_SLOT, 'risk')
+    else transport.watch(RISK_SLOT, 'risk', null, attempt)
+    health.watch()
+    needs.watch()
     for (const list of Object.values(lists)) {
       for (const b of list.shown) watchBatch(list, b)
       for (const s of list.swaps) for (const b of s.to) watchBatch(list, b)
@@ -887,11 +1032,16 @@ export function createOverviewReads(transport: OverviewTransport) {
     attempt = 0
     lists.attention = emptyList('attention')
     lists.paused = emptyList('paused')
-    table = null
-    limit = OVERVIEW_BATCH
-    healthTries = 0
-    shownHealth = null
-    failedMore = null
+    page = 'classic'
+    health.clear()
+    needs.clear()
+  }
+
+  /** Releases list `list`'s reads, which `page` 'status' asks none of. */
+  function dropList(list: List) {
+    for (const b of list.shown) transport.release(b.slot)
+    for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
+    Object.assign(list, emptyList(list.kind))
   }
 
   return {
@@ -900,9 +1050,10 @@ export function createOverviewReads(transport: OverviewTransport) {
         held. `by` names the mounted page: one that leaves after the next
         one asked stops nothing. A new `tries` (the page's Try again) asks
         the summary and the delays afresh. A new scope forgets the health
-        table, so the health read asks nothing until the page registers
-        the new scope's table (watchTable). */
-    watch(next: OverviewBase | null, by: number, tries: number) {
+        table and the Needs attention list, so their reads ask nothing until
+        the page registers the new scope's (watchTable, watchNeeds). `as`
+        says which page asks, and so which reads (OverviewPage). */
+    watch(next: OverviewBase | null, by: number, tries: number, as: OverviewPage = 'classic') {
       if (next === null && by !== owner) return
       owner = by
       if (next === null) {
@@ -912,7 +1063,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         return
       }
       const key = overviewKey(next)
-      const sameAsk = asking && key === baseKey && tries === attempt
+      const sameAsk = asking && key === baseKey && tries === attempt && as === page
       if (sameAsk) return
       // a new scope asks no health read until the page registers its table
       // in the same commit, as App mounts the page anew for each scope with
@@ -920,17 +1071,22 @@ export function createOverviewReads(transport: OverviewTransport) {
       // old one's; a new clock keeps the table and its rows
       if (
         base === null ||
+        as !== page ||
         JSON.stringify(scopeArgs(base.scope)) !== JSON.stringify(scopeArgs(next.scope))
       ) {
-        table = null
-        limit = OVERVIEW_BATCH
-        failedMore = null
+        health.forget()
+        needs.forget()
       }
       attempt = tries
       base = next
       baseKey = key
       asking = true
+      page = as
       for (const list of Object.values(lists)) {
+        if (page === 'status') {
+          dropList(list)
+          continue
+        }
         const listKey = listKeyOf(list.kind, next)
         if (list.key !== listKey) {
           list.key = listKey
@@ -948,32 +1104,35 @@ export function createOverviewReads(transport: OverviewTransport) {
         starts again at the first rows. */
     watchTable(next: HealthTable | null, by: number) {
       if (by !== owner) return
-      if (next === null ? table === null : sameTable(next, table)) return
-      // a new sort or search starts again at the first rows
-      limit = OVERVIEW_BATCH
-      failedMore = null
-      table = next
-      watchHealth()
-      settle()
+      if (health.set(next)) settle()
     },
     /** Load more on the health table: asks OVERVIEW_BATCH more rows, at most
         the answer's `most`, keeping the rows shown until they answer. */
     moreHealth() {
-      const view = healthView()
-      if (view?.more !== 'ready' || view.value?.state !== 'ok') return
-      limit = Math.min(limit + OVERVIEW_BATCH, view.value.most)
-      watchHealth()
+      health.more()
       settle()
     },
     /** Asks the health table afresh (its Try again), or after a Load more
         that failed, that Load more again (its Retry). */
     retryHealth() {
-      if (failedMore !== null) {
-        limit = failedMore
-        failedMore = null
-      }
-      healthTries++
-      watchHealth()
+      health.retry()
+      settle()
+    },
+    /** Asks for the Needs attention list's kind `next` (null for none), for
+        the page `by` names, as watchTable takes a table: a new kind starts
+        again at the first rows. */
+    watchNeeds(next: NeedsAsk | null, by: number) {
+      if (by !== owner) return
+      if (needs.set(next)) settle()
+    },
+    /** Load more on the Needs attention list: NEEDS_STEP more rows. */
+    moreNeeds() {
+      needs.more()
+      settle()
+    },
+    /** Asks the Needs attention list afresh, or a failed Load more again. */
+    retryNeeds() {
+      needs.retry()
       settle()
     },
     /** Takes the reads' news in: the store calls it after each delivery of
@@ -1025,6 +1184,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         attention: listView(lists.attention),
         paused: listView(lists.paused),
         health: healthView(),
+        needs: needs.view(),
       }
     },
     /** Whether view slot `slot` is one of the Overview's. */
@@ -1034,6 +1194,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       transport.release(SUMMARY_SLOT)
       transport.release(RISK_SLOT)
       transport.release(HEALTH_SLOT)
+      transport.release(NEEDS_SLOT)
       for (const list of Object.values(lists)) {
         for (const b of list.shown) transport.release(b.slot)
         for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)

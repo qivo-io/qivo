@@ -38,7 +38,7 @@
       "slug": "the-overview-project-health-at-a-glance",
       "title": "The Overview. Project health at a glance",
       "order": 5,
-      "description": "Overview summarizes the selected project, sub-project or My view from figures Qivo counts on the server. Its opening sentence reports overdue tasks, projected…"
+      "description": "Overview comes first in the view switch of a project, sub-project or My view. In a project it shows what is left and what needs attention: overdue, projected to miss,…"
     },
     {
       "file": "the-board.md",

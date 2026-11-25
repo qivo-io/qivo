@@ -66,6 +66,7 @@ html[data-appearance]
     .qivo-empty-state,
     [data-ov-summary],
     [data-ov-strip],
+    [data-ov-head],
     .overview-section,
     .settings-navigation,
     .settings-content-frame,

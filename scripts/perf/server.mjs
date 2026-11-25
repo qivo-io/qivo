@@ -2516,6 +2516,7 @@ const read = (name, args = {}) => {
     case 'overview:attention':
     case 'overview:paused':
     case 'overview:health':
+    case 'overview:needs':
       if (name === 'overview:health' && forcedOverview.healthError)
         throw new Error('the health table fails, as overview=health-error asks')
       return overviewStandIn(snapshot, name.slice('overview:'.length), args, {

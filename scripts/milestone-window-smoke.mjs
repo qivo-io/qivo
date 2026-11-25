@@ -263,7 +263,7 @@ try {
   // the row, two weeks on, has at most two before it, as a project holds one
   // milestone a week
   await page
-    .locator('[data-workspace-view] [data-overview-milestones] .overview-milestone', {
+    .locator('[data-workspace-view] [data-overview-milestones] [data-overview-milestone]', {
       hasText: `${prefix} B`,
     })
     .click()

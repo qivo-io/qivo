@@ -429,15 +429,15 @@ describe('people the workspace does not hold, on each page', () => {
   )
 
   it(
-    'names no lead for an Overview health row whose project the workspace cannot place',
+    "names no lead for a row of My view's health table whose project the workspace cannot place",
     async () => {
       const { board, names } = await load(
         (snap) => {
           spread(1)(snap)
-          const two = snap.projects.find((p) => p.id === 'two')
-          if (two) two.lead_id = GINA
+          const plan = snap.projects.find((p) => p.id === 'plan')
+          if (plan) plan.lead_id = GINA
         },
-        { scope: 'plan' },
+        { scope: 'mine' },
       )
       // a row of a project the workspace does not hold, led by Hal
       board.server.overview.edit = (query, answer) => {

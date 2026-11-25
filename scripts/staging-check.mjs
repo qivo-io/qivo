@@ -84,9 +84,9 @@
  * later search for the run tag lists them. It makes a
  * sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
- * the deployment's answers (overview.summary, risk, attention and paused),
- * whose figures, sentence and lists must count exactly those two, then
- * opens its project's Overview, whose health table (overview.health) must
+ * the deployment's answers (overview.summary and needs), whose figures,
+ * sentence and Needs attention list must count exactly those two, then
+ * opens its project's Overview, whose Sub-projects (overview.health) must
  * hold that sub-project's row with those two tasks' figures, and opens the
  * sub-project's Board from the row (ui/overview). It records the frames the
  * page sends on its sync socket and opens its project's Board, a fixture
@@ -175,8 +175,8 @@
  * search must also answer those two rows alone to the store's read for
  * the run tag, and a token search that matches nothing must say so
  * (ui/mcp-access-lists). At phone size every closed dropdown of the Board,
- * the Overviews, the Roadmap and two Settings pages must show its chosen
- * text (ui/phone-selects). It makes a
+ * My view's Overview, the Roadmap and two Settings pages must show its
+ * chosen text (ui/phone-selects). It makes a
  * project of its own with two sub-projects, finds it by its run tag in
  * Settings › Projects from the deployment's list (projectSettings.projects)
  * and opens its sub-projects (subProjects), archives one sub-project alone
@@ -7184,11 +7184,11 @@ export const PHONE_SELECTS_STEP = 'ui/phone-selects'
 
 /** The pages whose closed dropdowns the step reads, as paths under the
  *  organization's address, for the run project numbered `num`. `press`
- *  names a control the step presses first, where the page has it. */
+ *  names a control the step presses first, where the page has it. A
+ *  project's Overview holds no dropdown, so it is not among them. */
 export const phoneSelectPages = (num) => [
   { name: 'the Board', path: `board/p/${num}` },
   { name: "My view's Overview", path: 'overview/mine' },
-  { name: "the project's Overview", path: `overview/p/${num}` },
   { name: 'the Roadmap', path: `roadmap/p/${num}`, press: 'Task schedule' },
   { name: 'Settings › Users', path: 'settings/org-users' },
   { name: 'Settings › General', path: 'settings/org-general' },
@@ -8573,38 +8573,32 @@ async function notificationDeliveryCheck() {
  *  so no projection reads anyone's work. */
 export const OVERVIEW_OVERDUE_DAYS = 70
 export const OVERVIEW_EXPECTED = {
-  completion: '0 of 2 tasks done',
-  paused: '1',
+  tasksLeft: 'Tasks left2',
   sentence: '1 task is overdue.',
+  kinds: ['overdue', 'paused'],
 }
 
-/** What the run's sub-project's row in its project's health table shows
- *  (overviewCheck), cell by cell (data-ovcell): no task done of two, the
- *  paused one, no planned end passed and no remaining hours. Its Late
- *  cell reads 1 for the overdue task where the sub-project tracks delay and
- *  is blank where it does not, which the REST answer's track_delay says. */
-export const OVERVIEW_HEALTH_EXPECTED = {
-  progress: '0%',
-  done: '0/2',
-  left: '—',
-  behind: '—',
-  paused: '1',
-}
+/** What the run's sub-project's row in its project's Sub-projects says
+ *  (overviewCheck), as its accessible name: two tasks left, no remaining
+ *  hours, no task behind plan and the paused one. It counts the overdue
+ *  task as Late where the sub-project tracks delay, which the REST
+ *  answer's track_delay says, and none where it does not. */
+export const overviewSubLabel = (name, lead, tracksDelay) =>
+  `${name}, ${lead === null ? 'No lead assigned' : `${lead}, Lead`}, 2 tasks left, 0 hours left, ${tracksDelay ? 1 : 0} late, 0 behind plan, 1 paused`
 
 /** The Overview of a sub-project the run makes under its project M, with an
  *  overdue task and a paused one, opens on the deployment's answers
- *  (convex/overview.ts): the root reaches its ok state, Completion reads 0
- *  of 2 tasks done, Paused 1, the sentence names the one overdue task, the
- *  At-risk list holds the overdue task marked overdue and the Paused list
- *  the paused one, both at their end. Then M's own Overview answers its
- *  health table, whose row for the sub-project reads
- *  OVERVIEW_HEALTH_EXPECTED, among M's few sub-projects, which all fit its
- *  first 10 rows, and a press on the row's name opens the sub-project's
- *  Board on the deployment's answer, which leaves the run's saved view on a
- *  Board for the steps after it. It makes the sub-project and its tasks
- *  over REST and pushes the tasks to run.created, so the cleanup, which
- *  deletes M, removes them, and only reads in the app. It runs before the
- *  run archives M. */
+ *  (convex/overview.ts): the root reaches its ok state, Tasks left reads 2,
+ *  the sentence names the one overdue task, and Needs attention holds the
+ *  overdue task under Overdue and then the paused one under Paused. Then
+ *  M's own Overview answers its Sub-projects, whose row for the
+ *  sub-project reads overviewSubLabel, among M's few sub-projects, which
+ *  all fit its first 10 rows, and a press on the row opens the
+ *  sub-project's Board on the deployment's answer, which leaves the run's
+ *  saved view on a Board for the steps after it. It makes the sub-project
+ *  and its tasks over REST and pushes the tasks to run.created, so the
+ *  cleanup, which deletes M, removes them, and only reads in the app. It
+ *  runs before the run archives M. */
 async function overviewCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -8632,33 +8626,28 @@ async function overviewCheck() {
     const root = app.locator('[data-workspace-view] [data-overview-root][data-overview-state="ok"]')
     await root.waitFor({ timeout: 60_000 })
     const text = async (css) => ((await root.locator(css).first().textContent()) ?? '').trim()
-    const lists = async () =>
-      (await root.locator('[data-ov-list][data-ov-list-end]').count()) === 2 &&
-      (await root.locator('[data-ov-list][data-ov-list-state="ok"]').count()) === 2
-    expect(await until(lists), 'the lists did not reach their end')
+    await root.locator('[data-ov-needs] [data-ov-needs-state="ok"]').waitFor({ timeout: 60_000 })
+    eq(await text('[data-ov-figure="tasks-left"]'), OVERVIEW_EXPECTED.tasksLeft, 'Tasks left')
+    eq(await text('[data-ov-sentence]'), OVERVIEW_EXPECTED.sentence, 'the sentence')
+    const rows = root.locator('[data-ov-needs] [data-need]')
     expect(
-      (await text('[data-ov-strip] [data-ov-figure="completion"]')).includes(
-        OVERVIEW_EXPECTED.completion,
-      ),
-      `Completion does not read ${OVERVIEW_EXPECTED.completion}`,
+      await until(async () => (await rows.count()) === OVERVIEW_EXPECTED.kinds.length),
+      'Needs attention does not hold the two tasks',
     )
-    const paused = root.locator('[data-ov-strip] [data-ov-figure="paused"] .font-mono')
-    eq(((await paused.first().textContent()) ?? '').trim(), OVERVIEW_EXPECTED.paused, 'Paused')
-    eq(await text('[data-ov-summary]'), OVERVIEW_EXPECTED.sentence, 'the sentence')
-    const row = root.locator(`[data-ov-list="attention"] [data-atrisk]`)
-    eq(await row.count(), 1, 'At-risk rows')
-    eq(await row.first().getAttribute('data-risk'), 'overdue', "the At-risk row's marker")
-    expect(
-      ((await row.first().textContent()) ?? '').includes(late.title),
-      `the At-risk row is not ${late.key}`,
+    eq(
+      (await rows.evaluateAll((els) => els.map((el) => el.getAttribute('data-kind')))).join(', '),
+      OVERVIEW_EXPECTED.kinds.join(', '),
+      "the rows' kinds",
     )
-    const pausedRows = root.locator('[data-ov-list="paused"] [data-ovrow]')
-    eq(await pausedRows.count(), 1, 'Paused rows')
     expect(
-      ((await pausedRows.first().textContent()) ?? '').includes(held.title),
+      ((await rows.nth(0).textContent()) ?? '').includes(late.title),
+      `the Overdue row is not ${late.key}`,
+    )
+    expect(
+      ((await rows.nth(1).textContent()) ?? '').includes(held.title),
       `the Paused row is not ${held.key}`,
     )
-    // M's health table: the sub-project's row among M's sub-projects
+    // M's Sub-projects: the sub-project's row among M's sub-projects
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`, {
       waitUntil: 'domcontentloaded',
     })
@@ -8666,30 +8655,28 @@ async function overviewCheck() {
       '[data-workspace-view] [data-overview-root][data-overview-state="ok"]',
     )
     await project.waitFor({ timeout: 60_000 })
-    const health = project.locator('[data-ov-health][data-ov-health-state="ok"]')
-    await health.waitFor({ timeout: 60_000 })
-    const healthRow = health.locator(`[data-ovcard="${sub.id}"]`)
+    const subRow = project.locator(`[data-ov-subs] [data-ov-sub="${sub.id}"]`)
     expect(
-      await until(async () => (await healthRow.count()) === 1),
-      `the health table holds no row for ${sub.name}`,
+      await until(async () => (await subRow.count()) === 1),
+      `Sub-projects holds no row for ${sub.name}`,
     )
-    const cell = async (name) =>
-      ((await healthRow.locator(`[data-ovcell="${name}"]`).first().textContent()) ?? '').trim()
-    for (const [name, want] of Object.entries({
-      ...OVERVIEW_HEALTH_EXPECTED,
-      late: sub.track_delay ? '1' : '—',
-    }))
-      eq(await cell(name), want, `the health row's ${name}`)
-    // the row's name opens the sub-project's Board
-    await healthRow.locator('button').first().click()
+    // the row names its lead once the lead's name has loaded
+    const label = overviewSubLabel(sub.name, sub.lead_name ?? null, sub.track_delay === true)
+    const said = async () => (await subRow.getAttribute('aria-label')) ?? ''
+    expect(
+      await until(async () => (await said()) === label),
+      `the sub-project's row reads "${await said()}", not "${label}"`,
+    )
+    // the row opens the sub-project's Board
+    await subRow.click()
     await app
       .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
       .waitFor({ timeout: 60_000 })
     expect(
       await until(async () => app.url().includes(`/board/p/${sub.num}`)),
-      `the health row did not open the Board of ${sub.name}`,
+      `the Sub-projects row did not open the Board of ${sub.name}`,
     )
-    return `opened the Overview of ${sub.name} on the deployment's answers, with ${late.key} overdue and ${held.key} paused, and its row in ${M.key}'s health table, which opened its Board`
+    return `opened the Overview of ${sub.name} on the deployment's answers, with ${late.key} overdue and ${held.key} paused, and its row in ${M.key}'s Sub-projects, which opened its Board`
   })
 }
 

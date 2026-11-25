@@ -455,6 +455,8 @@ export const shapeMilestone = (m: Row<'milestones'>) => ({
   id: m.id,
   name: m.name,
   week: isoToWeek(m.week),
+  // the stored day, which `week` floors on the reader's own week grid
+  day: m.week,
   project: m.project_id,
 })
 export type MilestoneVM = ReturnType<typeof shapeMilestone>

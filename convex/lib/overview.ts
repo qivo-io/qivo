@@ -220,9 +220,10 @@ export type SummaryAnswer =
        * page's empty notes */
       any_task: Figure<{ value: boolean }>
       /** the leaves by stored status, for Completion (done over all), In
-       * progress, In review and the status distribution, and the paused
-       * leaves */
-      counts: Figure<{ leaves: Record<IssueStatus, number>; paused: number }>
+       * progress, In review and the status distribution, the paused
+       * leaves, and the remaining hours of the leaves not Done in whole
+       * tenths, for Hours left */
+      counts: Figure<{ leaves: Record<IssueStatus, number>; paused: number; left_tenths: number }>
       /** the tasks, groups included, not done for the reader and due
        * before `day` */
       overdue: Figure<{ count: number }>
@@ -278,7 +279,7 @@ export type ListAnswer =
 
 /** A scope as one query reads it: its seats, by organization, and for a
  * project scope its selection. */
-type ScopeRead =
+export type ScopeRead =
   | { kind: 'project'; seat: ViewAccess; seats: ViewSeats; selection: Selection }
   | { kind: 'mine'; seats: ViewSeats }
 
@@ -316,7 +317,7 @@ async function scopeOf(
  * scope the caller does not hold or where a bound of the caller's own
  * access reads stopped a check, over_budget where the scope itself, or a
  * read no figure or batch answers for itself, did not fit. */
-async function overScope<A>(
+export async function overScope<A>(
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
   scope: OverviewScope,
@@ -527,7 +528,7 @@ export const newGroups = (): Groups => ({ known: noSubtasks(), facts: new Map() 
  * (firstSubtaskCheck), and with `facts` the group facts of the groups among
  * them. Each task is one the reader is shown, and the parent of one is a
  * group. */
-async function readGroups(
+export async function readGroups(
   ctx: QueryCtx,
   guard: ViewBudget,
   g: Groups,
@@ -546,7 +547,8 @@ async function readGroups(
 }
 
 /* Whether `t` is a group, once readGroups read it. */
-const isGroup = (g: Groups, t: Doc<'issues'>): boolean => isGroupKnown(g.known, t.id) === true
+export const isGroup = (g: Groups, t: Doc<'issues'>): boolean =>
+  isGroupKnown(g.known, t.id) === true
 
 /* Whether `t` belongs to the scope `at`: in a project scope every task of
  * the selection does; in My view one its seat's person owns by the Reviewer
@@ -556,7 +558,7 @@ const inScope = (at: ScopeRead, g: Groups, t: Doc<'issues'>): boolean =>
 
 /* Whether `t` is done for the reader: a leaf by its stored status, a group
  * by its group facts, which readGroups read. */
-const isDoneFor = (g: Groups, t: Doc<'issues'>): boolean =>
+export const isDoneFor = (g: Groups, t: Doc<'issues'>): boolean =>
   isGroup(g, t) ? g.facts.get(t.id)?.done === true : t.status === 'done'
 
 // --- any task and overdue ----------------------------------------------------------------
@@ -641,7 +643,7 @@ async function overdueCount(
  * lib/viewLoads.ts verdicts, which Team sync's agenda shares. */
 
 /* Whether project `p` tracks delay, as the app paints a verdict only there. */
-const tracks = (p: Doc<'projects'> | null): boolean => p?.track_delay === true
+export const tracks = (p: Doc<'projects'> | null): boolean => p?.track_delay === true
 
 /* The scope's tasks due on or after the day, in projects that track delay,
  * projected late; null where an owner's load could not be read. The loads
@@ -1371,10 +1373,10 @@ export async function readSummary(
           : await mineCounts(ctx, guard, at.seats)
       if (read === null) return { state: 'unavailable', reason: 'counting' }
       const sum = sumCounts(read.values())
-      return { state: 'ok', leaves: sum.leaves, paused: sum.paused }
+      return { state: 'ok', leaves: sum.leaves, paused: sum.paused, left_tenths: sum.left_tenths }
     })
     const any_task = await bounded(async () => {
-      if (counts.state === 'ok' && leafTotal({ ...counts, left_tenths: 0 }) > 0)
+      if (counts.state === 'ok' && leafTotal(counts) > 0)
         return { state: 'ok' as const, value: true }
       return {
         state: 'ok' as const,
@@ -1399,7 +1401,11 @@ export async function readSummary(
 }
 
 /* SummaryAnswer's counts figure. */
-type SummaryAnswerCounts = Figure<{ leaves: Record<IssueStatus, number>; paused: number }>
+type SummaryAnswerCounts = Figure<{
+  leaves: Record<IssueStatus, number>
+  paused: number
+  left_tenths: number
+}>
 
 /**
  * The projected delays of `scope` (RiskAnswer) on the client's day and

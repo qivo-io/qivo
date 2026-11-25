@@ -64,8 +64,21 @@ function dayStart(year: number, month: number, day: number): Date {
 
 /** First day of d's week — the org's week-start day at local midnight. */
 export function weekStartOf(d: Date): Date {
-  const dow = (d.getDay() - weekStart + 7) % 7 // days since the week started
+  return weekStartIn(d, weekStart)
+}
+
+/* First day of d's week for weeks that start on weekday `start` (Date#getDay
+   numbering), at local midnight. */
+function weekStartIn(d: Date, start: number): Date {
+  const dow = (d.getDay() - start + 7) % 7 // days since the week started
   return dayStart(d.getFullYear(), d.getMonth(), d.getDate() - dow)
+}
+
+/** The first day of the week that holds day `day` (YYYY-MM-DD) for weeks
+    that start on weekday `start` (Date#getDay numbering), whatever week
+    start the app's grid uses, as a day. */
+export function firstDayOfWeek(day: string, start: number): string {
+  return isoFromDate(weekStartIn(isoToDate(day), start))
 }
 
 function computeTimelineStart(now: Date): Date {

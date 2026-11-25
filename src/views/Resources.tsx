@@ -22,18 +22,11 @@ import { type CSSProperties, type Ref, useEffect, useMemo, useRef, useState } fr
 import { Avatar, Icon, Seg } from '../components/qivo'
 import { Button } from '../components/ui/button'
 import { personLabel } from '../components/usePeople'
-import {
-  fmtHours,
-  hasPlannableWeek,
-  issueLoadByPerson,
-  type LoadIssue,
-  loadTone,
-  pausedWeeksByPerson,
-} from '../lib/workload'
+import { fmtHours, hasPlannableWeek, loadTone } from '../lib/workload'
 import { P, type PersonView, type ScopeInfo } from '../store/planner'
-import type { OwnerItem } from '../store/viewDelay'
 import { CAPACITY_UNKNOWN, capacityOf } from './capacity'
 import { WeekLines } from './roadmap/WeekLines'
+import { type Figures, figuresOf } from './teamWeeks'
 import './Resources.css'
 
 /** A person's place in Team utilization: their id and organization, how
@@ -41,59 +34,6 @@ import './Resources.css'
     Viewer's capped calls (P.watchRoadmapTeam), and the person as P.person
     names them, kept in place while their details load. */
 export type TeamPerson = { id: string; org: string; rows: number; person: PersonView }
-
-/** What the strip knows of one person's weeks: still loading, unknown, or
-    the hours each shown week holds and the weeks with paused work. */
-type Figures =
-  | { state: 'waiting' }
-  | { state: 'unknown' }
-  | {
-      state: 'ok'
-      hours: Map<number, number>
-      paused: Set<number>
-      /** the work the figures spread, for a drag's spread again */
-      items: readonly OwnerItem[]
-    }
-
-/** Person `id`'s figures over the weeks `range` from their work `items`
-    (P.ownerItems), keeping, under This project, the work whose project
-    `inScope` keeps, and with the weeks of the tasks in `live` (by uuid)
-    replaced by their drafts. Work without a project, busy time the reader
-    cannot see, stays out. */
-function figuresOf(
-  id: string,
-  items: readonly OwnerItem[],
-  range: { from: number; to: number },
-  inScope: ((pid: string) => boolean) | undefined,
-  live?: Record<string, { start: number; end: number }>,
-): Extract<Figures, { state: 'ok' }> {
-  const issues: LoadIssue[] = []
-  for (const item of items) {
-    if (item.project === null) continue
-    const draft = item.uuid ? live?.[item.uuid] : undefined
-    issues.push({
-      owner: id,
-      project: item.project,
-      start: draft ? draft.start : item.start,
-      end: draft ? draft.end : item.end,
-      remaining: item.remaining,
-      remainingSet: item.remainingSet,
-      paused: item.paused,
-    })
-  }
-  const hours = new Map<number, number>()
-  issueLoadByPerson(issues, inScope, range)
-    .get(id)
-    ?.forEach((byProject, week) => {
-      let total = 0
-      byProject.forEach((h) => {
-        total += h
-      })
-      hours.set(week, total)
-    })
-  const paused = pausedWeeksByPerson(issues, inScope, range).get(id) ?? new Set<number>()
-  return { state: 'ok', hours, paused, items }
-}
 
 type Props = {
   /** the owners of the Roadmap's shown tasks that meet the window */
