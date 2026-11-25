@@ -1102,13 +1102,16 @@ function Roadmap({
     })
   }
   /** Session `s`'s task as the Roadmap's answer names it, while no note
-      takes the Roadmap's place, else undefined. Auto-fit places only this
-      task. One the answer no longer names, as after another person moved
-      it out of the selection, keeps the dates it has, and the session ends
+      takes the Roadmap's place and Hide Done in Roadmap does not hide it,
+      else undefined. Auto-fit places only this task. One the answer no
+      longer names, as after another person moved it out of the selection,
+      or one that became Done, keeps the dates it has, and the session ends
       below with a word (the session-gone effect), though another view may
       still hold the task (taskOf). */
-  const sessionTask = (s: PlanSession): IssueVM | undefined =>
-    cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
+  const sessionTask = (s: PlanSession): IssueVM | undefined => {
+    const it = cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
+    return it && !(hideDone && P.isDone(it)) ? it : undefined
+  }
   // The first fit of an unscheduled task, once an answer names the task.
   // While the owner's weekly hours are unknown (capacityFor), it waits
   // only while a read for the owner is on its way (hoursLoading). Once

@@ -1107,6 +1107,42 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     expect(datesSent('one-1')).toEqual([])
   })
+
+  it('fits no end for an unscheduled task that becomes Done as its owner’s load arrives', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        const one = snap.issues[0]
+        Reflect.deleteProperty(one, 'start_week')
+        Reflect.deleteProperty(one, 'end_week')
+        one.remaining_hours = 100
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    board.server.holdLoads = true
+    network.mutation.mockClear()
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { focusPlan: unscheduled })
+    await flush()
+    expect(planCard()?.textContent).toContain('Loading…')
+    const starter = { start_week: week(0), end_week: week(1) }
+    expect(datesSent('one-1')).toEqual([starter])
+    // the starter bar saved, and someone sets one-1 Done, which arrives with
+    // the first load
+    Object.assign(board.snapshot.issues[0], { ...starter, status: 'done' })
+    board.server.holdLoads = false
+    await board.deliver()
+    await settle()
+    await flush()
+    expect(datesSent('one-1')).toEqual([starter])
+    expect(planCard()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-1 is Done, and Done tasks are hidden on the Roadmap. Its dates stay as they were saved.',
+      'info',
+    )
+  })
 })
 
 describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
