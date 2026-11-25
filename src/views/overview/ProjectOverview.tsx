@@ -16,7 +16,15 @@
    shows a dash or "unknown" and why, never a number. The milestones are
    views/useScopeMilestones.ts's, as My view's Overview reads them. */
 
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -358,8 +366,9 @@ function useHeldFocus() {
       onFocus: () => {
         on.current = true
       },
-      onBlur: () => {
-        on.current = false
+      // a window that loses focus blurs the control and keeps it focused
+      onBlur: (e: FocusEvent) => {
+        if (document.activeElement !== e.target) on.current = false
       },
     },
     held: () => {
@@ -411,7 +420,7 @@ function NeedRow({
   /** focus entered the row, also its calendar or picker */
   onFocusIn: (handle: string, uuid: string) => void
   /** focus left an element of the row, for another one or for none */
-  onFocusOut: () => void
+  onFocusOut: (e: FocusEvent) => void
 }) {
   const it = modelOf(row)
   // the handle the row names its task by, as the task window and its focus
@@ -548,8 +557,9 @@ function NeedsPanel({
       ),
     }
   }
-  const focusOut = () => {
-    focused.current = null
+  // a window that loses focus blurs the row and keeps it focused
+  const focusOut = (e: FocusEvent) => {
+    if (document.activeElement !== e.target) focused.current = null
   }
   const was = focused.current
   useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () =>
