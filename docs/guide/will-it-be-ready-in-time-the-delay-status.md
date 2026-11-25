@@ -6,9 +6,9 @@ hours and owner's workload. Delay tracking highlights two warnings:
 - **Late**, in red. The projected finish is after the due week, or the
   exact due date has already passed.
 
-**On track** has no warning color. Finishing in the due week is not classed
-as Late, though the hover text of its roadmap due-date marker says that the
-schedule is tight.
+**On track** has no warning color. While the due date has not passed,
+finishing in the due week is not classed as Late, though the hover text of
+its roadmap due-date marker says that the schedule is tight.
 Done tasks have no delay verdict. Tasks without a plan or due date also have
 no verdict. A task with only a due date needs an owner and remaining hours
 for a projection; without them, it gets a warning only once overdue.
