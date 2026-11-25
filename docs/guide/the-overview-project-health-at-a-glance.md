@@ -36,7 +36,8 @@ name, not only the rows shown. Qivo works out every row on the server, so
 the table no longer waits for your browser to load every task. Select a row
 to open that sub-project's Board. Late, Behind plan and Paused show “—” when
 zero. Narrow desktop windows scroll horizontally; phones show sortable
-cards, 10 at a time. Past 200 sub-projects the table shows the first 200
+cards, 10 at a time, where a zero count reads 0. Past 200 sub-projects the
+table shows the first 200
 and asks you to search for the others.
 
 Late and Behind plan count tasks only where
