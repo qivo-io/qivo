@@ -346,4 +346,67 @@ describe('keyboard focus on a project Overview', { timeout: BOARD_TEST_TIMEOUT }
     expect(rows()[0]).toBe(second)
     expect(document.activeElement).toBe(open(second))
   })
+
+  it("moves focus into Needs attention after a teammate's change only where Load more or the row that went had it", async () => {
+    // 21 tasks need attention: the two overdue, the paused one and 18 more
+    const { board } = await overview((snap) => {
+      plan(snap)
+      for (let n = 5; n <= 22; n++)
+        snap.issues.push({ ...taskRow(snap, `p${n}`, 'todo', n), paused: true })
+    })
+    const task = (id: string) => board.snapshot.issues.find((t) => t.id === id)
+    const pause = async (paused: boolean, ...ids: string[]) => {
+      for (const id of ids) Object.assign(task(id) ?? {}, { paused })
+      await board.deliver()
+    }
+    expect(rows()).toHaveLength(20)
+    expect(document.activeElement).toBe(document.body)
+    await pause(false, 'p22')
+    expect(q('[data-ov-more]')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+    // focus went into the first row and out of the page again
+    await act(async () => rows()[0]?.querySelector<HTMLElement>('[data-focus-key="row"]')?.focus())
+    expect(document.activeElement?.closest('[data-need]')).toBe(rows()[0])
+    await act(async () => {
+      const active = document.activeElement
+      if (active instanceof HTMLElement) active.blur()
+    })
+    Object.assign(task('later') ?? {}, { due_date: day(30) })
+    await board.deliver()
+    expect(rows()).toHaveLength(19)
+    expect(document.activeElement).toBe(document.body)
+    // Load more back, with focus on it
+    await pause(true, 'p22', 'fine')
+    await act(async () => q('[data-ov-more]')?.focus())
+    await pause(false, 'p22', 'fine')
+    expect(q('[data-ov-more]')).toBeNull()
+    expect(document.activeElement).toBe(q('[data-ov-needs]'))
+  })
+
+  it("moves focus into Sub-projects after a teammate's change only where Load more had it", async () => {
+    // Plan's sub-projects: One and ten more
+    const { board } = await overview((snap) => {
+      plan(snap)
+      const base = snap.projects[0]
+      for (let n = 2; n <= 11; n++)
+        snap.projects.push({ ...base, id: `sub${n}`, key: `S${n}`, num: 10 + n, name: `Sub ${n}` })
+    })
+    const eleventh = board.snapshot.projects.find((p) => p.id === 'sub11')
+    const drop = async () => {
+      board.snapshot.projects = board.snapshot.projects.filter((p) => p !== eleventh)
+      await board.deliver()
+    }
+    expect(q('[data-ov-subs-more]')).not.toBeNull()
+    await drop()
+    expect(q('[data-ov-subs-more]')).toBeNull()
+    expect(document.querySelectorAll('[data-ov-sub]')).toHaveLength(10)
+    expect(document.activeElement).toBe(document.body)
+    // Load more back, with focus on it
+    if (eleventh) board.snapshot.projects.push(eleventh)
+    await board.deliver()
+    await act(async () => q('[data-ov-subs-more]')?.focus())
+    await drop()
+    expect(q('[data-ov-subs-more]')).toBeNull()
+    expect(document.activeElement).toBe(q('[data-ov-subs-state]'))
+  })
 })

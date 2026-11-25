@@ -347,6 +347,29 @@ function Tabs({
   )
 }
 
+/** Focus props for a control that a change can take away, and `held()`,
+    whether focus was on it when it went, which answers once. */
+function useHeldFocus() {
+  // React hears no blur from an element it removes while it has focus, so
+  // the flag stays set through the removal
+  const on = useRef(false)
+  return {
+    props: {
+      onFocus: () => {
+        on.current = true
+      },
+      onBlur: () => {
+        on.current = false
+      },
+    },
+    held: () => {
+      const was = on.current
+      on.current = false
+      return was
+    },
+  }
+}
+
 const modelOf = (row: NeedsRow): IssueVM | undefined =>
   P.viewTask(NEEDS_SLOT, row.id) ?? P.anyTask(P.handleNow(row.id, row.org_id, row.num))
 
@@ -379,6 +402,7 @@ function NeedRow({
   inProject,
   onOpen,
   onFocusIn,
+  onFocusOut,
 }: {
   row: NeedsRow
   day: string
@@ -386,6 +410,8 @@ function NeedRow({
   onOpen: (id: string) => void
   /** focus entered the row, also its calendar or picker */
   onFocusIn: (handle: string, uuid: string) => void
+  /** focus left an element of the row, for another one or for none */
+  onFocusOut: () => void
 }) {
   const it = modelOf(row)
   // the handle the row names its task by, as the task window and its focus
@@ -415,6 +441,7 @@ function NeedRow({
       ref={root}
       {...controls.rootProps}
       onFocusCapture={() => onFocusIn(handle, row.id)}
+      onBlurCapture={onFocusOut}
       className="pov-need"
       data-need={handle}
       data-kind={kind}
@@ -505,7 +532,7 @@ function NeedsPanel({
   const unknown = c !== undefined && c.all.state !== 'ok' ? c.all : null
   const rows = answer?.rows ?? []
   const listRoot = useRef<HTMLDivElement>(null)
-  // the row focus was in last, and where focus goes once a change takes it
+  // the row focus is in, and where focus goes once a change takes that row
   // out of the tab: the next row, else the one before, else the heading
   const focused = useRef<{ uuid: string; target: () => HTMLElement | null } | null>(null)
   const heading = () =>
@@ -521,15 +548,20 @@ function NeedsPanel({
       ),
     }
   }
+  const focusOut = () => {
+    focused.current = null
+  }
   const was = focused.current
   useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () =>
     focused.current ? focused.current.target() : null,
   )
   // Load more leaves at the end of the list or where its rows failed:
-  // focus it left nowhere goes to Retry, else to the list
-  useFocusWhenGone(
-    (needs?.more ?? null) !== null,
-    () => listRoot.current?.querySelector<HTMLElement>('[data-ov-needs-retry]') ?? listRoot.current,
+  // where it held focus, focus goes to Retry, else to the list
+  const more = useHeldFocus()
+  useFocusWhenGone((needs?.more ?? null) !== null, () =>
+    more.held()
+      ? (listRoot.current?.querySelector<HTMLElement>('[data-ov-needs-retry]') ?? listRoot.current)
+      : null,
   )
   // the rows the answer shown answers, so a tab on its way keeps the last
   // answer's rows, dimmed, rather than none
@@ -587,6 +619,7 @@ function NeedsPanel({
                 inProject={info.isMeta}
                 onOpen={onOpen}
                 onFocusIn={focusIn}
+                onFocusOut={focusOut}
               />
             ))}
           </ul>
@@ -605,6 +638,7 @@ function NeedsPanel({
             type="button"
             variant="ghost"
             data-ov-more
+            {...more.props}
             aria-disabled={needs.more === 'loading' || undefined}
             className={cn('pov-more', needs.more === 'loading' && 'pointer-events-none italic')}
             onClick={() => {
@@ -789,10 +823,12 @@ function SubProjectsPanel({
             : 'refreshing'
   const root = useRef<HTMLDivElement>(null)
   // Load more leaves at the end of the list or where its rows failed:
-  // focus it left nowhere goes to Retry, else to the list
-  useFocusWhenGone(
-    (health?.more ?? null) !== null,
-    () => root.current?.querySelector<HTMLElement>('[data-ov-subs-retry]') ?? root.current,
+  // where it held focus, focus goes to Retry, else to the list
+  const more = useHeldFocus()
+  useFocusWhenGone((health?.more ?? null) !== null, () =>
+    more.held()
+      ? (root.current?.querySelector<HTMLElement>('[data-ov-subs-retry]') ?? root.current)
+      : null,
   )
   /** `step` for a button that goes with its press, with focus on the list. */
   const inList = (step: () => void) => () => {
@@ -862,6 +898,7 @@ function SubProjectsPanel({
             type="button"
             variant="ghost"
             data-ov-subs-more
+            {...more.props}
             className={cn('pov-more', health.more === 'loading' && 'pointer-events-none italic')}
             aria-disabled={health.more === 'loading' || undefined}
             onClick={() => {
