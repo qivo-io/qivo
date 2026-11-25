@@ -1204,6 +1204,10 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
       for (const read of windowReads) read(taskAnswer())
     })
     await until(() => expanded()[0] === LUMA, "Firmware's project expanded")
+    // the window keeps the page behind it inert, so the person closes it
+    // before they can select My view
+    await click(q('[data-task-close]'))
+    await until(() => !q('[data-task-close]'), 'the task window closed')
     await click(q('[data-mine-nav]'))
     // must fail for a sidebar that keeps the project it showed last
     await until(() => expanded()[0] === PORTAL, 'the project opened last expanded')
