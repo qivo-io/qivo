@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react'
 import { useContext, useLayoutEffect, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -273,13 +273,24 @@ export function Bar({
     if (!dragged.current) onOpen(it.id)
   }
   // The run-on and the stripes are no plan to drag: a press that travels
-  // across them moves nothing and opens nothing.
-  const tailPress = useRefR<{ x: number; y: number } | null>(null)
-  const onTailClick = (e: MouseEvent<HTMLDivElement>) => {
-    const from = tailPress.current
+  // across them moves nothing and opens nothing, also when it ends where it
+  // began. The press holds the pointer so that its release always ends it
+  // here. A click with no press of its own, as an assistive tool sends it,
+  // opens the task.
+  const tailPress = useRefR<{ x: number; y: number; far: boolean } | null>(null)
+  const onTailDown = (e: PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId)
+    tailPress.current = { x: e.clientX, y: e.clientY, far: false }
+  }
+  const onTailMove = (e: PointerEvent<HTMLDivElement>) => {
+    const press = tailPress.current
+    if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) press.far = true
+  }
+  const dropTailPress = () => {
     tailPress.current = null
-    if (from && Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return
-    onOpen(it.id)
+  }
+  const onTailClick = () => {
+    if (!tailPress.current?.far) onOpen(it.id)
   }
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
@@ -369,9 +380,11 @@ export function Bar({
             // the plan's bar speaks for both parts wherever it is in the window
             aria-hidden={plan ? true : undefined}
             tabIndex={plan ? -1 : 0}
-            onPointerDown={(e) => {
-              tailPress.current = { x: e.clientX, y: e.clientY }
-            }}
+            onPointerDown={onTailDown}
+            onPointerMove={onTailMove}
+            // the click of this release comes before any timer
+            onPointerUp={() => setTimeout(dropTailPress, 0)}
+            onPointerCancel={dropTailPress}
             onClick={onTailClick}
             onKeyDown={onKey}
             style={
