@@ -946,6 +946,22 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     },
   )
 
+  it('dims no row for a Team person whose tasks in the window it all hides, and fades the others once they show', async () => {
+    const board = await loadBoard(network, withDone, { scope: 'plan' })
+    const fade = (id: string) =>
+      document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)?.parentElement?.style
+        .opacity
+    await renderRoadmap(board)
+    // OTHER owns only the Done QN-3, which has no row
+    const other = () => document.querySelector<HTMLElement>(`[data-res-person="${OTHER}"]`)
+    await act(async () => other()?.click())
+    expect(other()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rows().map(fade)).toEqual(['1', '1', '1', '1'])
+    await renderRoadmap(board, { hideDone: false })
+    expect(fade('QN-3')).toBe('1')
+    expect(fade('QN-1')).toBe('0.3')
+  })
+
   it('says Done tasks are hidden where they are all the Roadmap has, with Clear filters under a filter', async () => {
     const clearFilters = vi.fn()
     const board = await loadBoard(

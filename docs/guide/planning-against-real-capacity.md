@@ -102,7 +102,9 @@ click another week to move it. Click the selected person's name again, press
 
 Roadmap filter controls let you keep the selection while adjusting filters.
 If a filter hides the person, their highlights disappear. Changing scope,
-date window or layout clears the week lock.
+date window or layout clears the week lock. Team also lists a person whose
+only tasks in the window are Done tasks that **Hide Done in Roadmap** hides.
+Selecting them dims no rows, as none of their tasks has a row.
 
 Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after

@@ -2065,6 +2065,10 @@ function Roadmap({
 
   // effective highlight: only while the selected person is actually in the strip
   const hl = hlUser && team.some((p) => p.id === hlUser) ? hlUser : null
+  // the rows ring and fade for it only while the person owns one: Team
+  // keeps the owner of Done tasks Hide Done in Roadmap hides, and would
+  // otherwise fade every row with none to highlight
+  const hlRows = hl && rowTasks.some((it) => it.owner === hl) ? hl : null
   const activeResourceWeek =
     stripMode !== 'min' &&
     team.length > 0 &&
@@ -2717,7 +2721,7 @@ function Roadmap({
                     const stale = !isGroup && L.stale
                     // a person highlighted in the strip fades everyone else's rows the
                     // same way; the planning row stays fully visible.
-                    const hlDim = hl && !isGroup && row.issue.owner !== hl && !spotlit
+                    const hlDim = hlRows && !isGroup && row.issue.owner !== hlRows && !spotlit
                     const fade = spotlit ? 1 : (stale ? 0.5 : 1) * (hlDim ? 0.3 : 1)
                     // due ticks belong to scheduled rows (spec §5) — the unsched
                     // pill carries its own due text instead
@@ -2726,7 +2730,7 @@ function Roadmap({
                     const ring =
                       row.kind !== 'task'
                         ? undefined
-                        : spotlit || (hl && row.issue.owner === hl)
+                        : spotlit || (hlRows && row.issue.owner === hlRows)
                           ? 'var(--primary)'
                           : barRing[row.issue.id]
                     return (
@@ -2782,7 +2786,7 @@ function Roadmap({
                   const chunkDeps = [
                     session?.issueId,
                     revealed?.id,
-                    hl,
+                    hlRows,
                     w0,
                     w1,
                     weekW,
