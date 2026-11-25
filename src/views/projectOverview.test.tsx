@@ -234,6 +234,37 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(section()?.textContent).toContain('Qivo shows the first 10 of 12 sub-projects.')
   })
 
+  it("names a sub-project's lead before the workspace holds the sub-project, loading and then by name, never as no lead", async () => {
+    const { board } = await overview((snap) => {
+      plan(snap)
+      snap.profiles.push({
+        ...snap.profiles[0],
+        id: 'pat',
+        auth_user_id: 'account-pat',
+        name: 'Pat Lead',
+        initials: 'PL',
+        org_role: 'user',
+      })
+    })
+    board.server.people.hold = true
+    // the row of a sub-project whose own details have not reached the
+    // workspace, led by Pat
+    board.server.overview.edit = (query, answer) => {
+      const ok = answer as { state: string; rows?: { project_id: string; lead_id: string }[] }
+      if (query !== 'health' || ok.state !== 'ok' || !ok.rows?.[0]) return answer
+      return {
+        ...ok,
+        rows: [...ok.rows, { ...ok.rows[0], project_id: 'unplaced', lead_id: 'pat' }],
+      }
+    }
+    await board.deliver()
+    const row = () => q('[data-ov-sub="unplaced"]')?.getAttribute('aria-label') ?? ''
+    expect(row()).toMatch(/^One, Loading…, Lead, /)
+    board.server.people.hold = false
+    await board.answerPeople()
+    await act(async () => vi.waitFor(() => expect(row()).toMatch(/^One, Pat Lead, Lead, /)))
+  })
+
   it("counts a milestone's late tasks up to the first day of its week in the project's organization, whatever week the reader's calendar starts on", async () => {
     /** A Monday at least two weeks on, YYYY-MM-DD, local time. */
     const monday = (() => {

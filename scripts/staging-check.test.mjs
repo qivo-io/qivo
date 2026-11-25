@@ -2240,7 +2240,7 @@ describe('staging check REST contract', () => {
       /`\$\{plural\(left \?\? 0, 'task'\)\} left, \$\{fmtHours\(c\.left_tenths \/ 10\)\} hours left`/,
     )
     expect(page).toMatch(/c \? `\$\{c\.paused\} paused` : null/)
-    expect(page).toMatch(/`\$\{personLabel\(lead, 'No lead assigned'\)\}, Lead`/)
+    expect(page).toMatch(/`\$\{lead \? personLabel\(lead, 'Unknown person'\) : 'Loading…'\}, Lead`/)
     expect(page).toContain(": 'No lead assigned',")
     expect(overviewSubLabel('Overview', 'Nora', true)).toBe(
       'Overview, Nora, Lead, 2 tasks left, 0 hours left, 1 late, 0 behind plan, 1 paused',

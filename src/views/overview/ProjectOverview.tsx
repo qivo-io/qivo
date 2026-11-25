@@ -728,18 +728,28 @@ function Chip({ kind, n, label }: { kind: string; n: number; label: string }) {
   )
 }
 
-function SubRow({ row, onOpen }: { row: HealthRow; onOpen: (id: string) => void }) {
+function SubRow({
+  row,
+  org,
+  onOpen,
+}: {
+  row: HealthRow
+  /** the organization of the project the row is a sub-project of, '' while
+      the page knows none */
+  org: string
+  onOpen: (id: string) => void
+}) {
   const c = row.counts.state === 'ok' ? row.counts : null
   const left = c ? c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review : null
   const d = row.delays.state === 'ok' ? row.delays : null
-  // the lead is named in its project's organization only, as the health
-  // table names it, since a read in another organization answers them gone
-  const org = P.project(row.project_id)?.org ?? null
-  const [lead] = useOrgPeople(org ?? '', [org ? row.lead_id : null])
+  // the lead is named in the sub-project's organization only, since a read
+  // in another organization answers them gone. It is the parent's, which
+  // the page knows before the workspace holds the sub-project itself
+  const [lead] = useOrgPeople(org, [org ? row.lead_id : null])
   const parts = [
     row.name,
-    lead && lead.state !== 'gone'
-      ? `${personLabel(lead, 'No lead assigned')}, Lead`
+    row.lead_id
+      ? `${lead ? personLabel(lead, 'Unknown person') : 'Loading…'}, Lead`
       : 'No lead assigned',
     c
       ? `${plural(left ?? 0, 'task')} left, ${fmtHours(c.left_tenths / 10)} hours left`
@@ -760,11 +770,7 @@ function SubRow({ row, onOpen }: { row: HealthRow; onOpen: (id: string) => void 
         onClick={() => onOpen(row.project_id)}
       >
         <span className="pov-sub-lead">
-          {lead && lead.state !== 'gone' ? (
-            <Avatar id={lead.id} size={28} />
-          ) : (
-            <Avatar id={null} size={28} />
-          )}
+          <Avatar id={row.lead_id} size={28} />
         </span>
         <span className="pov-sub-main">
           <span className="pov-sub-name">{row.name}</span>
@@ -804,9 +810,12 @@ function SubRow({ row, onOpen }: { row: HealthRow; onOpen: (id: string) => void 
 
 function SubProjectsPanel({
   health,
+  org,
   onOpen,
 }: {
   health: HealthView
+  /** the project's organization, '' while the page knows none */
+  org: string
   onOpen: (id: string) => void
 }) {
   const answer = health?.value?.state === 'ok' ? health.value : null
@@ -863,7 +872,7 @@ function SubProjectsPanel({
       <>
         <ul className="pov-list" data-ov-subs>
           {answer.rows.map((row) => (
-            <SubRow key={row.project_id} row={row} onOpen={onOpen} />
+            <SubRow key={row.project_id} row={row} org={org} onOpen={onOpen} />
           ))}
         </ul>
         {answer.sort.by_name && (
@@ -1444,6 +1453,7 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
               {replaced === null && info.isMeta && (
                 <SubProjectsPanel
                   health={read.health}
+                  org={info.proj?.org ?? ''}
                   onOpen={(id) => {
                     actions.setScope(id)
                     actions.setView('kanban')
