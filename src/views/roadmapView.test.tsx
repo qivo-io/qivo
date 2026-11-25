@@ -1090,6 +1090,57 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(planCard('QN-1')).not.toBeNull()
   })
 
+  it('drops a plan request still waiting for its task when Plan on roadmap names a hidden Done task', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // one-1 is unscheduled, and a High filter hides it; two-1 is Done
+        Reflect.deleteProperty(snap.issues[0], 'start_week')
+        Reflect.deleteProperty(snap.issues[0], 'end_week')
+        Object.assign(snap.issues[1], { status: 'done', start_week: week(30), end_week: week(31) })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const filters = { ...ROW, priority: 'high' as const }
+    await renderRoadmap(board, { filters })
+    network.mutation.mockClear()
+    // the first request waits for an answer that holds one-1
+    board.server.roadmap.hold = (name) => name === 'tasks:roadmap'
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { filters, focusPlan: unscheduled })
+    expect(roadmapAsks(board).at(-1)?.planned_task).toEqual({
+      id: 'one-1',
+      project_id: board.snapshot.projects[0].id,
+    })
+    await renderRoadmap(board, {
+      filters,
+      focusPlan: {
+        id: 'QN-2',
+        n: 2,
+        key: 'QN-2',
+        uuid: 'two-1',
+        project: 'two',
+        start: TODAY_WEEK + 30,
+        end: TODAY_WEEK + 31,
+        status: 'done',
+      },
+    })
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-2 is Done, and Done tasks are hidden on the Roadmap. To plan it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+      'info',
+    )
+    // the read asks for one-1 no more, and an answer that holds it plans nothing
+    expect(roadmapAsks(board).at(-1)?.planned_task).toBeUndefined()
+    board.server.roadmap.hold = false
+    await board.answer()
+    await flush()
+    expect(planCard()).toBeNull()
+    expect(datesSent('one-1')).toEqual([])
+  })
+
   it('ends a planning session once its task is Done, writing nothing more', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan' })
     board.P.roadmapContext(true, false)

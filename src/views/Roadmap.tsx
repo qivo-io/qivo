@@ -1293,6 +1293,20 @@ function Roadmap({
       sends its task again. */
   const dropPlanAsk = (req: PendingRequest) =>
     setPlanAsk((was) => (was && was.id === req.uuid ? null : was))
+  /** Resolves request `req` for a Done task Hide Done in Roadmap hides at
+      once, without taking it, so the window stays: it replaces the request
+      of its kind the Roadmap still waits on, as taking it would, and says
+      why it does not show. An open planning session stays. */
+  const refuseHidden = (req: PendingRequest) => {
+    const was = pendingRef.current[req.kind]
+    if (was) {
+      setPending({ ...pendingRef.current, [req.kind]: null })
+      if (was.kind === 'plan') dropPlanAsk(was)
+    }
+    if (req.kind === 'plan') onFocusConsumed?.(req.n)
+    else onRevealConsumed?.(req.n)
+    sayDoneHidden(req)
+  }
   useEffectR(() => {
     if (!revealTask || hideDone === null) return
     // App drops the request only while it is still this one
@@ -1322,8 +1336,7 @@ function Roadmap({
     // window showed is enough to say so at once, without moving the window
     // to weeks that would show nothing of it.
     if (hideDone && focusPlan.status === 'done' && !doneWithoutDates(focusPlan)) {
-      onFocusConsumed?.(n)
-      sayDoneHidden({ ...focusPlan, kind: 'plan' })
+      refuseHidden({ ...focusPlan, kind: 'plan' })
       return
     }
     take({ ...focusPlan, kind: 'plan' })
@@ -1394,11 +1407,11 @@ function Roadmap({
   }, [resolvedPlan?.req.n])
   /** Acts on request `req`, resolved to the task with handle `id`; answers
       the cleanup of the frames that bring it into view. A plan request
-      taken since replaces this one, which then does nothing. */
+      taken or refused since replaces this one, which then does nothing. */
   function act({ req, id }: { req: PendingRequest; id: string }) {
     const consumed = () =>
       req.kind === 'plan' ? onFocusConsumed?.(req.n) : onRevealConsumed?.(req.n)
-    if (req.kind === 'plan' && pendingRef.current.plan) {
+    if (req.kind === 'plan' && (pendingRef.current.plan || req.n !== takenPlan.current)) {
       consumed()
       return
     }
