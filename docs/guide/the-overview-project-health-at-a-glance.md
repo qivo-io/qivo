@@ -39,6 +39,11 @@ zero. Narrow desktop windows scroll horizontally; phones show sortable
 cards, 10 at a time. Past 200 sub-projects the table shows the first 200
 and asks you to search for the others.
 
+Late and Behind plan count tasks only where
+[delay tracking](./will-it-be-ready-in-time-the-delay-status.md) is on. A
+sub-project with it off shows “—” in both, also when it has tasks past their
+due date.
+
 Late and Behind plan depend on the other work of each task's owner. Where
 Qivo could not work that out, as when the owners have more open work than
 it reads at once, the cell reads **unknown**, never zero, and a line under

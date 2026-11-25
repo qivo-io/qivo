@@ -65,14 +65,14 @@ const HEALTH_COLS = [
     label: 'Late',
     align: 'right',
     dir: 'desc',
-    title: 'Tasks past their due date or projected to miss it',
+    title: 'Where delay tracking is on, tasks past their due date or projected to miss it',
   },
   {
     id: 'behind',
     label: 'Behind plan',
     align: 'right',
     dir: 'desc',
-    title: 'Tasks running past their planned end',
+    title: 'Where delay tracking is on, tasks projected to finish after their planned end',
   },
   { id: 'paused', label: 'Paused', align: 'right', dir: 'desc', title: 'Tasks on hold' },
 ] as const satisfies readonly {
