@@ -21,6 +21,7 @@ import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import {
+  firstDayOfWeek,
   fmtDate,
   isoToDate,
   isoToWeek,
@@ -70,6 +71,7 @@ import {
   type OverviewActions,
   type OverviewState,
   onePersonAtATime,
+  placeholder,
   shownOf,
   useOverviewRead,
 } from './overviewParts'
@@ -106,6 +108,14 @@ const KIND_EMPTY: Record<NeedsKind, string> = {
   blocked: 'No task is blocked.',
   no_reviewer: 'No task waits for a reviewer.',
   paused: 'No task is paused.',
+}
+
+/** What an empty tab says where its count is not a confirmed zero, as
+    where some verdict could not be read. */
+const KIND_NONE_FOUND: Record<'all' | 'projected' | 'behind', string> = {
+  all: 'Qivo found nothing that needs attention among the tasks it could check.',
+  projected: 'Qivo found no task projected to miss its due date among the tasks it could check.',
+  behind: 'Qivo found no task behind plan among the tasks it could check.',
 }
 
 type Filter = 'all' | NeedsKind
@@ -410,7 +420,7 @@ function NeedRow({
             className="pov-need-open"
             data-focus-key="row"
             aria-label={name}
-            onClick={() => onOpen(handle)}
+            onClick={() => onOpen(P.openTask(row.id, row.org_id, row.num))}
           >
             {row.title}
           </Button>
@@ -535,11 +545,12 @@ function NeedsPanel({
           </ul>
         ) : (
           <p className="pov-empty" data-ov-needs-state="empty">
-            {shownKind === 'all'
-              ? unknown
-                ? 'Qivo found nothing else that needs attention.'
-                : 'Nothing needs attention.'
-              : KIND_EMPTY[shownKind]}
+            {(shownKind === 'all' || shownKind === 'projected' || shownKind === 'behind') &&
+            c?.[shownKind].state !== 'ok'
+              ? KIND_NONE_FOUND[shownKind]
+              : shownKind === 'all'
+                ? 'Nothing needs attention.'
+                : KIND_EMPTY[shownKind]}
           </p>
         )}
         {needs.more !== null && (
@@ -746,6 +757,26 @@ function SubProjectsPanel({
               : `Qivo could not work out every ${DELAY_LABELS.late} and ${DELAY_LABELS.behind} count, so the sub-projects are in name order.`}
           </p>
         )}
+        {health.moreFailed && (
+          <div role="alert" className="pov-note">
+            Couldn't load more sub-projects.
+            <Button
+              type="button"
+              variant="ghost"
+              data-ov-subs-retry
+              className="h-control-sm text-sm"
+              onClick={() => P.overviewRetry('health')}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
+        {answer.rows.length >= answer.most && answer.total > answer.rows.length && (
+          <p className="pov-note" data-ov-subs-cap>
+            Qivo shows the first {answer.rows.length.toLocaleString('en-US')} of{' '}
+            {answer.total.toLocaleString('en-US')} sub-projects.
+          </p>
+        )}
         {health.more !== null && (
           <Button
             type="button"
@@ -889,17 +920,20 @@ function LoadPanel({
 }
 
 /** The line under an upcoming milestone: how many Late tasks are due on or
-    before its first day, those of the milestones above it left out. */
+    before the first day of its week, in the calendar of its organization,
+    whose weeks start on `weekStart`, so every reader counts the same
+    tasks; those of the milestones above it left out. */
 function lateLine(
   days: readonly { due: string; count: number }[],
   m: MilestoneVM,
   before: MilestoneVM | null,
+  weekStart: number,
 ): string {
-  const upTo = (w: number) => {
-    const day = weekToISO(w)
+  const upTo = (row: MilestoneVM) => {
+    const day = firstDayOfWeek(row.day, weekStart)
     return days.reduce((n, d) => (d.due <= day ? n + d.count : n), 0)
   }
-  const n = upTo(m.week) - (before ? upTo(before.week) : 0)
+  const n = upTo(m) - (before ? upTo(before) : 0)
   const late = DELAY_LABELS.late.toLowerCase()
   if (before === null)
     return n === 0
@@ -950,7 +984,7 @@ function MilestoneRow({
 export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
-  const openIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
+  const openIssue = useLatest((open: string) => actions.openIssue(open))
   const [filter, setFilter] = useState<Filter>('all')
   const read = useOverviewRead(
     info,
@@ -1141,7 +1175,12 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
                     ? needsAnswer
                       ? `Qivo could not count the ${DELAY_LABELS.late.toLowerCase()} tasks due before it`
                       : null
-                    : lateLine(lateDays, m, i > 0 ? (upcomingRows[i - 1] ?? null) : null)
+                    : lateLine(
+                        lateDays,
+                        m,
+                        i > 0 ? (upcomingRows[i - 1] ?? null) : null,
+                        P.orgWeekStart(info.proj?.org ?? ''),
+                      )
               }
               onEdit={editMilestone}
             />
@@ -1223,19 +1262,10 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
                 <Sentence needs={read.needs} tasksLeft={tasksLeft} />
                 <div className="pov-facts" data-ov-facts>
                   <Fact label="Tasks left" name="tasks-left" state={factState}>
-                    {tasksLeft ??
-                      (counts.state === 'counting'
-                        ? 'Counting…'
-                        : counts.state === 'loading'
-                          ? '…'
-                          : '—')}
+                    {tasksLeft ?? placeholder(counts)}
                   </Fact>
                   <Fact label="Hours left" name="hours-left" state={factState}>
-                    {c
-                      ? `${fmtHours(c.left_tenths / 10)}h`
-                      : counts.state === 'loading'
-                        ? '…'
-                        : '—'}
+                    {c ? `${fmtHours(c.left_tenths / 10)}h` : placeholder(counts)}
                   </Fact>
                   <LeadFact info={info} />
                 </div>

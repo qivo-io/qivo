@@ -23,9 +23,10 @@ Qivo works out every figure on the server, so Overview shows them without
 waiting for your browser to load every task. Until the server's answer
 arrives the figures show **…**. While Qivo is still counting an
 organization's tasks, as right after an update or for a moment after any
-project is archived or restored, Tasks left reads **Counting…**. A figure
-Qivo could not work out in one request shows **—** or **unknown** with a
-line that says why, never a smaller number or zero ([Limits](./limits.md)).
+project is archived or restored, Tasks left and Hours left read
+**Counting…**. A figure Qivo could not work out in one request shows **—**
+or **unknown** with a line that says why, never a smaller number or zero
+([Limits](./limits.md)).
 
 ## Needs attention
 
@@ -75,10 +76,11 @@ The projected delays depend on the other work of each task's owner. Where
 Qivo could not work that out, as when an owner has more open work than it
 reads at once, **All**, **Projected to miss** and **Behind plan** show a
 dash for an unknown count, never zero, a line says that those tabs may
-leave tasks out, and the rows Qivo could judge still show. A guest or
-organization Viewer sees other people's work one person at a time, so
-those counts are usually unknown for them
-([Who sees what](./who-sees-what-the-access-model.md)).
+leave tasks out, and the rows Qivo could judge still show. Such a tab
+without rows says that Qivo found none among the tasks it could check,
+never that there are none. A guest or organization Viewer sees other
+people's work one person at a time, so those counts are usually unknown
+for them ([Who sees what](./who-sees-what-the-access-model.md)).
 
 ## Sub-projects, load and milestones
 
@@ -88,8 +90,10 @@ counts, each in a place of its own, Late first and then by name. **Late**
 counts its overdue and projected-to-miss tasks where delay tracking is on.
 Where Qivo could not work out Late and Behind plan, the row says
 **unknown** and the list is in name order with a line that says why. It
-shows 10 sub-projects, and **Show more** adds 10. Select a row to open
-that sub-project's Board. A sub-project's own Overview has no such list.
+shows 10 sub-projects, and **Show more** adds 10; where that fails,
+**Retry** asks again and the rows already shown stay. Past 200 the list
+says how many of how many it shows. Select a row to open that
+sub-project's Board. A sub-project's own Overview has no such list.
 
 **Load this week** lists the owners of the open tasks here, with each
 person's planned hours this week across every project you can see, as a
@@ -103,10 +107,11 @@ shows hours only. A person whose load Qivo could not read shows
 **Milestones** lists upcoming milestones with a line under each, such as
 "2 late tasks are due before it": the tasks here whose verdict is
 **Late** and whose due date is on or before the first day of the
-milestone's week, and under each later milestone the ones due since the
-milestone above it. Where Qivo could not work out every projected delay
-the line says it could not count them. A project without delay tracking
-shows no such line.
+milestone's week, as the project's organization starts its weeks, so
+every reader counts the same tasks, and under each later milestone the
+ones due since the milestone above it. Where Qivo could not work out
+every projected delay the line says it could not count them. A project
+without delay tracking shows no such line.
 
 ## My view's Overview
 

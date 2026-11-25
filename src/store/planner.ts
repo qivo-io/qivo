@@ -11098,6 +11098,10 @@ export const PLANNER = {
   /** My seat in organization `orgId`, its profile id, or '' when I hold
       none there, as the New sub-project dialog names its creator. */
   seatIn: (orgId: string): string => profileIn(orgId),
+  /** The weekday organization `orgId`'s weeks start on (Date#getDay
+      numbering), which its milestones and calendar weeks follow, also
+      where the app's own grid follows another organization's. */
+  orgWeekStart: (orgId: string): number => rows.orgs.get(orgId)?.week_start ?? DEFAULT_WEEK_START,
   /* org admins lead every team — of THEIR OWN organization (0081). Being an
      admin at home says nothing about a team that shared a project with me,
      so the caller is resolved to the profile they hold in the team's org

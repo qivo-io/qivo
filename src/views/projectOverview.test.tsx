@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ForcedOverview } from '../store/overviewStandIn.setup'
@@ -11,7 +11,9 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    from the server's answers, through the Overview's stand-in
    (store/overviewStandIn.setup.ts), whose Needs attention list holds the
    stored facts' kinds: the sentence and Tasks left, a count Qivo could not
-   work out, a tab's read, and the row actions a reader may not use. The
+   work out, a tab's read, a row opened while the next answer loads, the
+   sub-projects' Load more and cap, a milestone's late count, and the row
+   actions a reader may not use. The
    list's own rule is the server's, which convex/tests/overviewNeeds.test.ts
    tests. */
 
@@ -80,14 +82,35 @@ const plan = (snap: Snapshot) => {
 
 async function overview(
   prepare: (snap: Snapshot) => void,
-  { scope = 'plan', force = {} as ForcedOverview } = {},
+  { scope = 'plan', force = {} as ForcedOverview, kept = false } = {},
 ) {
   const board = await loadBoard(network, prepare, { scope })
   board.server.overview.force = force
   const { Overview } = await import('./Overview')
+  const { KeptView } = await import('../components/KeptView')
+  const { IssueDetail } = await import('../panels/IssueDetail')
   const actions = new Proxy({}, { get: () => () => {} }) as never
-  await board.renderView(root, (info: ScopeInfo) => <Overview info={info} actions={actions} />)
-  return { board }
+  /* the page as App shows it, in its kept view, with the task window that
+     a row opens beside it */
+  function Screen({ info, shown }: { info: ScopeInfo; shown: boolean }) {
+    const [opened, setOpened] = useState<string | null>(null)
+    const open = new Proxy(actions, {
+      get: (_, name) => (name === 'openIssue' ? setOpened : () => {}),
+    })
+    return (
+      <>
+        <KeptView view="overview" shown={shown} className="view">
+          <Overview info={info} actions={open} />
+        </KeptView>
+        <IssueDetail issueId={opened} onClose={() => setOpened(null)} onOpen={setOpened} />
+      </>
+    )
+  }
+  const show = (shown: boolean) =>
+    board.renderView(root, (info: ScopeInfo) => <Screen info={info} shown={shown} />)
+  if (kept) await show(true)
+  else await board.renderView(root, (info: ScopeInfo) => <Overview info={info} actions={actions} />)
+  return { board, show }
 }
 
 const q = (selector: string) => document.querySelector<HTMLElement>(selector)
@@ -122,6 +145,111 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(text('[data-ov-unknown]')).toContain('may leave tasks out')
     // the rows of the stored facts still show
     expect(rows()).toHaveLength(3)
+  })
+
+  it('says none on a tab only for a confirmed zero, and that Qivo found none among the tasks it could check where the count is unknown', async () => {
+    const { board } = await overview(plan, { force: { needs: 'unknown' } })
+    await act(async () => tab('projected')?.click())
+    await board.answer()
+    expect(text('[data-ov-needs]')).toBe(
+      'Qivo found no task projected to miss its due date among the tasks it could check.',
+    )
+    await act(async () => tab('blocked')?.click())
+    await board.answer()
+    expect(text('[data-ov-needs]')).toBe('No task is blocked.')
+  })
+
+  it("opens a row's task while the next answer of the list is on its way", async () => {
+    const { board } = await overview(plan, { kept: true })
+    board.server.overview.hold = (query) => query === 'needs'
+    await act(async () => tab('paused')?.click())
+    // the last answer's rows stay, dimmed, while the Paused tab's loads
+    const row = rows()[0]
+    expect(row?.dataset.kind).toBe('overdue')
+    await act(async () => row?.querySelector<HTMLElement>('[data-focus-key="row"]')?.click())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(text('[data-task-title]')).toBe('Task later')
+  })
+
+  it('asks a failed Load more of the sub-projects again with Retry, and says how many it shows past the cap', async () => {
+    /** Plan's sub-projects: One and eleven more. */
+    const twelve = (snap: Snapshot) => {
+      plan(snap)
+      const base = snap.projects[0]
+      for (let n = 2; n <= 12; n++)
+        snap.projects.push({ ...base, id: `sub${n}`, key: `S${n}`, num: 10 + n, name: `Sub ${n}` })
+    }
+    const subs = () => document.querySelectorAll('[data-ov-sub]').length
+    const section = () => q('[data-ov-subs]')?.closest('section') ?? null
+    const button = (label: string) =>
+      [...(section()?.querySelectorAll<HTMLElement>('button') ?? [])].find(
+        (b) => b.textContent === label,
+      )
+    const { board } = await overview(twelve)
+    expect(subs()).toBe(10)
+    board.server.overview.fail = new Error('down')
+    board.server.overview.failing = (query, args) =>
+      query === 'health' && (args.limit as number) > 10
+    await act(async () => q('[data-ov-subs-more]')?.click())
+    await board.answer()
+    expect(subs()).toBe(10)
+    expect(section()?.textContent).toContain("Couldn't load more sub-projects.")
+    board.server.overview.fail = undefined
+    await act(async () => button('Retry')?.click())
+    await board.answer()
+    expect(subs()).toBe(12)
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await overview(twelve, { force: { health: { most: 10 } } })
+    expect(subs()).toBe(10)
+    expect(q('[data-ov-subs-more]')).toBeNull()
+    expect(section()?.textContent).toContain('Qivo shows the first 10 of 12 sub-projects.')
+  })
+
+  it("counts a milestone's late tasks up to the first day of its week in the project's organization, whatever week the reader's calendar starts on", async () => {
+    /** A Monday at least two weeks on, YYYY-MM-DD, local time. */
+    const monday = (() => {
+      const d = new Date()
+      d.setDate(d.getDate() + 21)
+      d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    })()
+    const { board } = await overview((snap) => {
+      // the reader's own organization starts its weeks on Sunday; Plan is
+      // a partner's, whose weeks start on Monday, and the reader its guest
+      snap.orgs[0].week_start = 0
+      const org = crypto.randomUUID()
+      const seat = crypto.randomUUID()
+      snap.orgs.push({
+        ...snap.orgs[0],
+        id: org,
+        name: 'Partner Co',
+        slug: 'partner',
+        week_start: 1,
+      })
+      snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
+      snap.myProfileIds.push(seat)
+      plan(snap)
+      for (const p of snap.projects) Object.assign(p, { org_id: org, lead_id: seat })
+      for (const t of snap.issues) Object.assign(t, { org_id: org, assignee_id: seat })
+      snap.access.push({ project_id: 'plan', profile_id: seat, level: 'user' })
+      snap.milestones.push({
+        id: 'launch',
+        project_id: 'plan',
+        name: 'Launch',
+        week: monday,
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
+    })
+    // one task projected to miss, due on the milestone's Monday
+    board.server.overview.edit = (query, answer) => {
+      const a = answer as { state: string }
+      return query === 'needs' && a.state === 'ok'
+        ? { ...a, tracks_delay: true, late_due: { state: 'ok', days: [{ due: monday, count: 1 }] } }
+        : answer
+    }
+    await board.answer()
+    expect(text('[data-overview-milestone="launch"]')).toContain('1 late task is due before it')
   })
 
   it("asks the server for a tab's kind and shows its rows", async () => {
