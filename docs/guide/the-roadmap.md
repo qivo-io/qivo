@@ -114,8 +114,8 @@ drop sets the end for you, at the earliest week by which the delay
 projection finishes the task, so it is not Behind plan
 ([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
 Placing a task in weeks that are already full can still make the owner's
-other tasks in those weeks read Behind plan, which Team utilization shows as
-a week over 100%.
+other tasks in those weeks read Behind plan. Team utilization shows such a
+week as full or over.
 
 Click the portrait beside a task to change or clear its assignee. Its list
 shows the people who can take the task, 25 at a time with a search and

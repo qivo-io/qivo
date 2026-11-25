@@ -40,9 +40,9 @@ The planning panel offers:
   its end is where the hours the other tasks leave free cover it. Qivo tries
   ends up to 520 weeks, ten years, after the first, and uses the last of
   them when none works. Placing a task in weeks that are already full can
-  still make the owner's other tasks in those weeks read Behind plan, which
-  Team utilization shows as a week over 100%. It uses the reviewer while a
-  task is In Review with one and follows ownership changes during the
+  still make the owner's other tasks in those weeks read Behind plan. Team
+  utilization shows such a week as full or over. It uses the reviewer while
+  a task is In Review with one and follows ownership changes during the
   session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
