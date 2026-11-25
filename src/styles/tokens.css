@@ -155,10 +155,12 @@
      is a quiet grey, and from it on a task on track takes its Board status
      as a fill, a Slipping or Delayed one the Board's delay blocks. A
      finished bar steps back. Fills are mixed over the panel the timeline
-     sits on, so week lines do not show through a bar. */
+     sits on, so week lines do not show through a bar. The past and Done
+     fills stay quiet, but their rims hold 3:1 on the panel and on the edge
+     badges' tint, over any Canvas photo too (a white one at worst). */
   --roadmap-bar-ground: var(--workspace-panel);
   --roadmap-bar-past: color-mix(in oklab, var(--text-1) 13%, var(--roadmap-bar-ground));
-  --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 28%, var(--roadmap-bar-ground));
+  --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 49%, var(--roadmap-bar-ground));
   --roadmap-bar-todo: color-mix(in oklab, var(--text-1) 44%, var(--roadmap-bar-ground));
   --roadmap-bar-todo-rim: color-mix(in oklab, var(--text-1) 68%, var(--roadmap-bar-ground));
   --roadmap-bar-progress: color-mix(
@@ -178,7 +180,7 @@
   --roadmap-bar-unknown: color-mix(in oklab, var(--text-1) 20%, var(--roadmap-bar-ground));
   --roadmap-bar-unknown-rim: color-mix(in oklab, var(--text-1) 55%, var(--roadmap-bar-ground));
   --roadmap-bar-done: color-mix(in oklab, var(--text-1) 6%, var(--roadmap-bar-ground));
-  --roadmap-bar-done-rim: color-mix(in oklab, var(--text-1) 16%, var(--roadmap-bar-ground));
+  --roadmap-bar-done-rim: color-mix(in oklab, var(--text-1) 49%, var(--roadmap-bar-ground));
   /* the dark bands of a paused bar's stripes */
   --roadmap-bar-hatch: color-mix(in oklab, var(--roadmap-bar-ground) 62%, transparent);
   /* due date lines, and dependency arrows whose dates do not conflict */
@@ -345,9 +347,11 @@
   --load-line-near: #a66e00;
   /* Roadmap bars whose colour carries meaning hold 3:1 on the white panel:
      To Do's grey, the blue and violet, and Slipping's amber of the load line
-     beside them. Rims are a step darker than their fills. */
+     beside them. Rims are a step darker than their fills. The past and
+     Done rims hold 3:1 on the frosted panel over a dark photo too (#e6e6e6
+     at worst), and on the edge badges' tint. */
   --roadmap-bar-past: color-mix(in oklab, var(--text-1) 14%, var(--roadmap-bar-ground));
-  --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 30%, var(--roadmap-bar-ground));
+  --roadmap-bar-past-rim: color-mix(in oklab, var(--text-1) 55%, var(--roadmap-bar-ground));
   --roadmap-bar-todo: color-mix(in oklab, var(--text-1) 50%, var(--roadmap-bar-ground));
   --roadmap-bar-todo-rim: color-mix(in oklab, var(--text-1) 70%, var(--roadmap-bar-ground));
   --roadmap-bar-progress: #2f6fe4;
@@ -358,7 +362,7 @@
   --roadmap-bar-behind-rim: #7f5400;
   --roadmap-bar-late-rim: var(--danger);
   --roadmap-bar-unknown: color-mix(in oklab, var(--text-1) 16%, var(--roadmap-bar-ground));
-  --roadmap-bar-done-rim: color-mix(in oklab, var(--text-1) 18%, var(--roadmap-bar-ground));
+  --roadmap-bar-done-rim: color-mix(in oklab, var(--text-1) 55%, var(--roadmap-bar-ground));
   --roadmap-dep: color-mix(in oklab, var(--text-1) 55%, transparent);
 
   /* Component hooks. Shared consumers read their token with a fallback, so
