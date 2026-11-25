@@ -494,9 +494,11 @@ function Roadmap({
        project I hold no task in, each labelled with that project's whole
        remaining hours. The answer names them (held_sub_projects); null
        wherever the scope narrows nothing.
-     · `bucket`, which of them hold a task the answer shows that also passes
-       the TOOLBAR filters on screen and has a row (`rowTasks`), and which
-       tasks those are. */
+     · `matched`, which of them hold a task the answer shows that also
+       passes the TOOLBAR filters on screen, Done tasks Hide Done in Roadmap
+       hides included, so a heading shows under a filter with the setting on
+       exactly where it does with it off.
+     · `bucket`, the tasks of each that have a row (`rowTasks`). */
   const held = view.held
   // whether the person sees any project or sub-project, which the server
   // answers (useHolds) only while My view's empty note could show
@@ -504,6 +506,7 @@ function Roadmap({
   // the rows show while an answer for this scope is on screen; any note
   // takes their place
   const showing = view.state === 'ok' || view.state === 'refreshing'
+  const matched = new Set(view.tasks.map((i) => i.project))
   const bucket = new Map()
   for (const i of rowTasks) {
     const b = bucket.get(i.project) || { dated: [], undated: [] }
@@ -519,10 +522,12 @@ function Roadmap({
        (deviation #50): a project or sub-project the filter empties drops off
        the rail entirely, the same rule the board's lanes and side-boards have
        always followed, rather than standing there as a heading over nothing.
+       One whose matches are all Done tasks Hide Done in Roadmap hides keeps
+       its place (`matched`), as it would with the setting off.
        Gated on `clearable` — with no filter on, every group keeps its place
        whether or not it holds work, so the rail's shape still reads as the
        scope's shape. */
-  const shows = (id) => (!held || held.has(id)) && (!clearable || bucket.has(id))
+  const shows = (id) => (!held || held.has(id)) && (!clearable || matched.has(id))
   /* …but only ASK when something is actually narrowing. With both gates open
      `shows` is identically true, so the filter would still differ from the
      whole list in one place: a project with no sub-project at all, whose

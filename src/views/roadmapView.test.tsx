@@ -983,6 +983,44 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(note()).toBeNull()
   })
 
+  it('keeps under a filter the headings and milestone flags it would show with the setting off', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // the only High task, two-1, is Done this week
+        snap.issues[1].status = 'done'
+        snap.milestones.push({
+          id: 'gate',
+          project_id: 'plan',
+          name: 'Gate',
+          week: week(1),
+          created_at: snap.issues[0].created_at,
+        })
+      },
+      { scope: 'mine' },
+    )
+    const filters = { ...ROW, mine: true, priority: 'high' as const }
+    const headings = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-track], [data-subtrack]')].map(
+        (el) => el.dataset.track ?? el.dataset.subtrack,
+      )
+    await renderRoadmap(board, { filters, hideDone: false })
+    await board.answer()
+    expect(rows()).toEqual(['QN-2'])
+    const off = headings()
+    expect(off).toEqual(['plan', 'two'])
+    expect(document.querySelector('[data-msflag="gate"]')).not.toBeNull()
+    await renderRoadmap(board, { filters })
+    await board.answer()
+    expect(rows()).toEqual([])
+    expect(headings()).toEqual(off)
+    expect(document.querySelector('[data-msflag="gate"]')).not.toBeNull()
+    expect(document.querySelector('[data-roadmap-done-hidden]')?.textContent).toContain(
+      'No other tasks match your filters.',
+    )
+  })
+
   it('says a jump to a hidden Done task where to show it, showing no row', async () => {
     const board = await loadBoard(
       network,
