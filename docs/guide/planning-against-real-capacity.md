@@ -42,12 +42,13 @@ The planning panel offers:
   an owner with a lot of open work it can stop looking sooner. It then tries
   the week in which the hours the other tasks leave free cover the task, and
   uses it if the projection finishes the task by then, though an earlier
-  week may work too. When Qivo finds no end, the end stays where you dropped
-  it, and the panel says **Auto-fit found no end within its limits, so the
+  week may work too. When Qivo finds no end, the end stays as it is, where
+  you dropped it or, for a task that had no dates, where its starter bar
+  ends, and the panel says **Auto-fit found no end within its limits, so the
   end stays as it is**. The task can then read Behind plan. Placing a task
   in weeks that are already full can still make the owner's other tasks in
-  those weeks read Behind plan. Team utilization shows such a week as full
-  or over. Auto-fit uses the reviewer while a task is In Review with one and
+  those weeks read Behind plan. Team utilization, with **All projects**
+  chosen, shows such a week as full or over. Auto-fit uses the reviewer while a task is In Review with one and
   follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo

@@ -206,9 +206,13 @@ export function PlanCard({
                         ? 'Add remaining time to auto-fit'
                         : !session.autoFit
                           ? 'Drag the end freely'
-                          : session.noFit
-                            ? NO_FIT_END
-                            : `On drop, ends in the earliest week ${first} is projected to finish it`}
+                          : loading
+                            ? 'Loading the workload…'
+                            : !load
+                              ? 'Workload is unavailable, so auto-fit is paused'
+                              : session.noFit
+                                ? NO_FIT_END
+                                : `On drop, ends in a week ${first} is projected to finish it`}
             </div>
           </div>
         </div>

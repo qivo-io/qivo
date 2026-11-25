@@ -110,14 +110,16 @@ Release to save. Click a bar or task name to open its details. Read-only bars
 and the bars of tasks with subtasks open but cannot move or resize.
 
 In a **Plan on roadmap** session with **Auto-fit end to workload** on, a
-drop sets the end for you, at the earliest week by which the delay
-projection finishes the task, so it is not Behind plan. When Qivo finds no
-such end within its limits, the end stays where you dropped it and the
-planning panel says so, and a Done task always moves as you drop it
+drop sets the end for you, at a week by which the delay projection
+finishes the task, so it is not Behind plan. Qivo looks for the earliest
+such week, and for an owner with a lot of open work it can settle on a
+later one. When Qivo finds no end within its limits, the end stays where
+you dropped it and the planning panel says so, and a Done task always moves
+as you drop it
 ([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
 Placing a task in weeks that are already full can still make the owner's
-other tasks in those weeks read Behind plan. Team utilization shows such a
-week as full or over.
+other tasks in those weeks read Behind plan. Team utilization, with **All
+projects** chosen, shows such a week as full or over.
 
 Click the portrait beside a task to change or clear its assignee. Its list
 shows the people who can take the task, 25 at a time with a search and

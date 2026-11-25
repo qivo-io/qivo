@@ -170,10 +170,10 @@ try {
       const end = autoFitEndWeek(spans, task(start), 32, TODAY_WEEK)
       if (end === null) continue
       found++
-      assert.notEqual(verdict(start, end), 'behind')
+      assert.equal(verdict(start, end), 'ok')
       if (earliest) assert.equal(verdict(start, end - 1), 'behind')
     }
-    if (earliest) assert.equal(found, starts.length)
+    assert.equal(found, starts.length)
     let next = 0
     fits.push({
       load: name,
