@@ -15,7 +15,7 @@ for a projection; without them, it gets a warning only once overdue.
 
 ## How the projection works
 
-Qivo projects all of one owner's unfinished tasks together, week by week,
+Qivo projects one owner's planned unfinished tasks together, week by week,
 against the owner's plannable hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
 Each Remaining save records when you measured it, and a task's remaining
 hours count from that week. A task takes part from that week or its planned
@@ -41,9 +41,13 @@ projected to finish in the third week, Behind plan. A task squeezed in one
 week asks for more in the weeks left in its plan, so it can still finish on
 time when those weeks have room.
 
-A task with remaining hours but no plan, and a paused task, ask for nothing.
-They get the hours the planned tasks leave free in each week, and paused
-work takes no hours from other tasks.
+A task with remaining hours but no plan, and a paused task, ask for nothing
+and take no hours from the planned tasks. Each one is fitted on its own into
+the hours the planned tasks leave free, so such tasks take no hours from
+each other either. For example, two such tasks of 32 hours each, with 32
+free hours in the coming week, are both projected to finish in that week,
+though together they need two weeks. Read their finish weeks one task at a
+time, not as a plan that fits together.
 
 The projection counts the owner's other open work as you may see it.
 Organization admins and users receive organization-wide commitments, with
