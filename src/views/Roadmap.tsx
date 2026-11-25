@@ -2066,10 +2066,11 @@ function Roadmap({
 
   // effective highlight: only while the selected person is actually in the strip
   const hl = hlUser && team.some((p) => p.id === hlUser) ? hlUser : null
-  // the rows ring and fade for it only while the person owns one: Team
-  // keeps the owner of Done tasks Hide Done in Roadmap hides, and would
-  // otherwise fade every row with none to highlight
-  const hlRows = hl && rowTasks.some((it) => it.owner === hl) ? hl : null
+  // the rows ring and fade for it only while the person owns a task row
+  // shown: Team also counts the owners of tasks under a collapsed heading
+  // and of Done tasks Hide Done in Roadmap hides, and would otherwise fade
+  // every row with none to highlight
+  const hlRows = hl && rows.some((row) => row.issue?.owner === hl) ? hl : null
   const activeResourceWeek =
     stripMode !== 'min' &&
     team.length > 0 &&

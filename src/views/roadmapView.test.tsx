@@ -946,21 +946,45 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     },
   )
 
-  it('dims no row for a Team person whose tasks in the window it all hides, and fades the others once they show', async () => {
-    const board = await loadBoard(network, withDone, { scope: 'plan' })
-    const fade = (id: string) =>
-      document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)?.parentElement?.style
-        .opacity
-    await renderRoadmap(board)
-    // OTHER owns only the Done QN-3, which has no row
-    const other = () => document.querySelector<HTMLElement>(`[data-res-person="${OTHER}"]`)
-    await act(async () => other()?.click())
-    expect(other()?.getAttribute('aria-pressed')).toBe('true')
-    expect(rows().map(fade)).toEqual(['1', '1', '1', '1'])
-    await renderRoadmap(board, { hideDone: false })
-    expect(fade('QN-3')).toBe('1')
-    expect(fade('QN-1')).toBe('0.3')
-  })
+  it.each([
+    ['on, which hides their Done task in One', true, 'one'],
+    ['off, with their Done task in Two', false, 'two'],
+  ] as const)(
+    'dims no row for a Team person with no row shown, the setting %s and their open task in a collapsed Two, and fades the others once it shows',
+    async (_, hideDone, doneIn) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          addOther(snap)
+          const now = { start_week: week(0), end_week: week(0), assignee_id: OTHER }
+          snap.issues.push(
+            {
+              ...taskRow(snap, 'other-done', 'done', 3),
+              ...now,
+              ...(doneIn === 'two' ? { project_id: 'two' } : {}),
+            },
+            { ...taskRow(snap, 'other-open', 'todo', 4), ...now, project_id: 'two' },
+          )
+        },
+        { scope: 'plan' },
+      )
+      const fade = (id: string) =>
+        document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)?.parentElement
+          ?.style.opacity
+      const fold = () => document.querySelector<HTMLElement>('[data-row-fold="two"]')
+      await renderRoadmap(board, { hideDone })
+      await act(async () => fold()?.click())
+      expect(rows()).toEqual(['QN-1'])
+      const other = () => document.querySelector<HTMLElement>(`[data-res-person="${OTHER}"]`)
+      await act(async () => other()?.click())
+      expect(other()?.getAttribute('aria-pressed')).toBe('true')
+      expect(fade('QN-1')).toBe('1')
+      await act(async () => fold()?.click())
+      expect(fade('QN-4')).toBe('1')
+      expect(fade('QN-1')).toBe('0.3')
+    },
+  )
 
   it('says Done tasks are hidden where they are all the Roadmap has, with Clear filters under a filter', async () => {
     const clearFilters = vi.fn()
