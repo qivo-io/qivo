@@ -121,8 +121,8 @@ Placing a task in weeks that are already full can still make the owner's
 other tasks in those weeks read Behind plan. With **All projects** chosen,
 Team utilization shows the hours planned in each week in the projects you
 can see. The delay projection also counts unfinished hours that move on from
-earlier weeks, and work you cannot see, so a week can be full for the
-projection while Team utilization shows it below 100%.
+earlier weeks, so a week can be full for the projection while Team
+utilization shows it below 100%.
 
 Click the portrait beside a task to change or clear its assignee. Its list
 shows the people who can take the task, 25 at a time with a search and

@@ -49,8 +49,8 @@ The planning panel offers:
   those weeks read Behind plan. With **All projects** chosen, Team
   utilization shows the hours planned in each week in the projects you can
   see. The delay projection also counts unfinished hours that move on from
-  earlier weeks, and work you cannot see, so a week can be full for the
-  projection while Team utilization shows it below 100%. Auto-fit uses the reviewer while a task is In Review with one and
+  earlier weeks, so a week can be full for the projection while Team
+  utilization shows it below 100%. Auto-fit uses the reviewer while a task is In Review with one and
   follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
