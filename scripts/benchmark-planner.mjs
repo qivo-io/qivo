@@ -1,4 +1,4 @@
-// Deterministic, deployment-free delay projection benchmark. Run with Node.
+// Deterministic, deployment-free delay projection and Auto-fit benchmark. Run with Node.
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,6 +6,11 @@ import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+
+// the everyday organization's people and each one's open tasks, as the
+// load benchmark grows it (scripts/load/options.mjs EVERYDAY_ORG)
+const EVERYDAY_PEOPLE = 50
+const EVERYDAY_TASKS_EACH = 3
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const cacheDir = await mkdtemp(join(tmpdir(), 'qivo-planner-benchmark-'))
@@ -20,6 +25,7 @@ try {
     server: { middlewareMode: true, hmr: false, watch: null },
   })
   const { computeDelayMap, delayOf } = await server.ssrLoadModule('/src/lib/delay.ts')
+  const { autoFitEndWeek } = await server.ssrLoadModule('/src/lib/workload.ts')
   const { TODAY_WEEK } = await server.ssrLoadModule('/src/lib/dates.ts')
   // every issue judged alone, each against a walk of its own
   const alone = (issues, load) => {
@@ -30,6 +36,8 @@ try {
     }
     return result
   }
+  // `count` open tasks over `owners` people. Every tenth is in a project the
+  // reader cannot see, so it is only a load row without a task id.
   const fixture = (count, owners) => {
     let randomState = 20261001
     const random = (max) => {
@@ -37,12 +45,13 @@ try {
       return Math.floor((randomState / 2 ** 32) * max)
     }
     const load = new Map(Array.from({ length: owners }, (_, i) => [`owner-${i}`, []]))
-    const issues = Array.from({ length: count }, (_, index) => {
+    const issues = []
+    for (let index = 0; index < count; index++) {
       const start = TODAY_WEEK - 12 + random(52)
       const issue = {
         uuid: `task-${index}`,
         owner: `owner-${random(owners)}`,
-        status: index % 13 === 0 ? 'done' : index % 5 === 0 ? 'review' : 'progress',
+        status: index % 5 === 0 ? 'review' : 'progress',
         isGroup: index % 17 === 0,
         paused: index % 19 === 0,
         start,
@@ -53,38 +62,41 @@ try {
         duePast: start + 8 < TODAY_WEEK,
         capacity: 32,
       }
-      // paused and done tasks and groups carry no load
-      if (!issue.paused && issue.status !== 'done' && !issue.isGroup) {
+      const hidden = index % 10 === 9
+      // paused tasks and groups carry no load
+      if (!issue.paused && !issue.isGroup) {
         load.get(issue.owner).push({
-          issueUuid: issue.uuid,
+          issueUuid: hidden ? null : issue.uuid,
           start: issue.start,
           end: issue.end,
           remainingSet: issue.remainingSet,
           remaining: issue.remaining,
         })
       }
-      return issue
-    })
-    for (const spans of load.values()) {
-      for (let i = 0; i < 8; i++) {
-        spans.push({
-          issueUuid: null,
-          start: TODAY_WEEK - 4 + i * 3,
-          end: TODAY_WEEK + i * 3,
-          remaining: 20 + i / 3,
-        })
-      }
+      if (!hidden) issues.push(issue)
     }
     return { issues, load }
   }
   const median = (values) => values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)]
+  const timed = (iterations, run) => {
+    const measure = () => {
+      const start = performance.now()
+      for (let i = 0; i < iterations; i++) run()
+      return (performance.now() - start) / iterations
+    }
+    for (let i = 0; i < 3; i++) measure()
+    const times = Array.from({ length: 9 }, measure)
+    return { 'median ms': median(times).toFixed(3), 'slowest ms': Math.max(...times).toFixed(3) }
+  }
   const results = []
   let observed = 0
-  // the design size's 10,000 open tasks of an organization over its 1,000
-  // people, then one person with a sub-project's 300 open tasks and with a
-  // project's 800, one figure at a time
+  // One figure at its design size a case: an organization's 10,000 open
+  // tasks over the everyday people, its 1,000 people with the everyday open
+  // tasks each, and one person with a sub-project's 300 open tasks and with
+  // a project's 800.
   for (const [count, owners] of [
-    [10000, 1000],
+    [10000, EVERYDAY_PEOPLE],
+    [1000 * EVERYDAY_TASKS_EACH, 1000],
     [300, 1],
     [800, 1],
   ]) {
@@ -97,24 +109,40 @@ try {
     )
     assert.deepEqual(sampled, alone(sample, load))
     const iterations = Math.max(1, Math.ceil(2000 / count))
-    const measure = () => {
-      const start = performance.now()
-      for (let i = 0; i < iterations; i++) observed += computeDelayMap(issues, load).size
-      return (performance.now() - start) / iterations
-    }
-    for (let i = 0; i < 3; i++) measure()
-    const times = Array.from({ length: 9 }, measure)
     results.push({
-      tasks: count,
+      'open tasks': count,
       owners,
-      'median ms': median(times).toFixed(3),
-      'slowest ms': Math.max(...times).toFixed(3),
+      ...timed(iterations, () => {
+        observed += computeDelayMap(issues, load).size
+      }),
+    })
+  }
+  // A drop in a planning session for one person with a sub-project's 300
+  // open tasks and with a project's 800: Auto-fit of a 40-hour task, from
+  // each of the next 20 weeks in turn.
+  const fits = []
+  for (const count of [300, 800]) {
+    const spans = fixture(count, 1).load.get('owner-0')
+    const starts = Array.from({ length: 20 }, (_, i) => TODAY_WEEK + i)
+    const drop = (start) =>
+      autoFitEndWeek(spans, { issueUuid: 'planned', start, remaining: 40 }, 32, TODAY_WEEK)
+    for (const start of starts) assert.ok(drop(start) >= start)
+    let next = 0
+    fits.push({
+      'open tasks': count,
+      ...timed(starts.length, () => drop(starts[next++ % starts.length])),
     })
   }
   assert.ok(observed > 0)
-  console.log(`Delay projection only; Node ${process.version}; 9 samples after 3 warmups.`)
-  console.log('Fixtures include fractional hours, measured windows, review owners and hidden load.')
+  console.log(`Node ${process.version}; 9 samples after 3 warmups.`)
+  console.log(
+    'Fixtures include fractional hours, measured windows, review owners and hidden load, ' +
+      'a tenth of the open tasks in projects the reader cannot see.',
+  )
+  console.log('Delay projection of every open task:')
   console.table(results)
+  console.log('Auto-fit of one drop:')
+  console.table(fits)
 } finally {
   await server?.close()
   await rm(cacheDir, { recursive: true, force: true })
