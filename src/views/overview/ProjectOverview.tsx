@@ -563,12 +563,17 @@ function NeedsPanel({
     if (document.activeElement !== e.target) focused.current = null
   }
   const was = focused.current
+  const [, marked] = useState(0)
   useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () => {
     const to = focused.current ? focused.current.target() : null
     // a window in the background sends no focus event for the row focus
-    // moves to, so the mark follows it here
+    // moves to, so the mark follows it here, and a render lets the hook see
+    // that row on the page before it can leave too
     const row = to?.closest<HTMLElement>('[data-need]')
-    if (row?.dataset.need && row.dataset.needId) focusIn(row.dataset.need, row.dataset.needId)
+    if (row?.dataset.need && row.dataset.needId) {
+      focusIn(row.dataset.need, row.dataset.needId)
+      marked((n) => n + 1)
+    }
     return to
   })
   // Load more leaves at the end of the list or where its rows failed:

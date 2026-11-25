@@ -396,6 +396,37 @@ describe('keyboard focus on a project Overview', { timeout: BOARD_TEST_TIMEOUT }
     expect(document.activeElement).toBe(open(second))
   })
 
+  it('moves focus on again when the row it moved to leaves too, with no focus event in between', async () => {
+    const { board } = await overview((snap) => {
+      plan(snap)
+      for (let n = 5; n <= 8; n++)
+        snap.issues.push({ ...taskRow(snap, `p${n}`, 'todo', n), paused: true })
+    })
+    const open = (row: HTMLElement | undefined) =>
+      row?.querySelector<HTMLElement>('[data-focus-key="row"]')
+    const clear = async (row: HTMLElement | undefined) => {
+      const task = board.snapshot.issues.find((t) => t.id === row?.dataset.needId)
+      if (task) Object.assign(task, { paused: false, due_date: day(30) })
+      await board.deliver()
+    }
+    const [first, second, third] = rows()
+    await act(async () => open(first)?.focus())
+    // a window in the background sends no focus events
+    const mute = (e: Event) => e.stopImmediatePropagation()
+    document.addEventListener('focusin', mute, true)
+    document.addEventListener('focus', mute, true)
+    try {
+      await clear(first)
+      expect(document.activeElement).toBe(open(second))
+      await clear(second)
+      expect(rows()[0]).toBe(third)
+      expect(document.activeElement).toBe(open(third))
+    } finally {
+      document.removeEventListener('focusin', mute, true)
+      document.removeEventListener('focus', mute, true)
+    }
+  })
+
   it("moves focus into Needs attention after a teammate's change only where Load more or the row that went had it", async () => {
     // 21 tasks need attention: the two overdue, the paused one and 18 more
     const { board } = await overview((snap) => {
