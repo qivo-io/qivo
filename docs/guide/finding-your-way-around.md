@@ -21,11 +21,13 @@ press **Load more**, up to 200. Past that it says that more projects are in
 **All projects**, with a button that opens it. Select a project to reveal
 its sub-projects, 25 at first and more as you scroll or press **Load more**,
 up to 100, after which it asks you to search. One project stays expanded at
-a time, the one you are in. When you open a project from elsewhere, such as
-**All projects**, Search or a link, the tree loads on until it shows that
-project and brings its row into view. A project opens at once. Where Qivo
-has not yet checked a project you open from a link or the one you had
-open last time, the page says it is opening the project, with its name
+a time, the one you opened last. It stays expanded while you visit
+**My view**, **Team sync**, **Inbox**, **All projects** or **Settings**, and
+opening another project collapses it. When you open a project from
+elsewhere, such as **All projects**, Search or a link, the tree loads on
+until it shows that project and brings its row into view. A project opens
+at once. Where Qivo has not yet checked a project you open from a link or
+the one you had open last time, the page says it is opening the project, with its name
 where Qivo knows it, until it has checked it. It then says so if you can no
 longer open it, or that Qivo couldn't open it, with **Retry**. The tree
 loads no tasks.

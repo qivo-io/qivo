@@ -317,6 +317,8 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  // the saved preferences, the remembered project among them
+  localStorage.clear()
   Reflect.deleteProperty(document, 'visibilityState')
   Reflect.deleteProperty(HTMLElement.prototype, 'scrollTop')
   if (pickLib) Object.assign(pickLib.SIDEBAR_MOST, { list: 200, children: 100 })
@@ -660,7 +662,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     return { big, boards, cloud, empty }
   }
 
-  it("lists the scope's 30 sub-projects 25 first and the rest on Load more, as siblings, and stops when the scope moves", async () => {
+  it("lists the scope's 30 sub-projects 25 first and the rest on Load more, as siblings, and stops when another project opens", async () => {
     const { big, cloud } = await bigProject()
     await render(big)
     expect(childNames()).toHaveLength(25)
@@ -683,10 +685,46 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render(cloud)
     expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
     expect(childNames()).toEqual(['Frontend'])
-    // My view ends every one
+  })
+
+  it('keeps the project opened last expanded and unlit while the scope names no project, until another project opens', async () => {
+    const { big, cloud } = await bigProject()
+    const frontend = snap.projects.find((p) => p.parent_id === cloud)?.id as string
+    /** The projects whose sub-projects show. */
+    const expanded = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-sidebar-children]')].map(
+        (c) => c.dataset.sidebarChildren,
+      )
+    const current = () => document.querySelectorAll('[data-sidebar-projects] [aria-current]')
+    await render(big)
+    expect(lit()).toEqual([big])
+    const reads = asked('children').length
+    // My view keeps Luma Sensor's sub-projects, read once, and lights no row
     await render('mine')
-    expect(open('projectNav:children')).toEqual([])
-    expect(document.querySelector('[data-sidebar-children]')).toBeNull()
+    expect(expanded()).toEqual([big])
+    expect(childNames()).toHaveLength(25)
+    expect(asked('children')).toHaveLength(reads)
+    expect(lit()).toEqual([])
+    expect(current()).toHaveLength(0)
+    // another project collapses it and shows its own
+    await render(cloud)
+    expect(expanded()).toEqual([cloud])
+    expect(open('projectNav:children').map((s) => s.args.project_id)).toEqual([cloud])
+    // a sub-project opened last keeps its project expanded, unlit
+    await render(frontend)
+    expect(lit()).toEqual([frontend])
+    await render('mine')
+    expect(expanded()).toEqual([cloud])
+    expect(childNames()).toEqual(['Frontend'])
+    expect(lit()).toEqual([])
+    // a tree mounted on My view, as after a reload, expands the remembered
+    // project
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    store.P.saveUINow({ lastProject: { org_id: ORG, project_id: big } })
+    await render('mine')
+    expect(expanded()).toEqual([big])
+    expect(lit()).toEqual([])
   })
 
   it('reads on to a scoped sub-project, lights it and stops at a lowered bound', async () => {
@@ -1005,18 +1043,20 @@ describe('the reveal', { timeout: 60_000 }, () => {
     await render(a)
     expect(scrolled).toEqual([into])
     // the person scrolls back to the top and goes to My view, which names
-    // no row, and back to A, whose row comes into view again; A's
-    // sub-projects load no more from here on
+    // no row, and back to A, whose row comes into view again
     tops.set(list(), 0)
     await render('mine')
     expect(scrolled).toEqual([into])
-    holding = (s) => s.name === 'projectNav:children'
     await render(a)
     expect(scrolled).toEqual([into, into])
     expect(lit()).toEqual([a])
     // the same through a sub-project of A the tree does not hold yet, its
-    // list still loading
+    // list still loading: the first project, in view, collapses A, whose
+    // sub-projects load no more from here on
     tops.set(list(), 0)
+    await render(ids[0])
+    expect(scrolled).toEqual([into, into])
+    holding = (s) => s.name === 'projectNav:children'
     await render(part)
     expect(childNames()).toEqual([])
     expect(lit()).toEqual([])
