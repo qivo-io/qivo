@@ -1352,6 +1352,31 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(datesSent('one-1').at(-1)).toEqual({ start_week: week(3), end_week: week(3) })
   })
 
+  it('keeps the dragged dates of a drop auto-fit finds no end for, and says so', async () => {
+    // two-1, of the same owner, holds 99,999 hours this week and next, more
+    // than ten years of their 32-hour weeks
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues[1].remaining_hours = 99_999
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await board.answer()
+    await settle()
+    await flush()
+    expect(planCard()?.textContent).not.toContain('Auto-fit found no end')
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    expect(datesSent('one-1')).toEqual([{ start_week: week(1), end_week: week(2) }])
+    expect(planCard()?.textContent).toContain(
+      'Auto-fit found no end within its limits, so the end stays as it is',
+    )
+  })
+
   it("places an unscheduled task's end once its owner's load first answers, and never again", async () => {
     const board = await loadBoard(
       network,

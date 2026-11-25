@@ -199,6 +199,10 @@ function RoadmapRoot({
   )
 }
 
+/** Whether Auto-fit places task `it`'s end: a task without subtasks, with
+    an owner and hours left. */
+const autoFits = (it: IssueVM) => !!it.owner && !P.isGroup(it) && it.remaining > 0
+
 const fitTask = (it: IssueVM, start: number): FitTask => ({
   issueUuid: it.uuid,
   start,
@@ -348,6 +352,12 @@ function Roadmap({
   const sendDates = (id, patch) => {
     const saved = P.updateIssue(id, patch)
     if (plannedWrites.current?.id === id) plannedWrites.current.writes.push(saved)
+  }
+  const noteFit = (s: PlanSession, found: boolean) => {
+    if (s.noFit === !found) return
+    const next = { ...s, noFit: !found }
+    sessionRef.current = next
+    setSession(next)
   }
   sessionRef.current = session
   // the session ends when the Roadmap goes, and when it hides (a kept page,
@@ -882,18 +892,13 @@ function Roadmap({
     const load = planLoadRef.current
     // auto-fit: the planned issue's end follows the owner's workload — a
     // move sets the start and recomputes the end; dragging the end is
-    // overridden by the same recompute ("checked against the rest of the plan")
+    // overridden by the same recompute ("checked against the rest of the plan"),
+    // unless the fit finds no end, when the drop keeps the end it dragged to
     const cap = capacityFor(it)
-    if (
-      sess &&
-      sess.issueId === id &&
-      sess.autoFit &&
-      it.owner &&
-      it.remaining > 0 &&
-      load &&
-      cap !== null
-    ) {
-      const end = autoFitEndWeek(load, fitTask(it, l.start), cap, P.TODAY_WEEK)
+    if (sess && sess.issueId === id && sess.autoFit && autoFits(it) && load && cap !== null) {
+      const fitted = autoFitEndWeek(load, fitTask(it, l.start), cap, P.TODAY_WEEK)
+      noteFit(sess, fitted !== null)
+      const end = fitted ?? l.end
       if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
@@ -1098,11 +1103,11 @@ function Roadmap({
   // the projects of the owner's work, which the panel names (PlanCard), at
   // most the owner's open tasks' projects
   useProjects(planLoad?.items?.map((item) => item.projectId) ?? [])
-  const autoFitEnd = (it: IssueVM, load: LoadItem[], capacity: number) =>
-    sendDates(it.id, {
-      start: it.start,
-      end: autoFitEndWeek(load, fitTask(it, it.start), capacity, P.TODAY_WEEK),
-    })
+  const autoFitEnd = (s: PlanSession, it: IssueVM, load: LoadItem[], capacity: number) => {
+    const end = autoFitEndWeek(load, fitTask(it, it.start), capacity, P.TODAY_WEEK)
+    noteFit(s, end !== null)
+    if (end !== null) sendDates(it.id, { start: it.start, end })
+  }
   /** Session `s`'s task as the Roadmap's answer names it, while no note
       takes the Roadmap's place and Hide Done in Roadmap does not hide it,
       else undefined. Auto-fit places only this task. One the answer no
@@ -1135,29 +1140,22 @@ function Roadmap({
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
-    const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
-    if (fits && cap !== null && load) autoFitEnd(it, load, cap)
+    const fits = s.autoFit && autoFits(it) && it.start != null
+    if (fits && cap !== null && load) autoFitEnd(placed, it, load, cap)
   })
   const toggleAutoFit = () => {
     const s = sessionRef.current
     if (!s) return
-    const autoFit = !s.autoFit
-    setSession({ ...s, autoFit })
+    const toggled = { ...s, autoFit: !s.autoFit, noFit: false }
+    sessionRef.current = toggled
+    setSession(toggled)
     const it = sessionTask(s)
     const load = planLoadRef.current
     // side effect OUTSIDE the state updater — a store write there would setState
     // on App (its store subscription) mid-render
     const cap = capacityFor(it)
-    if (
-      autoFit &&
-      it?.owner &&
-      !P.isGroup(it) &&
-      it.remaining > 0 &&
-      load &&
-      it.start != null &&
-      cap !== null
-    )
-      autoFitEnd(it, load, cap)
+    if (toggled.autoFit && it && autoFits(it) && load && it.start != null && cap !== null)
+      autoFitEnd(toggled, it, load, cap)
   }
   const confirmPlanning = () => {
     const s = sessionRef.current
@@ -1469,6 +1467,7 @@ function Roadmap({
       project: it.project,
       autoFit: true,
       fitOnLoad: wasUnscheduled,
+      noFit: false,
       orig,
     }
     sessionRef.current = started

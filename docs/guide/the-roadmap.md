@@ -111,7 +111,9 @@ and the bars of tasks with subtasks open but cannot move or resize.
 
 In a **Plan on roadmap** session with **Auto-fit end to workload** on, a
 drop sets the end for you, at the earliest week by which the delay
-projection finishes the task, so it is not Behind plan
+projection finishes the task, so it is not Behind plan. When Qivo finds no
+such end within its limits, the end stays where you dropped it and the
+planning panel says so
 ([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
 Placing a task in weeks that are already full can still make the owner's
 other tasks in those weeks read Behind plan. Team utilization shows such a

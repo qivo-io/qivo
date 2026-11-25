@@ -34,16 +34,21 @@ The planning panel offers:
   to the earliest week by which the delay projection finishes the task, with
   the owner's other tasks sharing their weekly hours
   ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
-  So the task you place is not Behind plan, though it is Late when that end
-  is after its due week. The end is no earlier than the start, the estimate
-  measurement week or the current week. A paused task asks for no hours, so
-  its end is where the hours the other tasks leave free cover it. Qivo tries
-  ends up to 520 weeks, ten years, after the first, and uses the last of
-  them when none works. Placing a task in weeks that are already full can
-  still make the owner's other tasks in those weeks read Behind plan. Team
-  utilization shows such a week as full or over. It uses the reviewer while
-  a task is In Review with one and follows ownership changes during the
-  session. While Qivo loads the
+  An end Qivo sets this way is not Behind plan, though it is Late when it is
+  after the task's due week. The end is no earlier than the start, the
+  estimate measurement week or the current week. A paused task asks for no
+  hours, so its end is where the hours the other tasks leave free cover it.
+  Qivo looks for an end up to 520 weeks, ten years, after the first, and for
+  an owner with a lot of open work it can stop looking sooner. It then tries
+  the week in which the hours the other tasks leave free cover the task, and
+  uses it if the projection finishes the task by then, though an earlier
+  week may work too. When Qivo finds no end, the end stays where you dropped
+  it, and the panel says **Auto-fit found no end within its limits, so the
+  end stays as it is**. The task can then read Behind plan. Placing a task
+  in weeks that are already full can still make the owner's other tasks in
+  those weeks read Behind plan. Team utilization shows such a week as full
+  or over. Auto-fit uses the reviewer while a task is In Review with one and
+  follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
   could not read their hours, it says **Capacity unknown, so auto-fit is

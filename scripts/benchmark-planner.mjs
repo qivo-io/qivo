@@ -126,7 +126,10 @@ try {
     const starts = Array.from({ length: 20 }, (_, i) => TODAY_WEEK + i)
     const drop = (start) =>
       autoFitEndWeek(spans, { issueUuid: 'planned', start, remaining: 40 }, 32, TODAY_WEEK)
-    for (const start of starts) assert.ok(drop(start) >= start)
+    for (const start of starts) {
+      const end = drop(start)
+      assert.ok(end === null || end >= start)
+    }
     let next = 0
     fits.push({
       'open tasks': count,

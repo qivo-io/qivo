@@ -118,9 +118,10 @@ const DONE = 1e-9
    asks that fill a week exactly can add up a little over it. */
 const FITS = 1e-9
 
-/* How many asks the walks of one Auto-fit (autoFitEndWeek) may add up,
-   past the walk of the owner's other tasks, before it stops trying ends. */
-const FIT_ASKS = 1_000_000
+/** How much work one Auto-fit (autoFitEndWeek) may do: how many asks the
+    walks of the ends it tries may add up, past the walk of the owner's
+    other tasks, before it stops trying ends. Tests lower it. */
+export const AUTO_FIT = { asks: 1_000_000 }
 
 let walkSteps = 0
 
@@ -129,6 +130,15 @@ let walkSteps = 0
     before and after a call to measure the call's work without a clock. */
 export function walkStepsSoFar(): number {
   return walkSteps
+}
+
+let fitWalks = 0
+
+/** How many ends Auto-fit (autoFitEndWeek) has walked the owner's tasks
+    with so far, in this module instance. A test or a benchmark reads it
+    before and after a call to count the ends the call tried. */
+export function fitWalksSoFar(): number {
+  return fitWalks
 }
 
 /** One task in its owner's shared walk: it asks for hours from week
@@ -269,8 +279,13 @@ function copyOf(w: Walk): Walk {
 
 /* The week the hours a walk leaves free, `cap` a week less those it gave
    in the runs `used`, cover `remaining` hours from week `from`, within
-   PROJECTION_WEEKS weeks of `from`, else the last of them. */
-function fitFreeIn(used: Walk['used'], cap: number, from: number, remaining: number): number {
+   PROJECTION_WEEKS weeks of `from`, else null. */
+function freeCover(
+  used: Walk['used'],
+  cap: number,
+  from: number,
+  remaining: number,
+): number | null {
   if (!(remaining > 0) || remaining <= DONE) return from
   const end = from + PROJECTION_WEEKS - 1
   let left = remaining
@@ -289,8 +304,13 @@ function fitFreeIn(used: Walk['used'], cap: number, from: number, remaining: num
     }
     w = to + 1
   }
-  return end
+  return null
 }
+
+/* freeCover, or the last of its weeks when the free hours do not cover
+   `remaining`. */
+const fitFreeIn = (used: Walk['used'], cap: number, from: number, remaining: number): number =>
+  freeCover(used, cap, from, remaining) ?? from + PROJECTION_WEEKS - 1
 
 /** What one owner's shared walk answers. */
 export type OwnerWeeks = {
@@ -355,21 +375,25 @@ export type FitTask = {
  * measured, or `todayWeek` without a measurement, or its start when that
  * is later, and its end is no earlier than that week or `todayWeek`. A
  * paused task asks for no hours, so it ends when the hours the walk leaves
- * free cover it.
+ * free cover it. An agent's unlimited hours fit every ask, so its task ends
+ * in that first week.
  *
- * The search tries PROJECTION_WEEKS ends. It skips an end in whose week the
- * other tasks leave fewer free hours than the task's even share, which no
- * walk with the task can fit, and stops trying once its walks have added up
- * FIT_ASKS asks. Without an end that works it gives the last end it could
- * try, as a free-hours fit does for an owner without free hours. An agent's
- * unlimited hours fit every ask, so its task ends in that first week.
+ * The search tries the PROJECTION_WEEKS ends from that week, skipping
+ * those that no walk with the task can meet, and stops trying once its
+ * walks have added up AUTO_FIT.asks asks. It then tries the end at which
+ * the hours the walk of the other tasks leaves free cover the task, if it
+ * has not tried that end yet, and gives it when the walk finishes the task
+ * by it, though an earlier end may work too. Null when the search
+ * establishes no end, which is also the answer for a task whose owner's
+ * other work leaves it none within PROJECTION_WEEKS weeks, and for a
+ * paused task the free hours do not cover within them.
  */
 export function autoFitEndWeek(
   load: readonly LoadSpan[],
   task: FitTask,
   capacity: number,
   todayWeek: number,
-): number {
+): number | null {
   const from = Math.max(task.start, task.remainingSet ?? todayWeek)
   const first = Math.max(from, todayWeek)
   const last = first + PROJECTION_WEEKS - 1
@@ -382,25 +406,51 @@ export function autoFitEndWeek(
   advance(rest, cap, from)
   const before = copyOf(rest)
   advance(rest, cap, Infinity)
-  if (task.paused) return Math.max(first, fitFreeIn(rest.used, cap, from, task.remaining))
-  let asks = 0
+  const free = freeCover(rest.used, cap, from, task.remaining)
+  if (task.paused) return free === null ? null : Math.max(first, free)
+  const started = new Set(before.active)
+  const due = before.tasks
+    .filter((t, i) => i >= before.next || started.has(t))
+    .sort((a, b) => a.end - b.end)
+  let dueHours = 0
+  let dueNext = 0
   let run = 0
-  for (let end = first; end <= last && asks <= FIT_ASKS; end++) {
+  /* Whether no walk can finish the task by `end`, asked for ends in
+     increasing order. A walk finishes the task by its end only in a week
+     whose asks fit, where every other task whose plan has ended by then
+     gets all its hours left, so those hours and the task's must fit in the
+     weeks from `from` to `end`. In that week the task asks for at least
+     its hours spread evenly, which the hours the other tasks leave free
+     in it must hold. */
+  const ruledOut = (end: number): boolean => {
+    while (dueNext < due.length && due[dueNext].end <= end) dueHours += due[dueNext++].left
     while (run < rest.used.length && rest.used[run].to < end) run++
     const at = rest.used[run]
     const given = at !== undefined && at.from <= end ? at.hours : 0
-    // the task asks in its last week at least its hours spread evenly
-    if (given + task.remaining / (end - from + 1) > cap + 2 * FITS) continue
+    const weeks = end - from + 1
+    return (
+      task.remaining + dueHours > (cap + 2 * FITS) * weeks * (1 + 1e-9) ||
+      given + task.remaining / weeks > cap + 2 * FITS
+    )
+  }
+  let asks = 0
+  const finishes = (end: number): boolean => {
+    fitWalks += 1
     const walk = copyOf(before)
     const own = taskOf({ issueUuid: task.issueUuid, from, end, remaining: task.remaining })
     let place = walk.next
     while (place < walk.tasks.length && byShared(walk.tasks[place], own) <= 0) place++
     walk.tasks.splice(place, 0, own)
     advance(walk, cap, end + 1)
-    if (walk.stopped === null && own.fin === end) return end
     asks += walk.asks
+    return walk.stopped === null && own.fin === end
   }
-  return last
+  let end = first
+  for (; end <= last && asks <= AUTO_FIT.asks; end++)
+    if (!ruledOut(end) && finishes(end)) return end
+  if (end > last || free === null) return null
+  const fallback = Math.max(first, free)
+  return fallback >= end && !ruledOut(fallback) && finishes(fallback) ? fallback : null
 }
 
 const DAY = 86_400_000

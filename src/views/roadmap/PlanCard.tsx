@@ -11,6 +11,10 @@ import { CAPACITY_UNKNOWN, capacityOf, hoursLoading } from '../capacity'
     them. */
 export const OWNER_HOURS_LOADING = 'Loading the owner’s hours…'
 
+/** What the planning panel says under auto-fit when its last fit found no
+    end (lib/workload.ts autoFitEndWeek) and left the end as it was. */
+export const NO_FIT_END = 'Auto-fit found no end within its limits, so the end stays as it is'
+
 /* a small on/off switch for the PlanCard's auto-fit control; the off track
    reads the palette's --switch-off, else --surface-3 */
 function PlanSwitch({
@@ -59,6 +63,9 @@ export type PlanSession = {
   autoFit: boolean
   /** whether the first valid load still places an unscheduled task's end */
   fitOnLoad: boolean
+  /** whether the last fit found no end, until a fit finds one or auto-fit
+      turns off */
+  noFit: boolean
   orig: ReturnType<typeof captureWeekDates>
 }
 
@@ -190,9 +197,11 @@ export function PlanCard({
                     ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
                     : remaining <= 0
                       ? 'Add remaining time to auto-fit'
-                      : session.autoFit
-                        ? `End follows ${first}’s free time on drop`
-                        : 'Drag the end freely'}
+                      : !session.autoFit
+                        ? 'Drag the end freely'
+                        : session.noFit
+                          ? NO_FIT_END
+                          : `End follows ${first}’s free time on drop`}
             </div>
           </div>
         </div>

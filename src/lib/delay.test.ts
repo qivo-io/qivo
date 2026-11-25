@@ -1,6 +1,11 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import { PROJECTION_WEEKS, walkStepsSoFar } from '../../convex/lib/workload'
+import {
+  AUTO_FIT,
+  fitWalksSoFar,
+  PROJECTION_WEEKS,
+  walkStepsSoFar,
+} from '../../convex/lib/workload'
 import { TODAY_WEEK } from './dates'
 import { computeDelayMap, DELAY_UNKNOWN, type DelayIssue, delayBeforeLoads, delayOf } from './delay'
 import { autoFitEndWeek, type FitTask, type LoadSpan } from './workload'
@@ -462,6 +467,15 @@ describe('delayOf — task groups', () => {
 describe('Auto-fit and the delay verdict', () => {
   const fitted = (load: LoadSpan[], task: Omit<FitTask, 'issueUuid'>) =>
     autoFitEndWeek(load, { issueUuid: 'self', ...task }, 32, T)
+  const withAsks = <R>(asks: number, run: () => R): R => {
+    const was = AUTO_FIT.asks
+    AUTO_FIT.asks = asks
+    try {
+      return run()
+    } finally {
+      AUTO_FIT.asks = was
+    }
+  }
 
   it('ends a task where the shared walk finishes it, so it reads On track', () => {
     // 32h in T and in T+2 leave T+1 and T+3 free, which hold 64h, but the
@@ -483,8 +497,9 @@ describe('Auto-fit and the delay verdict', () => {
     const measured = { ...task, start: T - 3, remainingSet: T - 2 }
     expect(autoFitEndWeek(busy, measured, Infinity, T)).toBe(T)
   })
-  it('gives the earliest end whose verdict is not Behind plan', () => {
+  it('gives the earliest end whose verdict is not Behind plan, or when its search stops early the free-hours end or none', () => {
     const week = fc.integer({ min: T - 4, max: T + 6 })
+    let stopped = 0
     fc.assert(
       fc.property(
         fc.array(
@@ -504,7 +519,8 @@ describe('Auto-fit and the delay verdict', () => {
           // the task's own span in the load, older than the task
           stale: fc.boolean(),
         }),
-        (rows, own) => {
+        fc.integer({ min: 0, max: 40 }),
+        (rows, own, asks) => {
           const load = rows.map((r, i) =>
             span({
               issueUuid: `o${i}`,
@@ -518,36 +534,75 @@ describe('Auto-fit and the delay verdict', () => {
           const task = { start: own.start, remaining: own.remaining, remainingSet: own.measured }
           const it = iss({ ...task, paused: own.paused, capacity: 32 })
           const end = fitted(load, { ...task, paused: own.paused })
-          const verdict = (e: number) => delayOf({ ...it, end: e }, load)?.status
+          const verdict = (e: number | null) =>
+            e === null ? null : delayOf({ ...it, end: e }, load)?.status
           expect(verdict(end)).toBe('ok')
           const first = Math.max(T, own.start, own.measured ?? T)
-          for (let e = first; e < end; e++) expect(verdict(e)).toBe('behind')
+          for (let e = first; e < (end ?? first); e++) expect(verdict(e)).toBe('behind')
+          // a search that may add up only `asks` asks
+          const cut = withAsks(asks, () => fitted(load, { ...task, paused: own.paused }))
+          if (cut === end) return
+          stopped++
+          const free = delayOf({ ...it, paused: true, end: first }, load)?.fin
+          expect([null, free]).toContain(cut)
+          if (cut !== null) expect(verdict(cut)).toBe('ok')
         },
       ),
       { seed: 20261125, numRuns: 300 },
     )
+    expect(stopped).toBeGreaterThan(0)
   })
-  it('tries the ends for a saturated owner at the cost of one walk', () => {
+  it('finds no end for an owner whose other work never lets the task finish, at the cost of one walk', () => {
     const endless = [span({ issueUuid: 'a', start: T, end: T, remaining: 1e12 })]
     const before = walkStepsSoFar()
-    expect(fitted(endless, { start: T, remaining: 10 })).toBe(T + PROJECTION_WEEKS - 1)
+    expect(fitted(endless, { start: T, remaining: 10 })).toBeNull()
     expect(walkStepsSoFar() - before).toBeLessThanOrEqual(PROJECTION_WEEKS)
   })
-  it('stops trying ends after bounded walking where every other week is full', () => {
-    // 400 ten-year tasks take 16h a week, and a 16h task fills every other
-    // week, so many ends leave room in their own week and fail on the ones
-    // before. Trying every end walks over 50,000 steps.
-    const load = [
-      ...Array.from({ length: 400 }, (_, i) =>
-        span({ issueUuid: `l${i}`, start: T, end: T + 519, remaining: 0.04 * 520 }),
-      ),
-      ...Array.from({ length: 260 }, (_, i) =>
-        span({ issueUuid: `s${i}`, start: T + 2 * i + 1, end: T + 2 * i + 1, remaining: 16 }),
-      ),
-    ]
-    const before = walkStepsSoFar()
-    fitted(load, { start: T, remaining: 4000 })
-    expect(walkStepsSoFar() - before).toBeLessThan(10_000)
+  it('ends a drop where the free hours after 100 full weeks cover it, On track by its due week, at the cost of one walk', () => {
+    // 100 tasks of 4h planned over T to T+99 fill the 4h weeks, so a 400h
+    // drop finishes in T+199 at the earliest
+    const load = Array.from({ length: 100 }, (_, i) =>
+      span({ issueUuid: `o${i}`, start: T, end: T + 99, remaining: 4 }),
+    )
+    const before = fitWalksSoFar()
+    expect(autoFitEndWeek(load, { issueUuid: 'self', start: T, remaining: 400 }, 4, T)).toBe(
+      T + 199,
+    )
+    expect(fitWalksSoFar() - before).toBe(1)
+    const b = iss({ start: T, remaining: 400, capacity: 4, dueWeek: T + 250 })
+    expect(delayOf({ ...b, end: T + 199 }, load)).toEqual({ status: 'ok', fin: T + 199 })
+    expect(delayOf({ ...b, end: T + 198 }, load)?.status).toBe('behind')
+  })
+  it("ends a drop after an owner's 196 weeks of other work where it can finish, not ten years on", () => {
+    // 800 tasks of 7.84h planned for this week share the 32h weeks until
+    // T+195, and their 6,272h and the drop's 400h fill 208.5 weeks
+    const load = Array.from({ length: 800 }, (_, i) =>
+      span({ issueUuid: `o${i}`, start: T, end: T, remaining: 7.84 }),
+    )
+    expect(fitted(load, { start: T, remaining: 400 })).toBe(T + 208)
+    const b = iss({ start: T, remaining: 400, capacity: 32 })
+    expect(delayOf({ ...b, end: T + 208 }, load)?.status).toBe('ok')
+    expect(delayOf({ ...b, end: T + 207 }, load)?.status).toBe('behind')
+  })
+  it('gives the free-hours end when its search stops early and the task finishes by it, and else no end', () => {
+    withAsks(0, () => {
+      // the one walk the search then takes, at T+8, does not finish the
+      // 100h by T+8, while the free hours cover them in T+10, where the walk
+      // finishes them, though T+9 works too
+      const load = [
+        span({ issueUuid: 'a', start: T + 1, end: T + 26, remaining: 160 }),
+        span({ issueUuid: 'b', start: T + 2, end: T + 10, remaining: 20 }),
+        span({ issueUuid: 'c', start: T, end: T + 4, remaining: 160 }),
+      ]
+      expect(fitted(load, { start: T, remaining: 100 })).toBe(T + 10)
+      // the one walk, at T+3, does not finish the 64h by T+3, which is
+      // also where the free hours cover them
+      const twoFull = [
+        span({ issueUuid: 'a', start: T, end: T, remaining: 32 }),
+        span({ issueUuid: 'c', start: T + 2, end: T + 2, remaining: 32 }),
+      ]
+      expect(fitted(twoFull, { start: T, remaining: 64 })).toBeNull()
+    })
   })
 })
 
