@@ -723,11 +723,14 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(expanded()).toEqual([cloud])
     expect(childNames()).toEqual(['Frontend'])
     expect(lit()).toEqual([])
-    // a tree mounted on My view, as after a reload, expands the remembered
-    // project
+    // after a reload on My view, a new store whose project cache knows no
+    // project and which holds only the saved project expands that project
     await act(async () => root.unmount())
     root = createRoot(container)
-    store.P.saveUINow({ lastProject: { org_id: ORG, project_id: big } })
+    localStorage.clear()
+    await load(snap)
+    saved(big)
+    expect(store.P.projectState(big)).toBe('loading')
     await render('mine')
     expect(expanded()).toEqual([big])
     expect(lit()).toEqual([])
