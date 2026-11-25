@@ -1,11 +1,10 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
+import { PROJECTION_WEEKS, shareOwnerWeeks, walkStepsSoFar } from '../../convex/lib/workload'
 import {
   canonicalLoad,
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
-  fitEndWeek,
-  fitEndWeekAgainst,
   fmtHours,
   hasPlannableWeek,
   issueLoadByPerson,
@@ -15,9 +14,7 @@ import {
   loadTone,
   pausedWeeksByPerson,
   plannableHoursOf,
-  prepareLoadProjection,
   spreadWindow,
-  weeksSpreadSoFar,
 } from './workload'
 
 const item = (o: Partial<LoadItem>): LoadItem => ({
@@ -64,7 +61,7 @@ describe('plannableHoursOf', () => {
   })
   it('never yields a zero denominator', () => {
     // 0 can't come from the DB (check > 0) but would silently make every
-    // load percentage Infinity and stall fitEndWeek at its 520-week bound
+    // load percentage Infinity and overbook every week of the shared walk
     expect(plannableHoursOf({ plannableHours: 0 })).toBe(DEFAULT_PLANNABLE_HOURS)
     expect(plannableHoursOf({ plannableHours: null })).toBe(DEFAULT_PLANNABLE_HOURS)
   })
@@ -86,17 +83,6 @@ describe('plannableHoursOf', () => {
     expect(hasPlannableWeek(plannableHoursOf({ kind: 'agent', plannableHours: null }))).toBe(false)
     expect(hasPlannableWeek(plannableHoursOf({ plannableHours: 20 }))).toBe(true)
     expect(hasPlannableWeek(plannableHoursOf(null))).toBe(true)
-  })
-})
-
-describe('fitEndWeek with an unbounded capacity', () => {
-  it('finishes in the starting week however much work there is', () => {
-    // the whole point of "an agent has no plannable week": its work is never
-    // stretched over calendar weeks it does not need
-    const cap = plannableHoursOf({ kind: 'agent', plannableHours: null })
-    expect(fitEndWeek(5, 400, cap, new Map())).toBe(5)
-    // …even against a week that is already fully committed
-    expect(fitEndWeek(5, 400, cap, new Map([[5, 999]]))).toBe(5)
   })
 })
 
@@ -174,137 +160,36 @@ describe('committedByWeek', () => {
   })
 })
 
-describe('fitEndWeek', () => {
-  it('returns start when there is no remaining time', () => {
-    expect(fitEndWeek(11, 0, 34, new Map())).toBe(11)
-  })
-  it('fits a free person by ceil(remaining/capacity)', () => {
-    // 60h at 34h/wk free → wk11:34 (rem26), wk12:34 (rem<0) → ends wk12 (2 weeks)
-    expect(fitEndWeek(11, 60, 34, new Map())).toBe(12)
-  })
-  it('pushes the end out when the person is partly committed', () => {
-    // 10h/wk already committed → 24h/wk free; 60h → wk11:24(36) wk12:24(12) wk13:24(<0) → wk13
-    const committed = new Map([
-      [11, 10],
-      [12, 10],
-      [13, 10],
-      [14, 10],
-    ])
-    expect(fitEndWeek(11, 60, 34, committed)).toBe(13)
-  })
-  it('does not loop forever when fully booked (capacity 0)', () => {
-    expect(fitEndWeek(11, 60, 0, new Map(), 50)).toBe(11 + 50 - 1)
-  })
-  it('skips saturated weeks then lands on the first week with free time', () => {
-    // wk11 fully booked (34), wk12 free → all 20h fit in wk12
-    const committed = new Map([[11, 34]])
-    expect(fitEndWeek(11, 20, 34, committed)).toBe(12)
-  })
-})
-
-describe('fitEndWeekAgainst', () => {
-  it('fits as fitEndWeek does over the whole load', () => {
-    fc.assert(
-      fc.property(
-        loads,
-        fc.integer({ min: -10, max: 15 }),
-        hours,
-        hours,
-        fc.integer({ min: 1, max: 30 }),
-        (load, start, remaining, capacity, maxWeeks) => {
-          expect(fitEndWeekAgainst(load, 'self', start, remaining, capacity, maxWeeks)).toBe(
-            fitEndWeek(start, remaining, capacity, committedByWeek(load, 'self'), maxWeeks),
-          )
-        },
-      ),
-      { seed: 20261015, numRuns: 400 },
-    )
-  })
-  it('fits against a plan that runs to the year 9999', () => {
-    const load = [item({ issueUuid: 'long', start: 0, end: LONG - 1, remaining: LONG * 30 })]
-    // 30 h a week of the owner's 34 are taken, so 10 h need three weeks
-    expect(fitEndWeekAgainst(load, 'self', 5, 10, 34)).toBe(7)
-  })
-})
-
-describe('prepared owner projections', () => {
-  it('preserves small competing commitments when excluding a much larger task', () => {
-    const load = [item({ issueUuid: 'self', remaining: 2 ** 60 }), item({ remaining: 1 })]
-    expect(prepareLoadProjection(load)(0, 1.5, 2, 'self')).toBe(1)
-  })
-
-  it('excludes every matching row and keeps anonymous hidden-project commitments', () => {
-    const load = [
-      item({ issueUuid: 'self', remaining: 20 }),
-      item({ issueUuid: 'self', start: -2, end: -1, remainingSet: 0, remaining: 10 }),
-      item({ issueUuid: null, remaining: 8 }),
-    ]
-    expect(prepareLoadProjection(load)(0, 3, 10, 'self')).toBe(1)
-    expect(prepareLoadProjection(load)(0, 3, 10, 'absent')).toBe(1)
-  })
-
-  it('keeps the original completion threshold and bounded/non-finite behavior', () => {
-    const loads = [
-      [item({ issueUuid: 'self', remaining: 0.1 }), item({ remaining: 0.2 })],
-      [item({ issueUuid: 'self', remaining: Infinity }), item({ remaining: 2 })],
-    ]
-    for (const load of loads) {
-      const project = prepareLoadProjection(load)
-      for (const capacity of [0, 1, 32, Infinity]) {
-        for (const remaining of [0, 0.8 + 1e-9 - Number.EPSILON, 0.8 + 1e-9, Infinity]) {
-          expect(project(0, remaining, capacity, 'self', 3)).toBe(
-            fitEndWeek(0, remaining, capacity, committedByWeek(load, 'self'), 3),
-          )
-        }
-      }
+describe('the shared walk', () => {
+  it('walks plans that run to the year 9999 at the cost of their starts and ends', () => {
+    const steps = (end: number): number => {
+      // 20 tasks starting a week apart, 1 h a week each of 34
+      const spans = Array.from({ length: 20 }, (_, i) => ({
+        issueUuid: `p${i}`,
+        from: i,
+        end,
+        remaining: end - i + 1,
+      }))
+      const before = walkStepsSoFar()
+      expect(shareOwnerWeeks(spans, 34).finishes).toEqual(spans.map(() => end))
+      return walkStepsSoFar() - before
     }
+    expect(steps(LONG - 1)).toBe(steps(120))
+    expect(steps(LONG - 1)).toBeLessThanOrEqual(21)
   })
-
-  it('matches ordered sums across randomized windows, magnitudes and completion boundaries', () => {
-    fc.assert(
-      fc.property(
-        loads,
-        fc.integer({ min: -10, max: 15 }),
-        hours,
-        hours,
-        (load, start, remaining, capacity) => {
-          const exact = committedByWeek(load, 'self')
-          const project = prepareLoadProjection(load)
-          const boundary = Math.max(0, capacity - (exact.get(start) || 0)) + 1e-9
-          for (const hoursLeft of [remaining, boundary, boundary - Number.EPSILON]) {
-            expect(project(start, hoursLeft, capacity, 'self', 50)).toBe(
-              fitEndWeek(start, hoursLeft, capacity, exact, 50),
-            )
-          }
-        },
-      ),
-      { seed: 20261001, numRuns: 400 },
-    )
+  it('stops walking an owner after PROJECTION_WEEKS overbooked weeks', () => {
+    const before = walkStepsSoFar()
+    const walk = shareOwnerWeeks([{ issueUuid: 'a', from: 0, end: 0, remaining: 1e12 }], 32)
+    expect(walk.finishes).toEqual([PROJECTION_WEEKS])
+    expect(walkStepsSoFar() - before).toBe(PROJECTION_WEEKS)
   })
-
-  it('projects against plans that run to the year 9999 at the cost of the weeks it reads', () => {
-    const long = (issueUuid: string, start: number, end = LONG - 1) =>
-      item({ issueUuid, start, end, remaining: (end - start + 1) * 3 }) // 3/wk
-    const own = item({ issueUuid: 'self', start: 0, end: 3, remaining: 40 })
-    const two = [long('a', 0), long('b', 2), own]
-    const project = prepareLoadProjection(two)
-    const whole = committedByWeek(two, 'self')
-    for (const start of [0, 100, LONG - 10]) {
-      expect(project(start, 40, 34, 'self')).toBe(fitEndWeek(start, 40, 34, whole))
-    }
-    expect(project(100, 40, 34, null)).toBe(fitEndWeek(100, 40, 34, committedByWeek(two)))
-    // Twenty such plans would be 8.3 million week entries spread in full.
-    // The projection spreads only the 64-week block it reads, so plans that
-    // end about two years out cost it the same.
-    const work = (end: number): number => {
-      const twenty = [...Array.from({ length: 20 }, (_, i) => long(`p${i}`, i, end)), own]
-      const before = weeksSpreadSoFar()
-      // week 0 has 31 of 34 hours free and week 1 has 28
-      expect(prepareLoadProjection(twenty)(0, 40, 34, 'self')).toBe(1)
-      return weeksSpreadSoFar() - before
-    }
-    expect(work(LONG - 1)).toBe(work(120))
-    expect(work(LONG - 1)).toBeLessThanOrEqual(21 * 64)
+  it('gives no free hours from the week a walk stops at its bound', () => {
+    const later = PROJECTION_WEEKS + 10
+    const stopped = shareOwnerWeeks([{ issueUuid: 'a', from: 0, end: 0, remaining: 1e12 }], 32)
+    expect(stopped.fitFree(later, 10)).toBe(later + PROJECTION_WEEKS - 1)
+    // a walk that finishes its tasks leaves the weeks after them free
+    const finished = shareOwnerWeeks([{ issueUuid: 'a', from: 0, end: 0, remaining: 64 }], 32)
+    expect(finished.fitFree(later, 10)).toBe(later)
   })
 })
 

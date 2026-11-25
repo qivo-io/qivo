@@ -109,6 +109,21 @@ With edit access, drag a bar to move it or drag either edge to resize it.
 Release to save. Click a bar or task name to open its details. Read-only bars
 and the bars of tasks with subtasks open but cannot move or resize.
 
+In a **Plan on roadmap** session with **Auto-fit end to workload** on, a
+drop sets the end for you, at a week by which the delay projection
+finishes the task, so it is not Behind plan. Qivo looks for the earliest
+such week, and for an owner with a lot of open work it can settle on a
+later one. When Qivo finds no end within its limits, the end stays where
+you dropped it and the planning panel says so, and a Done task always moves
+as you drop it
+([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
+Placing a task in weeks that are already full can still make the owner's
+other tasks in those weeks read Behind plan. With **All projects** chosen,
+Team utilization shows the hours planned in each week in the projects you
+can see. The delay projection also counts unfinished hours that move on from
+earlier weeks, so a week can be full for the projection while Team
+utilization shows it below 100%.
+
 Click the portrait beside a task to change or clear its assignee. Its list
 shows the people who can take the task, 25 at a time with a search and
 **Load more**, as the task window's **Assignee** does
@@ -135,8 +150,12 @@ on it moves nothing, and the plan still ends where the gray ends.
 
 **Projected delay** in the toolbar draws diagonal stripes in the same yellow
 or red from the end of a Behind plan or Late bar, or its run-on, to the end of
-the task's projected finish week, which the hover text names
+the task's projected finish week, which the hover text names. The stripes
+assume that in an overbooked week each of the owner's tasks gets the same
+share of the hours it asks for, the rest moving to later weeks, and that
+remaining hours count from the week they were last updated
 ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+With 16 hours in a week and asks of 24 and 8 hours, the tasks get 12 and 4.
 It is on by default. Switching it off hides the stripes and the projected
 finish week in the hover text, and nothing else, for your account, in every
 project, in My view and on the phone's landscape timeline.

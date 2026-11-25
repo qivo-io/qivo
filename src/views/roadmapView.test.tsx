@@ -1352,6 +1352,60 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(datesSent('one-1').at(-1)).toEqual({ start_week: week(3), end_week: week(3) })
   })
 
+  it('keeps the dragged dates of a drop auto-fit finds no end for, and says so', async () => {
+    // two-1, of the same owner, holds 99,999 hours this week and next, more
+    // than ten years of their 32-hour weeks
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues[1].remaining_hours = 99_999
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await board.answer()
+    await settle()
+    await flush()
+    expect(planCard()?.textContent).not.toContain('Auto-fit found no end')
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    expect(datesSent('one-1')).toEqual([{ start_week: week(1), end_week: week(2) }])
+    expect(planCard()?.textContent).toContain(
+      'Auto-fit found no end within its limits, so the end stays as it is',
+    )
+  })
+
+  it('moves a Done task as dropped, into the past too, with auto-fit off', async () => {
+    // one-1 is Done with 8 hours left as measured three weeks ago, when it
+    // was planned
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[0], {
+          status: 'done',
+          remaining_hours: 8,
+          remaining_set_at: `${week(-3)}T12:00:00.000Z`,
+          start_week: week(-3),
+          end_week: week(-3),
+        })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    const request = { ...planOne(board), start: TODAY_WEEK - 3, end: TODAY_WEEK - 3 }
+    await renderRoadmap(board, { focusPlan: request, hideDone: false })
+    await board.answer()
+    await settle()
+    await flush()
+    expect(planCard()?.textContent).toContain('Done, so auto-fit is off')
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    expect(datesSent('one-1')).toEqual([{ start_week: week(-2), end_week: week(-2) }])
+  })
+
   it("places an unscheduled task's end once its owner's load first answers, and never again", async () => {
     const board = await loadBoard(
       network,

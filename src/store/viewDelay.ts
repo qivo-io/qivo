@@ -13,10 +13,10 @@
    never counted again, before or after the server's answer, and a task
    given to another owner leaves the first owner's load. Spans without a
    task, other people's work the person is not shown, stay. The judged
-   task's own spans never count, whichever list holds them, since the
-   projection leaves them out by uuid (convex/lib/workload.ts), so a task
-   the window shows from its answer, painted with the person's pending
-   edits (store/taskDetail.ts), needs no span of its own here.
+   task takes part in its owner's walk as the task it judges, its spans in
+   the load set aside by uuid (convex/lib/delay.ts ownerProjection), so a
+   task the window shows from its answer, painted with the person's
+   pending edits (store/taskDetail.ts), needs no span of its own here.
 
    Team utilization and the planning panel read a person's work by the same
    rule (ownerItemsOf): the cache's spans with each one's project and the
@@ -120,6 +120,7 @@ export function delayIssueOfRow(row: ViewRow, capacity: (id: string) => number):
     isGroup: group,
     isDone: group ? !!row.group_done : row.status === 'done',
     partial: group ? !!row.span?.partial : false,
+    paused: !group && !!row.paused,
     owner,
     start,
     end: end === null ? null : Math.max(start ?? end, end),
@@ -146,6 +147,7 @@ export function delayIssueOfTask(
     isGroup: group.isGroup,
     isDone: group.isDone,
     partial: group.partial,
+    paused: !group.isGroup && !!it.paused,
     owner: it.owner ?? null,
     start: it.start,
     end: it.end,

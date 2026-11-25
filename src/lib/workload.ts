@@ -2,22 +2,20 @@
    otherwise the assignee. Hidden projects still contribute organization-wide
    load; presentation folds them into an anonymous "Other projects" bucket.
    The spread, capacity and fit rules live in convex/lib/workload.ts, which
-   the REST and MCP workload read and delay verdicts share. */
+   the REST and MCP workload read too. */
 
 import { spreadWindow, type WeekRange } from '../../convex/lib/workload'
 
 export {
+  autoFitEndWeek,
   canonicalLoad,
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
-  fitEndWeek,
-  fitEndWeekAgainst,
+  type FitTask,
   type LoadSpan,
   plannableHoursOf,
-  prepareLoadProjection,
   spreadWindow,
   type WeekRange,
-  weeksSpreadSoFar,
 } from '../../convex/lib/workload'
 
 /** Is this a capacity that can be divided by and written down? Everything that

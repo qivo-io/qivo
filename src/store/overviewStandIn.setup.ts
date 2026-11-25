@@ -382,6 +382,7 @@ export function overviewStandIn(
       isGroup: group,
       isDone: done(t),
       partial,
+      paused: !group && t.paused === true,
       owner: ownerId ?? null,
       start,
       end,

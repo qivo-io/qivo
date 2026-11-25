@@ -11,6 +11,14 @@ import { CAPACITY_UNKNOWN, capacityOf, hoursLoading } from '../capacity'
     them. */
 export const OWNER_HOURS_LOADING = 'Loading the owner’s hours…'
 
+/** What the planning panel says under auto-fit when its last fit found no
+    end (lib/workload.ts autoFitEndWeek) and left the end as it was. */
+export const NO_FIT_END = 'Auto-fit found no end within its limits, so the end stays as it is'
+
+/** What the planning panel says under auto-fit for a Done task, whose
+    dates auto-fit leaves alone. */
+export const DONE_NO_FIT = 'Done, so auto-fit is off'
+
 /* a small on/off switch for the PlanCard's auto-fit control; the off track
    reads the palette's --switch-off, else --surface-3 */
 function PlanSwitch({
@@ -59,6 +67,9 @@ export type PlanSession = {
   autoFit: boolean
   /** whether the first valid load still places an unscheduled task's end */
   fitOnLoad: boolean
+  /** whether the last fit found no end, until a fit finds one or auto-fit
+      turns off */
+  noFit: boolean
   orig: ReturnType<typeof captureWeekDates>
 }
 
@@ -98,9 +109,11 @@ export function PlanCard({
   // Roadmap then spends the first fit.
   const cap = owner ? capacityOf(owner) : null
   const ownerLoading = hoursLoading(owner)
-  const canFit = !!owner && cap !== null && remaining > 0
+  const done = P.isDone(issue)
+  const canFit = !!owner && cap !== null && remaining > 0 && !done
   const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
-  // Match auto-fit: weeks before the measurement anchor cannot dilute load.
+  // As the task's hours spread (spreadWindow), weeks before the measurement
+  // week cannot dilute load.
   const fitStart =
     scheduled && issue.remainingSet != null
       ? Math.max(issue.start, issue.remainingSet)
@@ -112,7 +125,8 @@ export function PlanCard({
     !loading && load && scheduled ? loadByProject(load, fitStart, issue.end, issue.uuid) : []
   const committedInWindow = buckets.reduce((s, b) => s + b.hours, 0)
   // Use the same owner for capacity and existing commitments. Agents have
-  // no bounded capacity; auto-fit ends in the starting week.
+  // no bounded capacity; auto-fit ends in the task's first week
+  // (lib/workload.ts autoFitEndWeek).
   const bounded = cap !== null && hasPlannableWeek(cap)
   const freePerWk =
     cap === null ? 0 : scheduled ? Math.max(0, cap - committedInWindow / fitDur) : cap
@@ -180,17 +194,25 @@ export function PlanCard({
               Auto-fit end to workload
             </div>
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
-              {!owner
-                ? 'Assign someone to auto-fit'
-                : ownerLoading
-                  ? OWNER_HOURS_LOADING
-                  : cap === null
-                    ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
-                    : remaining <= 0
-                      ? 'Add remaining time to auto-fit'
-                      : session.autoFit
-                        ? `End follows ${first}’s free time on drop`
-                        : 'Drag the end freely'}
+              {done
+                ? DONE_NO_FIT
+                : !owner
+                  ? 'Assign someone to auto-fit'
+                  : ownerLoading
+                    ? OWNER_HOURS_LOADING
+                    : cap === null
+                      ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
+                      : remaining <= 0
+                        ? 'Add remaining time to auto-fit'
+                        : !session.autoFit
+                          ? 'Drag the end freely'
+                          : loading
+                            ? 'Checking available time…'
+                            : !load
+                              ? 'Workload is unavailable, so auto-fit is paused'
+                              : session.noFit
+                                ? NO_FIT_END
+                                : `On drop, ends in a week ${first} is projected to finish it`}
             </div>
           </div>
         </div>

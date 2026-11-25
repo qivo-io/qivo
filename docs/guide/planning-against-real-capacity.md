@@ -29,15 +29,35 @@ subtasks instead.
 
 The planning panel offers:
 
-- **Auto-fit end to workload**, on by default for tasks without subtasks, with
-  an owner and positive Remaining hours. After each drag, Qivo computes the end
-  from the owner's free weekly capacity, starting no earlier than the estimate
-  measurement week. It uses the reviewer while a task is In Review with one
-  and follows ownership changes during the session. While Qivo loads the
+- **Auto-fit end to workload**, on by default for tasks without subtasks
+  that are not Done, with an owner and positive Remaining hours. After each
+  drag, Qivo looks for the earliest week by which the delay projection
+  finishes the task and sets the end there, with the owner's other tasks sharing their weekly hours
+  ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+  An end Qivo sets this way is not Behind plan, though it is Late when it is
+  after the task's due week. The end is no earlier than the start, the
+  estimate measurement week or the current week. A paused task asks for no
+  hours, so its end is where the hours the other tasks leave free cover it.
+  Qivo looks for an end up to 520 weeks, ten years, after the first, and for
+  an owner with a lot of open work it can stop looking sooner. It then tries
+  the week in which the hours the other tasks leave free cover the task, and
+  uses it if the projection finishes the task by then, though an earlier
+  week may work too. When Qivo finds no end, the end stays as it is, and
+  the panel says **Auto-fit found no end within its limits, so the end
+  stays as it is**. The task can then read Behind plan. Placing a task
+  in weeks that are already full can still make the owner's other tasks in
+  those weeks read Behind plan. With **All projects** chosen, Team
+  utilization shows the hours planned in each week in the projects you can
+  see. The delay projection also counts unfinished hours that move on from
+  earlier weeks, so a week can be full for the projection while Team
+  utilization shows it below 100%. Auto-fit uses the reviewer while a task is In Review with one and
+  follows ownership changes during the session. While Qivo loads the
   owner's details the panel says **Loading the owner's hours…**, and the
   first fit of an unscheduled task waits for their weekly hours. If Qivo
   could not read their hours, it says **Capacity unknown, so auto-fit is
-  off**.
+  off**. A Done task's dates record when the work happened, so a drag
+  moves or resizes it as you drop it, and the panel says **Done, so
+  auto-fit is off**.
 - The owner's committed hours by project, excluding paused work. Hidden
   projects appear as anonymous **Other projects** hours where your role allows
   it ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)). The free-hours summary uses that person's plannable week.
@@ -48,8 +68,9 @@ The planning panel offers:
 - **Confirm** to keep the dates or **Cancel** to restore the original dates,
   including an unscheduled state.
 
-Agents have no weekly capacity limit. Auto-fit ends in the start or measurement
-week, whichever is later, and shows **No weekly capacity limit for auto-fit**.
+Agents have no weekly capacity limit. Auto-fit ends in the start week, the
+measurement week or the current week, whichever is latest, and shows **No
+weekly capacity limit for auto-fit**.
 When Qivo cannot read the owner's workload, for example when they hold more
 open work than it reads at once, the panel shows **Workload is unavailable**
 and auto-fit pauses until Qivo can read it again. That applies to agents too.
@@ -112,6 +133,14 @@ Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after
 the planned end counts in the save week. These figures update while you drag
 bars; there is no separate allocation to enter.
+
+Team utilization shows the plan, so a week can read over 100%. Delay
+verdicts go further: in an overbooked week each of the person's tasks gets
+the same share of the hours it asks for that week, and the rest moves to
+later weeks, so the projected finishes show where an overbooked plan ends
+up ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+For example, with 16 hours in a week and tasks that ask for 24 and 8
+hours, each gets half its ask, 12 and 4 hours, not 8 each.
 
 ## Team sync
 

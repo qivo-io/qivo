@@ -2158,6 +2158,26 @@ different verdicts for one task. The server judges today's date in
 UTC, so near midnight or a week boundary it can differ from the app, which
 uses the browser's time zone.
 
+The projection shares the owner's plannable hours week by week among their
+planned unfinished tasks. Each task asks for its remaining hours divided by the
+weeks left in its plan, or for all of them once its plan has ended, from
+the week its remaining hours were last updated or its planned start,
+whichever is later. When a week is overbooked every task gets the same
+share of its ask, and the rest moves to the next week. A task is projected
+to finish in the first week that gives it all its remaining hours, which an
+overbooked week never does. An unfinished task is never projected to
+finish before the current week. So a task with remaining hours that gets
+its ask every week is projected to finish in its planned end week, or in
+the current week once that end has passed. An owned task with 0 remaining
+hours is projected to finish in the current week, or in its planned start
+week if that is later. A task without a plan,
+or a paused one, is fitted on its own into the hours the planned tasks
+leave free, so two such tasks can each be projected into the same free
+hours. Until the end
+of November 2026 each task was projected alone against the plans of the
+owner's other tasks, so a task on track could be projected to finish before
+its planned end.
+
 `delay` can also be:
 
 ```json

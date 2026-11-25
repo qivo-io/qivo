@@ -1883,7 +1883,9 @@ describe('at the design size', () => {
     }
     expect(calls.length).toBeGreaterThan(1)
     expect(assignee.out).toBe(450)
-    expect(single.out).toEqual({ status: 'behind', projected_end_week: '2026-09-21' })
+    // the 450 leaves' 1,800 hours share the busy owner's 40-hour weeks from
+    // 2026-09-07, so all of them finish in the 45th week
+    expect(single.out).toEqual({ status: 'behind', projected_end_week: '2027-07-12' })
   })
 
   it('reads an owner with everyday load and a paused task in each of the 200 sub-projects a person can read', async () => {
