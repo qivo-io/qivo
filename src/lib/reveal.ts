@@ -11,12 +11,15 @@ export const REVEAL_MS = 2400
     surfaces render it, for the sentence a view says when it does not hold
     the task (views/Roadmap.tsx). `place` is what the source knows of the
     task, its uuid, sub-project and weeks, so the Roadmap pans to it and
-    finds it in its answer before it shows it. */
+    finds it in its answer before it shows it. `done` says whether the
+    source showed the task Done, as P.isDone judges it, so the Roadmap can
+    say at once that Hide Done in Roadmap hides it. */
 export type RevealRequest = {
   id: string
   n: number
   atOnce?: boolean
   key?: string
+  done?: boolean
 } & Partial<TaskPlace>
 
 /** Where a task is, as a view that sends it to the Roadmap knows it: its

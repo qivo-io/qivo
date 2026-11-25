@@ -951,9 +951,16 @@ function App() {
   // window (Team sync, the Inbox, the task crumb, search). { id, n } like
   // focusPlan; the nonce comes from the same counter.
   const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
-  const reveal = (id: string, atOnce = false, key?: string, place?: TaskPlace) => {
+  const reveal = (id: string, atOnce = false, key?: string, place?: TaskPlace, done?: boolean) => {
     focusN.current += 1
-    setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}), ...place })
+    setRevealTask({
+      id,
+      n: focusN.current,
+      atOnce,
+      ...(key ? { key } : {}),
+      ...place,
+      ...(done === undefined ? {} : { done }),
+    })
   }
   /* The nonce of a reveal planOnRoadmap asked for, dropped with the plan
      request once another page covers the Roadmap (below roadmapActive). */
@@ -2211,7 +2218,7 @@ function App() {
         setSync(null)
         setOpenIssue(null)
         if (group) {
-          reveal(id, false, it.key, place)
+          reveal(id, false, it.key, place, P.isDone(it))
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
@@ -2342,7 +2349,13 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
-      reveal(handle, false, v === 'roadmap' ? it.key : undefined, taskPlaceOf(it))
+      reveal(
+        handle,
+        false,
+        v === 'roadmap' ? it.key : undefined,
+        taskPlaceOf(it),
+        v === 'roadmap' ? P.isDone(it) : undefined,
+      )
     })
   }
   /* A person header's Board or Roadmap jump: leave the page for that view

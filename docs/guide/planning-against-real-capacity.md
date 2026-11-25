@@ -306,6 +306,9 @@ Use the row controls to change tasks without opening them:
   shows its card behind it, scrolled into view and ringed until a moment
   after the window closes ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
   Roadmap finds its bar or unplanned row without starting a planning session.
+  For a Done task while **Hide Done in Roadmap** is on, the Roadmap says
+  that Done tasks are hidden and where to turn the setting off, and keeps
+  its window where it was ([The Roadmap](./the-roadmap.md)).
 - The **review tick** marks the task reviewed without changing it.
 
 A row's **Board** and **Roadmap** links open the task's sub-project. The

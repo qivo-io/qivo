@@ -143,8 +143,9 @@ const PANEL_GAP = 8
     roadmap (focusPlan) or Team sync's jump (revealTask): its handle, a
     nonce, the key a sentence names it by, and what its source knows of it,
     its uuid, sub-project and weeks, so the Roadmap pans to it and asks the
-    server to keep it before it looks it up, and for a plan request its
-    status, so a Done task without dates hears why it cannot be planned. */
+    server to keep it before it looks it up, for a plan request its status,
+    so a Done task without dates hears why it cannot be planned, and for a
+    reveal whether it is Done (lib/reveal.ts RevealRequest). */
 export type RoadmapRequest = {
   id: string
   n: number
@@ -154,6 +155,7 @@ export type RoadmapRequest = {
   start?: number | null
   end?: number | null
   status?: string
+  done?: boolean
 }
 
 /** A request the Roadmap takes and waits to resolve against an answer:
@@ -1270,15 +1272,29 @@ function Roadmap({
     req.kind === 'plan' && req.uuid && req.project
       ? { id: req.uuid, project_id: req.project }
       : null
+  /** Whether request `req`'s source showed its task Done: a plan request's
+      status, as it names a task without subtasks, or a reveal's `done`,
+      else undefined. */
+  const sourceDone = (req: PendingRequest): boolean | undefined =>
+    req.kind === 'plan' ? (req.status === undefined ? undefined : req.status === 'done') : req.done
+  /** Whether request `req` names a Done task Hide Done in Roadmap hides,
+      as its source showed it, which the Roadmap says at once. A Done task
+      without dates hears instead that it has nothing to plan. */
+  const hiddenAtOnce = (req: PendingRequest) =>
+    !!hideDone && sourceDone(req) === true && !(req.kind === 'plan' && doneWithoutDates(req))
   /** Takes request `req`: pans the window to the weeks its source knows,
       sends a task to plan with the Roadmap's read from now on, so the answer
       keeps it past the filter row, and waits until an answer on screen
-      resolves the request (below). */
+      resolves the request (below). The window waits for that answer while
+      Hide Done in Roadmap is on and the source did not show the task
+      unfinished, as only a Done task needs the window to be in the answer,
+      and the setting hides it, so a request for a hidden task leaves the
+      window where it was. */
   const take = (req: PendingRequest) => {
     if (mobile) setMobileLayout('timeline')
     const ask = askOf(req)
     if (ask) setPlanAsk(ask)
-    panTo(req.start, req.end ?? req.start)
+    if (!hideDone || sourceDone(req) === false) panTo(req.start, req.end ?? req.start)
     setPending({ ...pendingRef.current, [req.kind]: req })
   }
   /** Says that request `req` names a Done task Hide Done in Roadmap hides,
@@ -1305,7 +1321,8 @@ function Roadmap({
     }
     if (req.kind === 'plan') onFocusConsumed?.(req.n)
     else onRevealConsumed?.(req.n)
-    sayDoneHidden(req)
+    // a reveal without a key, such as a task window's, says nothing
+    if (req.kind === 'plan' || req.key) sayDoneHidden(req)
   }
   useEffectR(() => {
     if (!revealTask || hideDone === null) return
@@ -1316,7 +1333,9 @@ function Roadmap({
       return
     }
     takenReveal.current = n
-    take({ ...revealTask, kind: 'reveal' })
+    const req: PendingRequest = { ...revealTask, kind: 'reveal' }
+    if (hiddenAtOnce(req)) refuseHidden(req)
+    else take(req)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealTask?.n, hideDone === null])
   useEffectR(() => {
@@ -1332,14 +1351,9 @@ function Roadmap({
       return
     }
     takenPlan.current = n
-    // A plan request names a task without subtasks, so the Done status its
-    // window showed is enough to say so at once, without moving the window
-    // to weeks that would show nothing of it.
-    if (hideDone && focusPlan.status === 'done' && !doneWithoutDates(focusPlan)) {
-      refuseHidden({ ...focusPlan, kind: 'plan' })
-      return
-    }
-    take({ ...focusPlan, kind: 'plan' })
+    const req: PendingRequest = { ...focusPlan, kind: 'plan' }
+    if (hiddenAtOnce(req)) refuseHidden(req)
+    else take(req)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusPlan?.n, hideDone === null])
   /* Resolves the request taken once the Roadmap can say: where the tasks on

@@ -1021,35 +1021,50 @@ describe('Hide Done in Roadmap', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
   })
 
-  it('says a jump to a hidden Done task where to show it, showing no row', async () => {
-    const board = await loadBoard(
-      network,
-      (snap) => {
-        plan(snap)
-        Object.assign(snap.issues[0], { status: 'done', start_week: week(30), end_week: week(31) })
-      },
-      { scope: 'plan' },
-    )
-    await renderRoadmap(board)
-    await renderRoadmap(board, {
-      revealTask: {
-        id: 'QN-1',
-        n: 1,
-        key: 'QN-1',
-        uuid: 'one-1',
-        start: TODAY_WEEK + 30,
-        end: TODAY_WEEK + 31,
-      },
-    })
-    await board.answer()
-    await flush()
-    expect(window.showToast).toHaveBeenCalledWith(
-      'QN-1 is Done, and Done tasks are hidden on the Roadmap. To show it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
-      'info',
-    )
-    expect(rows()).toEqual(['QN-2'])
-    expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
-  })
+  it.each([
+    ['Team sync, which says it is Done', 30, true],
+    ['a source that does not say whether it is Done', 6, undefined],
+  ] as const)(
+    'says a jump from %s that its task is hidden, keeping the window',
+    async (_, weeks, done) => {
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          Object.assign(snap.issues[0], {
+            status: 'done',
+            start_week: week(weeks),
+            end_week: week(weeks),
+          })
+        },
+        { scope: 'plan' },
+      )
+      await renderRoadmap(board)
+      const asked = roadmapAsks(board).length
+      await renderRoadmap(board, {
+        revealTask: {
+          id: 'QN-1',
+          n: 1,
+          key: 'QN-1',
+          uuid: 'one-1',
+          start: TODAY_WEEK + weeks,
+          end: TODAY_WEEK + weeks,
+          ...(done === undefined ? {} : { done }),
+        },
+      })
+      await board.answer()
+      await flush()
+      expect(window.showToast).toHaveBeenCalledWith(
+        'QN-1 is Done, and Done tasks are hidden on the Roadmap. To show it, turn off Hide Done in Roadmap in Settings → Your preferences → Appearance.',
+        'info',
+      )
+      expect(rows()).toEqual(['QN-2'])
+      expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
+      // no other window was asked for, nor saved
+      expect(roadmapAsks(board)).toHaveLength(asked)
+      expect(board.P.loadUI().roadmapWin).toBeUndefined()
+    },
+  )
 
   it('says Plan on roadmap for a Done task where to show it, keeping the window and the open session', async () => {
     const board = await loadBoard(
