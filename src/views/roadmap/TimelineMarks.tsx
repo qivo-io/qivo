@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
 import { useContext, useLayoutEffect, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -274,11 +274,13 @@ export function Bar({
   }
   // The run-on and the stripes are no plan to drag: a press that travels
   // across them moves nothing and opens nothing, also when it ends where it
-  // began. The press holds the pointer so that its release always ends it
-  // here. A click with no press of its own, as an assistive tool sends it,
-  // opens the task.
+  // began, and neither does one released off them. The press holds the
+  // pointer, so the click of its release comes here and ends it. A click
+  // with no press of its own, as an assistive tool sends it, opens the task.
   const tailPress = useRefR<{ x: number; y: number; far: boolean } | null>(null)
   const onTailDown = (e: PointerEvent<HTMLDivElement>) => {
+    // only the main button's release sends a click
+    if (e.button !== 0) return
     e.currentTarget.setPointerCapture(e.pointerId)
     tailPress.current = { x: e.clientX, y: e.clientY, far: false }
   }
@@ -286,11 +288,14 @@ export function Bar({
     const press = tailPress.current
     if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) press.far = true
   }
-  const dropTailPress = () => {
+  const onTailClick = (e: MouseEvent<HTMLDivElement>) => {
+    const press = tailPress.current
     tailPress.current = null
-  }
-  const onTailClick = () => {
-    if (!tailPress.current?.far) onOpen(it.id)
+    if (
+      !press ||
+      (!press.far && e.currentTarget.contains(document.elementFromPoint(e.clientX, e.clientY)))
+    )
+      onOpen(it.id)
   }
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
@@ -382,9 +387,9 @@ export function Bar({
             tabIndex={plan ? -1 : 0}
             onPointerDown={onTailDown}
             onPointerMove={onTailMove}
-            // the click of this release comes before any timer
-            onPointerUp={() => setTimeout(dropTailPress, 0)}
-            onPointerCancel={dropTailPress}
+            onPointerCancel={() => {
+              tailPress.current = null
+            }}
             onClick={onTailClick}
             onKeyDown={onKey}
             style={
