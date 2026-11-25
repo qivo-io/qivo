@@ -2166,11 +2166,13 @@ function App() {
   // instead. That opens no session and writes nothing, and a group's dormant
   // status never stops it as Backlog. A task the window shows from its own
   // answer plans the same way (P.taskShown). The request carries the task's
-  // uuid, sub-project and weeks (TaskPlace) and its status. The Roadmap pans
-  // to those weeks, asks the server to keep the task past the filter row,
-  // waits for an answer that holds it, then spotlights it, or says it is
-  // not on the roadmap any more or why it cannot plan it there, as for a
-  // Done task without dates, whose window's button is off.
+  // uuid, sub-project and weeks (TaskPlace) and its status, or for a group
+  // whether the window's answer shows it Done (TaskDetailVM done). The
+  // Roadmap pans to those weeks, asks the server to keep the task past the
+  // filter row, waits for an answer that holds it, then spotlights it, or
+  // says it is not on the roadmap any more or why it cannot plan or show it
+  // there, as for a Done task without dates, whose window's button is off,
+  // or a Done task Hide Done in Roadmap hides (views/Roadmap.tsx).
   const planOnRoadmap = (id) => {
     const it = P.taskShown(id)
     if (!it) return
@@ -2217,12 +2219,15 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
+        // Done as the window's answer says it once the move lands, as the
+        // task can become Done while the move asks about unsent text
         if (group) {
-          reveal(id, false, it.key, place, P.isDone(it))
+          reveal(id, false, it.key, place, P.taskDetail(it.uuid, it.org)?.done ?? undefined)
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
-          setFocusPlan({ id, n: focusN.current, key: it.key, status: it.status, ...place })
+          const status = (P.taskShown(id) ?? it).status
+          setFocusPlan({ id, n: focusN.current, key: it.key, status, ...place })
         }
       },
     )
@@ -2349,12 +2354,15 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
+      // Done as the views hold the task once the move lands, as it can
+      // become Done while the move asks about unsent text
+      const now = P.anyTask(handle)
       reveal(
         handle,
         false,
         v === 'roadmap' ? it.key : undefined,
         taskPlaceOf(it),
-        v === 'roadmap' ? P.isDone(it) : undefined,
+        v === 'roadmap' && now ? P.isDone(now) : undefined,
       )
     })
   }

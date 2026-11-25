@@ -87,8 +87,11 @@ export type TaskDetailVM = {
       delay verdict (convex/lib/delay.ts) */
   partial: boolean
   /** whether the task is Done: for a group, every leaf of a whole list,
-      at least one, since P.isDone walks the workspace's tasks */
-  done: boolean
+      at least one, and null, unknown, where the answer's subtask list is
+      not whole or the group is archived. P.isDone cannot judge a group
+      the window shows, whose model no view's facts describe, and answers
+      false for it. */
+  done: boolean | null
   /** whether the window shows the person's own new task from what its
       create sent (creatingAnswer), before its own read answered: the
       controls that read the server about the task wait until then */
@@ -216,10 +219,10 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
   return {
     view,
     datesKnown,
-    // a list that is not complete leaves subtasks out of the span and can
-    // never make the group Done
+    // a list that is not complete leaves subtasks out of the span and
+    // cannot say whether the group is Done
     partial: !!span && (span.partial || !whole),
-    done: group ? whole && isIssueDone(view, byId) : view.status === 'done',
+    done: group ? (whole ? isIssueDone(view, byId) : null) : view.status === 'done',
     parent: answer.parent ? inputs.related(answer.parent) : null,
     level: answer.level,
     num: row.num,
@@ -250,7 +253,7 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
     view,
     datesKnown: !is_group,
     partial: false,
-    done: !is_group && view.status === 'done',
+    done: is_group ? null : view.status === 'done',
     parent: null,
     level: answer.level ?? null,
     archivedAt: Date.parse(answer.task.archived_at),
