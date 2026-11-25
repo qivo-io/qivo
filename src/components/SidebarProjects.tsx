@@ -26,7 +26,10 @@
      top-level project, from the project cache (P.project), which App
      names the scope with and the tree names the opened project with, the
      facts a navigation row seeded included, is the one expanded project
-     once a loaded row holds it. Its sub-projects come from
+     once a loaded row holds it. Once worked out it stays while the cache
+     no longer knows the opened project, as after a sub-project kept for
+     My view was archived, so its parent stays expanded while the list
+     holds the parent's row. Its sub-projects come from
      projectNav.children the same way, at most SIDEBAR_MOST.children, past
      which it asks for a search. A change of the expanded project unmounts
      that list, which stops its read. Rows light by App's `lit`, never for
@@ -83,7 +86,14 @@
    hidden every read stops and the scope rule waits. */
 
 import { compareValues } from 'convex/values'
-import { type MouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef } from 'react'
+import {
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { api } from '../../convex/_generated/api'
 import { nameKey } from '../../convex/lib/nameKey'
 import type {
@@ -134,6 +144,20 @@ export type FocusRow = { id: string; n: number }
 function openedProject(scope: string): string | null {
   if (!scope) return null
   return P.isMineScope(scope) ? (P.loadUI().lastProject?.project_id ?? null) : scope
+}
+
+/** The top-level project of project `opened`, its own id or its parent's,
+    which it names with the project cache. Once worked out it stays while
+    the cache no longer knows `opened`, as after it was archived. */
+function useOwner(opened: string | null): string | null {
+  useProjects([opened])
+  const facts = opened ? P.project(opened) : undefined
+  const owner = facts ? (facts.type === 'meta' ? facts.id : (facts.parent ?? null)) : undefined
+  const [kept, setKept] = useState<{ opened: string; owner: string | null } | null>(null)
+  if (opened !== null && owner !== undefined && (kept?.opened !== opened || kept.owner !== owner))
+    setKept({ opened, owner })
+  if (owner !== undefined) return owner
+  return opened !== null && kept?.opened === opened ? kept.owner : null
 }
 
 /** The top-level list's identity, one list across every seat. */
@@ -232,14 +256,7 @@ export function SidebarProjects({
   const end = listEnd(list, false)
 
   const opened = openedProject(scope)
-  useProjects([opened])
-  // the opened project's top-level project, its own id or its parent's
-  const openedFacts = opened ? P.project(opened) : undefined
-  const owner = openedFacts
-    ? openedFacts.type === 'meta'
-      ? openedFacts.id
-      : (openedFacts.parent ?? null)
-    : null
+  const owner = useOwner(opened)
   const ownerName = owner === null ? undefined : P.project(owner)?.name
   const ownerRow = owner === null ? undefined : list.rows.find((r) => r.id === owner)
 

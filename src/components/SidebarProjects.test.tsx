@@ -649,6 +649,14 @@ describe('the projects figure', { timeout: 60_000 }, () => {
 })
 
 describe('the expanded list', { timeout: 60_000 }, () => {
+  /** The projects whose sub-projects show. */
+  const expanded = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-sidebar-children]')].map(
+      (c) => c.dataset.sidebarChildren,
+    )
+  /** Saves project `id` as the one the person opened last, as App does
+      once a view shows it. */
+  const saved = (id: string) => store.P.saveUINow({ lastProject: { org_id: ORG, project_id: id } })
   /** Luma Sensor with 30 sub-projects, the figure under one project at its
       design size, and two everyday projects. */
   async function bigProject() {
@@ -690,16 +698,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
   it("expands the project opened last on My view, unlit, and the scope's own project elsewhere", async () => {
     const { big, cloud } = await bigProject()
     const frontend = snap.projects.find((p) => p.parent_id === cloud)?.id as string
-    /** The projects whose sub-projects show. */
-    const expanded = () =>
-      [...document.querySelectorAll<HTMLElement>('[data-sidebar-children]')].map(
-        (c) => c.dataset.sidebarChildren,
-      )
     const current = () => document.querySelectorAll('[data-sidebar-projects] [aria-current]')
-    /** Saves project `id` as the one the person opened last, as App does
-        once a view shows it. */
-    const saved = (id: string) =>
-      store.P.saveUINow({ lastProject: { org_id: ORG, project_id: id } })
     await render(big)
     saved(big)
     expect(lit()).toEqual([big])
@@ -734,6 +733,26 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render('mine')
     expect(expanded()).toEqual([big])
     expect(lit()).toEqual([])
+  })
+
+  it('keeps the project of a sub-project opened last expanded on My view once the sub-project is archived', async () => {
+    const { big, boards } = await bigProject()
+    await render(boards[0])
+    saved(boards[0])
+    await render('mine')
+    expect(expanded()).toEqual([big])
+    // someone archives it, so the project cache answers it gone and the
+    // expanded list drops its row
+    const board = snap.projects.find((p) => p.id === boards[0])
+    if (board) board.archived_at = NOW
+    const whole = subs.find((s) => s.name === 'workspace:whole' && s.open)
+    await act(async () => whole?.next(structuredClone(snap)))
+    await republish()
+    await vi.waitFor(() => expect(store.P.projectState(boards[0])).toBe('gone'))
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await settle()
+    expect(expanded()).toEqual([big])
+    expect(childNames()[0]).toBe(named(1, 'Board'))
   })
 
   it('reads on to a scoped sub-project, lights it and stops at a lowered bound', async () => {
