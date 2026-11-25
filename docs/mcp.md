@@ -2176,7 +2176,7 @@ Qivo could not read the whole group, so the true completion is unknown. The app 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show, for example `{"status": "behind", "projected_end_week":
 "2026-10-26"}`. `status` is `ok`, `behind` or `late`, the app's **On
-track**, **Currently delayed** and **Delayed**. `projected_end_week` is the
+track**, **Behind plan** and **Late**. `projected_end_week` is the
 first day of the week the work is projected to finish. It is `null` when
 `late` rests only on a passed due date, and for a finish after the year
 9999. `delay` itself is `null` when the task's project does not track delay

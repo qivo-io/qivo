@@ -8580,7 +8580,7 @@ export const OVERVIEW_EXPECTED = {
 
 /** What the run's sub-project's row in its project's health table shows
  *  (overviewCheck), cell by cell (data-ovcell): no task done of two, the
- *  paused one, no planned end passed and no remaining hours. Its Delayed
+ *  paused one, no planned end passed and no remaining hours. Its Late
  *  cell reads 1 for the overdue task where the sub-project tracks delay and
  *  is blank where it does not, which the REST answer's track_delay says. */
 export const OVERVIEW_HEALTH_EXPECTED = {

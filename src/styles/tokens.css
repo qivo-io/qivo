@@ -130,10 +130,10 @@
      load, because they are the same question asked of a task and of a person.
      Two values, both exceptions; "on track" and "comfortably loaded" render
      as nothing at all. */
-  --pressure-warn: var(--warn); /* slipping · nearly booked */
+  --pressure-warn: var(--warn); /* behind plan · nearly booked */
   --pressure-over: var(--danger); /* deadline lost · overbooked */
 
-  /* The board's Slipping and Delayed banners are a neutral band naming the
+  /* The board's Behind plan and Late banners are a neutral band naming the
      state, ending in a block of yellow or red that carries a white clock
      (deviation #312), the same in every theme: white reads better on the
      deeper amber than on a bright yellow, and the solid red holds its
@@ -145,7 +145,7 @@
      with a muted block, as the task window's Delay unknown is muted. */
   --delay-banner-unknown-block: color-mix(in oklab, var(--text-3) 70%, transparent);
   /* Team utilization's load line: a lighter planner blue for ordinary load,
-     and the Board's Slipping and Delayed blocks for a week near and over
+     and the Board's Behind plan and Late blocks for a week near and over
      capacity. */
   --load-line-normal: color-mix(in oklab, var(--primary) 88%, white);
   --load-line-near: var(--delay-banner-behind-block);
@@ -153,7 +153,7 @@
 
   /* Roadmap bars (Roadmap.css). A task's planned time before the today line
      is a quiet grey, and from it on a task on track takes its Board status
-     as a fill, a Slipping or Delayed one the Board's delay blocks. A
+     as a fill, a Behind plan or Late one the Board's delay blocks. A
      finished bar steps back. Fills are mixed over the panel the timeline
      sits on, so week lines do not show through a bar. The past and Done
      fills stay quiet, but their rims hold 3:1 on the panel and on the edge
@@ -341,12 +341,12 @@
      headings still cover scrolling rows. */
   --roadmap-group: #eef2f7;
   /* The load line holds 3:1 on the frosted panel over a dark photo (#e6e6e6
-     at worst): a darker planner blue, and Slipping's amber at a lower OKLCH
+     at worst): a darker planner blue, and Behind plan's amber at a lower OKLCH
      lightness (0.58), since #d49a00 gives 2.5:1 on white. */
   --load-line-normal: #3b74f0;
   --load-line-near: #a66e00;
   /* Roadmap bars whose colour carries meaning hold 3:1 on the white panel:
-     To Do's grey, the blue and violet, and Slipping's amber of the load line
+     To Do's grey, the blue and violet, and Behind plan's amber of the load line
      beside them. Rims are a step darker than their fills. The past and
      Done rims hold 3:1 on the frosted panel over a dark photo too (#e6e6e6
      at worst), and on the edge badges' tint. */

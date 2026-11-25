@@ -1537,7 +1537,7 @@ function Roadmap({
             pressed={showProjection}
             onPressedChange={setShowProjection}
             data-roadmap-projection
-            title="Stripes to a delayed task's projected finish"
+            title="Stripes to a late or behind-plan task's projected finish"
           >
             <Icon name="projection" size={16} />
             Projected delay

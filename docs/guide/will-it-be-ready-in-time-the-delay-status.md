@@ -1,13 +1,13 @@
 Qivo estimates an unfinished task's finish week from its plan, remaining
 hours and owner's workload. Delay tracking highlights two warnings:
 
-- **Currently delayed**, in yellow. The projected finish is after the planned
+- **Behind plan**, in yellow. The projected finish is after the planned
   end, without a missed or projected-to-miss due date.
-- **Delayed**, in red. The projected finish is after the due week, or the
+- **Late**, in red. The projected finish is after the due week, or the
   exact due date has already passed.
 
 **On track** has no warning color. Finishing in the due week is not classed
-as late, though the hover text of its roadmap due-date marker says that the
+as Late, though the hover text of its roadmap due-date marker says that the
 schedule is tight.
 Done tasks have no delay verdict. Tasks without a plan or due date also have
 no verdict. A task with only a due date needs an owner and remaining hours
@@ -44,7 +44,7 @@ their projected finish.
 **0 Remaining** means no work left, while an empty field means no estimate.
 With an owner and capacity, zero projects completion in the current week or
 the planned start week if later. A passed due date still makes the task
-Delayed, and a passed planned end can still make it Currently delayed.
+Late, and a passed planned end can still make it Behind plan.
 
 A group's planned end is the latest end of its scheduled subtasks. Groups
 use that end and their due date, not their saved status or a
@@ -53,7 +53,7 @@ descendant work is unfinished. Once all descendant work is Done, the group
 has no delay verdict.
 
 When Qivo cannot read all of a group's subtasks, such as for a very large
-group, the group can show only **Delayed**, and only when its due date has
+group, the group can show only **Late**, and only when its due date has
 passed or the subtasks it read already end after the due week. Otherwise it has no verdict, because the
 plan it read cannot show whether the group is on track. For the same
 reason, when that plan ends before the due date, the hover text of its
@@ -70,20 +70,20 @@ Roadmap due line says that Qivo could not read all of its subtasks.
   Roadmap reads the owner's other work from the server too, and where that
   work cannot be read, a bar turns gray with a dashed outline and its hover
   text, like its due-date line's, says **Delay unknown**.
-- **Board** shows **Slipping** or **Delayed** above the card. The due-date
+- **Board** shows **Behind plan** or **Late** above the card. The due-date
   tooltip also explains projected misses. Qivo reads the owner's other work
   from the server for the Board's cards, so their delay shows without
   loading every task; where that work cannot be read, the card says
   **Delay unknown**. A task you create shows on the Board at once, and its
   card takes its delay from the server like any other.
-- **Task window** shows **Currently delayed** or **Delayed** beside Due.
+- **Task window** shows **Behind plan** or **Late** beside Due.
   Hover for the projected finish week. A missed or projected-to-miss deadline
   outlines Due in red. Qivo reads the owner's other work from the server,
   as for the task's Board card, and the window shows the same verdict as
   its card, also for a task you just created. The window shows nothing
   while that work is on its
   way, and says **Delay unknown** only where it cannot be read. A passed
-  due date shows **Delayed**. A task with subtasks takes its delay from its
+  due date shows **Late**. A task with subtasks takes its delay from its
   subtasks' dates, not from anyone's other work, so it says **Delay
   unknown** only while some of those dates have not loaded. In the task
   window, those are the dates of its subtasks, which the window reads with
@@ -94,14 +94,14 @@ Roadmap due line says that Qivo could not read all of its subtasks.
 - **Team sync** shows the same banner as a Board card on its rows, **Delay
   unknown** included, judged on the server with each owner's other work.
   Where Qivo could not read someone's other work, the team summary's
-  projected misses and slipping counts read **unknown**, never 0
+  **Projected to miss** and **Behind plan** counts read **unknown**, never 0
   ([Team sync](./planning-against-real-capacity.md#team-sync)).
 - **Overview** includes projected misses in **Overdue & at risk**, which
   Qivo works out on the server with each owner's other work. A row says
   **risk unknown** where Qivo could not read that work, so the task may not
   be late, and the projected count says it is not available where it could
-  not work out every projection. The health table's **Delayed** and
-  **Slipping** counts come from the server too, and read **unknown** where
+  not work out every projection. The health table's **Late** and
+  **Behind plan** counts come from the server too, and read **unknown** where
   Qivo could not read an owner's other work.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
   today's date in UTC. A task's verdict says it is unavailable when Qivo

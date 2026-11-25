@@ -606,7 +606,7 @@ describe("the window's delay", () => {
     return view
   }
 
-  it("judges from the owner's load where the workspace cannot: nothing while it waits, Delayed from the load, unknown when unavailable or failed", async () => {
+  it("judges from the owner's load where the workspace cannot: nothing while it waits, Late from the load, unknown when unavailable or failed", async () => {
     const view = await showFar()
     const { P } = store
     const load = one('planning:ownerLoads')

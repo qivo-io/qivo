@@ -856,7 +856,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthState()).toBe('ok')
     expect(table()?.getAttribute('aria-busy')).toBeNull()
     expect(table()?.dataset.ovHealthEnd).toBe('')
-    // most Delayed first: One holds three overdue tasks, Two one
+    // most Late first: One holds three overdue tasks, Two one
     const one = board.snapshot.projects.find((p) => p.name === 'One')?.id
     expect(cardIds()).toEqual([one, 'two'])
     expect(cell(cards()[0], 'late')?.textContent).toBe('3')
@@ -864,7 +864,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(cell(cards()[0], 'done')?.textContent).toBe('1/7')
     expect(cell(cards()[1], 'paused')?.textContent).toBe('—')
     expect(cell(cards()[1], 'late')?.dataset.ovFigureState).toBe('ok')
-    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(heading('Late')?.getAttribute('aria-sort')).toBe('descending')
     expect(heading('Progress')?.getAttribute('aria-sort')).toBeNull()
     // no search box for two rows, and no Load more
     expect(document.querySelector('[data-ov-health-search]')).toBeNull()
@@ -904,7 +904,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthState()).toBe('refreshing')
     expect(table()?.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('[data-ov-table] tbody')?.className).toContain('opacity-60')
-    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(heading('Late')?.getAttribute('aria-sort')).toBe('descending')
     board.server.overview.hold = false
     await board.answer()
     expect(table()?.dataset.ovHealthKept).toBeUndefined()
@@ -951,8 +951,8 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
       'Sorted by name, because Qivo could not work out the delays of every sub-project here.',
     )
     expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
-    // a press on Delayed asks Delayed, which the server answers by name again
-    await click(heading('Delayed')?.querySelector('button'))
+    // a press on Late asks Late, which the server answers by name again
+    await click(heading('Late')?.querySelector('button'))
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc' })
     await act(async () => root.unmount())
     root = createRoot(container)
@@ -1014,9 +1014,9 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const note = () => document.querySelector<HTMLElement>('[data-ov-health-counts]')
     const { board } = await overview(work())
     expect(note()).toBeNull()
-    // counting under the default order, Delayed, which needs no count
+    // counting under the default order, Late, which needs no count
     await reanswer(board, { health: { counts: 'counting' } })
-    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(heading('Late')?.getAttribute('aria-sort')).toBe('descending')
     expect(note()?.dataset.ovHealthCounts).toBe('counting')
     expect(note()?.textContent).toBe(
       'Qivo is counting the tasks of these sub-projects. Their figures show once it is done.',

@@ -579,7 +579,7 @@ describe('rules a drift would break', () => {
     expect(summary.overdue).not.toEqual({ state: 'ok', count: drifted.length })
   })
 
-  it('differs from a rule that counts Delayed in a sub-project that does not track delay', async () => {
+  it('differs from a rule that counts Late in a sub-project that does not track delay', async () => {
     const { t, f, P, scope } = await adminCase()
     const info = oracleScope(P.snapshot, f.meta.id)
     if (info === null) throw new Error('no TBED')
@@ -595,7 +595,7 @@ describe('rules a drift would break', () => {
     const pcb = got.rows.find((r) => r.project_id === f.sub2.id)
     expect(pcb?.delays).toEqual({ state: 'ok', late: 0, behind: 0 })
     // PCB holds an overdue task, which a rule without the tracking gate
-    // counts as Delayed, since a passed due date is late whatever the load
+    // counts as Late, since a passed due date is late whatever the load
     const drifted = P.snapshot.issues.filter(
       (row) =>
         row.project_id === f.sub2.id &&

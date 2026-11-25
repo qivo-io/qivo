@@ -33,7 +33,7 @@ type Props = {
   due: DueMark
   start: number | null
   end: number | null
-  /** whether the person shows a Slipping or Delayed task's projected finish */
+  /** whether the person shows a Behind plan or Late task's projected finish */
   showProjection: boolean
   /** a subtask of the row's task has started (Roadmap.tsx subtasksStarted) */
   started: boolean

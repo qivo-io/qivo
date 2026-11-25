@@ -1390,7 +1390,7 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     await deliverAgain()
     // 400 hours do not fit in two weeks of Mira's time
     expect(delayChip()?.dataset.delayChip).toBe('late')
-    expect(delayChip()?.textContent).toBe('Delayed')
+    expect(delayChip()?.textContent).toBe('Late')
   })
 
   it('judges a group shown from its answer only from a complete subtask list', async () => {
@@ -1418,13 +1418,13 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     expect(delayChip()?.dataset.delayChip).toBe('late')
   })
 
-  it('says Delayed for a passed due date, as for a task the workspace holds, and nothing for a Done task or one without a due date or plan', async () => {
+  it('says Late for a passed due date, as for a task the workspace holds, and nothing for a Done task or one without a due date or plan', async () => {
     await load()
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far({ due_date: day(-2) })))
     expect(delayChip()?.dataset.delayChip).toBe('late')
-    expect(await hintOf(delayChip())).toBe('Delayed, the due date has passed')
+    expect(await hintOf(delayChip())).toBe('Late, the due date has passed')
     await answer('taskWindow:task', okAnswer(far({ status: 'done' })))
     expect(delayChip()).toBeNull()
     expect(dueText()).not.toContain('Overdue')

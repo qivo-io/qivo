@@ -257,7 +257,7 @@ html:not([data-focus-modality="pointer"]) .roadmap-bar:focus-visible::before {
   > :is(.roadmap-bar-past, .roadmap-bar-now, .roadmap-bar-run) {
   border-style: dashed;
 }
-/* A run-on without Slipping or Delayed to show, as where the project does not
+/* A run-on without Behind plan or Late to show, as where the project does not
    track delay: a faint, dashed stretch, so it never reads as planned time. */
 .roadmap-bar > .roadmap-bar-run[data-plain] {
   border-style: dashed;

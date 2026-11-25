@@ -2143,8 +2143,8 @@ window show:
 { "delay": { "status": "behind", "projected_end_week": "2026-10-26" } }
 ```
 
-`status` is `ok`, `behind` or `late`, the app's **On track**, **Currently
-delayed** and **Delayed**. `projected_end_week` is the first day of the week
+`status` is `ok`, `behind` or `late`, the app's **On track**, **Behind
+plan** and **Late**. `projected_end_week` is the first day of the week
 the work is projected to finish. It is `null` when `late` rests only on a
 passed due date, and for a finish after the year 9999. `delay` itself is
 `null` when the task's project does not track delay, when the task or its

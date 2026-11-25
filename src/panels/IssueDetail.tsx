@@ -4060,7 +4060,7 @@ function IssueDetail({
                           const done = !!detail?.done
                           const overdue = !archived && !!it.due && it.due < P.TODAY_ISO && !done
                           // with delay tracking (0064) the chip carries the projected
-                          // status — "Delayed" covers overdue; without it, the plain
+                          // status — "Late" covers overdue; without it, the plain
                           // overdue chip stays as before. The owner's load comes
                           // from the server, as for a Board card (P.windowDelay),
                           // so the window and the card of a task, the person's
@@ -4089,7 +4089,7 @@ function IssueDetail({
                                 className={late ? '!border-danger' : undefined}
                               />
                               {/* On track draws nothing — the DELAY_COLORS rule, applied
-                                  here too; a slipping or lost deadline is a glyph in its
+                                  here too; Behind plan and Late are a glyph in their
                                   pressure colour beside plain words, the projection in the
                                   tooltip. The colour never goes on text: a lost deadline
                                   is the red border of the date box and the red glyph. An

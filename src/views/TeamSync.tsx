@@ -297,7 +297,7 @@ function PersonJumps({
 }
 
 /* The agents' page: each agent collapsed to one line (hours this week, what
-   they are on, and a Delayed / Slipping count so a late agent task is not
+   they are on, and a Late / Behind plan count so a late agent task is not
    missed, or "Delays unknown" where the agenda could not judge one of
    their rows), expanding to the same three columns. Their supervisor
    answers. */
@@ -334,8 +334,8 @@ function AgentsPage({
           .filter((it) => it.owner === a.id)
           .map((it) => figures.verdict(it.uuid))
         const unknown = verdicts.includes('unknown')
-        const delayed = verdicts.filter((v) => v === 'late').length
-        const slipping = verdicts.filter((v) => v === 'behind').length
+        const late = verdicts.filter((v) => v === 'late').length
+        const behind = verdicts.filter((v) => v === 'behind').length
         const expanded = open.has(a.id)
         return (
           <section key={a.id} data-sync-agent={a.id} className="rounded-lg border border-border">
@@ -362,11 +362,11 @@ function AgentsPage({
                 </span>
               ) : (
                 <>
-                  {delayed > 0 && (
-                    <span className="text-sm font-semibold text-danger">{delayed} Delayed</span>
+                  {late > 0 && (
+                    <span className="text-sm font-semibold text-danger">{late} Late</span>
                   )}
-                  {slipping > 0 && (
-                    <span className="text-sm font-semibold text-warning">{slipping} Slipping</span>
+                  {behind > 0 && (
+                    <span className="text-sm font-semibold text-warning">{behind} Behind plan</span>
                   )}
                 </>
               )}

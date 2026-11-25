@@ -471,9 +471,9 @@ describe('the team opening', () => {
   const blocked: Record<string, readonly string[]> = { 'QN-4': ['QN-50'] }
   const blockedOf = (it: SyncIssue) => blocked[it.key] ?? []
   const rows = [
-    task({ key: 'QN-1', due: '2026-09-20' }), // overdue and Delayed
+    task({ key: 'QN-1', due: '2026-09-20' }), // overdue and Late
     task({ key: 'QN-2', due: '2026-10-20' }), // projected to miss
-    task({ key: 'QN-3', paused: true }), // slipping, paused
+    task({ key: 'QN-3', paused: true }), // behind plan, paused
     task({ key: 'QN-4', links: [{ type: 'blocked_by', id: 'QN-50' }] }),
     task({ key: 'QN-5', due: '2026-09-28' }), // overdue, not tracked
     task({ key: 'QN-6', due: '2026-09-29' }), // due today is not overdue
@@ -490,8 +490,8 @@ describe('the team opening', () => {
     expect(facts).toEqual({
       overdue: 2,
       projected: 1,
-      delayed: 2,
-      slipping: 1,
+      late: 2,
+      behind: 1,
       blocked: 1,
       paused: 1,
     })
@@ -505,14 +505,14 @@ describe('the team opening', () => {
     expect(unknown).toEqual({
       overdue: 2,
       projected: null,
-      delayed: null,
-      slipping: null,
+      late: null,
+      behind: null,
       blocked: 1,
       paused: 1,
     })
     // a count that left the unknown row out would read as complete
     expect(unknown.projected).not.toBe(1)
-    expect(unknown.slipping).not.toBe(0)
+    expect(unknown.behind).not.toBe(0)
   })
 
   const text = (parts: SentencePart[]) =>

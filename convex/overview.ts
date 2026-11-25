@@ -35,8 +35,8 @@
  *   and the asked column's order applied to the whole table first. Each row
  *   holds the counts (a project scope's from the organization's readiness
  *   and each kept sub-project's count rows, My view's from the person's count
- *   rows) and Delayed and Slipping, read as risk reads its verdicts. For
- *   Delayed and Slipping it reads every active task of the kept
+ *   rows) and Late and Behind plan, read as risk reads its verdicts. For
+ *   Late and Behind plan it reads every active task of the kept
  *   sub-projects that track delay, each one's first subtask, a group's
  *   subtasks and the owners' open tasks; for another column only those of
  *   the rows it answers, and for Lead each lead's profile by id. My view
@@ -61,7 +61,7 @@
  * asked about, and for risk and health an owner's open task elsewhere,
  * their profile's plannable hours or a project's delay tracking; the
  * summary's counts rerun only when a count row of the scope moves, and the
- * health table sorted by Delayed or Slipping on any change to a task of the
+ * health table sorted by Late or Behind plan on any change to a task of the
  * scope. authedQuery, not orgQuery, as My
  * view spans seats and a project scope whose seat goes away answers
  * `unavailable` instead of throwing in a subscription; list positions are

@@ -98,7 +98,7 @@ describe('delayOf — projection with owner + remaining', () => {
   // work no longer needs
   it('projects zero remaining hours as finishing now, not as no basis', () => {
     // plan runs to T+4 but the due week is T+2: the planned-end fallback
-    // would read T+4 > T+2 and badge finished work "Delayed"
+    // would read T+4 > T+2 and badge finished work "Late"
     const d = delayOf(iss({ start: T, end: T + 4, dueWeek: T + 2, remaining: 0 }), [])
     expect(d).toEqual({ status: 'ok', fin: T })
   })

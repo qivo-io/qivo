@@ -60,14 +60,13 @@ function DelayBanner({ it, id, verdict }: { it: IssueVM; id?: string; verdict?: 
       </span>
     )
   if (shown === null) return null
-  const behind = shown === 'behind'
   return (
     <span
       id={id}
-      data-delay={behind ? 'behind' : 'late'}
+      data-delay={shown}
       className="delay-banner block w-full bg-[var(--delay-banner)] py-1 pr-10 pl-2.5 text-xs font-extrabold tracking-[.05em] text-text-1"
     >
-      {behind ? 'Slipping' : 'Delayed'}
+      {P.DELAY_LABELS[shown]}
     </span>
   )
 }

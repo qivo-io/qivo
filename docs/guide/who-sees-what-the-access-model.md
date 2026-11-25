@@ -138,7 +138,7 @@ for them too, so where a scope's projected delays need more than one
 person's work, it says they are not available, and its Overdue & at risk
 list takes one person's projected tasks a **Load more** at a time. Where
 its health table's rows need more than one person's work, it shows
-**Delayed** and **Slipping** as **unknown** on each row that needs anyone
+**Late** and **Behind plan** as **unknown** on each row that needs anyone
 but the one person it reads, and then sorts by name where you sort by
 them.
 

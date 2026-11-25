@@ -417,7 +417,7 @@ export function TeamOpening({
       >
         <Fact label="Overdue" value={count(facts.overdue)} tone="danger" />
         <Fact label="Projected to miss" value={count(facts.projected)} tone="danger" />
-        <Fact label="Slipping" value={count(facts.slipping)} tone="warning" />
+        <Fact label="Behind plan" value={count(facts.behind)} tone="warning" />
         <Fact label="Blocked" value={count(facts.blocked)} />
         <Fact label="Paused" value={count(facts.paused)} />
         <div

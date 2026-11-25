@@ -879,7 +879,7 @@ describe("a person's page and the agents'", () => {
         'Delays unknown',
       )
       // a count that left the unknown row out would read as whole
-      expect(line?.textContent).not.toContain('1 Delayed')
+      expect(line?.textContent).not.toContain('1 Late')
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -887,7 +887,7 @@ describe("a person's page and the agents'", () => {
 
 describe('the opening', () => {
   it(
-    'reads Projected to miss and Slipping unknown where a verdict is, and the capacity list says whose load is unknown, never 0',
+    'reads Projected to miss and Behind plan unknown where a verdict is, and the capacity list says whose load is unknown, never 0',
     async () => {
       await open(
         people({ due_date: '2001-01-01' }, {}),

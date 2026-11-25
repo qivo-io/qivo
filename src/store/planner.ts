@@ -12468,7 +12468,7 @@ export const PLANNER = {
     if (!it || !PLANNER.tracksDelay(it) || !viewRows.factsOf(it)) return false
     return viewDelays.get(it.uuid) === DELAY_UNKNOWN
   },
-  /** Whether task `x`'s card shows a delay band: Slipping, Delayed or Delay
+  /** Whether task `x`'s card shows a delay band: Behind plan, Late or Delay
       unknown (views/kanbanCards.tsx DelayBanner), as the card's height and
       its hierarchy line read it. */
   delayBanner: (x: IssueVM | string): boolean => !!PLANNER.delayColor(x) || PLANNER.delayUnknown(x),

@@ -39,8 +39,8 @@ export const DELAY_COLORS: Record<DelayStatus, string | null> = {
 export const DELAY_NEUTRAL = null // done / no status, when the project tracks delay: also drawn as nothing
 export const DELAY_LABELS: Record<DelayStatus, string> = {
   ok: 'On track',
-  behind: 'Currently delayed',
-  late: 'Delayed',
+  behind: 'Behind plan',
+  late: 'Late',
 }
 /* The task window's mark for the two pressure states: an `Icon` name and the
    glyph's colour (the words beside it stay plain — coloured text reads poorly

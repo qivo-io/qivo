@@ -171,7 +171,7 @@ export type AgendaRow = ViewRow & {
    * src/lib/teamSync.ts blockersOf lists them */
   blocked_by: string[]
   /** the board banner's verdict (src/lib/teamSync.ts bannerVerdict), `late`
-   * (Delayed) or `behind` (Slipping); null on track, without a verdict or
+   * (Late) or `behind` (Behind plan); null on track, without a verdict or
    * in a project that does not track delay; `unknown` in a project that
    * tracks delay where the verdict needs its owner's load and the load was
    * not read, or the reader is not staff */
