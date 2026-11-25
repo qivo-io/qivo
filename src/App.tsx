@@ -2358,14 +2358,16 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
-      // Done as the views hold the task once the move lands, as it can
-      // become Done while the move asks about unsent text
+      // the task as the views hold it once the move lands, as it can
+      // change while the move asks about unsent text, so its weeks and
+      // whether it is Done come from one answer
       const now = P.anyTask(handle)
+      const shown = now ?? it
       reveal(
         handle,
         false,
-        v === 'roadmap' ? it.key : undefined,
-        taskPlaceOf(it),
+        v === 'roadmap' ? shown.key : undefined,
+        taskPlaceOf(shown),
         v === 'roadmap' && now ? P.isDone(now) : undefined,
       )
     })
