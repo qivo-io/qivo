@@ -207,7 +207,7 @@ export function PlanCard({
                         : !session.autoFit
                           ? 'Drag the end freely'
                           : loading
-                            ? 'Loading the workload…'
+                            ? 'Checking available time…'
                             : !load
                               ? 'Workload is unavailable, so auto-fit is paused'
                               : session.noFit

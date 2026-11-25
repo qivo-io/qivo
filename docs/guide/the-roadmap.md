@@ -118,8 +118,9 @@ you dropped it and the planning panel says so, and a Done task always moves
 as you drop it
 ([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
 Placing a task in weeks that are already full can still make the owner's
-other tasks in those weeks read Behind plan. Team utilization, with **All
-projects** chosen, shows such a week as full or over.
+other tasks in those weeks read Behind plan. Team utilization shows the load
+of such a week for the projects you can see, so with **All projects** chosen
+it reads full or over unless work you cannot see fills the week.
 
 Click the portrait beside a task to change or clear its assignee. Its list
 shows the people who can take the task, 25 at a time with a search and
