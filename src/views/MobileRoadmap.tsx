@@ -8,6 +8,7 @@ import { SYNC_LIMIT } from '../lib/boardGroups'
 import { focusAround } from '../lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
+import { TURN_OFF_HIDE_DONE } from '../lib/roadmapVisibility'
 import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
@@ -22,8 +23,12 @@ type MobileRoadmapProps = {
       sub-project; null in My view and before an answer */
   selection?: readonly string[] | null
   /** the tasks the Roadmap shows (views/roadmap/useRoadmapView.ts), in its
-      answer's order, checked on screen against the window and the filters */
+      answer's order, checked on screen against the window and the filters,
+      less the Done ones Hide Done in Roadmap hides */
   tasks: readonly IssueVM[]
+  /** the Done tasks Hide Done in Roadmap hides from `tasks`, so an empty
+      schedule says that they are hidden */
+  hiddenDone?: readonly IssueVM[]
   /** whether `tasks` are a current answer's, so an empty list may say that
       nothing matches */
   settled?: boolean
@@ -122,8 +127,9 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
 })
 
 /** The phone entry to the same roadmap. Its tasks are the Roadmap's, from the
- * server's answer for the selection, the window and the filters, which it
- * sorts and narrows only to planned or unplanned. Dates, editing and access
+ * server's answer for the selection, the window and the filters, less the
+ * Done ones Hide Done in Roadmap hides, which it sorts and narrows only to
+ * planned or unplanned. Dates, editing and access
  * rules still come from the planner; the timeline remains available for
  * spatial planning.
  * A toolbar row under Timeline & team holds Undo and Auto-move.
@@ -142,6 +148,7 @@ export function MobileRoadmap({
   info,
   selection = null,
   tasks: shown,
+  hiddenDone = [],
   settled = true,
   filterControls,
   actions,
@@ -158,11 +165,10 @@ export function MobileRoadmap({
   milestones: ms,
 }: MobileRoadmapProps) {
   const pastBodyId = useId()
+  const chosen = (it: IssueVM) =>
+    taskState === 'all' || (taskState === 'planned' ? it.start != null : it.start == null)
   const tasks = shown
-    .filter(
-      (it) =>
-        taskState === 'all' || (taskState === 'planned' ? it.start != null : it.start == null),
-    )
+    .filter(chosen)
     .sort(
       (a, b) =>
         (a.start ?? Number.MAX_SAFE_INTEGER) - (b.start ?? Number.MAX_SAFE_INTEGER) ||
@@ -423,9 +429,15 @@ export function MobileRoadmap({
               label={pendingRows}
             />
           </div>
-          {tasks.length === 0 && settled && (
-            <p className="mobile-roadmap-note">No tasks match these filters.</p>
-          )}
+          {tasks.length === 0 &&
+            settled &&
+            (hiddenDone.some(chosen) ? (
+              <p className="mobile-roadmap-note" data-roadmap-done-hidden>
+                Done tasks are hidden. To show them, {TURN_OFF_HIDE_DONE}.
+              </p>
+            ) : (
+              <p className="mobile-roadmap-note">No tasks match these filters.</p>
+            ))}
           {!info.mine && P.canWrite(info.id) && !!selection && selection.length > 0 && (
             <Button type="button" onClick={() => actions.newIssue({ project: selection[0] })}>
               <Icon name="plus" size={16} />

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
+import { Appearance } from './appearanceStandIn.setup'
 import { loadBoard, spread, taskRow } from './boardFixture.setup'
 
 /* The phone's task schedule mounts its first screen at once and the rest
@@ -428,20 +429,24 @@ const NO_FILTERS: IssueFilters = {
 async function renderRoadmap(
   board: Awaited<ReturnType<typeof loadBoard>>,
   filters: IssueFilters = NO_FILTERS,
+  hideDone?: boolean,
 ) {
   const { Roadmap } = await import('./Roadmap')
   const { WorkspaceShell } = await import('../components/WorkspaceShell')
+  const appearance = await import('../lib/appearanceContext')
   const actions = new Proxy({}, { get: () => () => {} }) as Parameters<typeof Roadmap>[0]['actions']
   await board.renderView(root, (info) => (
-    <WorkspaceShell header={null}>
-      <Roadmap
-        info={info}
-        filters={filters}
-        actions={actions}
-        filterControls={() => null}
-        focusPlan={null}
-      />
-    </WorkspaceShell>
+    <Appearance context={appearance} hide={hideDone}>
+      <WorkspaceShell header={null}>
+        <Roadmap
+          info={info}
+          filters={filters}
+          actions={actions}
+          filterControls={() => null}
+          focusPlan={null}
+        />
+      </WorkspaceShell>
+    </Appearance>
   ))
 }
 
@@ -506,7 +511,7 @@ const designProject = (snap: Snapshot) => {
 describe('the Roadmap at the design size', () => {
   it("shows a project's 800 open and 200 Done tasks at their sum, from its answer", async () => {
     const board = await loadBoard(network, designProject, { scope: 'plan' })
-    await renderRoadmap(board)
+    await renderRoadmap(board, NO_FILTERS, false)
     expect(roadmapState()).toBe('ok')
     expect(count('[data-roadmap-task-top]')).toBe(1000)
     // the headings read the answer's counts, 267 or 266 open tasks of 4
@@ -514,6 +519,13 @@ describe('the Roadmap at the design size', () => {
     const headings = [...document.querySelectorAll('[data-track]')].map((el) => el.textContent)
     expect(headings.join(' ')).toContain('1068h')
     expect(headings.join(' ')).toContain('1064h')
+  })
+
+  it("gives a design-size project's 200 Done tasks no row while Hide Done in Roadmap is on", async () => {
+    const board = await loadBoard(network, designProject, { scope: 'plan' })
+    await renderRoadmap(board)
+    expect(roadmapState()).toBe('ok')
+    expect(count('[data-roadmap-task-top]')).toBe(800)
   })
 
   it("spreads Team over the owners of a design-size project's rows, every cell a figure", async () => {

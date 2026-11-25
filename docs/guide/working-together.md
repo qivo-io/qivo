@@ -155,6 +155,11 @@ The workspace opens while images load and uses a solid background if no image
 is available. Your browser may cache your chosen background and preview for
 your account. The public demo does not keep this persistent cache.
 
+**Roadmap → Hide Done in Roadmap** gives Done tasks no row on the Roadmap. It
+is on by default and, like the theme, follows your account across
+organizations and devices. Turn it off to show Done tasks as dim gray bars
+([The Roadmap](./the-roadmap.md)).
+
 ## Your inbox
 
 Your **Inbox** collects mentions in task descriptions and comments, plus

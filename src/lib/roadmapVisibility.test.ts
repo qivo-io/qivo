@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRoadmapTaskVisible } from './roadmapVisibility'
+import { hidesDone, isRoadmapTaskVisible, withoutDone } from './roadmapVisibility'
 
 describe('roadmap task visibility', () => {
   // Both boundary weeks belong to the visible window.
@@ -103,5 +103,32 @@ describe('roadmap task visibility', () => {
     expect(group('backlog', true, 11, 15)).toBe(true)
     expect(group('todo', true, 18, 20)).toBe(false)
     expect(group('progress', true, null, null)).toBe(false)
+  })
+})
+
+describe('Hide Done in Roadmap', () => {
+  it('is on for an account that never chose, also before its appearance loads', () => {
+    expect(hidesDone(null)).toBe(true)
+    expect(hidesDone(undefined)).toBe(true)
+    expect(hidesDone({})).toBe(true)
+    expect(hidesDone({ roadmap_hide_done: true })).toBe(true)
+    expect(hidesDone({ roadmap_hide_done: false })).toBe(false)
+  })
+
+  const tasks = [
+    { id: 'a', done: false },
+    { id: 'b', done: true },
+    { id: 'c', done: false },
+    { id: 'd', done: true },
+  ]
+  const ids = (list: readonly { id: string }[]) => list.map((task) => task.id)
+
+  it('gives the Done tasks no row while on, keeping the others in order, and every task one while off', () => {
+    const on = withoutDone(tasks, true, (task) => task.done)
+    expect(ids(on.shown)).toEqual(['a', 'c'])
+    expect(ids(on.hidden)).toEqual(['b', 'd'])
+    const off = withoutDone(tasks, false, (task) => task.done)
+    expect(ids(off.shown)).toEqual(['a', 'b', 'c', 'd'])
+    expect(off.hidden).toEqual([])
   })
 })

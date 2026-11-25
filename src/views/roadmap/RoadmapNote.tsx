@@ -9,13 +9,16 @@
    Done tasks, since unfinished work shows whatever its dates; the line
    about the milestone flags may offer it (roadmapMilestones.ts
    markerLine), as the window bounds their range read. None shows part of
-   a Roadmap. */
+   a Roadmap. DoneHiddenNote is the one note beside rows the answer
+   brings: it shows where Hide Done in Roadmap hides every one of them. */
 
 import type { ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../../convex/lib/limits'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
 import { byNameOrder } from '../../lib/pagedList'
+import { TURN_OFF_HIDE_DONE } from '../../lib/roadmapVisibility'
 import type { ScopeInfo } from '../../store/planner'
 import type { RoadmapView } from './useRoadmapView'
 
@@ -150,4 +153,30 @@ export function RoadmapNote({
     default:
       return null
   }
+}
+
+/** What the Roadmap says under its headings where Hide Done in Roadmap
+    hides every task its answer brings, with Clear filters where a filter
+    is on (`filtered`). It is as compact as the note for no matches, so the
+    phone's landscape timeline shows it whole. */
+export function DoneHiddenNote({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
+  return (
+    <div
+      data-empty-state
+      className="animate-in fade-in slide-in-from-bottom-1 flex flex-1 flex-col items-center gap-2 px-4 py-[26px] text-center"
+    >
+      <span data-empty-state-title className="text-base font-semibold text-text-2">
+        Done tasks are hidden
+      </span>
+      <span className="max-w-[440px] text-sm text-text-3">
+        {filtered ? 'No other tasks match your filters.' : 'No other tasks are on this Roadmap.'} To
+        show Done tasks, {TURN_OFF_HIDE_DONE}.
+      </span>
+      {filtered && (
+        <Button type="button" onClick={onClear}>
+          Clear filters
+        </Button>
+      )}
+    </div>
+  )
 }

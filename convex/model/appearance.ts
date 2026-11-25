@@ -36,6 +36,8 @@ export async function customPreviewVersion(ctx: QueryCtx, image: Doc<'custom_bac
 export type AppearanceSettings = {
   mode: AppearanceMode
   image_source: ImageSource
+  /** whether the Roadmap gives Done tasks no row (Hide Done in Roadmap) */
+  roadmap_hide_done: boolean
   custom_image: null | {
     id: string
     name: string
@@ -66,6 +68,7 @@ export async function appearanceSettings(
     // Dark is the default, and it stands in for the retired Blue and Canvas themes.
     mode: settings?.mode === 'light' ? 'light' : 'dark',
     image_source: settings?.image_source ?? 'daily',
+    roadmap_hide_done: settings?.roadmap_hide_done !== false,
     custom_image:
       image && image.auth_user_id === authId
         ? {

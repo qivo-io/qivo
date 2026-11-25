@@ -14998,6 +14998,12 @@ export const PLANNER = {
     sendAwaited(api.appearance.save, preferences, 'none', {
       onError: (e) => toastWriteError(e, false),
     }),
+  /** Saves Hide Done in Roadmap for the account. The appearance watch, not
+      this answer, owns what Settings and the Roadmap show. */
+  setRoadmapHideDone: (hide: boolean) =>
+    sendAwaited(api.appearance.setRoadmapHideDone, { roadmap_hide_done: hide }, 'none', {
+      onError: (e) => toastWriteError(e, false),
+    }),
   /** Saves where the account's desktop alerts appear
       (notifications.setDelivery), which spends one change on the demo. It
       changes no local switch and asks for no permission, and the server's

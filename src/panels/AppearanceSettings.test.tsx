@@ -23,12 +23,14 @@ import { AppearanceSettings } from './AppearanceSettings'
 const store = vi.hoisted(() => ({
   deliver: null as ((value: AppearancePreferences) => void) | null,
   save: vi.fn(),
+  hideDone: vi.fn(),
   upload: vi.fn(),
   mint: vi.fn(async () => null),
 }))
 vi.mock('../store/planner', () => ({
   P: {
     setAppearance: store.save,
+    setRoadmapHideDone: store.hideDone,
     uploadAppearanceImage: store.upload,
     mintAppearanceImageUrl: store.mint,
   },
@@ -77,6 +79,7 @@ const custom = (
 ): AppearancePreferences => ({
   mode: 'dark',
   image_source: 'custom',
+  roadmap_hide_done: true,
   custom_image: {
     id: 'image-1',
     name: 'Lake.jpg',
@@ -98,6 +101,7 @@ let root: Root
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   store.save.mockReset()
+  store.hideDone.mockReset()
   store.upload.mockReset()
   store.mint.mockClear()
   window.showToast = vi.fn()
@@ -186,6 +190,32 @@ describe('Settings › Appearance', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
+  it("saves Hide Done in Roadmap's switch, which shows the account's value and the new one while it saves", async () => {
+    const toggle = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Hide Done in Roadmap"]',
+      )
+    await deliver(custom({}))
+    expect(toggle()?.getAttribute('aria-checked')).toBe('true')
+    let answer = () => {}
+    store.hideDone.mockReturnValue(
+      new Promise<void>((resolve) => {
+        answer = resolve
+      }),
+    )
+    await act(async () => toggle()?.click())
+    expect(store.hideDone).toHaveBeenCalledWith(false)
+    expect(toggle()?.getAttribute('aria-checked')).toBe('false')
+    expect(toggle()?.disabled).toBe(true)
+    await deliver({ ...custom({}), roadmap_hide_done: false })
+    await act(async () => answer())
+    expect(window.showToast).toHaveBeenCalledWith('Appearance saved.')
+    expect(toggle()?.getAttribute('aria-checked')).toBe('false')
+    store.hideDone.mockResolvedValue(null)
+    await act(async () => toggle()?.click())
+    expect(store.hideDone).toHaveBeenLastCalledWith(true)
+  })
+
   it('toasts a file its own check refuses, and sends nothing', async () => {
     await deliver(custom({}))
     await choose(new File([new Uint8Array([1, 2, 3, 4])], 'lake.jpg', { type: 'image/jpeg' }))
@@ -260,7 +290,12 @@ describe('Settings › Appearance', () => {
   it('says the weekly preview loads while the provider waits for the week’s image', async () => {
     context.preview = { status: 'loading', url: null, key: null, previewVersion: null }
     await draw()
-    await deliver({ mode: 'dark', image_source: 'daily', custom_image: null })
+    await deliver({
+      mode: 'dark',
+      image_source: 'daily',
+      roadmap_hide_done: true,
+      custom_image: null,
+    })
     expect(previewText()).toBe('Loading preview…')
     // nothing asked for or nothing to show is no loading
     context.preview = { status: 'unavailable', url: null, key: null, previewVersion: null }
@@ -289,7 +324,12 @@ describe('Settings › Appearance', () => {
       previewVersion: null,
     }
     await draw()
-    await deliver({ mode: 'dark', image_source: 'daily', custom_image: null })
+    await deliver({
+      mode: 'dark',
+      image_source: 'daily',
+      roadmap_hide_done: true,
+      custom_image: null,
+    })
     expect(previewText()).toBe('Preview unavailable.')
     expect(container.querySelector('img')).toBeNull()
     context.preview = {

@@ -194,6 +194,7 @@ describe('public demo ownership and authentication', () => {
     expect(await login.as.query(api.appearance.get, {})).toEqual({
       mode: 'dark',
       image_source: 'daily',
+      roadmap_hide_done: true,
       custom_image: null,
     })
     vi.stubEnv('DEMO_ADMISSION_OPEN', 'false')

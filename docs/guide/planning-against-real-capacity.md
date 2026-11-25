@@ -7,8 +7,11 @@ stays on the timeline for the session whatever the filters, and the Roadmap
 moves its window to the task first if needed. Unscheduled tasks receive a starter bar.
 A Backlog task must first move to another status; trying to plan it leaves
 its dates unchanged.
-Done tasks that have dates can still be moved on the Roadmap. A Done task
-without dates cannot be planned there, so its button is off and says why.
+Done tasks that have dates can still be moved on the Roadmap while **Hide
+Done in Roadmap** is off. While it is on, the Roadmap says the task is Done
+and hidden, and where to turn the setting off, and starts no session. A Done
+task without dates cannot be planned there, so its button is off and says
+why.
 When the task cannot show on that Roadmap, for example because the project
 is past the Roadmap's 1,000-task limit, Qivo says why and starts no
 session. If the task leaves the Roadmap during the
