@@ -1,8 +1,9 @@
-Overview is the first view of every project, sub-project and My view. In a
-project or sub-project it shows what is left to do and what needs
-attention, and leaves out what is finished. My view keeps the summary of
-your own tasks described under [My view's Overview](#my-views-overview).
-It describes current signals, not a guarantee that deadlines are safe. An
+Overview comes first in the view switch of every project, sub-project and
+My view. In a project or sub-project it shows what is left to do and what
+needs attention, and leaves out what is finished. My view keeps the
+summary of your own tasks described under
+[My view's Overview](#my-views-overview). It describes current signals,
+not a guarantee that deadlines are safe. An
 address that once named all projects opens as the Overview's own address
 does ([All projects](./finding-your-way-around.md#all-projects)).
 

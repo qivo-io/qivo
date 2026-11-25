@@ -276,8 +276,9 @@ Useful field rules:
   page did not read that owner's work; never read that as free time. Read
   the single task for its own verdict.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
-  `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
-  tasks with `status: "ok"`. It says `status: "counting"` with null counts
+  `GET /v1/projects/{ref}` add `completion`, how much of the project is
+  Done: its active tasks without subtasks and how many of them are Done,
+  with `status: "ok"`. It says `status: "counting"` with null counts
   for a moment after any project in the organization is archived, restored
   or moved to Deleted items, so ask again later, and `status:
   "unavailable"` with null counts in a project with too many sub-projects

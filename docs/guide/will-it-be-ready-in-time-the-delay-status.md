@@ -131,8 +131,11 @@ Roadmap due line says that Qivo could not read all of its subtasks.
   tasks behind plan under **Behind plan** in a project's **Needs
   attention**, and counts **Late** and **Behind plan** for each
   sub-project, all worked out on the server with each owner's other work.
-  Where Qivo could not read that work, those counts read **unknown**, never
-  0. My view's **Overdue & at risk** marks such a row **risk unknown**, so
+  Where Qivo could not read that work, the Projected to miss and Behind
+  plan tabs show a dash for their count and say that they may leave tasks
+  out, and a sub-project's Late and Behind plan read **unknown**, never 0
+  ([Needs attention](./the-overview-project-health-at-a-glance.md#needs-attention)).
+  My view's **Overdue & at risk** marks such a row **risk unknown**, so
   the task may not be late, and its health table's counts read **unknown**
   too.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
