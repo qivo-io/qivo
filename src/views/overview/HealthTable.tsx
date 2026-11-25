@@ -65,7 +65,7 @@ const HEALTH_COLS = [
     label: 'Late',
     align: 'right',
     dir: 'desc',
-    title: 'Tasks projected to miss their due date',
+    title: 'Tasks past their due date or projected to miss it',
   },
   {
     id: 'behind',
