@@ -315,8 +315,11 @@ Use the row controls to change tasks without opening them:
   Roadmap finds its bar or unplanned row without starting a planning session.
   If the task has become Done since its row was drawn, for example in a
   meeting that no longer updates, and **Hide Done in Roadmap** is on, the
-  Roadmap shows no row for it and says that Done tasks are hidden and where
-  to turn the setting off ([The Roadmap](./the-roadmap.md)).
+  Roadmap shows no row for it. Where it can tell that the task is Done, it
+  says that Done tasks are hidden and where to turn the setting off
+  ([The Roadmap](./the-roadmap.md)). Otherwise, as for a Done task without
+  dates whose row still showed it open, it says that the task is not on the
+  roadmap any more.
 - The **review tick** marks the task reviewed without changing it.
 
 A row's **Board** and **Roadmap** links open the task's sub-project. The

@@ -2185,7 +2185,6 @@ function App() {
     // window names; the Roadmap then opens as any scope does, at once
     const meta = P.topLevelOf(it.project)
     if (!meta) return
-    const place = taskPlaceOf(it)
     /* A Roadmap that holds the task's sub-project, that sub-project's or
        its top-level project's, stays; from anywhere else planning opens
        the task's top-level project. My view carries it
@@ -2210,24 +2209,27 @@ function App() {
         openIssue: null,
       },
       () => {
+        // the task as the window shows it once the move lands, as it can
+        // change while the move asks about unsent text, so its weeks, its
+        // status and whether it has subtasks come from one answer
+        const now = P.taskShown(id) ?? it
+        const place = taskPlaceOf(now)
+        const reveals = P.isGroup(now)
         setScope(to)
         // a reveal does not bypass the toolbar filters, so clear them as Team
         // sync's jump does (Focus stays)
-        if (group) clearFilters()
+        if (reveals) clearFilters()
         setView('roadmap')
         setProjectsOpen(false)
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
-        // Done as the window's answer says it once the move lands, as the
-        // task can become Done while the move asks about unsent text
-        if (group) {
-          reveal(id, false, it.key, place, P.taskDetail(it.uuid, it.org)?.done ?? undefined)
+        if (reveals) {
+          reveal(id, false, now.key, place, P.taskDetail(now.uuid, now.org)?.done ?? undefined)
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
-          const status = (P.taskShown(id) ?? it).status
-          setFocusPlan({ id, n: focusN.current, key: it.key, status, ...place })
+          setFocusPlan({ id, n: focusN.current, key: now.key, status: now.status, ...place })
         }
       },
     )
