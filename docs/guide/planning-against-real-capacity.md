@@ -125,10 +125,12 @@ the planned end counts in the save week. These figures update while you drag
 bars; there is no separate allocation to enter.
 
 Team utilization shows the plan, so a week can read over 100%. Delay
-verdicts go further: in an overbooked week the person's tasks share their
-hours equally, and the rest moves to later weeks, so the projected finishes
-show where an overbooked plan ends up
-([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+verdicts go further: in an overbooked week each of the person's tasks gets
+the same share of the hours it asks for that week, and the rest moves to
+later weeks, so the projected finishes show where an overbooked plan ends
+up ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+For example, with 16 hours in a week and tasks that ask for 24 and 8
+hours, each gets half its ask, 12 and 4 hours, not 8 each.
 
 ## Team sync
 

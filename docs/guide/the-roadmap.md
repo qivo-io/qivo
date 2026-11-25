@@ -144,10 +144,11 @@ on it moves nothing, and the plan still ends where the gray ends.
 **Projected delay** in the toolbar draws diagonal stripes in the same yellow
 or red from the end of a Behind plan or Late bar, or its run-on, to the end of
 the task's projected finish week, which the hover text names. The stripes
-assume that the owner's tasks share an overbooked week equally, the rest
-moving to later weeks, and that remaining hours count from the week they
-were last updated
+assume that in an overbooked week each of the owner's tasks gets the same
+share of the hours it asks for, the rest moving to later weeks, and that
+remaining hours count from the week they were last updated
 ([How the projection works](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+With 16 hours in a week and asks of 24 and 8 hours, the tasks get 12 and 4.
 It is on by default. Switching it off hides the stripes and the projected
 finish week in the hover text, and nothing else, for your account, in every
 project, in My view and on the phone's landscape timeline.
