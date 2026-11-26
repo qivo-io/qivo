@@ -744,15 +744,16 @@ export function overviewStandIn(
       .sort(group === 'next' ? byStart : byUrgency)
     return { rows: rows.slice(0, args[group] as number).map(rowOf), total: rows.length }
   }
-  // every task of the person's not done for them, by its overdue ones; a
+  // every project above a task of the person's that tracks delay, Done
+  // ones included, by the overdue ones of those not done for them; a
   // forced unknown makes a project unknown where one is due and not overdue
   const late = new Map<string, Map<string, number> | 'loads'>()
   for (const t of scoped) {
     const top = projectById.get(t.project_id)?.parent_id
-    if (top === undefined || !tracks(t) || done(t)) continue
+    if (top === undefined || !tracks(t)) continue
     const days = late.get(top) ?? new Map<string, number>()
     late.set(top, days)
-    if (days === 'loads' || t.due_date === undefined) continue
+    if (days === 'loads' || t.due_date === undefined || done(t)) continue
     if (t.due_date < day) days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
     else if (unknown) late.set(top, 'loads')
   }

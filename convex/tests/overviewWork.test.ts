@@ -381,6 +381,25 @@ describe('milestone lines', () => {
     expect(needs).toMatchObject({ late_due: { state: 'ok', days: [{ due: late, count: 1 }] } })
   })
 
+  it('gives a project that tracks delay, where every task of the person is Done, a line with no Late task', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Shipped',
+      assignee_id: f.user.id,
+      status: 'done',
+      done_at: PLANTED_AT,
+      due_date: shift(DAY, -4),
+    })
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    const answer = okOf(await workOf(t, f.user))
+    expect(answer.late_due).toEqual([{ project_id: f.meta.id, late: { state: 'ok', days: [] } }])
+  })
+
   it('answers each project its own Late tasks, unknown only where a verdict of a task due there could not be read, and none for a project without delay tracking', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)

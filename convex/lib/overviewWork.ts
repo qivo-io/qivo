@@ -75,11 +75,11 @@ export type WorkAnswer =
       counts: Record<'overdue' | 'blocked' | 'no_reviewer' | 'paused', number> &
         Record<'projected' | 'behind', Figure<{ count: number }>>
       /** one entry for each top-level project above a task of the
-       * person's that is not done for them in a sub-project that tracks
-       * delay, by project id: its Late tasks, the overdue ones and those
-       * projected to miss, by due date ascending, which may be none, or
-       * unavailable where a task of it that is due has a verdict that
-       * could not be read */
+       * person's in a sub-project that tracks delay, Done tasks not yet
+       * archived included, by project id: its Late tasks, the overdue ones
+       * and those projected to miss among the tasks not done for them, by
+       * due date ascending, which may be none, or unavailable where a task
+       * of it that is due has a verdict that could not be read */
       late_due: {
         project_id: string
         late: Figure<{ days: { due: string; count: number }[] }>
@@ -273,12 +273,12 @@ export async function readWork(
     // the Late tasks by due date under each top-level project, unknown for
     // a project where a task that is due could be Late by a verdict not read
     const lateDue = new Map<string, Map<string, number> | Missing>()
-    for (const t of open) {
+    for (const t of tracking) {
       const top = subOf.get(t.id)?.parent_id
       if (top === undefined) continue
       const days = lateDue.get(top) ?? new Map<string, number>()
       lateDue.set(top, days)
-      if (typeof days === 'string' || t.due_date === undefined) continue
+      if (typeof days === 'string' || t.due_date === undefined || isDoneFor(g, t)) continue
       if (unknown.has(t.id)) lateDue.set(top, delays.state === 'ok' ? 'loads' : delays.reason)
       else if (overdue(t) || verdictOf.get(t.id)?.status === 'late')
         days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
