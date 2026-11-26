@@ -4231,8 +4231,10 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
  * arguments the held answer may stand in for (`hold`) keep that answer and
  * its rows, never as current, until the answer for `key` replaces them: a
  * text filter that only narrows the Board's (views/board/useBoardView.ts
- * narrowsText), and the same Team sync meeting on a new day or week grid
- * (P.watchSync). The view decides when it holds; the store keeps one rule.
+ * narrowsText), the same Team sync meeting on a new day or week grid
+ * (P.watchSync), and an Overview list's Load more and its Retry
+ * (store/overviewLists.ts). The view decides when it holds; the store
+ * keeps one rule.
  * A new `attempt` on a read that keeps its rows past a failure
  * (ViewQuery keepsOnError) and still holds the last answer whose rows it
  * took (ViewRead fitted) asks afresh without dropping anything. The held
@@ -4365,8 +4367,8 @@ function releaseView(slot: ViewSlot) {
 
 /* The Overview's reads, over the view reads (store/overviewLists.ts). */
 const overview = createOverviewReads({
-  watch: (slot, query, key, attempt) =>
-    watchView(slot, OVERVIEW_QUERIES[query], key, attempt, 0, false),
+  watch: (slot, query, key, attempt, hold) =>
+    watchView(slot, OVERVIEW_QUERIES[query], key, attempt, 0, false, hold),
   read: viewRead,
   release: releaseView,
 })

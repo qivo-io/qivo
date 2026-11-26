@@ -151,6 +151,10 @@ const press = (key: string) =>
     )
   })
 const blur = (input: HTMLInputElement | null | undefined) => act(async () => input?.blur())
+/** Lets the store's repaint of the views, which runs on a timer, happen. */
+async function repaint() {
+  for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
 
 describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('shows the person’s open work in its three groups, with the status beside it', async () => {
@@ -289,6 +293,51 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.activeElement).toBe(hours('first'))
   })
 
+  it('keeps every row’s hours field and actions while Load more loads, with focus in the field being typed in', async () => {
+    const { board } = await overview((snap) => {
+      work(snap)
+      for (let i = 0; i < 10; i++) snap.issues.push(taskRow(snap, `more-${i}`, 'todo', 20 + i))
+    })
+    expect(titles('next')).toHaveLength(10)
+    await type(hours('wire'), '7')
+    board.server.overview.hold = (query) => query === 'work'
+    await act(async () => q('[data-ov-group="next"] [data-ov-more]')?.click())
+    expect(text('[data-ov-group="next"] [data-ov-more]')).toBe('Loading…')
+    expect(hours('wire')?.value).toBe('7')
+    expect(document.activeElement).toBe(hours('wire'))
+    expect(hours('first')).not.toBeNull()
+    expect(q('[data-work-id="first"] [data-ov-start]')).not.toBeNull()
+    board.server.overview.hold = false
+    await board.answer()
+    await repaint()
+    expect(titles('next')).toHaveLength(12)
+    expect(hours('wire')?.value).toBe('7')
+    expect(document.activeElement).toBe(hours('wire'))
+  })
+
+  it('keeps every row’s hours field and actions while Retry asks a failed Load more again', async () => {
+    const { board } = await overview((snap) => {
+      work(snap)
+      for (let i = 0; i < 10; i++) snap.issues.push(taskRow(snap, `more-${i}`, 'todo', 20 + i))
+    })
+    board.server.overview.fail = new Error('offline')
+    board.server.overview.failing = (query, args) => query === 'work' && (args.next ?? 0) > 10
+    await act(async () => q('[data-ov-group="next"] [data-ov-more]')?.click())
+    await board.answer()
+    await repaint()
+    expect(q('[data-ov-work-retry]')).not.toBeNull()
+    await type(hours('wire'), '7')
+    board.server.overview.fail = undefined
+    board.server.overview.hold = (query) => query === 'work'
+    await act(async () => q('[data-ov-work-retry]')?.click())
+    expect(hours('wire')?.value).toBe('7')
+    expect(q('[data-work-id="first"] [data-ov-start]')).not.toBeNull()
+    board.server.overview.hold = false
+    await board.answer()
+    await repaint()
+    expect(titles('next')).toHaveLength(12)
+  })
+
   it('keeps an action on its way when Escape puts the hours back', async () => {
     await overview(work)
     await act(async () => q('[data-work-id="first"] [data-ov-start]')?.click())
@@ -384,8 +433,7 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     const task = board.snapshot.issues.find((t) => t.id === 'check')
     if (task) task.status = 'done'
     await board.deliver()
-    // the store repaints the views on a timer
-    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    await repaint()
     const title = q('[data-empty-state-title]')
     expect(title?.textContent).toBe('Nothing assigned to you')
     expect(document.activeElement).toBe(title)

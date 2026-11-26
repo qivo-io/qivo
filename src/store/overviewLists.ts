@@ -25,7 +25,10 @@
      shown for the same scope and clock stays as `kept`, as the store's
      view read drops what it held for other arguments, and offers no Load
      more beyond the one on its way; a new scope or clock shows nothing
-     until its own answer. A Load more that fails goes back to the rows it
+     until its own answer. For a Load more and its Retry the store's read
+     keeps that answer and its rows too (OverviewTransport `hold`), so the
+     tasks of the rows on screen stay editable until the longer answer
+     replaces them. A Load more that fails goes back to the rows it
      showed, asking their arguments again so they keep updating, and offers
      Retry. Where those rows fail too, the read shows its error, whose Try
      again asks it afresh.
@@ -187,8 +190,15 @@ export type HeldRead = {
 export type OverviewTransport = {
   /** Registers read `slot` of `query` for the arguments `key` (JSON), or
       stops it with null, keeping what it held; a new `attempt` asks
-      afresh. */
-  watch(slot: string, query: OverviewQuery, key: string | null, attempt: number): void
+      afresh. With `hold` the answer it holds for other arguments, and its
+      rows, stay until an answer for `key` replaces them. */
+  watch(
+    slot: string,
+    query: OverviewQuery,
+    key: string | null,
+    attempt: number,
+    hold: boolean,
+  ): void
   /** What read `slot` holds. */
   read(slot: string): HeldRead
   /** Forgets read `slot`, its result and its rows. */
@@ -326,8 +336,19 @@ export function createOverviewReads(transport: OverviewTransport) {
     const key = () =>
       base === null || ask === null ? null : JSON.stringify(o.args(base, ask, limit))
 
-    /** Registers the read as the reads stand: live while asking. */
-    const watch = () => transport.watch(o.slot, o.query, asking ? key() : null, tries)
+    /** Registers the read as the reads stand: live while asking, holding
+        the answer shown where the arguments ask more rows of it. */
+    const watch = () =>
+      transport.watch(
+        o.slot,
+        o.query,
+        asking ? key() : null,
+        tries,
+        shown !== null &&
+          shown.base === baseKey &&
+          same(shown.ask, ask) &&
+          o.grew(shown.limit, limit),
+      )
 
     /** Takes the read's news in: an answer for the arguments asked now is
         the one it shows, and a Load more that failed goes back to the rows
@@ -453,13 +474,13 @@ export function createOverviewReads(transport: OverviewTransport) {
         watch()
       },
       /** Asks afresh (Try again), or after a Load more that failed, that
-          Load more again (Retry). */
+          Load more again (Retry), whose new arguments ask afresh, so the
+          rows on screen stay until they answer. */
       retry() {
         if (failedMore !== null) {
           limit = o.join(limit, failedMore)
           failedMore = null
-        }
-        tries++
+        } else tries++
         watch()
       },
       /** Forgets what the page asked, as for a new scope. */
@@ -586,6 +607,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       'summary',
       asking && base ? JSON.stringify(overviewArgs('summary', base)) : null,
       attempt,
+      false,
     )
     health.watch()
     needs.watch()

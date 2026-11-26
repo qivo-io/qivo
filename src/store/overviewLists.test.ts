@@ -82,7 +82,7 @@ function server(snap: Snapshot) {
     asked: [] as { slot: string; key: string }[],
   }
   const transport: OverviewTransport = {
-    watch(slot, query, key, attempt) {
+    watch(slot, query, key, attempt, hold) {
       let read = reads.get(slot)
       if (!read) {
         read = { query, want: null, attempt, held: null, current: false }
@@ -90,7 +90,8 @@ function server(snap: Snapshot) {
       }
       const retry = attempt !== read.attempt
       read.attempt = attempt
-      if (key !== null && (retry || (read.held !== null && read.held.key !== key))) read.held = null
+      if (key !== null && (retry || (read.held !== null && read.held.key !== key && !hold)))
+        read.held = null
       if (key === null || key !== read.want || retry) read.current = false
       if (key !== null && (key !== read.want || retry)) state.asked.push({ slot, key })
       read.want = key
