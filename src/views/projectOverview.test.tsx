@@ -234,6 +234,40 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(section()?.textContent).toContain('Qivo shows the first 10 of 12 sub-projects.')
   })
 
+  it('lets the sub-projects it showed go where the rows a failed Load more went back to fail too', async () => {
+    // Plan's sub-projects: One and eleven more
+    const { board } = await overview((snap) => {
+      plan(snap)
+      const base = snap.projects[0]
+      for (let n = 2; n <= 12; n++)
+        snap.projects.push({ ...base, id: `sub${n}`, key: `S${n}`, num: 10 + n, name: `Sub ${n}` })
+    })
+    const shown = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-ov-sub]')].map((row) => row.dataset.ovSub)
+    const read = () => board.P.cacheStats().reads.flat()
+    const first = shown()
+    expect(first).toHaveLength(10)
+    // One also holds Needs attention's rows, and the page reads Plan
+    const one = board.snapshot.projects[0].id
+    const listed = first.filter((id) => id !== one)
+    expect(listed).toHaveLength(9)
+    // the next 10 fail while the first 10 asked again are held back
+    board.server.overview.hold = (query) => query === 'health'
+    await act(async () => q('[data-ov-subs-more]')?.click())
+    board.server.overview.fail = new Error('down')
+    board.server.overview.failing = (query, args) =>
+      query === 'health' && (args.limit as number) > 10
+    await board.answer()
+    expect(shown()).toEqual(first)
+    expect(read()).toEqual(expect.arrayContaining(first))
+    // they fail too
+    board.server.overview.failing = (query) => query === 'health'
+    await board.answer()
+    expect(q('[data-ov-subs-state]')?.dataset.ovSubsState).toBe('error')
+    expect(read().filter((id) => listed.includes(id))).toEqual([])
+    expect(read()).toEqual(expect.arrayContaining([one, 'plan']))
+  })
+
   it("names a sub-project's lead before the workspace holds the sub-project, loading and then by name, never as no lead", async () => {
     const { board } = await overview((snap) => {
       plan(snap)

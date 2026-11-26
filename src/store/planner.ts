@@ -3760,7 +3760,10 @@ const KEEP_ROWS = Symbol('keep the rows')
     `keepsHeldOnError` keeps, as KEEP_ROWS does, only the rows of an answer
     held for other arguments (watchView `hold`) where the arguments asked
     fail, as an Overview list's failed Load more keeps the rows on screen
-    while it reads them again (store/overviewLists.ts). */
+    while it reads them again (store/overviewLists.ts). Where that read
+    fails too, while the failure before it is held, the rows go with the
+    projects their answer named, as they would have gone had the read gone
+    back without `hold`. */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
@@ -3878,11 +3881,14 @@ export const AGENDA_MILESTONE_SLOTS = {
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
     write; it names its rows' projects with the project cache, which give
-    each row its organization (the leads it names) and its name. */
+    each row its organization (the leads it names) and its name, and lets
+    them go after a failed Load more as the task lists do
+    (keepsHeldOnError). */
 const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
   health: {
     ref: api.overview.health,
+    keepsHeldOnError: true,
     projects: (value) => {
       const answer = value as { state?: string; rows?: { project_id: string }[] }
       return answer.state === 'ok' && answer.rows ? answer.rows.map((r) => r.project_id) : null
@@ -4119,6 +4125,14 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     next = { key, error }
   }
   together(() => {
+    // a failure while the read holds the failure of other arguments, as
+    // after an Overview list's failed Load more the read back to the rows
+    // on screen fails too (ViewQuery keepsHeldOnError)
+    const failedBack =
+      !!read.query.keepsHeldOnError &&
+      next.error !== undefined &&
+      read.held?.error !== undefined &&
+      read.held.key !== key
     read.held = next
     read.current = true
     read.connection = latestConnection
@@ -4149,9 +4163,11 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       dropHeldViewParts()
     }
     // the projects an answer names, named with the next repaint; a failure
-    // keeps the last answer's
+    // keeps the last answer's, except where it lets the rows a hold back
+    // kept go, as the arguments it asked without that hold would have
     const named = read.query.projects
     if (named && next.value !== undefined) nameSlotProjects(slot, named(next.value) ?? [])
+    else if (named && failedBack && rows !== KEEP_ROWS) nameSlotProjects(slot, [])
     // a milestone read's answer is its anchor; a failure keeps the last
     // one, which the view shows under its note (P.milestoneRead)
     const milestones = read.query.milestones
