@@ -351,7 +351,7 @@ describe('the field check in the store', () => {
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
       'Not saved. Emil Berg changed the title of QN-1. Your change was discarded.\n' +
-        'Not saved. Emil Berg changed the title of QN-1. Your text is still in the editor. Save again to replace their version.',
+        'Not saved. Emil Berg changed the title of QN-1. Your text is still in the field. Save again to replace their version.',
     )
   })
 

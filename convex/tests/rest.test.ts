@@ -1939,7 +1939,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
         body: JSON.stringify({ remaining_hours: 3 }),
       }),
       'bad_request',
-      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
+      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining hours',
     )
     const cleared = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.agent.id,

@@ -72,10 +72,37 @@ describe('refusalLine', () => {
     )
   })
 
-  it('says a refused comment edit is still in its editor', () => {
-    expect(line({ kept: true, changes: [change({ record: 'comment', field: 'body' })] })).toBe(
+  it('says where a kept draft is: the editor, its field or the Milestones window', () => {
+    const kept = (over: Partial<FieldChange>) => line({ kept: true, changes: [change(over)] })
+    expect(kept({ record: 'comment', field: 'body' })).toBe(
       'Not saved. Emil Berg changed this comment on QN-12. Your text is still in the editor. Save again to replace their version.',
     )
+    expect(kept({ field: 'description' })).toBe(
+      'Not saved. Emil Berg changed the description of QN-12. Your text is still in the editor. Save again to replace their version.',
+    )
+    expect(kept({ field: 'title' })).toBe(
+      'Not saved. Emil Berg changed the title of QN-12. Your text is still in the field. Save again to replace their version.',
+    )
+    expect(kept({ field: 'remaining_hours' })).toBe(
+      'Not saved. Emil Berg changed the remaining hours of QN-12. Your text is still in the field. Save again to replace their version.',
+    )
+    expect(kept({ record: 'milestone', field: 'name' })).toBe(
+      'Not saved. Emil Berg changed the name of milestone “Beta”. Your change is still in the Milestones window. Save again to replace their version.',
+    )
+  })
+
+  it('says remaining hours and dates were changed, as plurals', () => {
+    expect(line({ changes: [change({ field: 'remaining_hours', by: null })] })).toBe(
+      'Not saved. The remaining hours of QN-12 were changed elsewhere. Your change was discarded.',
+    )
+    expect(
+      line({
+        changes: [
+          change({ field: 'start_week', by: null }),
+          change({ field: 'end_week', by: null }),
+        ],
+      }),
+    ).toBe('Not saved. The dates of QN-12 were changed elsewhere. Your change was discarded.')
   })
 
   it('asks for Keep mine for a settings field that keeps the text', () => {

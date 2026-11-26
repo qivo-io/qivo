@@ -751,7 +751,7 @@ async function hasActiveSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<boolea
 export async function assertNoSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<void> {
   if (await hasActiveSubtasks(ctx, issue)) {
     throw badRequest(
-      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
+      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining hours',
     )
   }
 }
@@ -789,7 +789,7 @@ export async function assertNoGroupDates(ctx: QueryCtx, issue: Doc<'issues'>): P
 export async function assertOwnRemaining(ctx: QueryCtx, issue: GroupRow): Promise<void> {
   if (await hasActiveSubtasks(ctx, issue)) {
     throw rule(
-      'a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks',
+      'a task with subtasks has no remaining hours of its own, because it shows the sum of its subtasks',
     )
   }
 }

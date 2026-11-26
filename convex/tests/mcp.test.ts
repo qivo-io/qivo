@@ -2103,7 +2103,7 @@ describe('write tools', () => {
         remaining_hours: 4,
       }),
       'bad_request',
-      /^remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time$/,
+      /^remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining hours$/,
     )
     // assignee guard, machine sentences
     await expectRefusal(

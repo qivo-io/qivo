@@ -398,7 +398,7 @@ export function MobileRoadmap({
         <section className="mobile-roadmap-section">
           <h2>Task schedule</h2>
           <p className="mobile-roadmap-note">
-            Open a task to edit its dates, remaining time or linked tasks.
+            Open a task to edit its dates, remaining hours or linked tasks.
           </p>
           <details className="mobile-roadmap-tools">
             <summary>

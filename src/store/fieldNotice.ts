@@ -53,7 +53,7 @@ const WORDS: Partial<Record<FieldChange['record'], Record<string, string>>> = {
     start_week: 'start date',
     end_week: 'end date',
     due_date: 'due date',
-    remaining_hours: 'remaining time',
+    remaining_hours: 'remaining hours',
     paused: 'pause',
     parent_id: 'parent',
     project_id: 'project',
@@ -93,9 +93,21 @@ const WORDS: Partial<Record<FieldChange['record'], Record<string, string>>> = {
   },
 }
 
+const PLURAL = new Set(['dates', 'remaining hours', 'plannable hours', 'default plannable hours'])
+
 /* Records whose one checked field is the whole record, so the notice names
    the record alone: "Emil Berg changed this comment on QN-12". */
 const WHOLE = new Set<FieldChange['record']>(['comment', 'grant', 'link'])
+
+/* Each editor that keeps a draft sends `expected` only for the fields it
+   edits, so the refusal's first change tells where the draft waits. */
+function keptTail(first: FieldChange): string {
+  const save = 'Save again to replace their version.'
+  if (first.record === 'comment' || (first.record === 'task' && first.field === 'description'))
+    return `Your text is still in the editor. ${save}`
+  if (first.record === 'milestone') return `Your change is still in the Milestones window. ${save}`
+  return `Your text is still in the field. ${save}`
+}
 
 /** Joins words as people list them: "a", "a and b", "a, b and c". */
 const listed = (words: readonly string[]) =>
@@ -143,19 +155,20 @@ export function refusalLine(r: Refusal, look: Lookup): string {
   const whole = WHOLE.has(first.record)
   const writer = refusalWriter(r.changes, look)
   const what = whole ? record : `the ${listed(words)} of ${record}`
+  const plural = !whole && (words.length > 1 || PLURAL.has(words[0] ?? ''))
   const offline = r.offline ? ' while you were offline' : ''
   const changed =
     writer === 'you'
       ? `You changed ${what} elsewhere${offline}.`
       : writer
         ? `${writer.name} changed ${what}${offline}.`
-        : `${capital(what)} ${!whole && words.length > 1 ? 'were' : 'was'} changed elsewhere${offline}.`
+        : `${capital(what)} ${plural ? 'were' : 'was'} changed elsewhere${offline}.`
   const tail = r.deletes
     ? `Check it before you ${verb} it again.`
     : r.kept
       ? r.keepMine
         ? 'Your text is still in the field. Choose Keep mine under it to replace their version.'
-        : 'Your text is still in the editor. Save again to replace their version.'
+        : keptTail(first)
       : r.batch !== undefined && r.batch > 1
         ? `None of the ${r.batch} roadmap changes were saved.`
         : writer === 'you'

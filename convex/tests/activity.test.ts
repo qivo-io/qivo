@@ -697,7 +697,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
         patch: { remaining_hours: 5 },
       }),
       'rule',
-      /^a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks$/,
+      /^a task with subtasks has no remaining hours of its own, because it shows the sum of its subtasks$/,
     )
     const after = await t.run(async (ctx) => (await ctx.db.get(parent._id)) as Doc<'issues'>)
     expect(after.remaining_hours).toBeUndefined()

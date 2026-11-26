@@ -78,9 +78,11 @@ says so.
   field, such as the assignee while you edit the title, does not stop yours,
   and two people who choose the same value both save.
 - Your own quick edits in a row save, such as several changes to the
-  remaining time.
-- A refused title, description or comment edit stays in its editor, so you
-  can copy your text or save it again on purpose to replace the other
+  remaining hours.
+- A refused description or comment edit stays in its editor. A refused
+  title stays in its field, as do remaining hours typed in My view's
+  Overview, and a refused milestone change stays in the Milestones window.
+  You can copy your text or save it again on purpose to replace the other
   version.
 - A Roadmap change that saves several tasks at once, such as **Auto-move**,
   saves all or nothing. If one of its tasks changed since, none of its
