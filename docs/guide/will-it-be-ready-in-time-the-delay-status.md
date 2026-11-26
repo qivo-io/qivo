@@ -135,9 +135,9 @@ Roadmap due line says that Qivo could not read all of its subtasks.
   plan tabs show a dash for their count and say that they may leave tasks
   out, and a sub-project's Late and Behind plan read **unknown**, never 0
   ([Needs attention](./the-overview-project-health-at-a-glance.md#needs-attention)).
-  My view's **Overdue & at risk** marks such a row **risk unknown**, so
-  the task may not be late, and its health table's counts read **unknown**
-  too.
+  In My view such a row of **Your work** says **Delay unknown**, and the
+  counts of **Your projects** read **unknown** too
+  ([My view's Overview](./the-overview-project-health-at-a-glance.md#my-views-overview)).
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
   today's date in UTC. A task's verdict says it is unavailable when Qivo
   cannot read the owner's other open work in one request. A row of a task

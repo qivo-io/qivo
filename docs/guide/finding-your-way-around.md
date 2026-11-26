@@ -196,8 +196,9 @@ as reviewer, across all organizations you can access. A task assigned to you
 leaves My view while another reviewer owns it and returns when it leaves
 In Review.
 
-Projects, sub-project bands and health rows with none of your tasks are
-hidden. Completion counts and remaining-hour totals cover only your work.
+Projects and sub-project bands with none of your tasks are hidden, and the
+Overview lists only the projects that hold your work that is left.
+Completion counts and remaining-hour totals cover only your work.
 
 **My tasks** and **Assignee** filters are absent because this scope already
 selects your work. Text and Priority filters remain on desktop Board and

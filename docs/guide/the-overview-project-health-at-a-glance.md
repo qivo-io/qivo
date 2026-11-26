@@ -1,8 +1,8 @@
 Overview comes first in the view switch of every project, sub-project and
-My view. In a project or sub-project it shows what is left to do and what
-needs attention, and leaves out what is finished. My view keeps the
-summary of your own tasks described under
-[My view's Overview](#my-views-overview). It describes current signals,
+My view. It shows what is left to do and what needs attention, and leaves
+out what is finished. A project or sub-project's Overview covers everyone's
+work there, and My view's covers your own work across your projects
+([My view's Overview](#my-views-overview)). It describes current signals,
 not a guarantee that deadlines are safe. An
 address that once named all projects opens as the Overview's own address
 does ([All projects](./finding-your-way-around.md#all-projects)).
@@ -128,47 +128,87 @@ without delay tracking shows no such line.
 
 ## My view's Overview
 
-My view's Overview summarizes your own tasks. Its opening sentence reports
-overdue tasks, projected missed deadlines, paused work, completion or
-remaining work. The status strip shows **Completion**, **In progress**,
-**Paused** and **Next milestone**; completion and status totals count
-tasks without active subtasks. A figure Qivo could not count in one
-request shows **—** with a line that says why. Overdue reads every task due
-before today, including Done tasks the nightly archive has not taken yet,
-30 days after they were done, so it can show as not available. Open a
-project to see its figures then.
+My view's Overview shows your own work that is left, across every project
+you take part in, by the rule My view's Board uses: tasks assigned to you,
+and tasks In Review with you as their reviewer
+([My view](./finding-your-way-around.md#my-view)). No count, bar or
+percentage of finished tasks appears on the page.
 
-**Project health** shows one row per project that holds tasks of yours,
-with only your tasks counted: lead, progress, Done count, remaining hours,
-**Late**, **Behind plan** and **Paused**. It shows the first 10 projects in
-the chosen order, and **Load more** adds the next 10. Select a heading to
-sort the whole table by it and select it again to reverse the order. The
-default is Late, highest first, then by name. Once the table holds more
-than 10 projects, a **Search projects** box finds any of them by name.
-Select a row to open that project's Board, which keeps the restriction to
-your tasks. Late, Behind plan and Paused show "—" when zero. Narrow
-desktop windows scroll horizontally; phones show sortable cards, 10 at a
-time, where a zero count reads 0. Past 200 projects the table shows the
-first 200 and asks you to search for the others. Where Qivo could not work
-out Late and Behind plan, the cell reads **unknown**, never zero, and a
-table sorted by them sorts by name and says why. **Load more** can turn a
-row's Late count into **unknown**, as Qivo then works out more rows in one
-request.
+**Your work** lists your tasks without subtasks in three groups, each with
+how many tasks it holds:
 
-**Overdue & at risk** lists your unfinished tasks past their due date and,
-for projects with delay tracking, those projected to miss it. Hover
-"projected to miss" for the projected finish week. **Paused tasks** lists
-work on hold. Each list shows its first 10 tasks, earliest due date first
-and tasks without a due date last, and **Load more** adds the next 10. When
-a task changes while you read, its row moves to its new place in the
-order, or leaves the list when the task no longer belongs in it. No row
-shows twice or is skipped. Where Qivo checked only part of a list in one
-request, the list says so and **Load more** continues from there. A task
-marked **risk unknown** needs another person's work that Qivo could not
-read, so it may not be late. After many **Load more** presses the list
-keeps the latest rows and says that earlier tasks are not shown; **Show
-from the start** goes back to the first ones. Select a row to open its
-task.
+- **In progress**: your In Progress tasks, and your In Review tasks that
+  wait for a reviewer, marked **No reviewer**.
+- **Waiting on your review**: In Review tasks with you as their reviewer,
+  each saying who it is from.
+- **Next**: your To Do tasks.
+
+Backlog tasks are not listed, and count in Tasks left and Hours left. A
+task with subtasks is no row of its own. Its subtasks are, each naming it,
+such as "part of Bring up the first board".
+
+In progress and Waiting on your review put the most urgent task first, in
+the order of [Needs attention](#needs-attention): overdue, then projected
+to miss, behind plan, blocked, no reviewer and paused. The other tasks
+follow, in In progress by due date with undated tasks last, and in Waiting
+on your review the longest waiting first. Next goes by planned start, with
+planned tasks first and the earliest start first, then by due date with
+undated tasks last. Tasks of one date go by task number. Each group shows
+its first 10 tasks, and **Load more** adds 10, up to 1,000.
+
+A row shows a flag where its task is overdue, projected to miss, behind
+plan, blocked, waiting for a reviewer or paused, with the names and marks
+of Needs attention, and otherwise the task's status. Then come its title,
+its project and sub-project, and what applies of its fact, such as
+"finishes W50, planned W48", its due date, when it starts and who it is
+from. Where its sub-project tracks delay and Qivo could not work out its
+delay, the row says **Delay unknown**, never that it is on track, and a
+line above the groups says so. Every row has its hours left and its
+actions in the same place, whatever its title, its group or its actions.
+
+- **Hours left** is a field with the task's remaining hours. Type and press
+  Enter, or leave the field, to save them by the rules of the task window's
+  Remaining. An empty field clears them, and 0 is a value. The row says
+  **Saving…** while they save. Text that is not a number saves nothing,
+  and the row asks for a number. **Esc** puts the saved hours back. Where a
+  save fails, the row says so and the field keeps what you typed, also
+  while the list updates.
+- In progress rows have the **Status** control, with every status and
+  **Pause** or **Resume**.
+- Waiting on your review rows have **Send back**, which moves the task to
+  In Progress and so back to its assignee, and **Approve**, which moves it
+  to Done.
+- Next rows have **Start**, which moves the task to In Progress.
+
+These are the task window's own status changes, with its rules. A task you
+may only view shows its hours and no action. After a change the row moves
+to its new group, or leaves Your work once the task is no longer yours or
+no longer open. Keyboard focus stays on a row that moves, and when a row
+with focus leaves, focus goes to the next row, then to the one before it,
+then to the group's heading. Select a row to open its task. **Open on the
+Board** opens the same work on My view's Board.
+
+Each group says when it holds nothing, such as "Nothing waits for your
+review.", and Your work says so when none of the three holds a task.
+
+**Your status** states in one sentence what is overdue, projected to miss
+and blocked among those tasks, in the words a project's Overview opens
+with, beside **Tasks left** and **Hours left**, which count every task of
+yours that is not Done.
+
+**Milestones** lists the upcoming milestones of the projects that hold your
+work, each with its project's name. The line under a milestone counts your
+**Late** tasks in its project due before it, as a project's Overview counts
+them, from the milestone of the same project shown above it.
+
+**Your projects** lists each project that holds work of yours that is left,
+with its lead, your tasks and hours left there, and your **Late**,
+**Behind plan** and **Paused** counts, Late first and then by name, 10 at a
+time with **Load more**. Select a row to open that project's Board.
+
+The page has two columns where there is room. On a phone or in a narrow
+window it has one, Your work first, and each row puts its hours and its
+actions on a second line, in the same place in every row.
 
 ## Hidden pages, milestones and empty scopes
 
@@ -190,12 +230,8 @@ when a new week begins. In My view, **Milestones** lists the milestones of
 the projects that hold your own tasks, each with its project's name, and
 not those of other projects you can see.
 
-In My view, **Next milestone** is the first upcoming milestone,
-highlighted in the list; a project's list highlights it too. While it loads it shows "…", "None scheduled" where no upcoming
-milestone exists, and "Unavailable" where Qivo cannot tell, as when loading
-fails. Once **Load more** has moved past the first milestones, Next
-milestone loads on its own, and if that fails, it says "Couldn't load" with
-**Retry**. A section says when it is loading, and when Qivo could check only
+The next milestone is highlighted in the list while the list shows it. A
+section says when it is loading, and when Qivo could check only
 part of the list, in which case **Load more** continues. If loading fails,
 it says so with **Retry**, and if Qivo refuses to read the milestones, it
 gives the reason. In My view, where your own work spans more than 200
