@@ -365,6 +365,31 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(q('[data-work-id="first"] [data-ov-start]')).not.toBeNull()
   })
 
+  it('asks the longer list with a Retry pressed while the rows a failed Load more went back to are read again, which only its own answer settles', async () => {
+    const board = await failedLoadMore()
+    const nextAsked = () =>
+      [...board.server.overview.open].filter((s) => s.query === 'work').map((s) => s.args.next)
+    await act(async () => q('[data-ov-work-retry]')?.click())
+    await repaint()
+    expect(nextAsked()).toEqual([20])
+    expect(text('[data-ov-group="next"] [data-ov-more]')).toBe('Loading…')
+    expect(hours('wire')?.value).toBe('7')
+    // its own failure takes the list back to its rows, with Retry
+    await board.answer()
+    await repaint()
+    expect(nextAsked()).toEqual([10])
+    expect(q('[data-ov-work-retry]')).not.toBeNull()
+    expect(titles('next')).toHaveLength(10)
+    // and its own answer brings the longer list
+    await act(async () => q('[data-ov-work-retry]')?.click())
+    board.server.overview.fail = undefined
+    board.server.overview.hold = false
+    await board.answer()
+    await repaint()
+    expect(titles('next')).toHaveLength(12)
+    expect(hours('wire')?.value).toBe('7')
+  })
+
   it('lets the rows go and shows the error where the rows a failed Load more went back to fail too', async () => {
     const board = await failedLoadMore()
     expect(board.P.viewTask('overview:work', 'wire')?.uuid).toBe('wire')

@@ -358,7 +358,10 @@ export function createOverviewReads(transport: OverviewTransport) {
         the one it shows, and a Load more that failed goes back to the rows
         it showed, asking their arguments again. Where those rows fail too,
         it forgets the Load more, so the read shows its error and Try again
-        asks it afresh. */
+        asks it afresh. Only a failure the live read brought fails a Load
+        more: a Retry pressed while the rows it went back to load again
+        asks the arguments that failed, whose failure the store holds until
+        the new read answers. */
     function settleRead() {
       const now = key()
       if (now === null || baseKey === null || ask === null) return
@@ -375,6 +378,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         same(shown.ask, ask) &&
         o.grew(shown.limit, limit)
       ) {
+        if (!held.current) return
         failedMore = failedMore === null ? limit : o.join(failedMore, limit)
         limit = shown.limit
         watch()
@@ -409,11 +413,12 @@ export function createOverviewReads(transport: OverviewTransport) {
       const sameAsk = before !== null && same(before.ask, ask)
       const pressed = sameAsk && before !== null && o.grew(before.limit, limit)
       const keptAsk = before === null ? asked : o.asked(before.ask, before.limit)
-      if (held.key === now && held.error !== undefined)
+      if (held.key === now && held.error !== undefined && (held.current || !pressed))
         // a Load more that failed shows the rows before it from the first
-        // render, as settleRead takes the read back to them; any other
-        // error is the read's own, also where the rows a failed Load more
-        // went back to failed, which settleRead then forgets
+        // render, as settleRead takes the read back to them, and a failure
+        // from before its Retry shows that Retry on its way below; any
+        // other error is the read's own, also where the rows a failed Load
+        // more went back to failed, which settleRead then forgets
         return pressed && before !== null
           ? {
               value: before.value,
