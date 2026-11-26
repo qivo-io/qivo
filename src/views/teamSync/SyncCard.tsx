@@ -14,7 +14,6 @@ import { escapeClearsFirst, RECIPIENT_WORDS } from '@/components/pickerWords'
 import {
   AnchoredPop,
   Avatar,
-  FieldSelect,
   Icon,
   IssueKey,
   MenuItem,
@@ -22,6 +21,7 @@ import {
   ProjectNameOf,
   StatusDot,
 } from '@/components/qivo'
+import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/components/ui/popover'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -236,40 +236,17 @@ function StatusCtl({
 }) {
   return (
     <span data-sync-status={it.id} className="inline-flex shrink-0">
-      <FieldSelect
-        aria-label={`Status of ${it.title}`}
-        value={it.status}
-        menuWidth={180}
-        backLayer
+      <StatusSelect
+        it={it}
         disabled={!canWrite}
         title={canWrite ? undefined : offTitle}
-        className="min-w-control [&_[data-slot=select-value]>.truncate]:hidden"
-        options={P.STATUSES.map((s) => ({
-          value: s.id,
-          label: s.name,
-          icon: <StatusDot status={s.id} />,
-        }))}
-        onChange={(v) => {
-          // the row counts as touched once the server saves the move
-          void P.updateIssue(it.id, { status: v }).then((saved) => {
-            if (saved) ctx.touched(it)
-          })
+        className="min-w-control"
+        onStatus={(v) => {
           if (v === 'review' && !it.reviewer) ctx.setPrompt(it.id)
         }}
-        action={{
-          label: it.paused ? 'Resume' : 'Pause',
-          icon: (
-            <Icon
-              name={it.paused ? 'play' : 'pause'}
-              size={14}
-              color={it.paused ? 'var(--success)' : 'var(--text-2)'}
-            />
-          ),
-          onSelect: () => {
-            void P.updateIssue(it.id, { paused: !it.paused }).then((saved) => {
-              if (saved) ctx.touched(it)
-            })
-          },
+        // the row counts as touched once the server saves the change
+        onSaved={(saved) => {
+          if (saved) ctx.touched(it)
         }}
       />
     </span>

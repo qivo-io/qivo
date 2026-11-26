@@ -1,6 +1,6 @@
-/* A stand-in for the Overview's five live queries (convex/overview.ts
-   summary, risk, attention, paused and health) that answers from a
-   workspace the app holds, for the jsdom Board fixture
+/* A stand-in for the Overview's live queries the app calls
+   (convex/overview.ts summary, health, needs and work) that answers from
+   a workspace the app holds, for the jsdom Board fixture
    (src/views/boardFixture.setup.tsx), the app-level tests and the browser
    benchmark's server (scripts/perf/server.mjs), as
    store/boardStandIn.setup.ts answers the Board.
@@ -8,27 +8,21 @@
    It applies the Overview's rules (convex/lib/overview.ts) to the
    workspace's tasks: the scope as the Board's stand-in selects it, the
    leaves by status and the paused leaves, whether the scope holds a task,
-   Overdue on the client's day, the projected-late count by convex/lib/
-   delay.ts against each owner's load as store/ownerLoadsStandIn.setup.ts
-   gives it, at most one owner's load a query for a guest or an
-   organization Viewer, and the two lists in the server's order (due date,
-   undated last, then the task number, organization and id, where the
-   server ties by creation time), in batches of OVERVIEW_BATCH with the
-   server's `complete`, `next`, `end` and `split`, and fixed ends, and the
-   health table's rows (a project's visible live sub-projects, or My view's
-   top-level projects above the person's tasks) with their counts and
-   delays, searched, ordered by the server's total order (name keys by
-   their bytes, convex/lib/nameKey.ts) with its name fallback and cut at
-   `limit`, at most HEALTH_ROWS, and a project's Needs attention list from
-   its stored facts alone (Overdue, No reviewer and Paused, no verdict or
-   blocker). Its positions are plain text with each
-   list's prefix, refused with bad_request under another list, scope,
-   reader or clock. It reads no access rule or read budget of its own, so a
-   state the workspace cannot reach, such as `counting`, `budget`,
-   `over_budget` or a stopped batch, answers only when `force` asks for
-   it. src/store/overviewParity.test.ts
-   compares it with the real queries. It imports nothing the benchmark's
-   worker cannot load. */
+   Overdue on the client's day, and the health table's rows (a project's
+   visible live sub-projects, or My view's top-level projects above the
+   person's tasks) with their counts and delays by convex/lib/delay.ts
+   against each owner's load as store/ownerLoadsStandIn.setup.ts gives it,
+   at most one owner's load a query for a guest or an organization Viewer,
+   searched, ordered by the server's total order (name keys by their bytes,
+   convex/lib/nameKey.ts) with its name fallback and cut at `limit`, at
+   most HEALTH_ROWS; and a project's Needs attention list and My view's
+   Your work from their stored facts alone (Overdue, No reviewer and
+   Paused, no verdict or blocker). It reads no access rule or read budget
+   of its own, so a state the workspace cannot reach, such as `counting`,
+   `budget` or `over_budget`, answers only when `force` asks for it.
+   src/store/overviewParity.test.ts compares the summary and the health
+   table with the real queries. It imports nothing the benchmark's worker
+   cannot load. */
 
 import { ConvexError, compareValues, type Value } from 'convex/values'
 import { type DelayIssue, delayOf } from '../../convex/lib/delay'
@@ -39,16 +33,14 @@ import type {
   HealthAnswer,
   HealthRow,
   HealthSort,
-  ListAnswer,
-  OverviewRow,
   OverviewScope,
-  RiskAnswer,
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import type { NeedsAnswer } from '../../convex/lib/overviewNeeds'
+import type { WorkAnswer } from '../../convex/lib/overviewWork'
 import { taskOwnerId } from '../../convex/lib/review'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { ViewRow } from '../../convex/lib/viewReads'
+import type { WorkGroup } from '../../convex/lib/workGroups'
 import {
   canonicalLoad,
   DEFAULT_PLANNABLE_HOURS,
@@ -59,24 +51,23 @@ import type { LeafCounts } from '../../convex/model/overviewCounts'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
 import { spanOf } from './boardStandIn.setup'
 import type { Whole } from './guard/liveDouble.setup'
-import { OVERVIEW_BATCH, OVERVIEW_SPLIT, type OverviewQuery } from './overviewLists'
+import { OVERVIEW_BATCH, type OverviewQuery } from './overviewLists'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 
 /** A state the stand-in answers whatever the tasks say: a scope refusal
     (`unavailable`, `access_unchecked`, `over_budget`), a figure that is not
     given (`counting`, the counts' `budget`, which takes the figures after
-    them too, Overdue's `budget`, the projection's `budget`, or `loads`), a
-    list batch that stops after half a batch (`incomplete`), a list batch
-    that answers `over_budget`, or the owners in `unknown` whose loads no
-    batch can read; and for the health table alone its scope refusal, its
-    counts or its judged rows' delays not given, or a lower cap (`most`). */
+    them too, or Overdue's `budget`), the owners in `unknown` whose loads
+    the health table cannot read; and for the health table alone its scope
+    refusal, its counts or its judged rows' delays not given, or a lower cap
+    (`most`). */
 export type ForcedOverview = {
   scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
   counts?: 'counting' | 'budget'
   overdue?: 'budget'
-  projected?: 'budget' | 'loads'
-  list?: 'incomplete' | 'over_budget'
   unknown?: readonly string[]
+  /** Your work: past its budget, or with verdicts it could not read */
+  work?: 'over_budget' | 'unknown'
   /** the Needs attention list: past its budget, or with verdicts it could
       not read, whose counts read unavailable for `loads` */
   needs?: 'over_budget' | 'unknown'
@@ -177,7 +168,8 @@ function clockOf(a: { day: string; week: string; week_starts: number[]; week_end
 
 /** The arguments the Overview's queries take (convex/overview.ts). */
 export type OverviewArgs = {
-  scope: OverviewScope
+  /** none for Your work, which is My view's */
+  scope?: OverviewScope
   day?: string
   week?: string
   week_starts?: number[]
@@ -190,37 +182,27 @@ export type OverviewArgs = {
   limit?: number
   /** the Needs attention list's kind, `all` for every kind */
   kind?: string
+  /** Your work's limit of each group */
+  progress?: number
+  review?: number
+  next?: number
+  open_only?: boolean
 }
 
 /* The columns whose order needs every row's counts. */
 const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused']
 
-/* Where a row sorts: dated before undated, then by due date, then the task
-   number, organization and id. */
-type Pos = [undated: 0 | 1, due: string, num: number, org: string, id: string]
-const posOf = (t: Task): Pos => [
-  t.due_date === undefined ? 1 : 0,
-  t.due_date ?? '',
-  t.num,
-  t.org_id,
-  t.id,
-]
-const comparePos = (a: Pos, b: Pos) =>
-  a[0] - b[0] || order(a[1], b[1]) || a[2] - b[2] || order(a[3], b[3]) || order(a[4], b[4])
-
-const PREFIX = { attention: 'soa~', paused: 'sop~' } as const
-
 /** What the Overview query `query` answers `args` to the person whose
     workspace is `workspace`; `sees` tells whether they see a project, by
     default every live one the workspace holds, and `force` answers states
-    the workspace cannot reach. Throws bad_request for a position from
-    another list, scope, reader or clock, as the server refuses it. */
+    the workspace cannot reach. Throws bad_request for arguments the server
+    refuses. */
 export function overviewStandIn(
   workspace: Whole,
   query: OverviewQuery,
   args: OverviewArgs,
   { sees, force = {} }: { sees?: (projectId: string) => boolean; force?: ForcedOverview } = {},
-): SummaryAnswer | RiskAnswer | ListAnswer | HealthAnswer | NeedsAnswer {
+): SummaryAnswer | HealthAnswer | NeedsAnswer | WorkAnswer {
   const mine = new Set(workspace.myProfileIds)
   const projectById = new Map(workspace.projects.map((p) => [p.id, p]))
   const profileById = new Map(workspace.profiles.map((p) => [p.id, p]))
@@ -230,9 +212,11 @@ export function overviewStandIn(
   }
   // the Needs attention list names a project scope by its ids alone
   const scope: OverviewScope =
-    query === 'needs' && !('kind' in args.scope)
-      ? { kind: 'project', ...(args.scope as { org_id: string; project_id: string }) }
-      : args.scope
+    args.scope === undefined
+      ? { kind: 'mine' }
+      : query === 'needs' && !('kind' in args.scope)
+        ? { kind: 'project', ...(args.scope as { org_id: string; project_id: string }) }
+        : args.scope
 
   // the selection's sub-projects, in creation order, or null for none
   let subProjects: Project[] | null = null
@@ -322,10 +306,9 @@ export function overviewStandIn(
   }
 
   const tracks = (t: Task) => projectById.get(t.project_id)?.track_delay === true
-  const clock =
-    query === 'paused'
-      ? null
-      : clockOf(args as { day: string; week: string; week_starts: number[]; week_end: number })
+  const clock = clockOf(
+    args as { day: string; week: string; week_starts: number[]; week_end: number },
+  )
   // the reader's seat of each organization, and whether it reads one
   // owner's load a query (a guest or an organization Viewer)
   const seatIn = (org: string) => workspace.profiles.find((p) => p.org_id === org && mine.has(p.id))
@@ -474,6 +457,11 @@ export function overviewStandIn(
       return c
     }
     const counted = h.counts === undefined
+    if (args.open_only === true && counted)
+      items = items.filter((r) => {
+        const c = countsOf(r)
+        return c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review > 0
+      })
     // each lead's name, a lead of another organization or none being none
     const leadName = (r: Item) => {
       const p = r.lead === null ? undefined : profileById.get(r.lead)
@@ -588,28 +576,6 @@ export function overviewStandIn(
     }
   }
 
-  if (query === 'risk') {
-    if (force.projected)
-      return { state: 'ok', projected: { state: 'unavailable', reason: force.projected } }
-    const day = clock?.day as string
-    const open = scoped.filter(
-      (t) => t.due_date !== undefined && t.due_date >= day && tracks(t) && !done(t),
-    )
-    // every owner the verdicts need, at most one a query for a guest or Viewer
-    for (const org of new Set(open.map((t) => t.org_id))) {
-      const owners = new Set(open.filter((t) => t.org_id === org).flatMap((t) => needs(t) ?? []))
-      if ([...owners].some((id) => unknownOwners.has(id)))
-        return { state: 'ok', projected: { state: 'unavailable', reason: 'loads' } }
-      if (onePerQuery(org) && owners.size > 1)
-        return { state: 'ok', projected: { state: 'unavailable', reason: 'loads' } }
-    }
-    const late = open.filter((t) => {
-      const id = needs(t)
-      return verdictOf(t, id === null ? [] : loadOf(t.org_id, id))?.status === 'late'
-    }).length
-    return { state: 'ok', projected: { state: 'ok', count: late } }
-  }
-
   // ---- the Needs attention list (convex/lib/overviewNeeds.ts), from the
   // stored facts alone: Overdue, No reviewer and Paused, which rank in that
   // order, then by due date, undated last, and task number. It judges no
@@ -700,170 +666,118 @@ export function overviewStandIn(
     }
   }
 
-  // ---- a list batch
-  const kind = query
-  const key = JSON.stringify([
-    kind,
-    workspace.auth_user_id,
-    scope.kind === 'project' ? [scope.org_id, scope.project_id] : 'mine',
-    kind === 'paused' ? [] : [args.day, args.week, args.week_starts, args.week_end],
-  ])
-  const seal = (pos: Pos | null) => `${PREFIX[kind]}${JSON.stringify([key, pos])}`
-  const open = (text: string | undefined, name: string): Pos | null | undefined => {
-    if (text === undefined) return undefined
-    const refused = () =>
-      new ConvexError({
-        code: 'bad_request',
-        message: `${name} must be a position an earlier batch of this list answered`,
-      })
-    if (!text.startsWith(PREFIX[kind])) throw refused()
-    let body: unknown
-    try {
-      body = JSON.parse(text.slice(PREFIX[kind].length))
-    } catch {
-      throw refused()
-    }
-    if (!Array.isArray(body) || body[0] !== key) throw refused()
-    return body[1] as Pos | null
-  }
-  const from = open(args.cursor, 'cursor') ?? null
-  const fixedEnd = open(args.end, 'end')
-  const end = fixedEnd === undefined ? null : fixedEnd
-  if (force.list === 'over_budget') return { state: 'over_budget' }
-
-  // the candidates in order: the At-risk list's overdue and projected-late
-  // tasks, the Paused list's paused tasks without subtasks
-  const day = clock?.day ?? ''
-  const candidates = scoped
-    .filter((t) =>
-      kind === 'paused'
-        ? t.paused
-        : t.due_date !== undefined && (t.due_date < day || tracks(t)) && !done(t),
+  // ---- Your work (convex/lib/overviewWork.ts), from the stored facts
+  // alone: Overdue, No reviewer and Paused. It judges no verdict and reads
+  // no blocker; the server's own suite tests the whole rule
+  const day = args.day as string
+  const kindOrder = ['overdue', 'no_reviewer', 'paused'] as const
+  const kindsOf = (t: Task) =>
+    kindOrder.filter((k) =>
+      k === 'overdue'
+        ? t.due_date !== undefined && t.due_date < day
+        : k === 'no_reviewer'
+          ? t.status === 'review' && !t.reviewer_id
+          : t.paused,
     )
-    .sort((a, b) => comparePos(posOf(a), posOf(b)))
-  const shown = new Set(workspace.issues.map((t) => t.id))
-  const rowOf = (t: Task, at_risk?: OverviewRow['at_risk']): OverviewRow => {
+  const groupOf = (t: Task): WorkGroup | null =>
+    t.status === 'progress'
+      ? 'progress'
+      : t.status === 'todo'
+        ? 'next'
+        : t.status === 'review'
+          ? t.reviewer_id !== undefined && mine.has(t.reviewer_id)
+            ? 'review'
+            : 'progress'
+          : null
+  if (force.work === 'over_budget') return { state: 'over_budget' }
+  const unknown = force.work === 'unknown'
+  const work = scoped.filter((t) => !isGroup(t) && groupOf(t) !== null)
+  const rank = (t: Task) => {
+    const k = kindsOf(t)[0]
+    return k === undefined ? kindOrder.length : kindOrder.indexOf(k)
+  }
+  const byUrgency = (a: Task, b: Task) => {
+    const due = order(a.due_date ?? '\uffff', b.due_date ?? '\uffff')
+    const waited = order(a.review_at ?? '\uffff', b.review_at ?? '\uffff')
+    const k = kindsOf(a)[0]
+    return (
+      rank(a) - rank(b) ||
+      (k === 'no_reviewer' || (k === undefined && groupOf(a) === 'review') ? waited : due) ||
+      a.num - b.num
+    )
+  }
+  const byStart = (a: Task, b: Task) =>
+    order(a.start_week ?? '\uffff', b.start_week ?? '\uffff') ||
+    order(a.due_date ?? '\uffff', b.due_date ?? '\uffff') ||
+    a.num - b.num
+  const shownIds = new Set(workspace.issues.map((t) => t.id))
+  const rowOf = (t: Task) => {
     const { description: _text, parent_id: parent, has_subtasks: _flag, ...rest } = t
-    const row = {
+    const kinds = kindsOf(t)
+    const overdue = kinds[0] === 'overdue'
+    const parentRow = parent === undefined ? undefined : byId.get(parent)
+    return {
       ...rest,
-      ...(parent !== undefined && shown.has(parent) ? { parent_id: parent } : {}),
-    } as Omit<ViewRow, 'has_subtasks'>
-    const view: ViewRow = isGroup(t)
-      ? {
-          ...row,
-          has_subtasks: true,
-          group_done: done(t),
-          span: {
-            ...spanOf(t, children, byId),
-            partial: groupProgress(groupView[t.id], groupView).unknown,
-          },
-        }
-      : { ...row, has_subtasks: false }
-    return at_risk === undefined ? view : { ...view, at_risk }
+      ...(parent !== undefined && shownIds.has(parent) ? { parent_id: parent } : {}),
+      has_subtasks: false,
+      needs: {
+        kind: kinds[0] ?? null,
+        also: kinds.slice(1),
+        blocked_by: 0,
+        ...(unknown && tracks(t) && !overdue ? { delay_unknown: true as const } : {}),
+      },
+      ...(parentRow ? { parent_title: parentRow.title } : {}),
+    }
   }
-
-  // one batch's read (convex/lib/overview.ts readBatch)
-  const want = end === null ? OVERVIEW_BATCH + 1 : OVERVIEW_SPLIT + 1
-  const rows: { task: Task; row: OverviewRow }[] = []
-  let last: Pos | null = from
-  let stopped = false
-  // the owner a guest's or Viewer's batch read, by organization
-  const read = new Map<string, string>()
-  const unread = new Set<string>()
-  const stopAt =
-    force.list === 'incomplete' ? Math.ceil(OVERVIEW_BATCH / 2) : Number.POSITIVE_INFINITY
-  let judged = 0
-  for (const t of candidates) {
-    const pos = posOf(t)
-    if (from !== null && comparePos(pos, from) <= 0) continue
-    if (end !== null && comparePos(pos, end) > 0) break
-    if (rows.length >= want) break
-    if (judged >= stopAt) {
-      stopped = true
-      break
-    }
-    judged++
-    if (kind === 'paused') {
-      if (!isGroup(t)) rows.push({ task: t, row: rowOf(t) })
-      last = pos
-      continue
-    }
-    if ((t.due_date as string) < day) {
-      rows.push({ task: t, row: rowOf(t, { kind: 'overdue' }) })
-      last = pos
-      continue
-    }
-    const id = needs(t)
-    let verdict: ReturnType<typeof verdictOf>
-    if (id === null) verdict = verdictOf(t, [])
-    else {
-      const other = onePerQuery(t.org_id) && read.has(t.org_id) && read.get(t.org_id) !== id
-      if (other || unknownOwners.has(id)) {
-        // nothing judged before it, or an owner no batch can read: unknown
-        if (last !== from && !unread.has(id)) {
-          stopped = true
-          break
-        }
-        unread.add(id)
-        rows.push({ task: t, row: rowOf(t, { kind: 'unknown' }) })
-        last = pos
-        continue
-      }
-      if (onePerQuery(t.org_id)) read.set(t.org_id, id)
-      verdict = verdictOf(t, loadOf(t.org_id, id))
-    }
-    if (verdict?.status === 'late')
-      rows.push({
-        task: t,
-        row: rowOf(t, {
-          kind: 'projected',
-          finish_week:
-            verdict.fin === null
-              ? null
-              : (clock as NonNullable<typeof clock>).firstDay(verdict.fin),
-        }),
-      })
-    last = pos
+  const groupRows = (group: WorkGroup) => {
+    const rows = work
+      .filter((t) => groupOf(t) === group)
+      .sort(group === 'next' ? byStart : byUrgency)
+    return { rows: rows.slice(0, args[group] as number).map(rowOf), total: rows.length }
   }
-
-  // the batch's answer (convex/lib/overview.ts listBatch)
-  if (stopped && rows.length === 0 && last === from) return { state: 'over_budget' }
-  let kept = rows
-  let split: string | undefined
-  let complete = !stopped
-  let next: string | null
-  let lastText: string | null
-  const posOfRow = (i: number) => posOf((kept[i] as { task: Task }).task)
-  if (end === null) {
-    if (rows.length > OVERVIEW_BATCH || (stopped && rows.length === OVERVIEW_BATCH)) {
-      kept = rows.slice(0, OVERVIEW_BATCH)
-      lastText = seal(posOfRow(kept.length - 1))
-      next = lastText
-      complete = true
-    } else if (!stopped) {
-      lastText = kept.length === 0 ? null : seal(posOfRow(kept.length - 1))
-      next = null
-    } else {
-      lastText = last === null ? null : seal(last)
-      next = seal(last)
-    }
-  } else if (rows.length > OVERVIEW_SPLIT) {
-    kept = rows.slice(0, OVERVIEW_BATCH)
-    split = seal(posOfRow(kept.length - 1))
-    complete = true
-    lastText = seal(end)
-    next = lastText
-  } else {
-    lastText = seal(end)
-    next = stopped ? seal(last) : lastText
+  const late = new Map<string, Map<string, number>>()
+  for (const t of work) {
+    const top = projectById.get(t.project_id)?.parent_id
+    if (top === undefined || !tracks(t)) continue
+    const days = late.get(top) ?? new Map<string, number>()
+    late.set(top, days)
+    if (t.due_date !== undefined && t.due_date < day)
+      days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
   }
+  const count = (k: (typeof kindOrder)[number]) => work.filter((t) => kindsOf(t).includes(k)).length
+  const verdict = (n: number) =>
+    unknown
+      ? { state: 'unavailable' as const, reason: 'loads' as const }
+      : { state: 'ok' as const, count: n }
   return {
     state: 'ok',
-    rows: kept.map((r) => r.row),
-    complete,
-    next,
-    end: lastText,
-    ...(split === undefined ? {} : { split }),
+    groups: {
+      progress: groupRows('progress'),
+      review: groupRows('review'),
+      next: groupRows('next'),
+    },
+    most: 1000,
+    counts: {
+      overdue: count('overdue'),
+      blocked: 0,
+      no_reviewer: count('no_reviewer'),
+      paused: count('paused'),
+      projected: verdict(0),
+      behind: verdict(0),
+    },
+    late_due: unknown
+      ? { state: 'unavailable', reason: 'loads' }
+      : {
+          state: 'ok',
+          projects: [...late.entries()]
+            .sort(([a], [b]) => order(a, b))
+            .map(([project_id, days]) => ({
+              project_id,
+              days: [...days.entries()]
+                .sort(([a], [b]) => order(a, b))
+                .map(([due, n]) => ({ due, count: n })),
+            })),
+        },
   }
 }
 

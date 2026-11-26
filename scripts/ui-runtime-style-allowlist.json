@@ -91,10 +91,6 @@
     "count": 1,
     "reason": "a person's load line, filled to the share of their week their planned hours take"
   },
-  "src/views/overview/StatusBar.tsx": {
-    "count": 1,
-    "reason": "status-distribution segment percentages calculated from task counts and colors supplied by status metadata"
-  },
   "src/views/roadmap/PlanCard.tsx": {
     "count": 4,
     "reason": "auto-fit control state and visible/hidden-project workload presentation"

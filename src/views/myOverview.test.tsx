@@ -1,0 +1,292 @@
+// @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ForcedOverview } from '../store/overviewStandIn.setup'
+import type { ScopeInfo } from '../store/planner'
+import type { Snapshot } from '../store/plannerFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+
+/* My view's Overview (views/overview/MyOverview.tsx) from the server's
+   answers, through the Overview's stand-in (store/overviewStandIn.setup.ts),
+   whose Your work holds the stored facts' kinds: the groups and their rows,
+   the hours left edited in place, the actions' status changes, a reader who
+   may not edit, keyboard focus when a row leaves its group, the empty
+   states and a delay Qivo could not work out. Which tasks each group holds
+   and in what order is the server's rule, which
+   convex/tests/overviewWork.test.ts tests. */
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
+
+let container: HTMLDivElement
+let root: Root
+
+beforeEach(() => {
+  Element.prototype.getAnimations = () => []
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  )
+  window.showToast = vi.fn()
+  network.mutation.mockClear()
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+})
+
+afterEach(async () => {
+  await act(async () => root.unmount())
+  container.remove()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+/** Today's date `offset` days on, YYYY-MM-DD, local time. */
+const day = (offset: number) => {
+  const d = new Date()
+  d.setDate(d.getDate() + offset)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Plan over the fixture's sub-project One, and the person's tasks there:
+    two In Progress, one of them overdue; one In Review waiting for a
+    reviewer; one they review for Ben; two To Do; and one in Backlog and one
+    Done, which Your work does not show. */
+const work = (snap: Snapshot) => {
+  const base = snap.projects[0]
+  snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+  Object.assign(base, { parent_id: 'plan', name: 'One' })
+  const me = snap.profiles[0]
+  snap.profiles.push({ ...me, id: 'ben', name: 'Ben Carter', auth_user_id: undefined })
+  snap.issues.push(
+    { ...taskRow(snap, 'wire', 'progress', 1), remaining_hours: 4 },
+    { ...taskRow(snap, 'late', 'progress', 2), due_date: day(-3), remaining_hours: 8 },
+    { ...taskRow(snap, 'spec', 'review', 3) },
+    { ...taskRow(snap, 'check', 'review', 4), assignee_id: 'ben', reviewer_id: me.id },
+    { ...taskRow(snap, 'first', 'todo', 5), due_date: day(20), remaining_hours: 6 },
+    { ...taskRow(snap, 'second', 'todo', 6), due_date: day(40) },
+    taskRow(snap, 'someday', 'backlog', 7),
+    taskRow(snap, 'shipped', 'done', 8),
+  )
+}
+
+async function overview(prepare: (snap: Snapshot) => void, { force = {} as ForcedOverview } = {}) {
+  const board = await loadBoard(network, prepare, { scope: 'mine' })
+  board.server.overview.force = force
+  const { Overview } = await import('./Overview')
+  const actions = new Proxy({}, { get: () => () => {} }) as never
+  await board.renderView(root, (info: ScopeInfo) => <Overview info={info} actions={actions} />)
+  return { board }
+}
+
+const q = (selector: string) => document.querySelector<HTMLElement>(selector)
+const text = (selector: string) => q(selector)?.textContent ?? ''
+/** The titles group `group` shows, in order. */
+const titles = (group: string) =>
+  [...document.querySelectorAll<HTMLElement>(`[data-ov-group="${group}"] [data-work]`)].map(
+    (row) => row.querySelector('[data-focus-key="row"]')?.textContent,
+  )
+const row = (uuid: string) => q(`[data-work-id="${uuid}"]`)
+const hours = (uuid: string) => row(uuid)?.querySelector<HTMLInputElement>('input')
+/** The task updates sent, by their patches. */
+const patches = () =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === 'issues:update')
+    .map(([, args]) => (args as { patch: unknown }).patch)
+
+/** Types `value` into `input`, as a keyboard does. */
+async function type(input: HTMLInputElement | null | undefined, value: string) {
+  if (!input) throw new Error('no field')
+  await act(async () => {
+    input.focus()
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    set?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+const press = (key: string) =>
+  act(async () => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+    )
+  })
+const blur = (input: HTMLInputElement | null | undefined) => act(async () => input?.blur())
+
+describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('shows the person’s open work in its three groups, with the status beside it', async () => {
+    await overview(work)
+    expect(titles('progress')).toEqual(['Task late', 'Task spec', 'Task wire'])
+    expect(row('late')?.dataset.kind).toBe('overdue')
+    expect(row('spec')?.dataset.kind).toBe('no_reviewer')
+    expect(titles('review')).toEqual(['Task check'])
+    expect(titles('next')).toEqual(['Task first', 'Task second'])
+    expect(text('[data-ov-figure="work-progress"]')).toBe('3')
+    expect(text('[data-ov-sentence]')).toBe('1 task is overdue.')
+    // Backlog counts as left, as on a project's Overview
+    expect(text('[data-ov-figure="tasks-left"]')).toBe('Tasks left7')
+  })
+
+  it('saves hours left on Enter, says so while it saves, and keeps what was typed where the save fails', async () => {
+    await overview(work)
+    let settle: (value: unknown) => void = () => {}
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:update'
+        ? new Promise((resolve) => {
+            settle = resolve
+          })
+        : Promise.resolve(null),
+    )
+    await type(hours('wire'), '6.5')
+    await press('Enter')
+    expect(patches()).toEqual([{ remaining_hours: 6.5 }])
+    expect(row('wire')?.textContent).toContain('Saving…')
+    await act(async () => settle(null))
+    expect(row('wire')?.textContent).not.toContain('Saving…')
+    // the next one is refused: the field keeps the text and says so
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:update'
+        ? Promise.reject(new ConvexError({ code: 'rule', message: 'Not allowed' }))
+        : Promise.resolve(null),
+    )
+    await type(hours('late'), '3')
+    await press('Enter')
+    await act(async () => {})
+    expect(row('late')?.textContent).toContain('The hours were not saved')
+    expect(hours('late')?.value).toBe('3')
+    expect(hours('late')?.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('writes nothing for hours that are not a number, says so, and puts the saved hours back on Escape', async () => {
+    await overview(work)
+    await type(hours('wire'), 'four')
+    await blur(hours('wire'))
+    expect(patches()).toEqual([])
+    expect(row('wire')?.textContent).toContain('Enter the hours left as a number.')
+    expect(hours('wire')?.value).toBe('four')
+    await act(async () => hours('wire')?.focus())
+    await press('Escape')
+    expect(hours('wire')?.value).toBe('4')
+    expect(row('wire')?.textContent).not.toContain('Enter the hours')
+  })
+
+  it('keeps hours being typed while a live update renders the rows again', async () => {
+    const { board } = await overview(work)
+    await type(hours('first'), '12')
+    for (const t of board.snapshot.issues) {
+      if (t.id === 'second') t.title = 'Task second, renamed'
+      if (t.id === 'first') t.remaining_hours = 9
+    }
+    await board.deliver()
+    expect(titles('next')).toEqual(['Task first', 'Task second, renamed'])
+    expect(hours('first')?.value).toBe('12')
+    expect(document.activeElement).toBe(hours('first'))
+  })
+
+  it('sends Start and Send back as the status changes the task window makes, one at a time a row', async () => {
+    await overview(work)
+    await act(async () => q('[data-work-id="first"] [data-ov-start]')?.click())
+    await act(async () => q('[data-work-id="check"] [data-ov-send-back]')?.click())
+    expect(patches()).toEqual([{ status: 'progress' }, { status: 'progress' }])
+    // a row whose change is on its way takes no second press
+    await act(async () => q('[data-work-id="check"] [data-ov-approve]')?.click())
+    expect(patches()).toHaveLength(2)
+    expect(row('check')?.textContent).toContain('Saving…')
+  })
+
+  it('approves a review by moving it to Done', async () => {
+    await overview(work)
+    await act(async () => q('[data-work-id="check"] [data-ov-approve]')?.click())
+    expect(patches()).toEqual([{ status: 'done' }])
+  })
+
+  it('shows no field and no action to a reader who may not edit the task', async () => {
+    await overview((snap) => {
+      work(snap)
+      snap.profiles[0].org_role = 'viewer'
+      snap.access.push({ project_id: 'plan', profile_id: snap.profiles[0].id, level: 'viewer' })
+    })
+    expect(titles('progress')).toHaveLength(3)
+    expect(document.querySelector('[data-work] input')).toBeNull()
+    expect(document.querySelector('[data-work] .mov-actions button')).toBeNull()
+    expect(row('wire')?.querySelector('.mov-hours')?.textContent).toBe('4hleft')
+  })
+
+  it('keeps keyboard focus on a row that moves to another group, and moves it to the next row when its task leaves', async () => {
+    const { board } = await overview(work)
+    const open = (uuid: string) => row(uuid)?.querySelector<HTMLElement>('[data-focus-key="row"]')
+    await act(async () => open('first')?.focus())
+    const task = board.snapshot.issues.find((t) => t.id === 'first')
+    if (task) task.status = 'progress'
+    await board.deliver()
+    expect(titles('next')).toEqual(['Task second'])
+    expect(titles('progress')).toEqual(['Task late', 'Task spec', 'Task first', 'Task wire'])
+    expect(document.activeElement).toBe(open('first'))
+    if (task) task.status = 'done'
+    await board.deliver()
+    expect(document.activeElement).toBe(open('wire'))
+  })
+
+  it('says plainly when a group, all of Your work or the whole view holds nothing', async () => {
+    await overview((snap) => {
+      work(snap)
+      snap.issues = snap.issues.filter((t) => t.id !== 'check')
+    })
+    expect(text('[data-ov-group="review"] [data-ov-group-empty]')).toBe(
+      'Nothing waits for your review.',
+    )
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await overview((snap) => {
+      work(snap)
+      snap.issues = snap.issues.filter((t) => t.id === 'someday')
+    })
+    expect(text('[data-ov-work-empty]')).toBe(
+      'Nothing of yours is in progress, waiting on your review or next.',
+    )
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await overview((snap) => {
+      work(snap)
+      snap.issues = []
+    })
+    expect(text('[data-empty-state-title]')).toBe('Nothing assigned to you')
+  })
+
+  it('says a delay it could not work out is unknown, never on track', async () => {
+    await overview(
+      (snap) => {
+        work(snap)
+        snap.projects[0].track_delay = true
+      },
+      { force: { work: 'unknown' } },
+    )
+    expect(row('wire')?.textContent).toContain('Delay unknown')
+    expect(row('late')?.textContent).not.toContain('Delay unknown')
+    expect(q('[data-ov-unknown]')).not.toBeNull()
+    expect(text('[data-ov-sentence]')).toBe(
+      '1 task is overdue. Qivo could not work out every projected delay.',
+    )
+  })
+})

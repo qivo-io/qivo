@@ -352,26 +352,26 @@ describe("My view's Overview rows and milestones of a program only the cache hol
         parent_id: 'home',
       },
     )
-    // a paused task of the person's, which My view's Paused list shows
+    // a task of the person's, which My view's Your work shows
     const task = snap.issues.find((t) => t.id === 't-plan')
     if (!task) throw new Error('no Plan task')
-    task.paused = true
+    task.status = 'todo'
     const { P } = await app(snap, '/app/~/overview/mine')
     const row = () =>
-      [...document.querySelectorAll<HTMLElement>('[data-workspace-view] [data-ovrow]')].find((r) =>
+      [...document.querySelectorAll<HTMLElement>('[data-workspace-view] [data-work]')].find((r) =>
         r.textContent?.includes('Plan task'),
       )
     // the row's place and the milestone's project label from the cache
     await waitFor(() => row()?.textContent?.includes('Plan, Plan work'), "the row's place")
-    // the label above the milestone's name, which shows only once known
+    // the milestone's project label, which shows only once known
     await waitFor(
       () =>
         document.querySelector(
-          '[data-workspace-view] [data-overview-milestone="m-plan"] .overview-milestone-text > span',
+          '[data-workspace-view] [data-overview-milestone="m-plan"] .pov-mile-project',
         )?.textContent === 'Plan',
       "the milestone's project label",
     )
-    // the Paused list's answer named the sub-project, and the milestone
+    // Your work's answer named the sub-project, and the milestone
     // section's `mine` answer the program itself
     expect(byIds.some((ids) => ids.includes('plan-a'))).toBe(true)
     expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)

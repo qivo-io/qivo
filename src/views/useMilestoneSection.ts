@@ -98,24 +98,6 @@ function useFixedSlot(slot: string | null, wanted: string | null, live: boolean,
   }, [slot, wanted, live, owner])
 }
 
-/** Reads fixed slot `slot` with `ask`, live while the tab or desktop window
-    shows and `active` holds, else stopped with its answer kept, and
-    releases the slot while `ask` is null, as a kept page's section does
-    with each of its slots: the Overview's one-row read of the next
-    milestone. A new `attempt` asks again (Retry, P.watchMilestones).
-    Nothing while `slot` is null. */
-export function useMilestoneSlot(
-  slot: string | null,
-  ask: SectionAsk | null,
-  active: boolean,
-  attempt = 0,
-) {
-  const { visible } = useViewVisibility()
-  const [owner] = useState(() => ++owners)
-  const wanted = ask ? JSON.stringify({ ask, attempt } satisfies Wanted) : null
-  useFixedSlot(slot, wanted, visible && active, owner)
-}
-
 /**
  * Reads the section of milestones `base` names, or nothing while `base` is
  * null (no project held, Past collapsed, All projects), under `slots`

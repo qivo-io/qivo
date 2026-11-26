@@ -168,6 +168,7 @@ import type * as lib_viewFilters from "../lib/viewFilters.js";
 import type * as lib_viewLoads from "../lib/viewLoads.js";
 import type * as lib_viewReads from "../lib/viewReads.js";
 import type * as lib_webhookTransport from "../lib/webhookTransport.js";
+import type * as lib_workGroups from "../lib/workGroups.js";
 import type * as lib_workingSet from "../lib/workingSet.js";
 import type * as lib_workload from "../lib/workload.js";
 import type * as lib_workspaceJoin from "../lib/workspaceJoin.js";
@@ -459,6 +460,7 @@ declare const fullApi: ApiFromModules<{
   "lib/viewLoads": typeof lib_viewLoads;
   "lib/viewReads": typeof lib_viewReads;
   "lib/webhookTransport": typeof lib_webhookTransport;
+  "lib/workGroups": typeof lib_workGroups;
   "lib/workingSet": typeof lib_workingSet;
   "lib/workload": typeof lib_workload;
   "lib/workspaceJoin": typeof lib_workspaceJoin;

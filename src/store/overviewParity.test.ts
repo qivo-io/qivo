@@ -5,15 +5,14 @@
  * the store loads so its TODAY_ISO and TODAY_WEEK are the day and week the
  * queries are sent, sends the clock the page sends
  * (src/views/overview/overviewArgs.ts overviewClock), and checks that the
- * stand-in answers the same summary and delays, the same batches, rows,
- * verdicts and fixed ends of the Overdue & at risk and Paused lists, and
- * the same health table, for Nora in every column's order both ways, a cut
- * and a search, as the queries answer for the same caller. Over every row
- * of both lists it also checks what the page still does on screen
- * (views/Overview.tsx modelOf and its rows): the store shapes a model of
- * each row (store/viewRows.ts), so no list waits on a row it cannot show,
- * and the model shows the row's own task, its title, its due date and its
- * owner by the Reviewer rule (lib/review.ts taskOwnerId).
+ * stand-in answers the same summary and the same health table, for Nora in
+ * every column's order both ways, a cut and a search, as the queries
+ * answer for the same caller. Over every row of My view's Your work, as
+ * the server answers it, it also checks what the page does on screen
+ * (views/overview/MyOverview.tsx modelOf and its rows): the store shapes a
+ * model of each row (store/viewRows.ts), so no row waits on a model it
+ * cannot show, and the model shows the row's own task, its title, its due
+ * date and its owner by the Reviewer rule (lib/review.ts taskOwnerId).
  *
  * The process runs in New York's time zone, so the client's local weeks
  * differ from UTC weeks near midnight; vitest runs each file in a process
@@ -29,13 +28,15 @@ import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
 import type {
+  HealthAnswer,
   HealthSort,
-  ListAnswer,
   OverviewScope,
   SummaryAnswer,
 } from '../../convex/lib/overview'
-import { OVERVIEW, type OverviewRow, WEEK_STARTS } from '../../convex/lib/overview'
+import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
 import { taskOwnerId } from '../../convex/lib/review'
+import type { ViewRow } from '../../convex/lib/viewReads'
+import { WORK_GROUPS } from '../../convex/lib/workGroups'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
 import {
@@ -56,13 +57,8 @@ import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
-import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS, type OverviewQuery } from './overviewLists'
-import {
-  type ForcedOverview,
-  HEALTH_ROWS,
-  type OverviewArgs,
-  overviewStandIn,
-} from './overviewStandIn.setup'
+import { OVERVIEW_WEEKS, type OverviewQuery } from './overviewLists'
+import { HEALTH_ROWS, type OverviewArgs, overviewStandIn } from './overviewStandIn.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { nameEveryone } from './personShown.setup'
 
@@ -150,54 +146,15 @@ function utcDays(P: Store) {
 
 const sorted = (ids: Iterable<string>) => [...ids].sort()
 
-/** Every batch of a list from its start, each complete unless `partial`:
- * a guest's or Viewer's At-risk batch stops at the second owner whose load
- * it needs, and the next goes on from there. */
-async function wholeBatches(
-  read: (cursor?: string) => ListAnswer | Promise<ListAnswer>,
-  label: string,
-  partial = false,
-): Promise<(ListAnswer & { state: 'ok' })[]> {
-  const batches: (ListAnswer & { state: 'ok' })[] = []
-  let cursor: string | undefined
-  for (let n = 0; n < 100; n++) {
-    const got = await read(cursor)
-    if (got.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(got)}`)
-    if (!partial) expect(got.complete, `${label}: complete`).toBe(true)
-    expect(got.rows.length, `${label}: batch`).toBeLessThanOrEqual(OVERVIEW.batch)
-    batches.push(got)
-    if (got.next === null) return batches
-    cursor = got.next
-  }
-  throw new Error(`${label}: the list did not end`)
-}
-
-/** What the stand-in and the server must agree on of a list's batches:
- * each batch's rows by id with the facts the page reads and the verdict,
- * whether it is complete and whether it ends the list. */
-const batchFacts = (batches: (ListAnswer & { state: 'ok' })[]) =>
-  batches.map((b) => ({
-    rows: b.rows.map((row) => [
-      row.id,
-      row.has_subtasks,
-      row.parent_id ?? null,
-      row.group_done ?? null,
-      row.span?.partial ?? null,
-      row.at_risk ?? null,
-    ]),
-    complete: b.complete,
-    ends: b.next === null,
-  }))
-
-/* How many list rows expectRowsShown compared, and how many of them were
+/* How many rows expectRowsShown compared, and how many of them were
    owned by their reviewer, so a case can tell the comparison ran. */
 const shown = { rows: 0, reviewed: 0 }
 
 /** Checks that the store shapes a model of every row of `rows`, the rows
- * of a list's batches, as the page's modelOf takes one (store/viewRows.ts),
+ * of Your work's groups, as the page's modelOf takes one (store/viewRows.ts),
  * and that the model shows the row's task: its uuid, title, due date and
  * the owner the row's avatar shows by the Reviewer rule. */
-function expectRowsShown(P: Store, rows: readonly OverviewRow[], label: string) {
+function expectRowsShown(P: Store, rows: readonly ViewRow[], label: string) {
   const views = P.views.createViewRows(P.weekOf)
   views.take('parity', rows)
   views.beginPaint()
@@ -228,11 +185,11 @@ const HEALTH_SORTS: HealthSort[] = [
   'paused',
 ]
 
-/** Checks that the Overview's stand-in answers every read of `scope` as the
- * server does for `profile`: the summary, the delays, every batch of the
- * Overdue & at risk and Paused lists, and the health table, with `orders`
- * every column's order both ways, a cut and a search too. Answers how many
- * leaf tasks the summary counts. */
+/** Checks that the Overview's stand-in answers the summary and the health
+ * table of `scope` as the server does for `profile`, with `orders` every
+ * column's order both ways, a cut and a search too, and in My view that
+ * every row of Your work shows. Answers how many leaf tasks the summary
+ * counts. */
 async function expectParity(
   t: T,
   P: Store,
@@ -247,7 +204,6 @@ async function expectParity(
   const stand = (query: OverviewQuery, args: OverviewArgs) =>
     overviewStandIn(P.snapshot, query, args, { sees: (id) => levels.has(id) })
   const summary = await caller.query(api.overview.summary, { scope, day: days.day })
-  const risk = await caller.query(api.overview.risk, { scope, ...days })
   // sub-projects in creation order, which the stand-in reads from the
   // rows' created_at and the server from the documents', as sets
   const subsAsSet = (a: SummaryAnswer) =>
@@ -256,40 +212,22 @@ async function expectParity(
     subsAsSet(stand('summary', { scope, day: days.day }) as SummaryAnswer),
     `${label}: stand-in summary`,
   ).toEqual(subsAsSet(summary))
-  expect(stand('risk', { scope, ...days }), `${label}: stand-in risk`).toEqual(risk)
   if (summary.state !== 'ok') return 0
-  // a guest's or Viewer's At-risk batch stops at the second owner whose load
-  // it needs, and the next goes on from there
-  const staff = profile.org_role === 'admin' || profile.org_role === 'user'
-  const attention = await wholeBatches(
-    (cursor) =>
-      caller.query(api.overview.attention, { scope, ...days, ...(cursor ? { cursor } : {}) }),
-    `${label}: at risk`,
-    !staff,
-  )
-  const standAttention = await wholeBatches(
-    (cursor) => stand('attention', { scope, ...days, ...(cursor ? { cursor } : {}) }) as ListAnswer,
-    `${label}: stand-in at risk`,
-    !staff,
-  )
-  expect(batchFacts(standAttention), `${label}: stand-in at-risk batches`).toEqual(
-    batchFacts(attention),
-  )
-  const paused = await wholeBatches(
-    (cursor) => caller.query(api.overview.paused, { scope, ...(cursor ? { cursor } : {}) }),
-    `${label}: paused`,
-  )
-  const standPaused = await wholeBatches(
-    (cursor) => stand('paused', { scope, ...(cursor ? { cursor } : {}) }) as ListAnswer,
-    `${label}: stand-in paused`,
-  )
-  expect(batchFacts(standPaused), `${label}: stand-in paused batches`).toEqual(batchFacts(paused))
-  // every row of both lists shows as the page shows it
-  expectRowsShown(
-    P,
-    [...attention, ...paused].flatMap((b) => b.rows),
-    label,
-  )
+  // every row of Your work shows as the page shows it
+  if (scope.kind === 'mine') {
+    const work = await caller.query(api.overview.work, {
+      ...days,
+      progress: 1000,
+      review: 1000,
+      next: 1000,
+    })
+    if (work.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(work)}`)
+    expectRowsShown(
+      P,
+      WORK_GROUPS.flatMap((g) => work.groups[g].rows),
+      label,
+    )
+  }
   // the health table, each answer the stand-in's too
   const health = async (over: Partial<Record<string, unknown>> = {}) => {
     const args = {
@@ -340,13 +278,8 @@ it('runs in a zone other than UTC', () => {
   expect(new Date('2026-11-04T12:00:00.000Z').getTimezoneOffset()).not.toBe(0)
 })
 
-it("keeps the app's batch, split and week figures and the stand-in's health cap the server's", () => {
-  expect([OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS, HEALTH_ROWS]).toEqual([
-    OVERVIEW.batch,
-    OVERVIEW.split,
-    WEEK_STARTS,
-    OVERVIEW.healthRows,
-  ])
+it("keeps the app's weeks and the stand-in's health cap the server's", () => {
+  expect([OVERVIEW_WEEKS, HEALTH_ROWS]).toEqual([WEEK_STARTS, OVERVIEW.healthRows])
 })
 
 // ---------------------------------------------------------------- Northstar
@@ -530,7 +463,7 @@ describe('access shapes', () => {
     shown.rows = 0
     shown.reviewed = 0
     expect(await compareShape(null, 'admin')).toBeGreaterThan(0)
-    // the lists showed rows, an In Review one among them owned by its
+    // Your work showed rows, an In Review one among them owned by its
     // reviewer
     expect(shown.rows).toBeGreaterThan(0)
     expect(shown.reviewed).toBeGreaterThan(0)
@@ -547,6 +480,25 @@ describe('access shapes', () => {
 })
 
 // ------------------------------------------------- the rules that must hold
+
+/** Late and Behind plan of the health table's one row of sub-project
+ * scope `scope`, as `profile` reads it on `days`. */
+async function lateOf(
+  t: T,
+  profile: Doc<'profiles'>,
+  scope: OverviewScope,
+  days: ReturnType<typeof clientDays>,
+): Promise<Extract<HealthAnswer, { state: 'ok' }>['rows'][number]['delays']> {
+  const got = await as(t, profile).query(api.overview.health, {
+    scope,
+    ...days,
+    sort: 'name',
+    dir: 'asc',
+    limit: 10,
+  })
+  if (got.state !== 'ok' || got.rows.length !== 1) throw new Error(JSON.stringify(got))
+  return (got.rows[0] as (typeof got.rows)[number]).delays
+}
 
 describe('rules a drift would break', () => {
   /** The admin's store and answers over TBED, which they see whole. */
@@ -690,195 +642,15 @@ describe('rules a drift would break', () => {
     expect(await expectParity(t, P, f.admin, scope, 'fall-back week')).toBe(1)
     // a week measured as 168 hours places the instant in the next one
     const fixed = { ...days, week_end: days.week_starts[52] + 168 * 3_600_000 }
-    const local = await as(t, f.admin).query(api.overview.risk, { scope, ...days })
-    const drifted = await as(t, f.admin).query(api.overview.risk, { scope, ...fixed })
-    if (local.state !== 'ok' || drifted.state !== 'ok')
-      throw new Error(JSON.stringify([local, drifted]))
-    expect(drifted.projected).not.toEqual(local.projected)
+    const local = await lateOf(t, f.admin, scope, days)
+    expect(local).toEqual({ state: 'ok', late: 0, behind: 0 })
+    expect(await lateOf(t, f.admin, scope, fixed)).not.toEqual(local)
   })
 
   it('differs from a server that places remaining_set_at in its UTC week', async () => {
-    const { t, f, P, scope } = await adminCase()
-    const local = await as(t, f.admin).query(api.overview.risk, { scope, ...clientDays(P) })
-    const utc = await as(t, f.admin).query(api.overview.risk, { scope, ...utcDays(P) })
-    if (local.state !== 'ok' || utc.state !== 'ok') throw new Error(JSON.stringify([local, utc]))
-    expect(utc.projected).not.toEqual(local.projected)
-  })
-})
-
-// ------------------------------------------------------- the stand-in's ends
-
-describe('fixed ends', () => {
-  /** A read of the Paused list a batch at a time. */
-  type Read = (at: { cursor?: string; end?: string }) => Promise<ListAnswer>
-
-  /** 25 paused tasks of one sub-project, 20 dated over four days and 5
-   * undated, read by the fixture's user through the server and through the
-   * stand-in over their workspace (`force` as it takes it), each paging
-   * with its own positions. */
-  async function fixedCase({ groups = false } = {}) {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const planted: Doc<'issues'>[] = []
-    for (let i = 0; i < 25; i++)
-      planted.push(
-        await plantIssue(t, {
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          title: `Paused ${String(i).padStart(2, '0')}`,
-          paused: true,
-          ...(i < 20 ? { due_date: `2026-11-0${3 + (i % 4)}` } : {}),
-        }),
-      )
-    // with `groups`, 40 paused groups the list leaves out among them, so a
-    // batch judges its candidates in several rounds and a lowered budget
-    // can stop it between two
-    for (let i = 0; groups && i < 40; i++) {
-      const group = await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        title: `Group ${i}`,
-        paused: true,
-        due_date: `2026-11-0${3 + (i % 4)}`,
-      })
-      await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        title: `Its subtask ${i}`,
-        parent_id: group.id,
-      })
-    }
-    await countOrg(t, f.org.id)
-    const scope = projectScope(f.user, f.sub.id)
-    const caller = as(t, f.user)
-    const server: Read = (at) => caller.query(api.overview.paused, { scope, ...at })
-    const standIn =
-      (force: ForcedOverview = {}): Read =>
-      async (at) => {
-        const snap = await wholeOf(t, f.user)
-        if (snap === null) throw new Error('no workspace')
-        return overviewStandIn(snap, 'paused', { scope, ...at }, { force }) as ListAnswer
-      }
-    return { t, f, planted, server, standIn }
-  }
-
-  const titlesOf = (a: ListAnswer | undefined) =>
-    a?.state === 'ok' ? a.rows.map((r) => r.title) : []
-
-  /** The open batches of `ask` from the list's start, and a way to ask its
-   * first three batches again with the ends they answered. */
-  async function pages(ask: Read, label: string) {
-    const batches = await wholeBatches((cursor) => ask(cursor ? { cursor } : {}), label)
-    const [first, second] = batches
-    const fixed = async () =>
-      (
-        await Promise.all([
-          ask({ end: first?.end as string }),
-          ask({ cursor: first?.next as string, end: second?.end as string }),
-          ask({ cursor: second?.next as string }),
-        ])
-      ).map(titlesOf)
-    return { batches, first, second, fixed, ask }
-  }
-
-  it('answers fixed batches as the server does: asked again, a row moved out, one grown past the split', async () => {
-    const { t, f, planted, server: serverRead, standIn } = await fixedCase()
-    const server = await pages(serverRead, 'server')
-    const stand = await pages(standIn(), 'stand-in')
-    expect(server.batches.map(titlesOf)).toEqual(stand.batches.map(titlesOf))
-    expect(server.batches.map((b) => b.rows.length)).toEqual([10, 10, 5])
-    expect(await server.fixed()).toEqual(await stand.fixed())
-
-    // the first row of the first batch moves past the second batch: it
-    // leaves the first fixed batch and joins the open one, once
-    const moved = planted.find((p) => p.title === server.first?.rows[0]?.title) as Doc<'issues'>
-    await t.run((ctx) => ctx.db.patch(moved._id, { due_date: '2026-12-02' }))
-    const after = await server.fixed()
-    expect(after).toEqual(await stand.fixed())
-    expect(after.flat()).toHaveLength(25)
-    expect(new Set(after.flat()).size).toBe(25)
-    expect(after[0]).not.toContain(moved.title)
-    expect(after[2]).toContain(moved.title)
-
-    // 15 more inside the first batch's span: it answers a split, and its
-    // halves hold every row once, on both
-    for (let i = 0; i < 15; i++)
-      await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        title: `Late paused ${i}`,
-        paused: true,
-        due_date: '2026-11-03',
-      })
-    await countOrg(t, f.org.id)
-    const halves = async (side: Awaited<ReturnType<typeof pages>>) => {
-      const end = side.first?.end as string
-      const grown = await side.ask({ end })
-      if (grown.state !== 'ok' || grown.split === undefined) throw new Error(JSON.stringify(grown))
-      expect(grown.rows).toHaveLength(OVERVIEW.batch)
-      expect(grown.complete).toBe(true)
-      const parts = await Promise.all([
-        side.ask({ end: grown.split }),
-        side.ask({ cursor: grown.split, end }),
-      ])
-      return { grown: titlesOf(grown), parts: parts.map(titlesOf) }
-    }
-    const split = await halves(server)
-    expect(split).toEqual(await halves(stand))
-    expect(split.parts[0]).toEqual(split.grown)
-    expect(new Set(split.parts.flat()).size).toBe(split.parts.flat().length)
-    expect(split.parts.flat().length).toBeGreaterThan(OVERVIEW.split)
-  })
-
-  it('answers a fixed batch that stopped as the server does: its first rows, the position it reached, its end kept', async () => {
-    const { server: serverRead, standIn } = await fixedCase({ groups: true })
-    /* Checks `got`, the fixed batch of the first 20 rows to `end` whose
-       reads stopped, against the contract: incomplete, its first rows, a
-       `next` before the end it keeps, and the two batches `whole` reads
-       that meet at `next` hold every one of `all` once. */
-    const check = async (whole: Read, got: ListAnswer, end: string, all: string[]) => {
-      if (got.state !== 'ok') throw new Error(JSON.stringify(got))
-      expect(got.complete).toBe(false)
-      expect(got.rows.length).toBeGreaterThan(0)
-      expect(got.end).toBe(end)
-      expect(got.next).not.toBe(end)
-      expect(titlesOf(got)).toEqual(all.slice(0, got.rows.length))
-      const parts = await Promise.all([
-        whole({ end: got.next as string }),
-        whole({ cursor: got.next as string, end }),
-      ])
-      expect(parts.flatMap(titlesOf)).toEqual(all)
-    }
-    /* The first 20 rows `ask` pages to, and the end of their second batch. */
-    const firstTwenty = async (ask: Read) => {
-      const { first, second } = await pages(ask, 'first twenty')
-      return { all: [...titlesOf(first), ...titlesOf(second)], end: second?.end as string }
-    }
-    // the stand-in stops a batch where it is told to
-    const stand = await firstTwenty(standIn())
-    await check(
-      standIn(),
-      await standIn({ list: 'incomplete' })({ end: stand.end }),
-      stand.end,
-      stand.all,
-    )
-    // the server stops it under a lowered budget, set on the module the
-    // queries read now: an earlier case's store reset the module registry
-    const server = await firstTwenty(serverRead)
-    expect(server.all).toEqual(stand.all)
-    const { OVERVIEW: live } = await import('../../convex/lib/overview')
-    const was = structuredClone(live.reads)
-    let got: ListAnswer | null = null
-    try {
-      for (let ranges = 200; ranges > 0 && got === null; ranges--) {
-        Object.assign(live.reads, { ranges })
-        const answer = await serverRead({ end: server.end })
-        if (answer.state === 'ok' && !answer.complete && answer.rows.length > 0) got = answer
-      }
-    } finally {
-      Object.assign(live.reads, was)
-    }
-    if (got === null) throw new Error('no lowered budget stopped the batch')
-    await check(serverRead, got, server.end, server.all)
+    const { t, f, P } = await adminCase()
+    const scope = projectScope(f.admin, f.sub.id)
+    const local = await lateOf(t, f.admin, scope, clientDays(P))
+    expect(await lateOf(t, f.admin, scope, utcDays(P))).not.toEqual(local)
   })
 })

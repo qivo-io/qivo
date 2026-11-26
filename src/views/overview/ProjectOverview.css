@@ -1,9 +1,10 @@
-/* A project or sub-project's Overview (ProjectOverview.tsx). Every list
+/* A project or sub-project's Overview (ProjectOverview.tsx) and the parts
+   My view's (MyOverview.tsx) shares with it (overviewRows.tsx). Every list
    lays its rows on fixed columns, so a value of one kind sits at the same
    place in every row: a row's flag, its fact's right edge and its owner; a
-   sub-project's hours and each of its Late, Behind plan and Paused counts
-   in a slot of its own; a person's line and percentage. Two columns where
-   the page has room, else one, Needs attention first. */
+   project's or sub-project's hours and each of its Late, Behind plan and
+   Paused counts in a slot of its own; a person's line and percentage. Two
+   columns where the page has room, else one, the main list first. */
 
 .pov {
   container-type: inline-size;
@@ -617,9 +618,15 @@
   font-weight: 600;
 }
 .pov-mile-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
   font-size: var(--fs-xs);
   line-height: 1.3;
   color: var(--text-2);
+}
+.pov-mile-project {
+  color: var(--text-1);
 }
 .pov-mile-when {
   display: flex;

@@ -13,7 +13,7 @@ import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
-import { MINE_MILESTONES_HINT, MINE_TOO_MANY } from './overview/OverviewMilestones'
+import { MINE_MILESTONES_HINT, MINE_TOO_MANY } from './overview/overviewFacts'
 import type { ScopeMilestones } from './useScopeMilestones'
 
 type MobileRoadmapProps = {

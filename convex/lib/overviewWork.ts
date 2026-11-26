@@ -25,10 +25,9 @@ import {
   verdicts,
 } from './viewLoads'
 import { FOCUS_STATUSES, groupBy, ownTasks, shownParents, type ViewRow, viewRow } from './viewReads'
+import type { WorkGroup } from './workGroups'
 
-export const WORK_GROUPS = ['progress', 'review', 'next'] as const
-
-export type WorkGroup = (typeof WORK_GROUPS)[number]
+export { WORK_GROUPS, type WorkGroup } from './workGroups'
 
 /** Tests lower these and set them back with structuredClone. `most` is
  * the Board's ceiling of matching tasks (lib/limits.ts BOARD_TASKS). */
