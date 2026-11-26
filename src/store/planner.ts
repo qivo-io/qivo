@@ -4400,6 +4400,9 @@ const overview = createOverviewReads({
   release: releaseView,
 })
 
+/* What runs before the Overview's rows go (P.beforeOverviewRelease). */
+const beforeOverviewRelease = new Set<() => void>()
+
 /** Runs `step`, an action on the Overview's reads, and shows what it
     changed in one repaint of the views. */
 function overviewStep(step: () => void) {
@@ -12243,11 +12246,24 @@ export const PLANNER = {
           ? overview.retryNeeds()
           : overview.retryWork(),
     ),
+  /** Runs `write` once, as P.releaseOverview begins, while the Overview's
+      rows are still there: a write the page holds back until another
+      answers, which the store sends only for a task its rows hold. Answers
+      a function that drops it. */
+  beforeOverviewRelease: (write: () => void) => {
+    beforeOverviewRelease.add(write)
+    return () => {
+      beforeOverviewRelease.delete(write)
+    }
+  },
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
       longer kept. */
   releaseOverview: () => {
+    const writes = [...beforeOverviewRelease]
+    beforeOverviewRelease.clear()
+    for (const write of writes) write()
     overviewStep(() => overview.release())
     ownerLoads.release(OVERVIEW_PEOPLE)
     for (const slot of [...OVERVIEW_MILESTONE_SLOTS.upcoming, ...OVERVIEW_MILESTONE_SLOTS.past])

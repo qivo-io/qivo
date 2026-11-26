@@ -105,8 +105,9 @@ function startOf(row: WorkRow): string | null {
 /** A task's remaining hours typed in Your work and not yet saved: the
     field's text, the hours the field showed when the person began, which
     a save sends as the value they saw, whether a save is on its way, the
-    text submitted while it was (`queued`), which saves once it answers,
-    and what the last submit or save says, if anything. */
+    text submitted while it was (`queued`), which saves once it answers or
+    as the Overview's rows go, whichever comes first, and what the last
+    submit or save says, if anything. */
 type HoursDraft = {
   text: string
   seen: number | null
@@ -131,8 +132,9 @@ type TaskRef = Pick<IssueVM, 'id' | 'uuid'>
  * refuses it with the conflict notice; the text stays, and saving it again
  * replaces the other value. Each Enter or blur submits the text the field
  * holds then: during a save the last text submitted saves once that save
- * answers, and text typed after it stays in the field until the person
- * submits it too. A status change on its way takes no second one.
+ * answers, or as the Overview's rows go where that comes first, and text
+ * typed after it stays in the field until the person submits it too. A
+ * status change on its way takes no second one.
  */
 function useWorkEdits() {
   const hours = useRef(new Map<string, HoursDraft>())
@@ -148,7 +150,8 @@ function useWorkEdits() {
     else changes.current.set(uuid, change)
     render((n) => n + 1)
   }
-  /** Sends `text`, submitted from draft `d`, with no save on its way. */
+  /** Sends `text`, submitted from draft `d`, with no save on its way, or
+      behind the one on its way as the Overview's rows go. */
   const send = (it: TaskRef, d: HoursDraft, text: string) => {
     const patch = remainingPatchFromInput({ value: text }, d.seen)
     if (!patch.write) {
@@ -157,6 +160,19 @@ function useWorkEdits() {
     }
     let shown = d.seen
     put(it.uuid, { ...d, saving: true, queued: null, note: null })
+    const sendQueued = (now: HoursDraft, queued: string) =>
+      send(it, { ...now, seen: patch.value, saving: false, queued: null }, queued)
+    // the Overview's rows can go before this save answers, as where a press
+    // opens another page, and the store sends nothing for a task they no
+    // longer hold. Text submitted meanwhile goes then, with this save's
+    // hours as the ones seen: the server applies it after this save, and
+    // refuses it where this save did not land or someone saved in between.
+    let left = false
+    const stop = P.beforeOverviewRelease(() => {
+      left = true
+      const now = hours.current.get(it.uuid)
+      if (now !== undefined && now.queued !== null) sendQueued(now, now.queued)
+    })
     void P.updateIssue(
       it.id,
       { remaining: patch.value },
@@ -168,13 +184,13 @@ function useWorkEdits() {
         },
       },
     ).then((saved) => {
+      stop()
       const now = hours.current.get(it.uuid)
-      if (now === undefined) return
+      if (left || now === undefined) return
       // after a refusal nothing submitted during the save is sent, as it
       // would replace unseen the value a conflict names
       if (!saved) put(it.uuid, { ...now, seen: shown, saving: false, queued: null, note: 'failed' })
-      else if (now.queued !== null)
-        send(it, { ...now, seen: patch.value, saving: false, queued: null }, now.queued)
+      else if (now.queued !== null) sendQueued(now, now.queued)
       else if (now.text === text) put(it.uuid, null)
       else put(it.uuid, { ...now, seen: patch.value, saving: false })
     })

@@ -373,6 +373,30 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     ])
   })
 
+  it('sends hours submitted during a save when a press opens another page before that save answers, with that save’s hours as the ones seen, and nothing more where they are refused', async () => {
+    const { board } = await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), '7')
+    await press('Enter')
+    await type(hours('wire'), '8')
+    const project = q('[data-ov-sub]')
+    project?.addEventListener('click', () => {
+      root.unmount()
+      board.P.releaseOverview()
+    })
+    const held = await hold(project, hours('wire'))
+    await held.release()
+    await repaint()
+    // the first save lands, and someone else saves before the second
+    await settle()
+    await settle(changedFirst())
+    await repaint()
+    expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 7 }, expected: { remaining_hours: 4 } },
+      { patch: { remaining_hours: 8 }, expected: { remaining_hours: 7 } },
+    ])
+  })
+
   it('adds no line to a row and takes none away while it saves, nor while a press is held when the save answers', async () => {
     await overview(work)
     const settle = heldUpdates()
