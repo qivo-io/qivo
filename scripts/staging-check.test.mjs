@@ -216,6 +216,7 @@ import {
   typeSearch,
   UPLOAD_STEP,
   WAITS,
+  WORK_QUERY,
   WORKLOAD_PAGE,
   WORKLOAD_PAGES_MAX,
   WORKLOAD_PEOPLE,
@@ -248,8 +249,13 @@ describe('staging check REST contract', () => {
       new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
       'utf8',
     )
+    const parts = readFileSync(
+      new URL('../src/views/overview/overviewRows.tsx', import.meta.url),
+      'utf8',
+    )
     expect(page).toContain('label="Tasks left"')
-    expect(page).toContain('syncSentence({ overdue: c.overdue')
+    expect(page).toContain('overdue: c.overdue,')
+    expect(parts).toContain('syncSentence(facts)')
     const sentence = readFileSync(new URL('../src/lib/teamSync.ts', import.meta.url), 'utf8')
     expect(sentence).toMatch(/` \$\{tasks\(f\.overdue\)\} \$\{is\(f\.overdue\)\} overdue`/)
     expect(OVERVIEW_EXPECTED).toEqual({
@@ -449,9 +455,10 @@ describe('staging check REST contract', () => {
     ])
       expect(modals).toContain(mark)
     expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
-    // the step presses the row on M's Overview, a project's page
+    // the step presses the row on M's Overview, a project's page, whose
+    // milestone panel is the one both Overview pages share
     const overview = readFileSync(
-      new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
+      new URL('../src/views/overview/overviewRows.tsx', import.meta.url),
       'utf8',
     )
     expect(overview).toContain('data-overview-milestone={m.id}')
@@ -517,22 +524,34 @@ describe('staging check REST contract', () => {
   it("checks the Overview's Upcoming and collapsed Past on the deployment's section read, and My view's with mine", () => {
     expect(OVERVIEW_MILESTONES_STEP).toBe('ui/overview-milestones')
     expect(MILESTONES_SECTION_QUERY).toBe('milestones:section')
-    // the marks the step waits on and presses: on M's Overview, a
-    // project's page, its rows and Past's disclosure, on My view's its
-    // rows, and on both the sections they share
+    // the marks the step waits on and presses: the milestone panel both
+    // Overview pages share, its rows and Past's disclosure, the sections it
+    // shares with the window, and My view's Your work, its Next group,
+    // rows and Load more
     const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
-    const project = read('../src/views/overview/ProjectOverview.tsx')
-    const myView = read('../src/views/overview/OverviewMilestones.tsx')
+    const panel = read('../src/views/overview/overviewRows.tsx')
+    const myView = read('../src/views/overview/MyOverview.tsx')
     const sections = read('../src/components/MilestoneSectionPart.tsx')
     for (const mark of [
       'data-overview-milestones',
       'data-overview-milestone={m.id}',
       'data-milestone-past-toggle',
       'aria-expanded={ms.pastOpen}',
+      "{...{ [hook.more]: '' }}",
+      "aria-disabled={more === 'loading' || undefined}",
     ])
-      expect(project, mark).toContain(mark)
-    for (const mark of ['data-overview-milestones', 'data-overview-milestone={m.id}'])
+      expect(panel, mark).toContain(mark)
+    for (const mark of [
+      'data-ov-work',
+      'data-ov-group={group}',
+      'data-work-id={row.id}',
+      "hook={{ more: 'data-ov-more'",
+    ])
       expect(myView, mark).toContain(mark)
+    for (const page of [read('../src/views/overview/ProjectOverview.tsx'), myView])
+      expect(page).toContain('<MilestonesPanel')
+    expect(WORK_QUERY).toBe('overview:work')
+    expect(read('../convex/overview.ts')).toContain('export const work = authedQuery(')
     for (const mark of [
       'data-milestone-section={side}',
       'data-milestone-section-state={open ? view.state : undefined}',
@@ -2233,7 +2252,7 @@ describe('staging check REST contract', () => {
   })
   it("checks its sub-project's row in Sub-projects on what its two tasks give, in the row's words", () => {
     const page = readFileSync(
-      new URL('../src/views/overview/ProjectOverview.tsx', import.meta.url),
+      new URL('../src/views/overview/overviewRows.tsx', import.meta.url),
       'utf8',
     )
     expect(page).toMatch(
@@ -3113,7 +3132,6 @@ describe('the phone dropdowns step', () => {
     const pages = phoneSelectPages(12)
     expect(pages.map((page) => page.path)).toEqual([
       'board/p/12',
-      'overview/mine',
       'roadmap/p/12',
       'settings/org-users',
       'settings/org-general',

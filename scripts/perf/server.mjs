@@ -26,7 +26,10 @@
 // from root fields this server no longer sends, so it cannot load against
 // it (scripts/benchmark-browser.mjs --baseline). A read of a part this
 // server does not serve answers an error that says so (readPart). Measure
-// such a build in a checkout of its own. It answers the task
+// such a build in a checkout of its own. So it is for a baseline build from
+// before My view's Overview read Your work, whose Overview asks the
+// Overview's lists and delays (overview:risk, attention and paused), which
+// this server answers with an error that says so. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the
 // workspace it holds through the stand-in the store tests share
 // (src/store/taskWindowStandIn.setup.ts), which a write sends again with
@@ -88,12 +91,12 @@
 //   overview             a state the Overview's queries answer whatever the
 //                        tasks say, for screenshots of states a seeded
 //                        backend cannot reach: counting, counts-budget,
-//                        overdue-budget, projected-budget, loads (a guest's
-//                        or Viewer's projection), incomplete (each list
-//                        batch stops after half a batch), unknown (every
-//                        owner's load unreadable, so projected candidates
-//                        show as risk unknown), list-over-budget,
-//                        over_budget, unavailable or access_unchecked; for
+//                        overdue-budget, unknown (every owner's load
+//                        unreadable, so the health table's delays read
+//                        unknown), over_budget, unavailable or
+//                        access_unchecked; for My view's Your work alone
+//                        work-over-budget and work-unknown (its delays
+//                        unknown); for
 //                        the health table alone health-counting (its counts
 //                        counting), health-budget (its rows' delays past the
 //                        budget, so it sorts by name), health-loads (its
@@ -616,7 +619,7 @@
 // answer brings and Team utilization read (planning:ownerLoads,
 // src/store/ownerLoadsStandIn.setup.ts), from the same workspace, with no
 // bounds. So are the Overview's queries
-// (overview:summary, risk, attention, paused and health), through the
+// (overview:summary, health, needs and work), through the
 // stand-in the jsdom tests use (src/store/overviewStandIn.setup.ts), with no
 // access or read budget. So are Settings › Labels' batches
 // (labels:settingsPage), through the stand-in the jsdom tests use
@@ -822,11 +825,9 @@ const forcedOverview = (() => {
     if (state === 'counting') force.counts = 'counting'
     else if (state === 'counts-budget') force.counts = 'budget'
     else if (state === 'overdue-budget') force.overdue = 'budget'
-    else if (state === 'projected-budget') force.projected = 'budget'
-    else if (state === 'loads') force.projected = 'loads'
-    else if (state === 'incomplete') force.list = 'incomplete'
-    else if (state === 'list-over-budget') force.list = 'over_budget'
     else if (state === 'unknown') force.unknown = 'everyone'
+    else if (state === 'work-over-budget') force.work = 'over_budget'
+    else if (state === 'work-unknown') force.work = 'unknown'
     else if (['over_budget', 'unavailable', 'access_unchecked'].includes(state)) force.scope = state
     else if (state === 'health-counting') force.health = { ...force.health, counts: 'counting' }
     else if (state === 'health-budget') force.health = { ...force.health, delays: 'budget' }
@@ -2511,12 +2512,16 @@ const read = (name, args = {}) => {
     case 'pickers:syncRecipients':
     case 'pickers:canOwn':
       return ownerPickersStandIn(snapshot, name, args, forcedOwners)
-    case 'overview:summary':
     case 'overview:risk':
     case 'overview:attention':
     case 'overview:paused':
+      throw new Error(
+        `${name} is no Overview read this perf server serves (summary, health, needs and work only); a build from before My view's Overview read Your work cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
+      )
+    case 'overview:summary':
     case 'overview:health':
     case 'overview:needs':
+    case 'overview:work':
       if (name === 'overview:health' && forcedOverview.healthError)
         throw new Error('the health table fails, as overview=health-error asks')
       return overviewStandIn(snapshot, name.slice('overview:'.length), args, {

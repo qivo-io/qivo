@@ -175,7 +175,7 @@
  * search must also answer those two rows alone to the store's read for
  * the run tag, and a token search that matches nothing must say so
  * (ui/mcp-access-lists). At phone size every closed dropdown of the Board,
- * My view's Overview, the Roadmap and two Settings pages must show its
+ * the Roadmap and two Settings pages must show its
  * chosen text (ui/phone-selects). It makes a
  * project of its own with two sub-projects, finds it by its run tag in
  * Settings › Projects from the deployment's list (projectSettings.projects)
@@ -7184,11 +7184,10 @@ export const PHONE_SELECTS_STEP = 'ui/phone-selects'
 
 /** The pages whose closed dropdowns the step reads, as paths under the
  *  organization's address, for the run project numbered `num`. `press`
- *  names a control the step presses first, where the page has it. A
- *  project's Overview holds no dropdown, so it is not among them. */
+ *  names a control the step presses first, where the page has it. An
+ *  Overview holds no native dropdown, so none is among them. */
 export const phoneSelectPages = (num) => [
   { name: 'the Board', path: `board/p/${num}` },
-  { name: "My view's Overview", path: 'overview/mine' },
   { name: 'the Roadmap', path: `roadmap/p/${num}`, press: 'Task schedule' },
   { name: 'Settings › Users', path: 'settings/org-users' },
   { name: 'Settings › General', path: 'settings/org-general' },
@@ -9015,6 +9014,9 @@ async function loadUntil(section, row, what) {
   await row.waitFor({ timeout: 60_000 })
 }
 
+/** My view's Your work, which My view's Overview subscribes. */
+export const WORK_QUERY = 'overview:work'
+
 /** The Overview's milestones on the deployment's section read. The run
  *  makes `<tag> Overview milestone` over REST on M in the first week from
  *  three weeks on that M leaves free (freeMilestoneWeek), `<tag> Overview
@@ -9029,7 +9031,10 @@ async function loadUntil(section, row, what) {
  *  no projects, show the milestone among Upcoming's rows (pressing Load
  *  more, as Nora's other projects' milestones can come first), then M's
  *  name on it, which the project cache reads after the row shows, and drop
- *  it once the run deleted it over REST. It deletes
+ *  it once the run deleted it over REST. That load must also subscribe
+ *  WORK_QUERY and show the task in Your work's Next from its answer
+ *  (pressing Next's Load more, as Nora's other To Do tasks can come
+ *  first). It deletes
  *  the past milestone and the task at the end, and the cleanup that
  *  deletes M removes whatever a failure left. It runs while M is active,
  *  after ui/roadmap-milestones, and leaves the saved view on M's Board. */
@@ -9109,6 +9114,26 @@ async function overviewMilestonesCheck() {
       )
       const mine = upcoming.locator(`[data-overview-milestone="${made.id}"]`)
       await loadUntil(upcoming, mine, made.name)
+      // Your work: the task in Next, from the deployment's work read
+      expect(
+        sent.some((f) => addsQuery(f, WORK_QUERY)),
+        "My view's Overview did not subscribe Your work",
+      )
+      const next = app.locator('[data-workspace-view] [data-ov-group="next"]')
+      const own = next.locator(`[data-work-id="${task.id}"]`)
+      const more = next.locator('[data-ov-more]:not([aria-disabled])')
+      for (let press = 0; press < 100; press++) {
+        expect(
+          await until(async () => (await own.count()) > 0 || (await more.count()) > 0, 60_000),
+          `Your work's Next neither showed ${task.key} nor offered Load more`,
+        )
+        if ((await own.count()) > 0) break
+        await more.click()
+      }
+      expect(
+        ((await own.textContent()) ?? '').includes(task.title),
+        `Your work's row of ${task.key} does not name it`,
+      )
       // the row shows first and M's name after it, once the project cache
       // has read the projects the section's answer names
       expect(
@@ -9117,7 +9142,7 @@ async function overviewMilestonesCheck() {
       )
       await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${made.id}`)
       await mine.waitFor({ state: 'detached', timeout: 60_000 })
-      return `showed ${made.name} in ${M.key}'s Upcoming and ${past.name} only once Past was expanded, from the deployment's section read, and in My view from a read with mine and no projects, with ${M.key}'s name, until it was deleted over REST`
+      return `showed ${made.name} in ${M.key}'s Upcoming and ${past.name} only once Past was expanded, from the deployment's section read, and in My view from a read with mine and no projects, with ${M.key}'s name, until it was deleted over REST, and ${task.key} in My view's Next from the deployment's work read`
     } finally {
       app.off('websocket', record)
       await rest(w, 'DELETE', `/projects/${M.id}/milestones/${past.id}`)
