@@ -389,12 +389,34 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     await repaint()
     // the first save lands, and someone else saves before the second
     await settle()
-    await settle(changedFirst())
+    await settle(
+      new ConvexError({
+        code: 'conflict',
+        reason: 'field_changed',
+        message: 'changed',
+        changes: [
+          {
+            record: 'task',
+            id: 'wire',
+            field: 'remaining_hours',
+            by: null,
+            at: '2026-11-25T10:00:00.000Z',
+          },
+        ],
+      }),
+    )
     await repaint()
     expect(updates()).toMatchObject([
       { patch: { remaining_hours: 7 }, expected: { remaining_hours: 4 } },
       { patch: { remaining_hours: 8 }, expected: { remaining_hours: 7 } },
     ])
+    // the page that held the text is gone, so the notice says it was discarded
+    const said = vi
+      .mocked(window.showToast)
+      .mock.calls.map(([text]) => String(text))
+      .join(' ')
+    expect(said).toContain('discarded')
+    expect(said).not.toContain('still in the')
   })
 
   it('adds no line to a row and takes none away while it saves, nor while a press is held when the save answers', async () => {

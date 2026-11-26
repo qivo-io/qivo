@@ -139,6 +139,8 @@ type TaskRef = Pick<IssueVM, 'id' | 'uuid'>
 function useWorkEdits() {
   const hours = useRef(new Map<string, HoursDraft>())
   const changes = useRef(new Map<string, Change>())
+  // the Overview's rows went, and the fields and their text with them
+  const gone = useRef(false)
   const [, render] = useState(0)
   const put = (uuid: string, draft: HoursDraft | null) => {
     if (draft === null) hours.current.delete(uuid)
@@ -170,6 +172,7 @@ function useWorkEdits() {
     let left = false
     const stop = P.beforeOverviewRelease(() => {
       left = true
+      gone.current = true
       const now = hours.current.get(it.uuid)
       if (now !== undefined && now.queued !== null) sendQueued(now, now.queued)
     })
@@ -180,7 +183,7 @@ function useWorkEdits() {
         seen: { remaining_hours: d.seen },
         keepDraft: (value) => {
           shown = typeof value === 'number' ? value : null
-          return true
+          return !gone.current
         },
       },
     ).then((saved) => {
@@ -199,6 +202,7 @@ function useWorkEdits() {
     hours: (uuid: string) => hours.current.get(uuid),
     change: (uuid: string) => changes.current.get(uuid),
     type(it: IssueVM, text: string) {
+      gone.current = false
       const d = hours.current.get(it.uuid)
       put(
         it.uuid,
