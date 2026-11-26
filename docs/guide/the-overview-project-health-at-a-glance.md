@@ -181,8 +181,11 @@ actions in the same place, whatever its title, its group or its actions.
   Qivo does not save yours and says so
   ([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)).
   What you typed stays in the field, and saving it again replaces their
-  value. If you have left the Overview by then, your hours are discarded,
-  and the notice says so.
+  value. If the page is gone by then, as after you chose a project in the
+  sidebar
+  ([Pages stay as you left them](./finding-your-way-around.md#pages-stay-as-you-left-them)),
+  your hours are discarded, and the notice says so. Behind another page,
+  such as the Board, the Overview keeps what you typed.
 - In progress rows have the **Status** control, with every status and
   **Pause** or **Resume**.
 - Waiting on your review rows have **Send back**, which moves the task to

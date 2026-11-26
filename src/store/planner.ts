@@ -4400,8 +4400,14 @@ const overview = createOverviewReads({
   release: releaseView,
 })
 
-/* What runs before the Overview's rows go (P.beforeOverviewRelease). */
+/* What runs before a page of the Overview goes (P.beforeOverviewRelease). */
 const beforeOverviewRelease = new Set<() => void>()
+
+function runBeforeOverviewRelease() {
+  const writes = [...beforeOverviewRelease]
+  beforeOverviewRelease.clear()
+  for (const write of writes) write()
+}
 
 /** Runs `step`, an action on the Overview's reads, and shows what it
     changed in one repaint of the views. */
@@ -12246,24 +12252,28 @@ export const PLANNER = {
           ? overview.retryNeeds()
           : overview.retryWork(),
     ),
-  /** Runs `write` once, as P.releaseOverview begins, while the Overview's
-      rows are still there: a write the page holds back until another
-      answers, which the store sends only for a task its rows hold. Answers
-      a function that drops it. */
+  /** Runs `write` once, as the Overview's page goes for good
+      (P.leaveOverviewPage, P.releaseOverview), while the Overview's rows
+      are still there: a write the page holds back until another answers,
+      which the store sends only for a task its rows hold. Answers a
+      function that drops it. */
   beforeOverviewRelease: (write: () => void) => {
     beforeOverviewRelease.add(write)
     return () => {
       beforeOverviewRelease.delete(write)
     }
   },
+  /** Runs what waits for the Overview's page to go
+      (P.beforeOverviewRelease): a page of the Overview left for good while
+      the Overview stays kept, as where a new scope mounts it anew. Its
+      reads and rows stay for the page that takes its place. */
+  leaveOverviewPage: runBeforeOverviewRelease,
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
       longer kept. */
   releaseOverview: () => {
-    const writes = [...beforeOverviewRelease]
-    beforeOverviewRelease.clear()
-    for (const write of writes) write()
+    runBeforeOverviewRelease()
     overviewStep(() => overview.release())
     ownerLoads.release(OVERVIEW_PEOPLE)
     for (const slot of [...OVERVIEW_MILESTONE_SLOTS.upcoming, ...OVERVIEW_MILESTONE_SLOTS.past])

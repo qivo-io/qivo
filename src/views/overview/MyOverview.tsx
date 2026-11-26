@@ -11,7 +11,7 @@
    and only for a task the person may edit. Every row of every group lays
    its values on the same columns (MyOverview.css). */
 
-import { type FocusEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type FocusEvent, type ReactNode, useCallback, useRef, useState } from 'react'
 import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -139,14 +139,8 @@ type TaskRef = Pick<IssueVM, 'id' | 'uuid'>
 function useWorkEdits() {
   const hours = useRef(new Map<string, HoursDraft>())
   const changes = useRef(new Map<string, Change>())
-  // the page left the screen, and the fields and their text with it
+  // this page of the Overview left for good, and the fields and their text with it
   const gone = useRef(false)
-  useEffect(() => {
-    gone.current = false
-    return () => {
-      gone.current = true
-    }
-  }, [])
   const [, render] = useState(0)
   const put = (uuid: string, draft: HoursDraft | null) => {
     if (draft === null) hours.current.delete(uuid)
@@ -178,6 +172,7 @@ function useWorkEdits() {
     let left = false
     const stop = P.beforeOverviewRelease(() => {
       left = true
+      gone.current = true
       const now = hours.current.get(it.uuid)
       if (now !== undefined && now.queued !== null) sendQueued(now, now.queued)
     })
@@ -207,6 +202,7 @@ function useWorkEdits() {
     hours: (uuid: string) => hours.current.get(uuid),
     change: (uuid: string) => changes.current.get(uuid),
     type(it: IssueVM, text: string) {
+      gone.current = false
       const d = hours.current.get(it.uuid)
       put(
         it.uuid,

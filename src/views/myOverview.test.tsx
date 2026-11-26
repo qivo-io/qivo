@@ -420,12 +420,15 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('says the hours were discarded where their save is refused after the page went to a project that keeps the Overview’s rows', async () => {
-    await overview(work)
+    const { board } = await overview(work)
     const settle = heldUpdates()
     await type(hours('wire'), '7')
     await press('Enter')
     // as a project in the sidebar does, which takes the page and keeps the rows
-    root.unmount()
+    await act(async () => {
+      root.unmount()
+      board.P.leaveOverviewPage()
+    })
     await settle(
       new ConvexError({
         code: 'conflict',
