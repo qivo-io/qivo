@@ -8,12 +8,12 @@
  * stand-in answers the same summary and the same health table, for Nora in
  * every column's order both ways, a cut and a search, as the queries
  * answer for the same caller, and a project's Needs attention answer with
- * the same Sub-projects and its verdict counts given where the server
- * gives them. Of the server's own two reads of a top-level project's
- * Sub-projects it checks the rule convex/lib/overviewNeeds.ts states, that
- * the Needs attention answer gives every figure the health table sorted by
- * Late gives, the same, and may give one the health table answers
- * unavailable. Over every row of My view's Your work, as
+ * every row in the same order with what it needs, the same total, counts,
+ * people, Late tasks by due date and Sub-projects. Of the server's own two
+ * reads of a top-level project's Sub-projects it checks the rule
+ * convex/lib/overviewNeeds.ts states, that a figure both give is the same,
+ * as either may give one the other answers unavailable. Over every row of
+ * My view's Your work, as
  * the server answers it, it also checks what the page does on screen
  * (views/overview/MyOverview.tsx modelOf and its rows): the store shapes a
  * model of each row (store/viewRows.ts), so no row waits on a model it
@@ -42,7 +42,7 @@ import type {
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
-import type { NeedsAnswer } from '../../convex/lib/overviewNeeds'
+import { NEEDS, type NeedsAnswer } from '../../convex/lib/overviewNeeds'
 import { taskOwnerId } from '../../convex/lib/review'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import { WORK_GROUPS } from '../../convex/lib/workGroups'
@@ -64,6 +64,7 @@ import {
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
+import { plantBlocks } from '../../convex/tests/teamSyncAgenda.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
 import { OVERVIEW_WEEKS, type OverviewQuery } from './overviewLists'
@@ -199,8 +200,9 @@ const HEALTH_SORTS: HealthSort[] = [
 
 /** Checks that `needs`, a top-level project's Sub-projects as
  * overview.needs answers them, holds the same rows as `health`, from
- * overview.health sorted by Late, and gives each figure `health` gives, the
- * same, and that where every row is the same, so is the table. */
+ * overview.health sorted by Late, with the same names, leads, total and
+ * cap, that a row's counts or delays that both give are the same, and that
+ * where every row is the same, so is the table. */
 function expectFiguresOf(needs: HealthTable | undefined, health: HealthAnswer, label: string) {
   if (needs === undefined || health.state !== 'ok')
     throw new Error(`${label}: ${JSON.stringify([needs, health])}`)
@@ -217,29 +219,30 @@ function expectFiguresOf(needs: HealthTable | undefined, health: HealthAnswer, l
     const other = byId.get(row.project_id)
     const at = `${label}: Sub-projects row ${row.name}`
     expect([other?.name, other?.lead_id], at).toEqual([row.name, row.lead_id])
-    if (row.counts.state === 'ok') expect(other?.counts, at).toEqual(row.counts)
-    if (row.delays.state === 'ok') expect(other?.delays, at).toEqual(row.delays)
+    if (row.counts.state === 'ok' && other?.counts.state === 'ok')
+      expect(other.counts, at).toEqual(row.counts)
+    if (row.delays.state === 'ok' && other?.delays.state === 'ok')
+      expect(other.delays, at).toEqual(row.delays)
     same &&= isDeepStrictEqual(other, row)
   }
   if (same) expect(needs, `${label}: Sub-projects`).toEqual(health)
 }
 
-/** Whether each count of a Needs attention answer that needs the verdicts
- * is given, or why not. */
-function verdictStates(answer: NeedsAnswer) {
-  if (answer.state !== 'ok') return answer
-  const { projected, behind, all } = answer.counts
-  return [projected, behind, all, answer.late_due].map((f) => (f.state === 'ok' ? 'ok' : f.reason))
-}
+/** A Needs attention answer with each row as its task's id and what it
+ * needs, the part of a row that the list works out. */
+const needsOf = (answer: NeedsAnswer) =>
+  answer.state === 'ok'
+    ? { ...answer, rows: answer.rows.map((r) => ({ id: r.id, needs: r.needs })) }
+    : answer
 
 /** Checks that the Overview's stand-in answers the summary and the health
  * table of `scope` as the server does for `profile`, with `orders` every
  * column's order both ways, a cut and a search too, and in My view that
- * every row of Your work shows. Of a project it checks that the stand-in's
- * Needs attention answer holds the server's Sub-projects and gives its
- * verdict counts where the server does, and of a top-level project the
- * rule between the server's two reads of its Sub-projects
- * (expectFiguresOf). Answers how many leaf tasks the summary counts. */
+ * every row of Your work shows. Of a project it checks that the stand-in
+ * answers the server's Needs attention list, every row of it, and of a
+ * top-level project the rule between the server's two reads of its
+ * Sub-projects (expectFiguresOf). Answers how many leaf tasks the summary
+ * counts. */
 async function expectParity(
   t: T,
   P: Store,
@@ -296,7 +299,7 @@ async function expectParity(
   // a top-level project's Needs attention answer holds its Sub-projects, a
   // sub-project's none
   if (scope.kind === 'project') {
-    const args = { ...days, kind: 'all' as const, limit: 20 }
+    const args = { ...days, kind: 'all' as const, limit: NEEDS.most }
     const needs = await caller.query(api.overview.needs, {
       scope: { org_id: scope.org_id, project_id: scope.project_id },
       ...args,
@@ -307,12 +310,10 @@ async function expectParity(
       expectFiguresOf(needs.health, table, label)
       subProjectTables++
     } else expect(needs.health, `${label}: Sub-projects`).toBeUndefined()
-    const standIn = stand('needs', { scope, ...args }) as NeedsAnswer
-    if (standIn.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(standIn)}`)
-    expect(standIn.health, `${label}: stand-in Sub-projects`).toEqual(needs.health)
-    expect(verdictStates(standIn), `${label}: stand-in verdict counts`).toEqual(
-      verdictStates(needs),
-    )
+    expect(
+      needsOf(stand('needs', { scope, ...args }) as NeedsAnswer),
+      `${label}: stand-in Needs attention`,
+    ).toEqual(needsOf(needs))
   }
   if (orders && table.state === 'ok') {
     for (const sort of HEALTH_SORTS)
@@ -398,11 +399,13 @@ const NOW_CASE = Date.parse('2026-11-04T19:00:00.000Z')
 /** The tasks every access case plants over the withOrg fixture for
  * `subject`, FW tracking delay: an overdue task, a Done task past its due
  * date, a group past its due date whose leaves are all Done, a task in a
- * sibling sub-project the subject may not see, a paused group, paused
+ * sibling sub-project the subject may not see, a task blocked by that one,
+ * the Done one and one in PCB, a paused group, paused
  * tasks dated, undated and Done, a group with its subtask in an archived
- * sub-project, a task stored on the TBED meta, an In Review hand-off and a task the
- * subject reviews, tasks projected late, on track and behind, a group
- * projected late by its span, and a task whose remaining hours were
+ * sub-project, a task stored on the TBED meta, an In Review hand-off, a task the
+ * subject reviews and two nobody reviews, tasks projected late, on track
+ * and behind, two groups projected late by their span, a task further
+ * behind, and a task whose remaining hours were
  * measured near midnight before a week began in New York, so its local and
  * UTC weeks differ. Then the organization is counted. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
@@ -421,8 +424,12 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     plantIssue(t, { org_id, project_id: project.id, ...fields })
   const mine = { assignee_id: subject.id }
   await task(f.sub, { title: 'Overdue', due_date: '2026-10-28', ...mine })
-  await task(f.sub2, { title: 'Overdue in PCB', due_date: '2026-11-03', status: 'progress' })
-  await task(f.sub, {
+  const pcb = await task(f.sub2, {
+    title: 'Overdue in PCB',
+    due_date: '2026-11-03',
+    status: 'progress',
+  })
+  const donePastDue = await task(f.sub, {
     title: 'Done past due',
     due_date: '2026-10-20',
     status: 'done',
@@ -430,7 +437,17 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   })
   const late = await task(f.sub, { title: 'Late group', due_date: '2026-10-30', ...mine })
   await task(f.sub, { title: 'Its Done leaf', parent_id: late.id, status: 'done', done_at: NOW })
-  await task(sibling, { title: 'Overdue in the sibling', due_date: '2026-10-27', ...mine })
+  const inSibling = await task(sibling, {
+    title: 'Overdue in the sibling',
+    due_date: '2026-10-27',
+    ...mine,
+  })
+  const waits = await task(f.sub, { title: 'Waits on three', ...mine })
+  await plantBlocks(t, [
+    [inSibling, waits],
+    [donePastDue, waits],
+    [pcb, waits],
+  ])
   const pausedGroup = await task(f.sub, { title: 'Paused group', paused: true, ...mine })
   await task(f.sub, { title: 'Its subtask', parent_id: pausedGroup.id, ...mine })
   await task(f.sub, { title: 'Paused, dated', paused: true, due_date: '2026-11-20', ...mine })
@@ -486,6 +503,38 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     parent_id: span.id,
     start_week: '2026-11-23',
     end_week: '2026-11-30',
+  })
+  // further behind its plan, and further past its due week, than the ones
+  // planted before them
+  await task(f.sub, {
+    title: 'Further behind its plan',
+    start_week: '2026-10-05',
+    end_week: '2026-10-12',
+    remaining_set_at: '2026-10-06T15:00:00.000Z',
+    remaining_hours: 10,
+    ...mine,
+  })
+  const farSpan = await task(f.sub, { title: 'Group far late by its span', due_date: '2026-11-13' })
+  await task(f.sub, {
+    title: 'Its far late leaf',
+    parent_id: farSpan.id,
+    start_week: '2026-12-14',
+    end_week: '2026-12-21',
+  })
+  // two hand-offs nobody reviews, the one waiting longer due later
+  await task(f.sub2, {
+    title: 'Waiting since October',
+    status: 'review',
+    due_date: '2026-12-01',
+    review_at: '2026-10-20T15:00:00.000Z',
+    ...mine,
+  })
+  await task(f.sub2, {
+    title: 'Waiting since Monday',
+    status: 'review',
+    due_date: '2026-11-20',
+    review_at: '2026-11-02T15:00:00.000Z',
+    ...mine,
   })
   // measured at 22:00 on Sunday 18 October in New York, Monday 19 October in
   // UTC: 400 hours at 40 a week from that week end in the week of 14

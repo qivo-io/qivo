@@ -9,8 +9,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* A project or sub-project's Overview (views/overview/ProjectOverview.tsx)
    from the server's answers, through the Overview's stand-in
-   (store/overviewStandIn.setup.ts), whose Needs attention list holds the
-   stored facts' kinds: the sentence and Tasks left, a count Qivo could not
+   (store/overviewStandIn.setup.ts), whose Needs attention list follows the
+   server's rule: the sentence and Tasks left, a count Qivo could not
    work out, a tab's read, a row opened while the next answer loads, the
    people's load reads of a kept page, the sub-projects' Load more and cap,
    a milestone's late count, and the row actions a reader may not use. The
@@ -80,6 +80,17 @@ const plan = (snap: Snapshot) => {
   snap.issues.push(taskRow(snap, 'fine', 'todo', 4))
 }
 
+/** Plan with a fifth task, due in three weeks with 8 hours left, whose
+    verdict needs its owner's load. */
+const planned = (snap: Snapshot) => {
+  plan(snap)
+  snap.issues.push({
+    ...taskRow(snap, 'planned', 'todo', 5),
+    due_date: day(21),
+    remaining_hours: 8,
+  })
+}
+
 async function overview(
   prepare: (snap: Snapshot) => void,
   { scope = 'plan', force = {} as ForcedOverview, kept = false } = {},
@@ -138,7 +149,7 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('reads a count it could not work out as unknown, never 0, and says the list may leave tasks out', async () => {
-    await overview(plan, { force: { needs: 'unknown' } })
+    await overview(planned, { force: { needs: 'unknown' } })
     for (const kind of ['all', 'projected', 'behind'])
       expect(tab(kind)?.getAttribute('aria-label'), kind).toMatch(/count unknown$/)
     expect(tab('overdue')?.getAttribute('aria-label')).toBe('Overdue, 2 tasks')
@@ -148,7 +159,7 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('says none on a tab only for a confirmed zero, and that Qivo found none among the tasks it could check where the count is unknown', async () => {
-    const { board } = await overview(plan, { force: { needs: 'unknown' } })
+    const { board } = await overview(planned, { force: { needs: 'unknown' } })
     await act(async () => tab('projected')?.click())
     await board.answer()
     expect(text('[data-ov-needs]')).toBe(
