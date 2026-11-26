@@ -258,6 +258,26 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(row('wire')?.textContent).not.toContain('Saving…')
   })
 
+  it('sends the hours submitted during a save, never what is typed after them', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), '5')
+    await press('Enter')
+    await type(hours('wire'), '6')
+    await press('Enter')
+    // back in the field, cleared to type something else, not submitted
+    await type(hours('wire'), '')
+    await settle()
+    expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 5 } },
+      { patch: { remaining_hours: 6 }, expected: { remaining_hours: 5 } },
+    ])
+    await settle()
+    expect(updates()).toHaveLength(2)
+    expect(hours('wire')?.value).toBe('')
+    expect(document.activeElement).toBe(hours('wire'))
+  })
+
   it('keeps hours being typed in a row that moves to another group, with focus in the field', async () => {
     const { board } = await overview(work)
     await type(hours('first'), '7')

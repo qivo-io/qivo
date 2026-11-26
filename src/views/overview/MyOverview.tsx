@@ -102,14 +102,16 @@ function startOf(row: WorkRow): string | null {
 }
 
 /** A task's remaining hours typed in Your work and not yet saved: the
-    text, the hours the field showed when the person began, which the save
-    sends as the value they saw, and where its save stands. `again` says
-    the person left the field while a save was on its way. */
+    field's text, the hours the field showed when the person began, which
+    a save sends as the value they saw, whether a save is on its way, the
+    text submitted while it was (`queued`), which saves once it answers,
+    and what the last submit or save says, if anything. */
 type HoursDraft = {
   text: string
   seen: number | null
-  state: 'idle' | 'saving' | 'failed' | 'invalid'
-  again: boolean
+  saving: boolean
+  queued: string | null
+  note: 'invalid' | 'failed' | null
 }
 
 /** Where a row's status change stands. */
@@ -126,9 +128,10 @@ type TaskRef = Pick<IssueVM, 'id' | 'uuid'>
  * nothing and stays. A save sends the hours shown when the person began
  * typing as the ones they saw, so a value someone else saved meanwhile
  * refuses it with the conflict notice; the text stays, and saving it again
- * replaces the other value. Hours typed while a save is on its way stay,
- * and save once it answers where the person left the field. A status
- * change on its way takes no second one.
+ * replaces the other value. Each Enter or blur submits the text the field
+ * holds then: during a save the last text submitted saves once that save
+ * answers, and text typed after it stays in the field until the person
+ * submits it too. A status change on its way takes no second one.
  */
 function useWorkEdits() {
   const hours = useRef(new Map<string, HoursDraft>())
@@ -144,25 +147,15 @@ function useWorkEdits() {
     else changes.current.set(uuid, change)
     render((n) => n + 1)
   }
-  const save = (it: TaskRef) => {
-    const d = hours.current.get(it.uuid)
-    if (d === undefined) return
-    if (d.state === 'saving') {
-      put(it.uuid, { ...d, again: true })
-      return
-    }
-    if (remainingNumber(d.text) === undefined) {
-      put(it.uuid, { ...d, state: 'invalid' })
-      return
-    }
-    const patch = remainingPatchFromInput({ value: d.text }, d.seen)
+  /** Sends `text`, submitted from draft `d`, with no save on its way. */
+  const send = (it: TaskRef, d: HoursDraft, text: string) => {
+    const patch = remainingPatchFromInput({ value: text }, d.seen)
     if (!patch.write) {
-      put(it.uuid, null)
+      put(it.uuid, d.text === text ? null : { ...d, note: null })
       return
     }
-    const sent = d.text
     let shown = d.seen
-    put(it.uuid, { ...d, state: 'saving', again: false })
+    put(it.uuid, { ...d, saving: true, queued: null, note: null })
     void P.updateIssue(
       it.id,
       { remaining: patch.value },
@@ -176,12 +169,13 @@ function useWorkEdits() {
     ).then((saved) => {
       const now = hours.current.get(it.uuid)
       if (now === undefined) return
-      if (!saved) put(it.uuid, { ...now, seen: shown, state: 'failed', again: false })
-      else if (now.text === sent) put(it.uuid, null)
-      else {
-        put(it.uuid, { ...now, seen: patch.value, state: 'idle', again: false })
-        if (now.again) save(it)
-      }
+      // after a refusal nothing submitted during the save is sent, as it
+      // would replace unseen the value a conflict names
+      if (!saved) put(it.uuid, { ...now, seen: shown, saving: false, queued: null, note: 'failed' })
+      else if (now.queued !== null)
+        send(it, { ...now, seen: patch.value, saving: false, queued: null }, now.queued)
+      else if (now.text === text) put(it.uuid, null)
+      else put(it.uuid, { ...now, seen: patch.value, saving: false })
     })
   }
   return {
@@ -192,14 +186,22 @@ function useWorkEdits() {
       put(
         it.uuid,
         d === undefined
-          ? { text, seen: it.remaining ?? null, state: 'idle', again: false }
-          : { ...d, text, state: d.state === 'saving' ? 'saving' : 'idle' },
+          ? { text, seen: it.remaining ?? null, saving: false, queued: null, note: null }
+          : { ...d, text, note: null },
       )
     },
-    save,
+    /** Submits the field's text, as Enter and blur do. */
+    save(it: TaskRef) {
+      const d = hours.current.get(it.uuid)
+      if (d === undefined) return
+      if (remainingNumber(d.text) === undefined)
+        put(it.uuid, { ...d, queued: null, note: 'invalid' })
+      else if (d.saving) put(it.uuid, { ...d, queued: d.text })
+      else send(it, d, d.text)
+    },
     /** Puts back the saved hours, except while a save is on its way. */
     escape(it: TaskRef) {
-      if (hours.current.get(it.uuid)?.state !== 'saving') put(it.uuid, null)
+      if (hours.current.get(it.uuid)?.saving !== true) put(it.uuid, null)
     },
     /** Says a status change of `it` is on its way, false where one already is. */
     begin(it: TaskRef): boolean {
@@ -224,14 +226,13 @@ function HoursField({
   draft: HoursDraft | undefined
   edits: WorkEdits
 }) {
-  const state = draft?.state ?? 'idle'
   return (
-    <span className="mov-hours-box" data-state={state}>
+    <span className="mov-hours-box" data-state={draft?.saving ? 'saving' : undefined}>
       <Input
         type="text"
         inputMode="decimal"
         aria-label={`Remaining hours for ${it.title}`}
-        aria-invalid={state === 'invalid' || state === 'failed' || undefined}
+        aria-invalid={(draft?.note ?? null) !== null || undefined}
         data-ov-hours={it.id}
         data-focus-key="hours"
         placeholder="—"
@@ -259,8 +260,8 @@ function SaveNote({
   change: Change | undefined
 }) {
   const failed = [
-    hours?.state === 'invalid' ? 'Enter the remaining hours as a number.' : null,
-    hours?.state === 'failed'
+    hours?.note === 'invalid' ? 'Enter the remaining hours as a number.' : null,
+    hours?.note === 'failed'
       ? 'The remaining hours were not saved. Your text is still in the field.'
       : null,
     change === 'failed' ? 'The change was not saved.' : null,
@@ -272,7 +273,7 @@ function SaveNote({
           {line}
         </span>
       ))}
-      {(hours?.state === 'saving' || change === 'saving') && (
+      {(hours?.saving || change === 'saving') && (
         <span className="mov-note" role="status">
           Saving…
         </span>
@@ -423,7 +424,7 @@ function WorkRowView({
       data-work-id={row.id}
       data-group={group}
       data-kind={kind ?? undefined}
-      data-saving={draft?.state === 'saving' || change === 'saving' || undefined}
+      data-saving={draft?.saving || change === 'saving' || undefined}
     >
       <span className="mov-flag">
         {kind ? <NeedFlag kind={kind} /> : <StatusDot status={row.status} />}
