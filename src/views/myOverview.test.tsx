@@ -151,6 +151,28 @@ const press = (key: string) =>
     )
   })
 const blur = (input: HTMLInputElement | null | undefined) => act(async () => input?.blur())
+/** A mouse press on `target` that takes focus from `field`, as a browser
+    blurs it on the press, held until `release`, which lets go and clicks in
+    one task, as a browser does. */
+async function pressFrom(
+  field: HTMLInputElement | null | undefined,
+  target: HTMLElement | null | undefined,
+) {
+  if (!field || !target) throw new Error('nothing to press')
+  const pointer = (type: string) =>
+    target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1 }))
+  await act(async () => {
+    pointer('pointerdown')
+    field.blur()
+  })
+  return {
+    release: () =>
+      act(async () => {
+        pointer('pointerup')
+        target.click()
+      }),
+  }
+}
 /** Lets the store's repaint of the views, which runs on a timer, happen. */
 async function repaint() {
   for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
@@ -180,11 +202,16 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
           })
         : Promise.resolve(null),
     )
+    // the row's status is in the page before it says anything, so a screen
+    // reader hears it when its text changes
+    const status = row('wire')?.querySelector('[role="status"]')
+    expect(status?.textContent).toBe('')
     // a keypad that writes decimals with a comma
     await type(hours('wire'), '6,5')
     await press('Enter')
     expect(patches()).toEqual([{ remaining_hours: 6.5 }])
-    expect(row('wire')?.textContent).toContain('Saving…')
+    expect(row('wire')?.querySelector('[role="status"]')).toBe(status)
+    expect(status?.textContent).toBe('Saving…')
     await act(async () => settle(null))
     expect(row('wire')?.textContent).not.toContain('Saving…')
     // the next one is refused: the field keeps the text and says so
@@ -280,6 +307,40 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(updates()).toHaveLength(2)
     expect(hours('wire')?.value).toBe('')
     expect(document.activeElement).toBe(hours('wire'))
+  })
+
+  it('changes nothing in a row whose field a press leaves until the press is released, and saves the hours after its click', async () => {
+    await overview(work)
+    heldUpdates()
+    await type(hours('wire'), '5')
+    const shown = row('wire')?.outerHTML
+    const press = await pressFrom(hours('wire'), q('[data-work-id="first"] [data-ov-start]'))
+    expect(patches()).toEqual([])
+    expect(row('wire')?.outerHTML).toBe(shown)
+    await press.release()
+    await repaint()
+    expect(patches()).toEqual([{ status: 'progress' }, { remaining_hours: 5 }])
+    expect(row('wire')?.textContent).toContain('Saving…')
+  })
+
+  it('sends both an action pressed in a row and the hours its press left, with the hours shown when typing began as the ones seen', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('first'), '3')
+    const press = await pressFrom(hours('first'), q('[data-work-id="first"] [data-ov-start]'))
+    await press.release()
+    await repaint()
+    expect(updates()).toMatchObject([
+      { patch: { status: 'progress' } },
+      { patch: { remaining_hours: 3 }, expected: { remaining_hours: 6 } },
+    ])
+    expect(row('first')?.textContent).toContain('Saving…')
+    await settle()
+    expect(row('first')?.textContent).toContain('Saving…')
+    await settle()
+    expect(row('first')?.textContent).not.toContain('Saving…')
+    expect(row('first')?.textContent).not.toContain('not saved')
+    expect(hours('first')?.value).toBe('3')
   })
 
   it('keeps hours being typed in a row that moves to another group, with focus in the field', async () => {

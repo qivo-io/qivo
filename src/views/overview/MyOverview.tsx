@@ -15,6 +15,7 @@ import { type FocusEvent, type ReactNode, useCallback, useRef, useState } from '
 import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { afterPress } from '@/lib/afterPress'
 import { isoToWeek, TODAY_WEEK } from '@/lib/dates'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { remainingNumber, remainingPatchFromInput, remainingValue } from '@/lib/remaining'
@@ -190,14 +191,13 @@ function useWorkEdits() {
           : { ...d, text, note: null },
       )
     },
-    /** Submits the field's text, as Enter and blur do. */
-    save(it: TaskRef) {
+    /** Submits `text`, the field's text when Enter or blur submitted it. */
+    save(it: TaskRef, text: string) {
       const d = hours.current.get(it.uuid)
       if (d === undefined) return
-      if (remainingNumber(d.text) === undefined)
-        put(it.uuid, { ...d, queued: null, note: 'invalid' })
-      else if (d.saving) put(it.uuid, { ...d, queued: d.text })
-      else send(it, d, d.text)
+      if (remainingNumber(text) === undefined) put(it.uuid, { ...d, queued: null, note: 'invalid' })
+      else if (d.saving) put(it.uuid, { ...d, queued: text })
+      else send(it, d, text)
     },
     /** Puts back the saved hours, except while a save is on its way. */
     escape(it: TaskRef) {
@@ -245,7 +245,10 @@ function HoursField({
             edits.escape(it)
           }
         }}
-        onBlur={() => edits.save(it)}
+        onBlur={(e) => {
+          const text = e.currentTarget.value
+          afterPress(() => edits.save(it, text))
+        }}
       />
       <span aria-hidden="true">h</span>
     </span>
@@ -273,13 +276,9 @@ function SaveNote({
           {line}
         </span>
       ))}
-      {/* said, not shown: a line here would move the rows below between a
-          press and its release, so the press would miss its button */}
-      {(hours?.saving || change === 'saving') && (
-        <span className="sr-only" role="status">
-          Saving…
-        </span>
-      )}
+      <span className="mov-note" role="status">
+        {hours?.saving || change === 'saving' ? 'Saving…' : null}
+      </span>
     </>
   )
 }

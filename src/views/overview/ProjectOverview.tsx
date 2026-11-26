@@ -27,6 +27,7 @@ import {
 } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
+import { afterPress } from '@/lib/afterPress'
 import { TODAY_WEEK, weekNumLabel } from '@/lib/dates'
 import { focusAround } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
@@ -241,6 +242,7 @@ function NeedRow({
   const [ownerName] = useOrgPeople(row.org_id, [owner])
   const root = useRef<HTMLLIElement>(null)
   const controls = useLiveControls(root)
+  const [keepActions, setKeepActions] = useState(false)
   const place = inProject ? P.projectPlace(row.project_id, false) : null
   const placeName = place ? P.placeLabel(place) : null
   const name = [
@@ -259,10 +261,16 @@ function NeedRow({
       {...controls.rootProps}
       onFocusCapture={() => onFocusIn(handle, row.id)}
       onBlurCapture={onFocusOut}
+      onBlur={(e) => {
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+        setKeepActions(true)
+        afterPress(() => setKeepActions(false))
+      }}
       className="pov-need"
       data-need={handle}
       data-need-id={row.id}
       data-kind={kind}
+      data-keep-actions={keepActions || undefined}
     >
       <StaticControlsContext.Provider value={controls.value}>
         <NeedFlag kind={kind} />

@@ -115,6 +115,11 @@
 .mov-note[data-tone="danger"] {
   color: var(--pov-late-ink);
 }
+/* A row's status line stays in the page while it says nothing, so a screen
+   reader hears its text when it changes; empty, it takes no room. */
+.mov-note:empty {
+  position: absolute;
+}
 
 /* The hours and the actions sit above the title's button, whose box
    covers the row. */
