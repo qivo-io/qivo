@@ -169,8 +169,8 @@ actions in the same place, whatever its title, its group or its actions.
 - The task's remaining hours are a field, followed by "left". Type and
   press Enter, or leave the field, to save them by the rules of the task
   window's **Remaining**. An empty field clears them, 0 is a value, and a
-  comma works as the decimal point, as in 1,5. The row says **Saving…**
-  while they save. Hours you save meanwhile save once that save answers,
+  comma works as the decimal point, as in 1,5. The field dims while they
+  save. Hours you save meanwhile save once that save answers,
   and what you type after them stays in the field until you save it too.
   Text that is not a number saves nothing, and the row asks for a
   number. **Esc** puts the saved hours back, except while they save. Where
@@ -188,8 +188,9 @@ actions in the same place, whatever its title, its group or its actions.
   to Done.
 - Next rows have **Start**, which moves the task to In Progress.
 
-These are the task window's own status changes, with its rules. A task you
-may only view shows its hours and no action. After a change the row moves
+These are the task window's own status changes, with its rules. A row's
+actions dim while its change saves, and take no other change until it
+answers. A task you may only view shows its hours and no action. After a change the row moves
 to its new group, or leaves Your work once the task is no longer yours or
 no longer open. Keyboard focus stays on a row that moves, in its hours
 field where it was there, and when a row with focus leaves, focus goes to

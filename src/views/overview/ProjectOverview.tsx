@@ -27,7 +27,7 @@ import {
 } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
-import { afterPress } from '@/lib/afterPress'
+import { afterPress, pressing } from '@/lib/afterPress'
 import { TODAY_WEEK, weekNumLabel } from '@/lib/dates'
 import { focusAround } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
@@ -262,6 +262,7 @@ function NeedRow({
       onFocusCapture={() => onFocusIn(handle, row.id)}
       onBlurCapture={onFocusOut}
       onBlur={(e) => {
+        if (!pressing()) return
         if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
         setKeepActions(true)
         afterPress(() => setKeepActions(false))

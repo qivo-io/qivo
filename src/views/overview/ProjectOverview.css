@@ -352,10 +352,10 @@
 
 /* The actions take no room until the row is under the pointer or holds
    keyboard focus; on a touch screen they always show, as icons. A press
-   that takes focus from them keeps their room until its release
-   (data-keep-actions): where they share a column with the title, the
-   title would take the room back and the rows below would move under the
-   pointer. */
+   that takes focus from them keeps their room until the press is over
+   (data-keep-actions, lib/afterPress): where they share a column with the
+   title, the title would take the room back and the rows below would move
+   under the pointer. */
 .pov-need-actions {
   grid-area: actions;
   position: relative;

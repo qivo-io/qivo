@@ -115,11 +115,6 @@
 .mov-note[data-tone="danger"] {
   color: var(--pov-late-ink);
 }
-/* A row's status line stays in the page while it says nothing, so a screen
-   reader hears its text when it changes; empty, it takes no room. */
-.mov-note:empty {
-  position: absolute;
-}
 
 /* The hours and the actions sit above the title's button, whose box
    covers the row. */
@@ -154,8 +149,14 @@
 .mov-hours-box input::placeholder {
   color: var(--text-2);
 }
+/* A save shows in place, in a field with hours and in an empty one alike,
+   and changes no size: a line would move the rows below. */
+.mov-hours-box[data-state="saving"] {
+  opacity: 0.6;
+}
 .mov-hours-box[data-state="saving"] input {
-  color: var(--text-2);
+  border-style: dashed;
+  cursor: progress;
 }
 .mov-hours-box > span {
   position: absolute;
@@ -182,9 +183,12 @@
   gap: 8px;
   min-width: 0;
 }
-.mov-actions .pov-action[aria-disabled="true"] {
+.mov-actions[data-state="saving"] > * {
   opacity: 0.6;
-  cursor: default;
+  cursor: progress;
+}
+.mov-actions[data-state="saving"] :is(.pov-action, .mov-status) {
+  border-style: dashed;
 }
 .mov-approve {
   border-color: var(--mov-approve-fill);

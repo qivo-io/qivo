@@ -15,7 +15,7 @@ import { type FocusEvent, type ReactNode, useCallback, useRef, useState } from '
 import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { afterPress } from '@/lib/afterPress'
+import { useAfterPress } from '@/lib/afterPress'
 import { isoToWeek, TODAY_WEEK } from '@/lib/dates'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { remainingNumber, remainingPatchFromInput, remainingValue } from '@/lib/remaining'
@@ -191,13 +191,14 @@ function useWorkEdits() {
           : { ...d, text, note: null },
       )
     },
-    /** Submits `text`, the field's text when Enter or blur submitted it. */
-    save(it: TaskRef, text: string) {
+    /** Submits the field's text, as Enter and blur do. */
+    save(it: TaskRef) {
       const d = hours.current.get(it.uuid)
       if (d === undefined) return
-      if (remainingNumber(text) === undefined) put(it.uuid, { ...d, queued: null, note: 'invalid' })
-      else if (d.saving) put(it.uuid, { ...d, queued: text })
-      else send(it, d, text)
+      if (remainingNumber(d.text) === undefined)
+        put(it.uuid, { ...d, queued: null, note: 'invalid' })
+      else if (d.saving) put(it.uuid, { ...d, queued: d.text })
+      else send(it, d, d.text)
     },
     /** Puts back the saved hours, except while a save is on its way. */
     escape(it: TaskRef) {
@@ -220,10 +221,13 @@ type WorkEdits = ReturnType<typeof useWorkEdits>
 function HoursField({
   it,
   draft,
+  note,
   edits,
 }: {
   it: IssueVM
   draft: HoursDraft | undefined
+  /** the draft's note as the row shows it */
+  note: HoursDraft['note']
   edits: WorkEdits
 }) {
   return (
@@ -232,7 +236,7 @@ function HoursField({
         type="text"
         inputMode="decimal"
         aria-label={`Remaining hours for ${it.title}`}
-        aria-invalid={(draft?.note ?? null) !== null || undefined}
+        aria-invalid={note !== null || undefined}
         data-ov-hours={it.id}
         data-focus-key="hours"
         placeholder="—"
@@ -245,10 +249,7 @@ function HoursField({
             edits.escape(it)
           }
         }}
-        onBlur={(e) => {
-          const text = e.currentTarget.value
-          afterPress(() => edits.save(it, text))
-        }}
+        onBlur={() => edits.save(it)}
       />
       <span aria-hidden="true">h</span>
     </span>
@@ -256,18 +257,20 @@ function HoursField({
 }
 
 function SaveNote({
-  hours,
-  change,
+  note,
+  changeFailed,
+  saving,
 }: {
-  hours: HoursDraft | undefined
-  change: Change | undefined
+  note: HoursDraft['note']
+  changeFailed: boolean
+  saving: boolean
 }) {
   const failed = [
-    hours?.note === 'invalid' ? 'Enter the remaining hours as a number.' : null,
-    hours?.note === 'failed'
+    note === 'invalid' ? 'Enter the remaining hours as a number.' : null,
+    note === 'failed'
       ? 'The remaining hours were not saved. Your text is still in the field.'
       : null,
-    change === 'failed' ? 'The change was not saved.' : null,
+    changeFailed ? 'The change was not saved.' : null,
   ].filter((line) => line !== null)
   return (
     <>
@@ -276,8 +279,8 @@ function SaveNote({
           {line}
         </span>
       ))}
-      <span className="mov-note" role="status">
-        {hours?.saving || change === 'saving' ? 'Saving…' : null}
+      <span className="sr-only" role="status">
+        {saving ? 'Saving…' : null}
       </span>
     </>
   )
@@ -398,6 +401,12 @@ function WorkRowView({
   const unknown = row.needs.delay_unknown === true
   const draft = edits.hours(row.id)
   const change = edits.change(row.id)
+  // a line under the title moves the rows below, so one comes or goes only
+  // between presses, and a press below lands where it was pressed; a save
+  // shows in place and changes no size
+  const note = useAfterPress(draft?.note ?? null)
+  const changeFailed = useAfterPress(change === 'failed')
+  const saving = draft?.saving === true || change === 'saving'
   const editable = !!it && P.canWrite(it.project) && !P.createOnItsWay(it.uuid)
   const remaining = it?.remaining ?? row.remaining_hours ?? null
   const hoursText = remaining === null ? 'no estimate' : `${fmtHours(remaining)} hours left`
@@ -425,7 +434,7 @@ function WorkRowView({
       data-work-id={row.id}
       data-group={group}
       data-kind={kind ?? undefined}
-      data-saving={draft?.saving || change === 'saving' || undefined}
+      data-saving={saving || undefined}
     >
       <span className="mov-flag">
         {kind ? <NeedFlag kind={kind} /> : <StatusDot status={row.status} />}
@@ -463,11 +472,11 @@ function WorkRowView({
           {fromText && <span>{fromText}</span>}
           {start && <span>{start}</span>}
         </span>
-        <SaveNote hours={draft} change={change} />
+        <SaveNote note={note} changeFailed={changeFailed} saving={saving} />
       </span>
       <span className="mov-hours">
         {it && editable ? (
-          <HoursField it={it} draft={draft} edits={edits} />
+          <HoursField it={it} draft={draft} note={note} edits={edits} />
         ) : (
           <span className="mov-hours-box mov-hours-text">
             {remaining === null ? '—' : `${fmtHours(remaining)}h`}
@@ -475,7 +484,7 @@ function WorkRowView({
         )}
         <span className="mov-hours-left">left</span>
       </span>
-      <span className="mov-actions">
+      <span className="mov-actions" data-state={change === 'saving' ? 'saving' : undefined}>
         {it && editable && (
           <Actions it={it} group={group} busy={change === 'saving'} edits={edits} />
         )}

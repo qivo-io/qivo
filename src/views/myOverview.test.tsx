@@ -117,22 +117,30 @@ const updates = () =>
     .map(([, args]) => args as { patch: unknown; expected?: unknown })
 /** The task updates sent, by their patches. */
 const patches = () => updates().map((u) => u.patch)
-/** Task updates answer when the test settles them, in the order sent. */
+/** Task updates answer when the test settles them, in the order sent:
+    saved, refused, or with the error given. */
 function heldUpdates() {
-  const settle: ((saved: boolean) => void)[] = []
+  const settle: ((outcome: boolean | Error) => void)[] = []
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref) === 'issues:update'
       ? new Promise((resolve, reject) => {
-          settle.push((saved) =>
-            saved
+          settle.push((outcome) =>
+            outcome === true
               ? resolve(null)
-              : reject(new ConvexError({ code: 'rule', message: 'Not allowed' })),
+              : reject(
+                  outcome === false
+                    ? new ConvexError({ code: 'rule', message: 'Not allowed' })
+                    : outcome,
+                ),
           )
         })
       : Promise.resolve(null),
   )
-  return (saved = true) => act(async () => settle.shift()?.(saved))
+  return (outcome: boolean | Error = true) => act(async () => settle.shift()?.(outcome))
 }
+/** The server's refusal of a value someone else changed first. */
+const changedFirst = () =>
+  new ConvexError({ code: 'conflict', reason: 'field_changed', message: 'changed' })
 
 /** Types `value` into `input`, as a keyboard does. */
 async function type(input: HTMLInputElement | null | undefined, value: string) {
@@ -151,28 +159,45 @@ const press = (key: string) =>
     )
   })
 const blur = (input: HTMLInputElement | null | undefined) => act(async () => input?.blur())
-/** A mouse press on `target` that takes focus from `field`, as a browser
-    blurs it on the press, held until `release`, which lets go and clicks in
-    one task, as a browser does. */
-async function pressFrom(
-  field: HTMLInputElement | null | undefined,
-  target: HTMLElement | null | undefined,
-) {
-  if (!field || !target) throw new Error('nothing to press')
-  const pointer = (type: string) =>
-    target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1 }))
+/** A mouse press on `target`, which takes focus from `field` where one is
+    given, as a browser blurs it on the press, held until `release`, which
+    lets go and clicks in one task, as a browser does. */
+async function hold(target: HTMLElement | null | undefined, field?: HTMLInputElement | null) {
+  if (!target) throw new Error('nothing to press')
+  const pointer = (type: string, buttons: number) =>
+    target.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons,
+      }),
+    )
   await act(async () => {
-    pointer('pointerdown')
-    field.blur()
+    pointer('pointerdown', 1)
+    field?.blur()
   })
   return {
     release: () =>
       act(async () => {
-        pointer('pointerup')
+        pointer('pointerup', 0)
         target.click()
+        await new Promise((r) => setTimeout(r, 0))
       }),
   }
 }
+/** What of a row takes room: its elements with their classes and, for each
+    one not visually hidden, whether it holds text. */
+const room = (el: Element | null | undefined): string =>
+  !el || el.classList.contains('sr-only')
+    ? ''
+    : `${el.tagName}.${el.getAttribute('class') ?? ''}${el.textContent ? '+' : ''}(${[
+        ...el.children,
+      ]
+        .map(room)
+        .join()})`
 /** Lets the store's repaint of the views, which runs on a timer, happen. */
 async function repaint() {
   for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
@@ -309,38 +334,87 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.activeElement).toBe(hours('wire'))
   })
 
-  it('changes nothing in a row whose field a press leaves until the press is released, and saves the hours after its click', async () => {
-    await overview(work)
-    heldUpdates()
-    await type(hours('wire'), '5')
-    const shown = row('wire')?.outerHTML
-    const press = await pressFrom(hours('wire'), q('[data-work-id="first"] [data-ov-start]'))
-    expect(patches()).toEqual([])
-    expect(row('wire')?.outerHTML).toBe(shown)
-    await press.release()
-    await repaint()
-    expect(patches()).toEqual([{ status: 'progress' }, { remaining_hours: 5 }])
-    expect(row('wire')?.textContent).toContain('Saving…')
-  })
-
-  it('sends both an action pressed in a row and the hours its press left, with the hours shown when typing began as the ones seen', async () => {
-    await overview(work)
+  it('sends no hours submitted during a save that a value someone else saved refuses, also where a press held through the refusal submitted them', async () => {
+    const { board } = await overview(work)
     const settle = heldUpdates()
-    await type(hours('first'), '3')
-    const press = await pressFrom(hours('first'), q('[data-work-id="first"] [data-ov-start]'))
-    await press.release()
+    await type(hours('first'), '7')
+    await press('Enter')
+    await type(hours('first'), '8')
+    const held = await hold(q('[data-work-id="second"] [data-ov-start]'), hours('first'))
+    const task = board.snapshot.issues.find((t) => t.id === 'first')
+    if (task) task.remaining_hours = 9
+    await board.deliver()
+    await settle(changedFirst())
+    await held.release()
     await repaint()
     expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 7 }, expected: { remaining_hours: 6 } },
       { patch: { status: 'progress' } },
-      { patch: { remaining_hours: 3 }, expected: { remaining_hours: 6 } },
     ])
-    expect(row('first')?.textContent).toContain('Saving…')
+    expect(hours('first')?.value).toBe('8')
+    expect(row('first')?.textContent).toContain('The remaining hours were not saved')
+  })
+
+  it('saves the hours of a field a press leaves at the press, also where the press opens another page', async () => {
+    const { board } = await overview(work)
+    heldUpdates()
+    await type(hours('wire'), '5')
+    const project = q('[data-ov-sub]')
+    // as the project's Board does, which takes the Overview's page and rows
+    project?.addEventListener('click', () => {
+      root.unmount()
+      board.P.releaseOverview()
+    })
+    const held = await hold(project, hours('wire'))
+    await held.release()
+    await repaint()
+    expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 5 }, expected: { remaining_hours: 4 } },
+    ])
+  })
+
+  it('adds no line to a row and takes none away while it saves, nor while a press is held when the save answers', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    const status = () => row('wire')?.querySelector('[role="status"]')?.textContent
+    const before = room(row('wire'))
+    await type(hours('wire'), '5')
+    await press('Enter')
+    expect(status()).toBe('Saving…')
+    expect(room(row('wire'))).toBe(before)
+    let held = await hold(q('[data-ov-board]'))
     await settle()
-    expect(row('first')?.textContent).toContain('Saving…')
-    await settle()
-    expect(row('first')?.textContent).not.toContain('Saving…')
-    expect(row('first')?.textContent).not.toContain('not saved')
-    expect(hours('first')?.value).toBe('3')
+    expect(status()).toBe('')
+    expect(room(row('wire'))).toBe(before)
+    await held.release()
+    await type(hours('wire'), '6')
+    await press('Enter')
+    held = await hold(q('[data-ov-board]'))
+    await settle(false)
+    expect(room(row('wire'))).toBe(before)
+    expect(row('wire')?.textContent).not.toContain('not saved')
+    await held.release()
+    expect(row('wire')?.textContent).toContain('The remaining hours were not saved')
+  })
+
+  it('shows and takes away the line a press that leaves the field brings only once its click is in', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), 'four')
+    let held = await hold(q('[data-ov-board]'), hours('wire'))
+    expect(row('wire')?.textContent).not.toContain('Enter the remaining hours as a number.')
+    await held.release()
+    expect(row('wire')?.textContent).toContain('Enter the remaining hours as a number.')
+    // a press that saves again takes a failed save's line away, and saves at the press
+    await type(hours('late'), '3')
+    await press('Enter')
+    await settle(false)
+    await act(async () => hours('late')?.focus())
+    held = await hold(q('[data-ov-board]'), hours('late'))
+    expect(patches()).toEqual([{ remaining_hours: 3 }, { remaining_hours: 3 }])
+    expect(row('late')?.textContent).toContain('The remaining hours were not saved')
+    await held.release()
+    expect(row('late')?.textContent).not.toContain('The remaining hours were not saved')
   })
 
   it('keeps hours being typed in a row that moves to another group, with focus in the field', async () => {
