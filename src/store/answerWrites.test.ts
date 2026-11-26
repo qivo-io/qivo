@@ -655,21 +655,42 @@ describe('every copy of a task the window shows from its own answer', { timeout:
   it('paints the Board card and an Overview row of the task with a window write', async () => {
     await load()
     await openBoard([viewRow(far({ paused: true }))])
-    P.watchOverview(overviewKey(), 1, 0)
+    P.watchOverview(overviewKey(), 1, 0, 'mine')
+    P.watchOverviewWork(true, 1)
     await turn()
-    const paused = open('overview:paused').at(-1)
-    paused?.deliver({
+    const work = open('overview:work').at(-1)
+    const empty = { rows: [], total: 0 }
+    work?.deliver({
       state: 'ok',
-      rows: [viewRow(far({ paused: true }))],
-      complete: true,
-      next: null,
-      end: 'op1~end',
+      groups: {
+        progress: {
+          rows: [
+            {
+              ...viewRow(far({ paused: true })),
+              needs: { kind: 'paused', also: [], blocked_by: 0 },
+            },
+          ],
+          total: 1,
+        },
+        review: empty,
+        next: empty,
+      },
+      most: 1000,
+      counts: {
+        overdue: 0,
+        blocked: 0,
+        no_reviewer: 0,
+        paused: 1,
+        projected: { state: 'ok', count: 0 },
+        behind: { state: 'ok', count: 0 },
+      },
+      late_due: { state: 'ok', projects: [] },
     })
     await turn()
     await openFar(okAnswer(far({ paused: true })))
     void P.updateIssue(H, { title: 'Tune it' })
     expect(card()?.title).toBe('Tune it')
-    expect(P.viewTask('overview:paused:2', FAR)?.title).toBe('Tune it')
+    expect(P.viewTask('overview:work', FAR)?.title).toBe('Tune it')
     expect(shown().title).toBe('Tune it')
   })
 
