@@ -4,7 +4,8 @@
    hours field with one width and one right edge, and the actions in one
    column as wide as the widest set, Send back and Approve, each set held
    to its right edge. A narrow row puts the hours and the actions on a
-   second line, on the same columns in every row. */
+   second line, and a narrower one the actions on a third, on the same
+   columns in every row. */
 
 .mov {
   --mov-flag: 22px;
@@ -251,5 +252,18 @@
     line-clamp: 2;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+/* The widest set, Send back and Approve, takes about 190 px, which the
+   column beside the hours holds only where the page is about 400 px wide
+   or more, so on a narrower page every row puts its actions on a line of
+   their own. */
+@container (max-width: 420px) {
+  .mov-row {
+    grid-template-columns: var(--mov-flag) minmax(0, 1fr);
+    grid-template-areas:
+      "flag main"
+      ". hours"
+      ". actions";
   }
 }

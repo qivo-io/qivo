@@ -222,7 +222,7 @@ tasks** and, where you may add one, **New sub-project…**.
 
 **Overview** shows a project's Needs attention list first, in one column,
 and My view's **Your work** first, with each task's remaining hours and
-actions on a second line of its row, then **Your status**, **Milestones**
+actions below its title, then **Your status**, **Milestones**
 and **Your projects**, 10 at a time with **Load more**
 ([My view's Overview](./the-overview-project-health-at-a-glance.md#my-views-overview)). The view switch reads **Overview**,
 **Tasks** and **Roadmap**. **Roadmap** starts on milestones,

@@ -226,7 +226,8 @@ project's Board.
 
 The page has two columns where there is room. On a phone or in a narrow
 window it has one, Your work first, and each row puts its hours and its
-actions on a second line, in the same place in every row.
+actions on a second line, in the same place in every row. On a narrow
+phone the actions take a third line.
 
 ## Hidden pages, milestones and empty scopes
 
