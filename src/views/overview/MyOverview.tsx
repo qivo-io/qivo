@@ -91,7 +91,6 @@ const GROUP_EMPTY: Record<WorkGroup, string> = {
 const modelOf = (row: WorkRow): IssueVM | undefined =>
   P.viewTask(WORK_SLOT, row.id) ?? P.anyTask(P.handleNow(row.id, row.org_id, row.num))
 
-/** When a To Do task is planned to start, from its start week. */
 function startOf(row: WorkRow): string | null {
   if (!row.start_week) return null
   const week = isoToWeek(row.start_week)
@@ -101,8 +100,6 @@ function startOf(row: WorkRow): string | null {
     : `planned to start ${weekOf(row.start_week)}`
 }
 
-/** What a row is doing with its writes: saving one, one that failed, or
-    hours it could not read. */
 type Save = { what: 'hours' | 'change'; state: 'saving' | 'failed' | 'invalid' } | null
 
 /**
@@ -174,7 +171,6 @@ function HoursField({ it, onSave }: { it: IssueVM; onSave: (save: Save) => void 
   )
 }
 
-/** A row's note on its writes: saving, or what failed. */
 function SaveNote({ save }: { save: Save }) {
   if (save?.state === 'invalid')
     return (
@@ -584,7 +580,6 @@ function WorkPanel({
   )
 }
 
-/** The sentence's facts from Your work's answer. */
 function sentenceFacts(work: WorkView): SentenceFacts {
   if (work === null || (work.value === undefined && work.error === undefined)) return 'loading'
   if (work.value === undefined) return 'error'

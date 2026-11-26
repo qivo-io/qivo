@@ -11,6 +11,11 @@
   --mov-hours: 96px;
   --mov-actions: 196px;
   --mov-gap: 12px;
+  /* the dark theme's primary is too light under white text for 4.5 to 1 */
+  --mov-approve-fill: color-mix(in oklab, var(--primary) 78%, black);
+}
+:root[data-appearance="light"] .mov {
+  --mov-approve-fill: var(--primary);
 }
 
 .mov .overview-section-heading h2 {
@@ -176,12 +181,12 @@
   cursor: default;
 }
 .mov-approve {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground, #ffffff);
+  border-color: var(--mov-approve-fill);
+  background: var(--mov-approve-fill);
+  color: #ffffff;
 }
 .mov-approve:hover {
-  border-color: var(--primary);
+  border-color: var(--mov-approve-fill);
   filter: brightness(1.08);
 }
 .mov-status {
