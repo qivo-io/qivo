@@ -110,11 +110,29 @@ const titles = (group: string) =>
   )
 const row = (uuid: string) => q(`[data-work-id="${uuid}"]`)
 const hours = (uuid: string) => row(uuid)?.querySelector<HTMLInputElement>('input')
-/** The task updates sent, by their patches. */
-const patches = () =>
+/** The task updates sent. */
+const updates = () =>
   network.mutation.mock.calls
     .filter(([ref]) => getFunctionName(ref) === 'issues:update')
-    .map(([, args]) => (args as { patch: unknown }).patch)
+    .map(([, args]) => args as { patch: unknown; expected?: unknown })
+/** The task updates sent, by their patches. */
+const patches = () => updates().map((u) => u.patch)
+/** Task updates answer when the test settles them, in the order sent. */
+function heldUpdates() {
+  const settle: ((saved: boolean) => void)[] = []
+  network.mutation.mockImplementation((ref) =>
+    getFunctionName(ref) === 'issues:update'
+      ? new Promise((resolve, reject) => {
+          settle.push((saved) =>
+            saved
+              ? resolve(null)
+              : reject(new ConvexError({ code: 'rule', message: 'Not allowed' })),
+          )
+        })
+      : Promise.resolve(null),
+  )
+  return (saved = true) => act(async () => settle.shift()?.(saved))
+}
 
 /** Types `value` into `input`, as a keyboard does. */
 async function type(input: HTMLInputElement | null | undefined, value: string) {
@@ -158,7 +176,8 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
           })
         : Promise.resolve(null),
     )
-    await type(hours('wire'), '6.5')
+    // a keypad that writes decimals with a comma
+    await type(hours('wire'), '6,5')
     await press('Enter')
     expect(patches()).toEqual([{ remaining_hours: 6.5 }])
     expect(row('wire')?.textContent).toContain('Saving…')
@@ -173,7 +192,7 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     await type(hours('late'), '3')
     await press('Enter')
     await act(async () => {})
-    expect(row('late')?.textContent).toContain('The hours were not saved')
+    expect(row('late')?.textContent).toContain('The remaining hours were not saved')
     expect(hours('late')?.value).toBe('3')
     expect(hours('late')?.getAttribute('aria-invalid')).toBe('true')
   })
@@ -183,12 +202,95 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     await type(hours('wire'), 'four')
     await blur(hours('wire'))
     expect(patches()).toEqual([])
-    expect(row('wire')?.textContent).toContain('Enter the hours left as a number.')
+    expect(row('wire')?.textContent).toContain('Enter the remaining hours as a number.')
     expect(hours('wire')?.value).toBe('four')
     await act(async () => hours('wire')?.focus())
     await press('Escape')
     expect(hours('wire')?.value).toBe('4')
-    expect(row('wire')?.textContent).not.toContain('Enter the hours')
+    expect(row('wire')?.textContent).not.toContain('Enter the remaining hours')
+  })
+
+  it('sends the hours shown when typing began as the ones seen, and keeps the text where someone saved others first', async () => {
+    const { board } = await overview(work)
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:update'
+        ? Promise.reject(
+            new ConvexError({ code: 'conflict', reason: 'field_changed', message: 'changed' }),
+          )
+        : Promise.resolve(null),
+    )
+    await type(hours('first'), '12')
+    const task = board.snapshot.issues.find((t) => t.id === 'first')
+    if (task) task.remaining_hours = 9
+    await board.deliver()
+    await blur(hours('first'))
+    await act(async () => {})
+    expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 12 }, expected: { remaining_hours: 6 } },
+    ])
+    expect(hours('first')?.value).toBe('12')
+    expect(row('first')?.textContent).toContain('The remaining hours were not saved')
+    // saving again on purpose replaces the value they saved
+    await act(async () => hours('first')?.focus())
+    await blur(hours('first'))
+    expect(updates()[1]).toMatchObject({
+      patch: { remaining_hours: 12 },
+      expected: { remaining_hours: 9 },
+    })
+  })
+
+  it('saves hours typed while a save is on its way once that save answers', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), '5')
+    await blur(hours('wire'))
+    await type(hours('wire'), '6')
+    await blur(hours('wire'))
+    expect(patches()).toEqual([{ remaining_hours: 5 }])
+    await settle()
+    expect(updates()).toMatchObject([
+      { patch: { remaining_hours: 5 } },
+      { patch: { remaining_hours: 6 }, expected: { remaining_hours: 5 } },
+    ])
+    expect(hours('wire')?.value).toBe('6')
+    await settle()
+    expect(hours('wire')?.value).toBe('6')
+    expect(row('wire')?.textContent).not.toContain('Saving…')
+  })
+
+  it('keeps hours being typed in a row that moves to another group, with focus in the field', async () => {
+    const { board } = await overview(work)
+    await type(hours('first'), '7')
+    const task = board.snapshot.issues.find((t) => t.id === 'first')
+    if (task) task.status = 'progress'
+    await board.deliver()
+    expect(titles('progress')).toContain('Task first')
+    expect(hours('first')?.value).toBe('7')
+    expect(document.activeElement).toBe(hours('first'))
+  })
+
+  it('keeps an action on its way when Escape puts the hours back', async () => {
+    await overview(work)
+    await act(async () => q('[data-work-id="first"] [data-ov-start]')?.click())
+    await type(hours('first'), '3')
+    await press('Escape')
+    expect(hours('first')?.value).toBe('6')
+    expect(row('first')?.textContent).toContain('Saving…')
+    await act(async () => q('[data-work-id="first"] [data-ov-start]')?.click())
+    expect(patches()).toEqual([{ status: 'progress' }])
+  })
+
+  it('takes no Escape while the hours save, and keeps the text where that save fails', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), '5')
+    await press('Enter')
+    await act(async () => hours('wire')?.focus())
+    await press('Escape')
+    expect(hours('wire')?.value).toBe('5')
+    await settle(false)
+    expect(hours('wire')?.value).toBe('5')
+    expect(row('wire')?.textContent).toContain('The remaining hours were not saved')
   })
 
   it('keeps hours being typed while a live update renders the rows again', async () => {

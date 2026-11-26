@@ -54,6 +54,12 @@ describe('remainingPatch — emptiness, not falsiness', () => {
     }
   })
 
+  it('reads one comma as the decimal point, and more than one separator as no number', () => {
+    expect(remainingPatch('1,5', 8)).toEqual({ write: true, value: 1.5 })
+    for (const bad of ['1,5,3', '1,5.2', ','])
+      expect(remainingPatch(bad, 8)).toEqual({ write: false, value: null })
+  })
+
   it('handles a missing raw value as empty', () => {
     expect(remainingPatch(null, 8)).toEqual({ write: true, value: null })
     expect(remainingPatch(undefined, undefined).write).toBe(false)

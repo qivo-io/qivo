@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { isoToWeek, TODAY_WEEK } from '@/lib/dates'
 import { focusAround } from '@/lib/focusWhenGone'
-import { remainingPatch, remainingValue } from '@/lib/remaining'
+import { remainingNumber, remainingPatchFromInput, remainingValue } from '@/lib/remaining'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -100,97 +100,183 @@ function startOf(row: WorkRow): string | null {
     : `planned to start ${weekOf(row.start_week)}`
 }
 
-type Save = { what: 'hours' | 'change'; state: 'saving' | 'failed' | 'invalid' } | null
+/** A task's remaining hours typed in Your work and not yet saved: the
+    text, the hours the field showed when the person began, which the save
+    sends as the value they saw, and where its save stands. `again` says
+    the person left the field while a save was on its way. */
+type HoursDraft = {
+  text: string
+  seen: number | null
+  state: 'idle' | 'saving' | 'failed' | 'invalid'
+  again: boolean
+}
+
+/** Where a row's status change stands. */
+type Change = 'saving' | 'failed'
+
+type TaskRef = Pick<IssueVM, 'id' | 'uuid'>
 
 /**
- * A task's hours left, as the task window's Remaining reads and writes
- * them (lib/remaining): empty clears them, 0 is a value, and text that is
- * not a number writes nothing and says so. It saves on Enter or on leaving
- * the field; Escape puts back the saved hours. What was typed stays in the
- * field while it saves, where the save fails, and while a live update
- * renders the row again.
+ * The remaining hours typed and the status changes of Your work's rows,
+ * by task, above the groups, so a row that moves to another group or
+ * leaves and comes back keeps them. The hours save as the task window's
+ * Remaining reads them (lib/remaining): empty clears them, 0 is a value,
+ * one comma is the decimal point, and text that is not a number writes
+ * nothing and stays. A save sends the hours shown when the person began
+ * typing as the ones they saw, so a value someone else saved meanwhile
+ * refuses it with the conflict notice; the text stays, and saving it again
+ * replaces the other value. Hours typed while a save is on its way stay,
+ * and save once it answers where the person left the field. A status
+ * change on its way takes no second one.
  */
-function HoursField({ it, onSave }: { it: IssueVM; onSave: (save: Save) => void }) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const [state, setState] = useState<'idle' | 'saving' | 'failed' | 'invalid'>('idle')
-  const commit = () => {
-    if (draft === null || state === 'saving') return
-    const text = draft.trim()
-    if (text !== '' && !Number.isFinite(Number(text))) {
-      setState('invalid')
-      onSave({ what: 'hours', state: 'invalid' })
+function useWorkEdits() {
+  const hours = useRef(new Map<string, HoursDraft>())
+  const changes = useRef(new Map<string, Change>())
+  const [, render] = useState(0)
+  const put = (uuid: string, draft: HoursDraft | null) => {
+    if (draft === null) hours.current.delete(uuid)
+    else hours.current.set(uuid, draft)
+    render((n) => n + 1)
+  }
+  const setChange = (uuid: string, change: Change | null) => {
+    if (change === null) changes.current.delete(uuid)
+    else changes.current.set(uuid, change)
+    render((n) => n + 1)
+  }
+  const save = (it: TaskRef) => {
+    const d = hours.current.get(it.uuid)
+    if (d === undefined) return
+    if (d.state === 'saving') {
+      put(it.uuid, { ...d, again: true })
       return
     }
-    const patch = remainingPatch(text, it.remaining)
+    if (remainingNumber(d.text) === undefined) {
+      put(it.uuid, { ...d, state: 'invalid' })
+      return
+    }
+    const patch = remainingPatchFromInput({ value: d.text }, d.seen)
     if (!patch.write) {
-      setDraft(null)
-      setState('idle')
-      onSave(null)
+      put(it.uuid, null)
       return
     }
-    setState('saving')
-    onSave({ what: 'hours', state: 'saving' })
-    void P.updateIssue(it.id, { remaining: patch.value }).then((saved) => {
-      if (saved) {
-        setDraft(null)
-        setState('idle')
-        onSave(null)
-      } else {
-        setState('failed')
-        onSave({ what: 'hours', state: 'failed' })
+    const sent = d.text
+    let shown = d.seen
+    put(it.uuid, { ...d, state: 'saving', again: false })
+    void P.updateIssue(
+      it.id,
+      { remaining: patch.value },
+      {
+        seen: { remaining_hours: d.seen },
+        keepDraft: (value) => {
+          shown = typeof value === 'number' ? value : null
+          return true
+        },
+      },
+    ).then((saved) => {
+      const now = hours.current.get(it.uuid)
+      if (now === undefined) return
+      if (!saved) put(it.uuid, { ...now, seen: shown, state: 'failed', again: false })
+      else if (now.text === sent) put(it.uuid, null)
+      else {
+        put(it.uuid, { ...now, seen: patch.value, state: 'idle', again: false })
+        if (now.again) save(it)
       }
     })
   }
+  return {
+    hours: (uuid: string) => hours.current.get(uuid),
+    change: (uuid: string) => changes.current.get(uuid),
+    type(it: IssueVM, text: string) {
+      const d = hours.current.get(it.uuid)
+      put(
+        it.uuid,
+        d === undefined
+          ? { text, seen: it.remaining ?? null, state: 'idle', again: false }
+          : { ...d, text, state: d.state === 'saving' ? 'saving' : 'idle' },
+      )
+    },
+    save,
+    /** Puts back the saved hours, except while a save is on its way. */
+    escape(it: TaskRef) {
+      if (hours.current.get(it.uuid)?.state !== 'saving') put(it.uuid, null)
+    },
+    /** Says a status change of `it` is on its way, false where one already is. */
+    begin(it: TaskRef): boolean {
+      if (changes.current.get(it.uuid) === 'saving') return false
+      setChange(it.uuid, 'saving')
+      return true
+    },
+    end(it: TaskRef, saved: boolean) {
+      setChange(it.uuid, saved ? null : 'failed')
+    },
+  }
+}
+
+type WorkEdits = ReturnType<typeof useWorkEdits>
+
+function HoursField({
+  it,
+  draft,
+  edits,
+}: {
+  it: IssueVM
+  draft: HoursDraft | undefined
+  edits: WorkEdits
+}) {
+  const state = draft?.state ?? 'idle'
   return (
     <span className="mov-hours-box" data-state={state}>
       <Input
         type="text"
         inputMode="decimal"
-        aria-label={`Hours left for ${it.title}`}
+        aria-label={`Remaining hours for ${it.title}`}
         aria-invalid={state === 'invalid' || state === 'failed' || undefined}
         data-ov-hours={it.id}
+        data-focus-key="hours"
         placeholder="—"
-        value={draft ?? String(remainingValue(it.remaining))}
-        onChange={(e) => {
-          setDraft(e.target.value)
-          if (state === 'invalid' || state === 'failed') setState('idle')
-        }}
+        value={draft?.text ?? String(remainingValue(it.remaining))}
+        onChange={(e) => edits.type(it, e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur()
-          if (e.key === 'Escape' && draft !== null) {
+          if (e.key === 'Escape' && draft !== undefined) {
             e.stopPropagation()
-            setDraft(null)
-            setState('idle')
-            onSave(null)
+            edits.escape(it)
           }
         }}
-        onBlur={commit}
+        onBlur={() => edits.save(it)}
       />
       <span aria-hidden="true">h</span>
     </span>
   )
 }
 
-function SaveNote({ save }: { save: Save }) {
-  if (save?.state === 'invalid')
-    return (
-      <span className="mov-note" data-tone="danger" role="alert">
-        Enter the hours left as a number.
-      </span>
-    )
-  if (save === null) return null
-  if (save.state === 'saving')
-    return (
-      <span className="mov-note" role="status">
-        Saving…
-      </span>
-    )
+function SaveNote({
+  hours,
+  change,
+}: {
+  hours: HoursDraft | undefined
+  change: Change | undefined
+}) {
+  const failed = [
+    hours?.state === 'invalid' ? 'Enter the remaining hours as a number.' : null,
+    hours?.state === 'failed'
+      ? 'The remaining hours were not saved. Your text is still in the field.'
+      : null,
+    change === 'failed' ? 'The change was not saved.' : null,
+  ].filter((line) => line !== null)
   return (
-    <span className="mov-note" data-tone="danger" role="alert">
-      {save.what === 'hours'
-        ? 'The hours were not saved. Your text is still in the field.'
-        : 'The change was not saved.'}
-    </span>
+    <>
+      {failed.map((line) => (
+        <span key={line} className="mov-note" data-tone="danger" role="alert">
+          {line}
+        </span>
+      ))}
+      {(hours?.state === 'saving' || change === 'saving') && (
+        <span className="mov-note" role="status">
+          Saving…
+        </span>
+      )}
+    </>
   )
 }
 
@@ -202,19 +288,16 @@ function Actions({
   it,
   group,
   busy,
-  onSave,
+  edits,
 }: {
   it: IssueVM
   group: WorkGroup
   busy: boolean
-  onSave: (save: Save) => void
+  edits: WorkEdits
 }) {
   const move = (status: 'progress' | 'done') => {
-    if (busy) return
-    onSave({ what: 'change', state: 'saving' })
-    void P.updateIssue(it.id, { status }).then((saved) =>
-      onSave(saved ? null : { what: 'change', state: 'failed' }),
-    )
+    if (!edits.begin(it)) return
+    void P.updateIssue(it.id, { status }).then((saved) => edits.end(it, saved))
   }
   if (group === 'progress')
     return (
@@ -223,8 +306,8 @@ function Actions({
         labelled
         disabled={busy}
         className="mov-status h-control-sm"
-        onStatus={() => onSave({ what: 'change', state: 'saving' })}
-        onSaved={(saved) => onSave(saved ? null : { what: 'change', state: 'failed' })}
+        onStatus={() => edits.begin(it)}
+        onSaved={(saved) => edits.end(it, saved)}
       />
     )
   if (group === 'review')
@@ -275,6 +358,7 @@ function WorkRowView({
   group,
   day,
   me,
+  edits,
   onOpen,
   onFocusIn,
   onFocusOut,
@@ -284,8 +368,9 @@ function WorkRowView({
   day: string
   /** the person's profile ids, for a review they hand themselves */
   me: ReadonlySet<string>
+  edits: WorkEdits
   onOpen: (open: string) => void
-  onFocusIn: (handle: string, uuid: string) => void
+  onFocusIn: (handle: string, uuid: string, key?: string) => void
   onFocusOut: (e: FocusEvent) => void
 }) {
   const it = modelOf(row)
@@ -307,7 +392,8 @@ function WorkRowView({
   const due = kind === null && row.due_date ? `due ${dayOf(row.due_date)}` : null
   const parent = row.parent_title ? `part of ${row.parent_title}` : null
   const unknown = row.needs.delay_unknown === true
-  const [save, setSave] = useState<Save>(null)
+  const draft = edits.hours(row.id)
+  const change = edits.change(row.id)
   const editable = !!it && P.canWrite(it.project) && !P.createOnItsWay(it.uuid)
   const remaining = it?.remaining ?? row.remaining_hours ?? null
   const hoursText = remaining === null ? 'no estimate' : `${fmtHours(remaining)} hours left`
@@ -328,14 +414,14 @@ function WorkRowView({
     .join(', ')
   return (
     <li
-      onFocusCapture={() => onFocusIn(handle, row.id)}
+      onFocusCapture={(e) => onFocusIn(handle, row.id, (e.target as HTMLElement).dataset.focusKey)}
       onBlurCapture={onFocusOut}
       className="mov-row"
       data-work={handle}
       data-work-id={row.id}
       data-group={group}
       data-kind={kind ?? undefined}
-      data-saving={save?.state === 'saving' || undefined}
+      data-saving={draft?.state === 'saving' || change === 'saving' || undefined}
     >
       <span className="mov-flag">
         {kind ? <NeedFlag kind={kind} /> : <StatusDot status={row.status} />}
@@ -373,11 +459,11 @@ function WorkRowView({
           {fromText && <span>{fromText}</span>}
           {start && <span>{start}</span>}
         </span>
-        <SaveNote save={save} />
+        <SaveNote hours={draft} change={change} />
       </span>
       <span className="mov-hours">
         {it && editable ? (
-          <HoursField it={it} onSave={setSave} />
+          <HoursField it={it} draft={draft} edits={edits} />
         ) : (
           <span className="mov-hours-box mov-hours-text">
             {remaining === null ? '—' : `${fmtHours(remaining)}h`}
@@ -387,7 +473,7 @@ function WorkRowView({
       </span>
       <span className="mov-actions">
         {it && editable && (
-          <Actions it={it} group={group} busy={save?.state === 'saving'} onSave={setSave} />
+          <Actions it={it} group={group} busy={change === 'saving'} edits={edits} />
         )}
       </span>
     </li>
@@ -400,6 +486,7 @@ function WorkGroupList({
   answer,
   day,
   me,
+  edits,
   onOpen,
 }: {
   group: WorkGroup
@@ -407,6 +494,7 @@ function WorkGroupList({
   answer: Extract<WorkAnswer, { state: 'ok' }>
   day: string
   me: ReadonlySet<string>
+  edits: WorkEdits
   onOpen: (open: string) => void
 }) {
   const { rows, total } = answer.groups[group]
@@ -434,6 +522,7 @@ function WorkGroupList({
               group={group}
               day={day}
               me={me}
+              edits={edits}
               onOpen={onOpen}
               onFocusIn={focusIn}
               onFocusOut={focusOut}
@@ -467,12 +556,14 @@ function WorkPanel({
   info,
   work,
   day,
+  edits,
   onOpen,
   onBoard,
 }: {
   info: ScopeInfo
   work: WorkView
   day: string
+  edits: WorkEdits
   onOpen: (open: string) => void
   onBoard: () => void
 }) {
@@ -540,6 +631,7 @@ function WorkPanel({
           answer={answer}
           day={day}
           me={me}
+          edits={edits}
           onOpen={onOpen}
         />
       ) : null,
@@ -607,6 +699,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
     'mine',
   )
   const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
+  const edits = useWorkEdits()
   const milestonesRoot = useRef<HTMLDivElement>(null)
   // a milestone deleted from its window takes its row: focus goes to the
   // next row, the one before, Upcoming's empty line or the page's note
@@ -775,6 +868,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
                   info={info}
                   work={read.work}
                   day={day}
+                  edits={edits}
                   onOpen={openIssue}
                   onBoard={() => actions.setView('kanban')}
                 />

@@ -166,13 +166,20 @@ delay, the row says **Delay unknown**, never that it is on track, and a
 line above the groups says so. Every row has its hours left and its
 actions in the same place, whatever its title, its group or its actions.
 
-- **Hours left** is a field with the task's remaining hours. Type and press
-  Enter, or leave the field, to save them by the rules of the task window's
-  Remaining. An empty field clears them, and 0 is a value. The row says
-  **Saving…** while they save. Text that is not a number saves nothing,
-  and the row asks for a number. **Esc** puts the saved hours back. Where a
-  save fails, the row says so and the field keeps what you typed, also
-  while the list updates.
+- The task's remaining hours are a field, followed by "left". Type and
+  press Enter, or leave the field, to save them by the rules of the task
+  window's **Remaining**. An empty field clears them, 0 is a value, and a
+  comma works as the decimal point, as in 1,5. The row says **Saving…**
+  while they save, and hours you type meanwhile save once that save
+  answers. Text that is not a number saves nothing, and the row asks for a
+  number. **Esc** puts the saved hours back, except while they save. Where
+  a save fails, the row says so and the field keeps what you typed, also
+  while the list updates and when the task moves to another group. If
+  someone else saved the task's remaining hours after you began typing,
+  Qivo does not save yours and says so
+  ([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)).
+  What you typed stays in the field, and saving it again replaces their
+  value.
 - In progress rows have the **Status** control, with every status and
   **Pause** or **Resume**.
 - Waiting on your review rows have **Send back**, which moves the task to
@@ -183,9 +190,9 @@ actions in the same place, whatever its title, its group or its actions.
 These are the task window's own status changes, with its rules. A task you
 may only view shows its hours and no action. After a change the row moves
 to its new group, or leaves Your work once the task is no longer yours or
-no longer open. Keyboard focus stays on a row that moves, and when a row
-with focus leaves, focus goes to the next row, then to the one before it,
-then to the group's heading. Select a row to open its task. **Open on the
+no longer open. Keyboard focus stays on a row that moves, in its hours
+field where it was there, and when a row with focus leaves, focus goes to
+the next row, then to the one before it, then to the group's heading. Select a row to open its task. **Open on the
 Board** opens the same work on My view's Board.
 
 Each group says when it holds nothing, such as "Nothing waits for your

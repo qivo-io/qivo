@@ -9185,14 +9185,16 @@ const VIEW_WRITES = new Set([
     the views' rows of the task and the task window's own answer of it
     (`detail`), which shows once a window opens on the task while the write
     waits (store/layers.ts View). Its `expected` values are the view's row
-    on screen. A write of dates alone joins the Roadmap's history, in its
+    on screen with `opts.seen` over it, and a field the person saw with the
+    value sent stays unsent; `opts.keepDraft` and `opts.keepUnsaved` run as
+    for the window's own answer (updateAnswerTask). A write of dates alone joins the Roadmap's history, in its
     open batch (recordRoadmapChange), and goes out as an ordinary write
     where no visit records it. A group's dates come from its subtasks, so a
     date patch for one drops. Resolves false for any other field. A handle two view rows share names the person's new task on its
     way (store/viewRows.ts byHandle), never another person's task. A write
     on the task a window shows from a current answer goes through
     updateAnswerTask instead (P.updateIssue). */
-function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
+function updateViewTask(id: string, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
   const it = viewRows.byHandle(id)
   const row = it && viewRows.peek(it.uuid)
   if (!it || !row) return Promise.resolve(false)
@@ -9215,7 +9217,7 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   // nobody else to judge
   const wire = mapIssuePatch(patch)
   if (!wire) return Promise.resolve(false)
-  const shown: Record<string, unknown> = { ...row }
+  const shown: Record<string, unknown> = { ...row, ...opts.seen }
   for (const key of Object.keys(wire) as (keyof typeof wire)[])
     if ((wire[key] ?? null) === (shown[key] ?? null)) delete wire[key]
   if (!Object.keys(wire).length) return Promise.resolve(true)
@@ -9238,12 +9240,15 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
       },
     },
   }
-  const over = overOf('issues', row, Object.keys(wire))
+  const over = overOf('issues', row, Object.keys(wire), opts.seen)
   const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
   return (
-    (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||
+    (planningOnly &&
+      recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over, opts.keepDraft)) ||
     send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
       over,
+      keepDraft: opts.keepDraft,
+      keepUnsaved: opts.keepUnsaved,
       about: { task: uuid },
     })
   )
@@ -12869,7 +12874,7 @@ export const PLANNER = {
     // the task the window shows from its own current answer, else one only
     // an open view's answer brings (store/viewRows.ts)
     const shown = answerTaskOf(id)
-    return shown ? updateAnswerTask(shown, patch, opts) : updateViewTask(id, patch)
+    return shown ? updateAnswerTask(shown, patch, opts) : updateViewTask(id, patch, opts)
   },
 
   setStatus: (id: string, status: Row<'issues'>['status']) => {

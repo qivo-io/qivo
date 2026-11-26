@@ -150,10 +150,13 @@ export function useHeldFocus() {
 
 /**
  * Where focus goes once a change takes the row it is in out of a list: the
- * next row, else the one before, else the list's heading. Each row carries
- * `data-<mark>` (its handle) and `data-<mark>-id` (its task's uuid) and
- * calls `focusIn` as focus enters it and `focusOut` as focus leaves an
- * element of it; `shows` says whether the list still shows a uuid.
+ * same row where it shows elsewhere on the page, else the next row, else
+ * the one before, else the list's heading. Each row carries `data-<mark>`
+ * (its handle) and `data-<mark>-id` (its task's uuid) and calls `focusIn`
+ * as focus enters it, with the `data-focus-key` of the element focused, and
+ * `focusOut` as focus leaves an element of it; `shows` says whether the
+ * list still shows a uuid. Focus goes to the element of the same key in
+ * the row it lands on, else to its `row` one.
  */
 export function useRowFocus(
   mark: string,
@@ -163,13 +166,16 @@ export function useRowFocus(
   const attr = `data-${mark}`
   const idKey = `${mark}Id`
   const focused = useRef<{ uuid: string; target: () => HTMLElement | null } | null>(null)
-  const focusIn = (handle: string, uuid: string) => {
+  const focusIn = (handle: string, uuid: string, key?: string) => {
     focused.current = {
       uuid,
       target: focusAround(
         attr,
         handle,
-        (row) => row.querySelector<HTMLElement>('[data-focus-key="row"]'),
+        (row) =>
+          (key && key !== 'row'
+            ? row.querySelector<HTMLElement>(`[data-focus-key="${key}"]`)
+            : null) ?? row.querySelector<HTMLElement>('[data-focus-key="row"]'),
         () => headingTarget(heading()) ?? null,
       ),
     }
@@ -189,7 +195,7 @@ export function useRowFocus(
     const handle = row?.getAttribute(attr)
     const uuid = row?.dataset[idKey]
     if (handle && uuid) {
-      focusIn(handle, uuid)
+      focusIn(handle, uuid, to?.dataset.focusKey)
       marked((n) => n + 1)
     }
     return to
