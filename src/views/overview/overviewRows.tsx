@@ -17,7 +17,7 @@ import type { HealthView } from '@/store/overviewLists'
 import type { HealthRow } from '../../../convex/lib/overview'
 import type { NeedsKind } from '../../../convex/lib/overviewNeeds'
 import { MilestoneSectionPart } from '../../components/MilestoneSectionPart'
-import { Avatar, Icon } from '../../components/qivo'
+import { Avatar, Icon, ProjectName } from '../../components/qivo'
 import { personLabel, useOrgPeople } from '../../components/usePeople'
 import { type MilestoneVM, P } from '../../store/planner'
 import type { ScopeMilestones } from '../useScopeMilestones'
@@ -213,8 +213,9 @@ function ProjectRow({
   const d = row.delays.state === 'ok' ? row.delays : null
   // a read in another organization answers the lead gone
   const [lead] = useOrgPeople(org, [org ? row.lead_id : null])
+  const project = { id: row.project_id, name: P.project(row.project_id)?.name ?? row.name }
   const parts = [
-    row.name,
+    P.projectLabel(project),
     row.lead_id
       ? `${lead ? personLabel(lead, 'Unknown person') : 'Loading…'}, Lead`
       : 'No lead assigned',
@@ -240,7 +241,9 @@ function ProjectRow({
           <Avatar id={row.lead_id} size={28} />
         </span>
         <span className="pov-sub-main">
-          <span className="pov-sub-name">{row.name}</span>
+          <span className="pov-sub-name">
+            <ProjectName project={project} wrap />
+          </span>
           <span className="pov-sub-num">
             {c ? (
               <>
@@ -335,6 +338,14 @@ export function ProjectsPanel({
     )
   else if (!answer)
     body = <div className="pov-note">Qivo could not list the {noun} in one request.</div>
+  else if (answer.uncounted)
+    body = (
+      <div className="pov-note" data-ov-subs-uncounted={answer.uncounted}>
+        {answer.uncounted === 'counting'
+          ? `Qivo is counting the tasks here, so it cannot list the ${noun} yet.`
+          : `Qivo could not count the tasks here in one request, so it cannot list the ${noun}.`}
+      </div>
+    )
   else
     body = (
       <>

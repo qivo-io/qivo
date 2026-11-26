@@ -684,7 +684,7 @@ describe('every copy of a task the window shows from its own answer', { timeout:
         projected: { state: 'ok', count: 0 },
         behind: { state: 'ok', count: 0 },
       },
-      late_due: { state: 'ok', projects: [] },
+      late_due: [],
     })
     await turn()
     await openFar(okAnswer(far({ paused: true })))

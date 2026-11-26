@@ -709,20 +709,24 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
   const busy = state === 'loading' || state === 'refreshing'
 
   const workAnswer = read.work?.value?.state === 'ok' ? read.work.value : null
-  const late = workAnswer?.late_due ?? null
-  const lateOf = new Map(
-    late?.state === 'ok' ? late.projects.map((p) => [p.project_id, p.days]) : [],
-  )
+  // a failed or refused read of Your work leaves no project's Late tasks
+  // known, delay tracking or not
+  const workFailed =
+    read.work !== null &&
+    (read.work.value === undefined
+      ? read.work.error !== undefined
+      : read.work.value.state === 'over_budget')
+  const lateOf = new Map(workAnswer?.late_due.map((p) => [p.project_id, p.late]) ?? [])
   const lineOf = (m: MilestoneVM, i: number, rows: readonly MilestoneVM[]) => {
-    if (late === null) return null
+    if (workFailed) return LATE_UNKNOWN
+    const late = lateOf.get(m.project)
+    if (late === undefined) return null
     if (late.state !== 'ok') return LATE_UNKNOWN
-    const days = lateOf.get(m.project)
-    if (days === undefined) return null
     const before = rows
       .slice(0, i)
       .reverse()
       .find((r) => r.project === m.project)
-    return lateLine(days, m, before ?? null, P.orgWeekStart(P.project(m.project)?.org ?? ''))
+    return lateLine(late.days, m, before ?? null, P.orgWeekStart(P.project(m.project)?.org ?? ''))
   }
 
   const status = (

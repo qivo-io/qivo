@@ -3,15 +3,28 @@
  * assignee and reviewer ranges as the Board's My view reads them, with
  * the kinds of the project Overview's Needs attention list
  * (lib/overviewNeeds.ts). In Review without a reviewer stays with its
- * assignee under In progress, as Team sync's On it holds it. The tasks,
- * their parents and blockers are read whole or the answer is over_budget;
- * the verdicts come last, and a verdict that could not be read makes the
- * delay figures unavailable and its row's delay unknown, never on track. */
+ * assignee under In progress, as Team sync's On it holds it. Each row's
+ * blockers are read through the seat of its own organization. The
+ * milestone lines' Late tasks are read from every task of the person's
+ * in a status other than Done that is not done for them, Backlog and
+ * groups included, as Needs attention reads a project's. The tasks, their parents and blockers are
+ * read whole or the answer is over_budget; the verdicts come last, and a
+ * verdict that could not be read makes the delay figures unavailable, its
+ * row's delay unknown, never on track, and its top-level project's Late
+ * tasks unavailable where it could be Late. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { badRequest } from './functions'
-import { isGroup, newGroups, overScope, readGroups, type ScopeRefusal, tracks } from './overview'
+import {
+  isDoneFor,
+  isGroup,
+  newGroups,
+  overScope,
+  readGroups,
+  type ScopeRefusal,
+  tracks,
+} from './overview'
 import { NEEDS_KINDS, type NeedsKind } from './overviewNeeds'
 import { taskOwnerId } from './review'
 import { blockersOf } from './teamSyncAgenda'
@@ -26,6 +39,8 @@ import {
 } from './viewLoads'
 import { FOCUS_STATUSES, groupBy, ownTasks, shownParents, type ViewRow, viewRow } from './viewReads'
 import type { WorkGroup } from './workGroups'
+
+const OPEN_STATUSES = ['backlog', ...FOCUS_STATUSES] as const
 
 export { WORK_GROUPS, type WorkGroup } from './workGroups'
 
@@ -59,14 +74,16 @@ export type WorkAnswer =
       most: number
       counts: Record<'overdue' | 'blocked' | 'no_reviewer' | 'paused', number> &
         Record<'projected' | 'behind', Figure<{ count: number }>>
-      /** the Late rows, the overdue ones and those projected to miss, of
-       * sub-projects that track delay, by due date ascending, under the
-       * top-level project of their sub-project: one entry for each
-       * top-level project above a row in a sub-project that tracks delay,
-       * whose days may be empty; unavailable as Projected to miss is */
-      late_due: Figure<{
-        projects: { project_id: string; days: { due: string; count: number }[] }[]
-      }>
+      /** one entry for each top-level project above a task of the
+       * person's that is not done for them in a sub-project that tracks
+       * delay, by project id: its Late tasks, the overdue ones and those
+       * projected to miss, by due date ascending, which may be none, or
+       * unavailable where a task of it that is due has a verdict that
+       * could not be read */
+      late_due: {
+        project_id: string
+        late: Figure<{ days: { due: string; count: number }[] }>
+      }[]
     }
   | ScopeRefusal
 
@@ -168,35 +185,56 @@ export async function readWork(
     const read = new Map<string, Doc<'issues'>>()
     const mine: { task: Doc<'issues'>; group: WorkGroup }[] = []
     const subOf = new Map<string, Doc<'projects'>>()
+    const tracking: Doc<'issues'>[] = []
     for (const seat of at.seats.values()) {
       const own: Doc<'issues'>[] = []
-      for await (const step of ownTasks(ctx, guard, seat, FOCUS_STATUSES)) own.push(...step)
+      for await (const step of ownTasks(ctx, guard, seat, OPEN_STATUSES)) own.push(...step)
       for (const t of own) read.set(t.id, t)
       await readGroups(ctx, guard, g, own, false)
       for (const t of own) {
-        if (isGroup(g, t) || taskOwnerId(t, false) !== seat.me.id) continue
-        const group = groupOf(t, seat.me.id)
-        if (group === null) continue
+        if (taskOwnerId(t, isGroup(g, t)) !== seat.me.id) continue
         const sub = await seat.project(t.project_id)
         if (sub === null) continue
         subOf.set(t.id, sub)
-        mine.push({ task: t, group })
+        if (tracks(sub)) tracking.push(t)
+        const group = isGroup(g, t) ? null : groupOf(t, seat.me.id)
+        if (group !== null) mine.push({ task: t, group })
       }
     }
+    await readGroups(
+      ctx,
+      guard,
+      g,
+      tracking.filter((t) => isGroup(g, t)),
+      true,
+    )
+    const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
     const tasks = mine.map((m) => m.task)
     const parents = await shownParents(ctx, guard, tasks, read, Number.POSITIVE_INFINITY)
     const parentOf = new Map(parents.map((p) => [p.id, p]))
-    const blockers = await blockersOf(ctx, guard, at.seats, {
-      rows: tasks,
-      tasks: read,
-      known: g.known,
-    })
+    const blocked = new Map<string, Doc<'issues'>[]>()
+    for (const [org, rows] of groupBy(tasks, (t) => t.org_id)) {
+      const seat = at.seats.get(org)
+      if (seat === undefined) continue
+      const blockers = await blockersOf(ctx, guard, new Map([[org, seat]]), {
+        rows,
+        tasks: read,
+        known: g.known,
+      })
+      for (const t of rows) blocked.set(t.id, blockers.open(t))
+    }
 
-    // organizations in id order, so where a stopped read ends never
-    // follows the order of the rows
+    // the verdicts last: of the rows, and of the person's other tasks a
+    // verdict could make Late, organizations in id order, so where a
+    // stopped read ends never follows the order of the rows
     const tracked = (t: Doc<'issues'>) => tracks(subOf.get(t.id) ?? null)
     const overdue = (t: Doc<'issues'>) => t.due_date !== undefined && t.due_date < clock.day
-    const judged = tasks.filter((t) => tracked(t) && !overdue(t))
+    const open = tracking.filter((t) => !isDoneFor(g, t))
+    const rowIds = new Set(tasks.map((t) => t.id))
+    const judged = [
+      ...tasks.filter((t) => tracked(t) && !overdue(t)),
+      ...open.filter((t) => !rowIds.has(t.id) && t.due_date !== undefined && !overdue(t)),
+    ]
     const verdictOf = new Map<string, { status: string; fin: number | null }>()
     const unknown = new Set<string>()
     const delays = await bounded(async (): Promise<Figure<{ missing: Missing | null }>> => {
@@ -205,16 +243,16 @@ export async function readWork(
       for (const org of [...byOrg.keys()].sort()) {
         const owners: string[] = []
         for (const t of byOrg.get(org) ?? []) {
-          const owner = await v.needs(t, null)
+          const owner = await v.needs(t, facts(t))
           if (owner !== null) owners.push(owner)
         }
         await v.readAll(org, owners)
       }
       let missing: Missing | null = null
       for (const t of judged) {
-        const verdict = await v.of(t, null)
+        const verdict = await v.of(t, facts(t))
         if (verdict === UNKNOWN) {
-          missing = 'loads'
+          if (rowIds.has(t.id)) missing = 'loads'
           unknown.add(t.id)
         } else if (verdict !== null) verdictOf.set(t.id, verdict)
       }
@@ -223,39 +261,45 @@ export async function readWork(
     const missing: Missing | null = delays.state === 'ok' ? delays.missing : delays.reason
     if (delays.state !== 'ok') for (const t of judged) unknown.add(t.id)
 
+    // the Late tasks by due date under each top-level project, unknown for
+    // a project where a task that is due could be Late by a verdict not read
+    const lateDue = new Map<string, Map<string, number> | Missing>()
+    for (const t of open) {
+      const top = subOf.get(t.id)?.parent_id
+      if (top === undefined) continue
+      const days = lateDue.get(top) ?? new Map<string, number>()
+      lateDue.set(top, days)
+      if (typeof days === 'string' || t.due_date === undefined) continue
+      if (unknown.has(t.id)) lateDue.set(top, delays.state === 'ok' ? 'loads' : delays.reason)
+      else if (overdue(t) || verdictOf.get(t.id)?.status === 'late')
+        days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
+    }
+
     const list: Judged[] = []
-    const lateDue = new Map<string, Map<string, number>>()
     for (const { task: t, group } of mine) {
       const kinds: NeedsKind[] = []
       let weeks = 0
       let fin: number | null | undefined
       const verdict = verdictOf.get(t.id)
-      const top = subOf.get(t.id)?.parent_id
-      const late = top !== undefined && tracked(t) ? (lateDue.get(top) ?? new Map()) : null
-      if (late !== null && top !== undefined) lateDue.set(top, late)
-      if (overdue(t)) {
-        kinds.push('overdue')
-        if (late !== null) late.set(t.due_date as string, (late.get(t.due_date as string) ?? 0) + 1)
-      } else if (verdict?.status === 'late') {
+      if (overdue(t)) kinds.push('overdue')
+      else if (verdict?.status === 'late') {
         kinds.push('projected')
         fin = verdict.fin
         weeks =
           verdict.fin === null || t.due_date === undefined
             ? 0
             : verdict.fin - clock.ofDay(t.due_date)
-        if (late !== null && t.due_date !== undefined)
-          late.set(t.due_date, (late.get(t.due_date) ?? 0) + 1)
       } else if (verdict?.status === 'behind') {
         kinds.push('behind')
         fin = verdict.fin
         const end = plannedEnd(clock, t)
         weeks = verdict.fin === null || end === null ? 0 : verdict.fin - end
       }
-      const open = blockers.open(t)
-      if (open.length > 0) kinds.push('blocked')
+      const blockers = blocked.get(t.id) ?? []
+      if (blockers.length > 0) kinds.push('blocked')
       if (t.status === 'review' && t.reviewer_id === undefined) kinds.push('no_reviewer')
       if (t.paused === true) kinds.push('paused')
-      list.push({ task: t, group, kinds, weeks, fin, unknown: unknown.has(t.id), blockers: open })
+      list.push({ task: t, group, kinds, weeks, fin, unknown: unknown.has(t.id), blockers })
     }
 
     const shown = new Map(read)
@@ -302,20 +346,20 @@ export async function readWork(
         projected: verdictFigure(count('projected'), missing),
         behind: verdictFigure(count('behind'), missing),
       },
-      late_due:
-        missing === null
-          ? {
-              state: 'ok',
-              projects: [...lateDue.entries()]
-                .sort(([a], [b]) => order(a, b))
-                .map(([project_id, days]) => ({
-                  project_id,
+      late_due: [...lateDue.entries()]
+        .sort(([a], [b]) => order(a, b))
+        .map(([project_id, days]) => ({
+          project_id,
+          late:
+            typeof days === 'string'
+              ? { state: 'unavailable', reason: days }
+              : {
+                  state: 'ok',
                   days: [...days.entries()]
                     .sort(([a], [b]) => order(a, b))
                     .map(([due, n]) => ({ due, count: n })),
-                })),
-            }
-          : { state: 'unavailable', reason: missing },
+                },
+        })),
     }
   })
 }

@@ -594,4 +594,34 @@ describe('Your work', () => {
     expect(workRows(s)).toEqual({ progress: 0, review: 0, next: WORK_FIRST + WORK_STEP })
     expect(s.lists.view().work).toMatchObject({ moreFailed: false, failedAt: null })
   })
+
+  it("keeps another group's Load more while one group's failed, also once that group fits, and Retry keeps what the other loaded", async () => {
+    const { snap, base } = myWork(20, 11)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0, 'mine')
+    s.lists.watchWork(true, 1)
+    s.deliver()
+    s.state.failing = (slot, args) =>
+      slot === WORK && args.progress === WORK_FIRST + WORK_STEP ? new Error('down') : undefined
+    s.lists.moreWork('progress')
+    s.deliver()
+    expect(s.lists.view().work).toMatchObject({
+      failedAt: { progress: WORK_FIRST + WORK_STEP },
+      more: { progress: null, review: null, next: 'ready' },
+    })
+    // In progress shrinks to its first rows: Next still loads more
+    const started = snap.issues.find((t) => t.status === 'progress')
+    if (started) started.status = 'done'
+    s.change()
+    expect(s.lists.view().work?.more.next).toBe('ready')
+    s.lists.moreWork('next')
+    s.deliver()
+    expect(workRows(s)).toEqual({ progress: WORK_FIRST, review: 0, next: 20 })
+    // the failed rows asked again keep Next's
+    if (started) started.status = 'progress'
+    s.state.failing = () => undefined
+    s.lists.retryWork()
+    s.deliver()
+    expect(workRows(s)).toEqual({ progress: 11, review: 0, next: 20 })
+  })
 })

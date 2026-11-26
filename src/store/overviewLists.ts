@@ -292,7 +292,10 @@ export function createOverviewReads(transport: OverviewTransport) {
    * and a Load more that failed, whose Retry asks it again. `Lim` is a
    * number of rows, or one for each part of an answer, as Your work's
    * groups; `pressed` says which parts a limit asks more of than one
-   * before, and `ready` which parts of an answer offer Load more.
+   * before, and `ready` which parts of an answer offer Load more. A Load
+   * more of one part that failed leaves the other parts' Load more, and
+   * `join` keeps the larger of two limits in each part, so a failed part's
+   * Retry keeps what another part loaded since.
    */
   function limitedRead<Ask, Answer extends { state: string }, Lim, More, Asked>(o: {
     slot: string
@@ -305,9 +308,11 @@ export function createOverviewReads(transport: OverviewTransport) {
     asked: (ask: Ask, limit: Lim) => Asked
     /** whether `now` asks more rows than `before` of some part */
     grew: (before: Lim, now: Lim) => boolean
+    join: (a: Lim, b: Lim) => Lim
     /** what Load more says for `value`, the answer for limit `answered`,
-        `pressed` naming the limit on its way (null for none) */
-    more: (value: Answer, answered: Lim, pressed: Lim | null) => More
+        `pressed` naming the limit on its way and `failed` the one a failed
+        Load more asked (null for none) */
+    more: (value: Answer, answered: Lim, pressed: Lim | null, failed: Lim | null) => More
     none: More
   }) {
     let ask: Ask | null = null
@@ -339,20 +344,18 @@ export function createOverviewReads(transport: OverviewTransport) {
           shown = { base: baseKey, ask, limit, value: held.value as Answer }
         return
       }
-      if (failedMore !== null) {
-        failedMore = null
-        return
-      }
       if (
         shown !== null &&
         shown.base === baseKey &&
         same(shown.ask, ask) &&
         o.grew(shown.limit, limit)
       ) {
-        failedMore = limit
+        failedMore = failedMore === null ? limit : o.join(failedMore, limit)
         limit = shown.limit
         watch()
+        return
       }
+      failedMore = null
     }
 
     /** What the read shows. */
@@ -362,7 +365,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       const held = transport.read(o.slot)
       const asked = o.asked(ask, limit)
       const offered = (value: Answer, answered: Lim, pressed: Lim | null) =>
-        failedMore !== null ? o.none : o.more(value, answered, pressed)
+        o.more(value, answered, pressed, failedMore)
       if (held.key === now && held.value !== undefined) {
         const value = held.value as Answer
         return {
@@ -394,7 +397,7 @@ export function createOverviewReads(transport: OverviewTransport) {
               kept: false,
               more: o.none,
               moreFailed: true,
-              failedAt: limit,
+              failedAt: failedMore === null ? limit : o.join(failedMore, limit),
             }
           : {
               error: held.error,
@@ -453,7 +456,7 @@ export function createOverviewReads(transport: OverviewTransport) {
           Load more again (Retry). */
       retry() {
         if (failedMore !== null) {
-          limit = failedMore
+          limit = o.join(limit, failedMore)
           failedMore = null
         }
         tries++
@@ -495,7 +498,9 @@ export function createOverviewReads(transport: OverviewTransport) {
     args: (at, table, limit) => overviewArgs('health', at, { ...table, limit }),
     asked: (table, limit) => ({ ...table, limit }),
     grew: (a, b) => a < b,
-    more: (value, _answered, pressed) => oneMore(value, pressed !== null),
+    join: Math.max,
+    more: (value, _answered, pressed, failed) =>
+      failed === null ? oneMore(value, pressed !== null) : null,
     none: null,
   })
 
@@ -509,7 +514,9 @@ export function createOverviewReads(transport: OverviewTransport) {
       args: (at, ask, limit) => overviewArgs('needs', at, null, { ...ask, limit }),
       asked: (ask, limit) => ({ ...ask, limit }),
       grew: (a, b) => a < b,
-      more: (value, _answered, pressed) => oneMore(value, pressed !== null),
+      join: Math.max,
+      more: (value, _answered, pressed, failed) =>
+        failed === null ? oneMore(value, pressed !== null) : null,
       none: null,
     },
   )
@@ -524,13 +531,20 @@ export function createOverviewReads(transport: OverviewTransport) {
     args: (at, _ask, limit) => overviewArgs('work', at, null, null, limit),
     asked: () => true,
     grew: (a, b) => WORK_GROUPS.some((g) => a[g] < b[g]),
-    // while one group's Load more is on its way, only that group says so
-    more: (value, answered, pressed) => {
+    join: (a, b) => ({
+      progress: Math.max(a.progress, b.progress),
+      review: Math.max(a.review, b.review),
+      next: Math.max(a.next, b.next),
+    }),
+    // while one group's Load more is on its way, only that group says so,
+    // and a group whose Load more failed offers Retry instead
+    more: (value, answered, pressed, failed) => {
       if (value.state !== 'ok') return noWorkMore
       const out = { ...noWorkMore }
       for (const g of WORK_GROUPS) {
         const group = value.groups[g]
         if (pressed !== null) out[g] = pressed[g] > answered[g] ? 'loading' : null
+        else if (failed !== null && failed[g] > answered[g]) out[g] = null
         else out[g] = oneMore({ state: 'ok', ...group, most: value.most }, false)
       }
       return out

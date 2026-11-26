@@ -18,6 +18,7 @@ import {
   newT,
   plantHiddenSibling,
   plantIssue,
+  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -211,18 +212,18 @@ describe('what a row needs', () => {
     expect(kindOf('Place parts')).toBe('blocked')
     expect(kindOf('On time')).toBeNull()
     expect(answer.counts.projected).toEqual({ state: 'ok', count: 1 })
-    expect(answer.late_due).toEqual({
-      state: 'ok',
-      projects: [
-        {
-          project_id: f.meta.id,
+    expect(answer.late_due).toEqual([
+      {
+        project_id: f.meta.id,
+        late: {
+          state: 'ok',
           days: [
             { due: shift(DAY, -2), count: 1 },
             { due: shift(DAY, 3), count: 1 },
           ],
         },
-      ],
-    })
+      },
+    ])
   })
 
   it('says a delay it could not work out is unknown, never on track, and keeps the rows', async () => {
@@ -237,7 +238,159 @@ describe('what a row needs', () => {
     expect(row('Order parts')?.needs.kind).toBe('overdue')
     expect(row('Order parts')?.needs.delay_unknown).toBeUndefined()
     expect(answer.counts.projected).toEqual({ state: 'unavailable', reason: 'loads' })
-    expect(answer.late_due.state).toBe('unavailable')
+    expect(answer.late_due).toEqual([
+      { project_id: f.meta.id, late: { state: 'unavailable', reason: 'loads' } },
+    ])
+  })
+
+  it("flags a blocked task in each of the login's organizations, through that organization's seat", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const other = await withReadingAdmin(t)
+    const there = await plantSeat(t, {
+      org_id: other.org.id,
+      org_role: 'admin',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.meta.id,
+        profile_id: there.id,
+        level: 'user',
+      }),
+    )
+    // a sub-project of the second organization the seat there cannot see
+    const lab = await plantProject(t, {
+      org_id: other.org.id,
+      type: 'project',
+      parent_id: other.hidden.id,
+      name: 'Lab',
+    })
+    const task = (org: string, project: string, title: string, assignee: string) =>
+      plantIssue(t, { org_id: org, project_id: project, title, assignee_id: assignee })
+    await plantBlocks(t, [
+      [
+        await task(f.org.id, f.sub.id, 'Cut stencil', f.admin.id),
+        await task(f.org.id, f.sub.id, 'Place parts', f.user.id),
+      ],
+      [
+        await task(other.org.id, other.sub.id, 'Order reels', other.admin.id),
+        await task(other.org.id, other.sub.id, 'Load feeders', there.id),
+      ],
+      [
+        await task(other.org.id, lab.id, 'Hidden prototype', other.admin.id),
+        await task(other.org.id, other.sub.id, 'Calibrate', there.id),
+      ],
+    ])
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    await countOrg(t, other.org.id)
+    const answer = okOf(await workOf(t, f.user))
+    const needs = Object.fromEntries(answer.groups.next.rows.map((r) => [r.title, r.needs]))
+    expect(Object.keys(needs).sort()).toEqual(['Calibrate', 'Load feeders', 'Place parts'])
+    expect(needs['Place parts']).toMatchObject({ kind: 'blocked', blocked_by: 1 })
+    expect(needs['Load feeders']).toMatchObject({ kind: 'blocked', blocked_by: 1 })
+    expect(needs.Calibrate).toMatchObject({ kind: null, blocked_by: 0 })
+    expect(answer.counts.blocked).toBe(2)
+  })
+})
+
+describe('milestone lines', () => {
+  it("counts the Late tasks of every task of the person's that is not Done, Backlog and groups included, as Your projects counts them", async () => {
+    const { t, f } = await kindsCase()
+    const late = shift(DAY, -4)
+    const task = (title: string, fields: Partial<Doc<'issues'>>) =>
+      plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        title,
+        assignee_id: f.user.id,
+        ...fields,
+      })
+    await task('Someday', { status: 'backlog', due_date: late })
+    const parent = await task('Bring-up', { status: 'todo', due_date: late })
+    await task('Solder headers', {
+      status: 'todo',
+      parent_id: parent.id,
+      assignee_id: f.admin.id,
+    })
+    await task('Shipped', { status: 'done', done_at: PLANTED_AT, due_date: late })
+    await countOrg(t, f.org.id)
+    const answer = okOf(await workOf(t, f.user))
+    expect(answer.late_due).toEqual([
+      {
+        project_id: f.meta.id,
+        late: {
+          state: 'ok',
+          days: [
+            { due: late, count: 2 },
+            { due: shift(DAY, -2), count: 1 },
+            { due: shift(DAY, 3), count: 1 },
+          ],
+        },
+      },
+    ])
+    const projects = await as(t, f.user).query(api.overview.health, {
+      scope: { kind: 'mine' },
+      ...WEEKS,
+      sort: 'late',
+      dir: 'desc',
+      limit: 10,
+      open_only: true,
+    })
+    expect(projects).toMatchObject({
+      state: 'ok',
+      rows: [{ project_id: f.meta.id, delays: { state: 'ok', late: 4 } }],
+    })
+  })
+
+  it('answers each project its own Late tasks, unknown only where a verdict of a task due there could not be read, and none for a project without delay tracking', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
+    const top = async (name: string, track_delay: boolean) => {
+      const meta = await plantProject(t, { org_id: f.org.id, name, lead_id: f.user.id })
+      const sub = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: meta.id,
+        name: `${name} work`,
+        track_delay,
+      })
+      return { meta, sub }
+    }
+    const overdueOnly = await top('Overdue only', true)
+    const untracked = await top('Untracked', false)
+    const task = (project: string, title: string, fields: Partial<Doc<'issues'>>) =>
+      plantIssue(t, {
+        org_id: f.org.id,
+        project_id: project,
+        title,
+        assignee_id: f.user.id,
+        status: 'progress',
+        ...fields,
+      })
+    await task(f.sub.id, 'Tune loop', {
+      start_week: DAY,
+      end_week: DAY,
+      remaining_hours: 60,
+      remaining_set_at: `${DAY}T12:00:00.000Z`,
+      due_date: shift(DAY, 3),
+    })
+    await task(overdueOnly.sub.id, 'Order parts', { due_date: shift(DAY, -2) })
+    await task(overdueOnly.sub.id, 'Undated', {})
+    await task(untracked.sub.id, 'Write notes', { due_date: shift(DAY, -1) })
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    Object.assign(OWNER_LOADS, { open: 0 })
+    const answer = okOf(await workOf(t, f.user))
+    const byId = Object.fromEntries(answer.late_due.map((p) => [p.project_id, p.late]))
+    expect(Object.keys(byId).sort()).toEqual([f.meta.id, overdueOnly.meta.id].sort())
+    expect(byId[f.meta.id]).toEqual({ state: 'unavailable', reason: 'loads' })
+    expect(byId[overdueOnly.meta.id]).toEqual({
+      state: 'ok',
+      days: [{ due: shift(DAY, -2), count: 1 }],
+    })
   })
 })
 
@@ -355,7 +508,7 @@ describe('real limits', () => {
     const ok = okOf(answer)
     expect(ok.groups.next.total + ok.groups.progress.total + ok.groups.review.total).toBe(400)
     expect(ok.counts.projected.state).toBe('ok')
-    expect(ok.late_due.state).toBe('ok')
+    expect(ok.late_due.every((p) => p.late.state === 'ok')).toBe(true)
     // the projects list the page asks beside it
     const started = Date.now()
     const projects = await measured(c.t, (ctx) =>

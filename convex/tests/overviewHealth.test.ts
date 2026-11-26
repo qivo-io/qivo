@@ -433,6 +433,39 @@ describe('open only', () => {
     expect(open.rows.map((r) => r.name)).toEqual(['Testbed platform'])
     expect(open.total).toBe(1)
   })
+
+  it('lists no project as holding work left while the counts that say which do are not given', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const other = await withReadingAdmin(t)
+    const there = await plantSeat(t, {
+      org_id: other.org.id,
+      org_role: 'admin',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.meta.id,
+        profile_id: there.id,
+        level: 'user',
+      }),
+    )
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.user.id,
+      status: 'done',
+      done_at: PLANTED_AT,
+    })
+    await plantIssue(t, { org_id: other.org.id, project_id: other.sub.id, assignee_id: there.id })
+    await countOrg(t, f.org.id)
+    const ask = () => health(t, f.user, MINE, { sort: 'name', dir: 'asc', open_only: true })
+    expect(okOf(await ask())).toMatchObject({ rows: [], total: 0, uncounted: 'counting' })
+    await countOrg(t, other.org.id)
+    const counted = okOf(await ask())
+    expect(counted.rows.map((r) => r.project_id)).toEqual([other.meta.id])
+    expect(counted.uncounted).toBeUndefined()
+  })
 })
 
 // -------------------------------------------------------------------- figures

@@ -684,7 +684,7 @@ describe("a write's view part while several views read", () => {
       projected: { state: 'ok', count: 0 },
       behind: { state: 'ok', count: 0 },
     },
-    late_due: { state: 'ok', projects: [] },
+    late_due: [],
   })
   /** Your work's view slot. */
   const WORK_SLOT = 'overview:work'

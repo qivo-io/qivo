@@ -457,7 +457,16 @@ export function overviewStandIn(
       return c
     }
     const counted = h.counts === undefined
-    if (args.open_only === true && counted)
+    if (args.open_only === true && h.counts !== undefined)
+      return {
+        state: 'ok',
+        rows: [],
+        total: 0,
+        sort: { key: sort, dir },
+        most,
+        uncounted: h.counts,
+      }
+    if (args.open_only === true)
       items = items.filter((r) => {
         const c = countsOf(r)
         return c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review > 0
@@ -735,14 +744,17 @@ export function overviewStandIn(
       .sort(group === 'next' ? byStart : byUrgency)
     return { rows: rows.slice(0, args[group] as number).map(rowOf), total: rows.length }
   }
-  const late = new Map<string, Map<string, number>>()
-  for (const t of work) {
+  // every task of the person's not done for them, by its overdue ones; a
+  // forced unknown makes a project unknown where one is due and not overdue
+  const late = new Map<string, Map<string, number> | 'loads'>()
+  for (const t of scoped) {
     const top = projectById.get(t.project_id)?.parent_id
-    if (top === undefined || !tracks(t)) continue
+    if (top === undefined || !tracks(t) || done(t)) continue
     const days = late.get(top) ?? new Map<string, number>()
     late.set(top, days)
-    if (t.due_date !== undefined && t.due_date < day)
-      days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
+    if (days === 'loads' || t.due_date === undefined) continue
+    if (t.due_date < day) days.set(t.due_date, (days.get(t.due_date) ?? 0) + 1)
+    else if (unknown) late.set(top, 'loads')
   }
   const count = (k: (typeof kindOrder)[number]) => work.filter((t) => kindsOf(t).includes(k)).length
   const verdict = (n: number) =>
@@ -765,19 +777,20 @@ export function overviewStandIn(
       projected: verdict(0),
       behind: verdict(0),
     },
-    late_due: unknown
-      ? { state: 'unavailable', reason: 'loads' }
-      : {
-          state: 'ok',
-          projects: [...late.entries()]
-            .sort(([a], [b]) => order(a, b))
-            .map(([project_id, days]) => ({
-              project_id,
-              days: [...days.entries()]
-                .sort(([a], [b]) => order(a, b))
-                .map(([due, n]) => ({ due, count: n })),
-            })),
-        },
+    late_due: [...late.entries()]
+      .sort(([a], [b]) => order(a, b))
+      .map(([project_id, days]) => ({
+        project_id,
+        late:
+          days === 'loads'
+            ? { state: 'unavailable', reason: 'loads' }
+            : {
+                state: 'ok',
+                days: [...days.entries()]
+                  .sort(([a], [b]) => order(a, b))
+                  .map(([due, n]) => ({ due, count: n })),
+              },
+      })),
   }
 }
 

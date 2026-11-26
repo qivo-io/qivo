@@ -199,12 +199,20 @@ yours that is not Done.
 **Milestones** lists the upcoming milestones of the projects that hold your
 work, each with its project's name. The line under a milestone counts your
 **Late** tasks in its project due before it, as a project's Overview counts
-them, from the milestone of the same project shown above it.
+them, from the milestone of the same project shown above it. Every task of
+yours that is not Done counts, Backlog tasks and tasks with subtasks too.
+Where Qivo could not work out the delay of a task of yours due in that
+project, or could not load Your work, the line says it could not count
+them. A project where none of your tasks is in a sub-project that tracks
+delay shows no line.
 
 **Your projects** lists each project that holds work of yours that is left,
 with its lead, your tasks and hours left there, and your **Late**,
 **Behind plan** and **Paused** counts, Late first and then by name, 10 at a
-time with **Load more**. Select a row to open that project's Board.
+time with **Load more**. Two projects of the same name show their numbers.
+While Qivo cannot count your tasks, which projects hold work of yours is
+not known, so it lists none and says why. Select a row to open that
+project's Board.
 
 The page has two columns where there is room. On a phone or in a narrow
 window it has one, Your work first, and each row puts its hours and its
