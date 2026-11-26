@@ -60,7 +60,10 @@
 // says so; measure such a revision with its own checkout's benchmark on the
 // same machine instead. So it is for a revision before the Inbox feed,
 // whose workspace waits for the inbox part (workspace.inbox), which this
-// checkout's perf server no longer answers either. A revision from before
+// checkout's perf server no longer answers either, and for a revision from
+// before My view's Overview read Your work, whose Overview asks the lists
+// and delays (overview.risk, attention and paused) this perf server no
+// longer answers. A revision from before
 // the task windows went still has the ask for every task, which nothing
 // calls once this driver dropped its task load, so its store
 // holds no task either and both arms run the same phases.
@@ -543,14 +546,14 @@ async function openPage(origin, tasks, metrics, query = '') {
 /* The shown view counts as complete when nothing on it waits to mount and,
    in a build whose views ask the server, their answers arrived: the
    Board's (data-board-state ok), and the Overview's summary
-   (data-overview-state ok) with the first batch of each of its lists
-   (data-ov-list-state no longer loading or refreshing) and its health
-   table's first answer for the table on screen (data-ov-health-state
-   neither loading nor refreshing, and no data-ov-health-kept), a project's
+   (data-overview-state ok) with its health table's first answer for the
+   table on screen (data-ov-health-state neither loading nor refreshing,
+   and no data-ov-health-kept), a project's
    Needs attention list (data-ov-needs-state neither loading nor
    refreshing), its Sub-projects (data-ov-subs-state neither loading nor
    refreshing) and its Load this week, every person's load and name
-   answered (data-ov-people-state not loading), and the
+   answered (data-ov-people-state not loading), My view's Your work
+   (data-ov-work-state neither loading nor refreshing), and the
    Roadmap's answer for the selection on screen (data-roadmap-state ok, not
    the last answer kept while a new one loads) with no Team utilization
    cell waiting for its owner's load (data-load-waiting), and the Overview's
@@ -573,9 +576,9 @@ async function openPage(origin, tasks, metrics, query = '') {
 const boardComplete = () => {
   const state = document.querySelector('[data-workspace-view] [data-board-root]')
   const overview = document.querySelector('[data-workspace-view] [data-overview-root]')
-  const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
   const health = document.querySelector('[data-workspace-view] [data-ov-health]')
   const needs = document.querySelector('[data-workspace-view] [data-ov-needs-state]')
+  const work = document.querySelector('[data-workspace-view] [data-ov-work-state]')
   const subs = document.querySelector('[data-workspace-view] [data-ov-subs-state]')
   const people = document.querySelector('[data-workspace-view] [data-ov-people-state]')
   const roadmap = document.querySelector('[data-workspace-view] [data-roadmap-root]')
@@ -598,11 +601,10 @@ const boardComplete = () => {
     (overview === null || overview.getAttribute('data-overview-state') === 'ok') &&
     (upcoming === null ||
       !['loading', 'refreshing'].includes(upcoming.getAttribute('data-milestone-section-state'))) &&
-    lists.every(
-      (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
-    ) &&
     (needs === null ||
       !['loading', 'refreshing'].includes(needs.getAttribute('data-ov-needs-state'))) &&
+    (work === null ||
+      !['loading', 'refreshing'].includes(work.getAttribute('data-ov-work-state'))) &&
     (subs === null ||
       !['loading', 'refreshing'].includes(subs.getAttribute('data-ov-subs-state'))) &&
     (people === null || people.getAttribute('data-ov-people-state') !== 'loading') &&

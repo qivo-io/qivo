@@ -5,6 +5,17 @@
 
 export type RemainingPatch = { write: boolean; value: number | null }
 
+/** The hours that text `raw` names: null where it is empty, undefined where
+    it is not a number. One "," reads as the decimal point, as a keypad in a
+    region that writes decimals with a comma types it. */
+export function remainingNumber(raw: string | null | undefined): number | null | undefined {
+  const s = String(raw == null ? '' : raw).trim()
+  if (s === '') return null
+  const commas = s.split(',').length - 1
+  const value = Number(commas === 1 && !s.includes('.') ? s.replace(',', '.') : s)
+  return Number.isFinite(value) ? value : undefined
+}
+
 /** Read a Remaining input's raw text against the stored value.
     `write: false` means leave the issue alone (unparseable or unchanged);
     otherwise `value` is the patch — `null` clears the field.
@@ -16,9 +27,8 @@ export function remainingPatch(
   badInput = false,
 ): RemainingPatch {
   if (badInput) return { write: false, value: null }
-  const s = String(raw == null ? '' : raw).trim()
-  const value = s === '' ? null : Number(s)
-  if (value != null && !Number.isFinite(value)) return { write: false, value: null }
+  const value = remainingNumber(raw)
+  if (value === undefined) return { write: false, value: null }
   const cur = current == null ? null : current
   return { write: value !== cur, value }
 }

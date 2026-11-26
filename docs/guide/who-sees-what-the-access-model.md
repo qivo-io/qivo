@@ -138,11 +138,8 @@ for them too. In a project, where the projected delays need more than one
 person's work, **Needs attention** shows the counts of **Projected to
 miss**, **Behind plan** and **All** as unknown and says those tabs may
 leave tasks out, and **Sub-projects** shows **Late** and **Behind plan** as
-**unknown**. In My view it says the projected delays are not available,
-its Overdue & at risk list takes one person's projected tasks a **Load
-more** at a time, and its health table shows **Late** and **Behind plan**
-as **unknown** on each row that needs anyone but the one person it reads,
-and then sorts by name where you sort by them.
+**unknown**. In My view the delays of your tasks need only your own work,
+which Qivo reads for you, so they show as for anyone else.
 
 Change history follows the same rules. You see a task's changes only if you
 can access the task and every project a change involves, such as both ends of

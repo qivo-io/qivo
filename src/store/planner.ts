@@ -50,8 +50,8 @@ import {
 } from '../../convex/lib/limits'
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
-import type { ListAnswer } from '../../convex/lib/overview'
 import type { NeedsAnswer } from '../../convex/lib/overviewNeeds'
+import type { WorkAnswer } from '../../convex/lib/overviewWork'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -62,6 +62,7 @@ import { reviewStamp, taskOwnerId } from '../../convex/lib/review'
 import type { DependencyAnswer, DependencyRow, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
+import { WORK_GROUPS, type WorkGroup } from '../../convex/lib/workGroups'
 import type { NavByIdRow, NavByIds } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
 import {
@@ -223,12 +224,10 @@ import {
   baseOfKey,
   createOverviewReads,
   type HealthTable,
-  type ListKind,
   type NeedsAsk,
   type OverviewPage,
   type OverviewQuery,
   type OverviewView,
-  splitAt,
 } from './overviewLists'
 import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoadCache'
 import { createPreferences } from './preferences'
@@ -3720,9 +3719,9 @@ function pay() {
 /* ---- The task rows the open views' answers bring ----
    A view registers each read it shows here from an effect, with the
    arguments on screen, or none while its page or the tab is hidden: the
-   Board its answer (P.watchBoard), the Overview its summary, its delays,
-   its lists' batches and its health table (P.watchOverview and
-   P.watchOverviewTable, store/overviewLists.ts), and Team sync its agenda
+   Board its answer (P.watchBoard), the Overview its summary, its health
+   table, Needs attention and Your work (P.watchOverview and the reads it
+   registers beside, store/overviewLists.ts), and Team sync its agenda
    (P.watchSync). Each read names its query and the rows its answer brings
    (ViewQuery); the health table's brings none. The store
    subscribes, takes each result in the transition that brings it and keeps
@@ -3749,20 +3748,28 @@ const KEEP_ROWS = Symbol('keep the rows')
 /** What a view read subscribes, and the rows its answer brings: `rows`
     answers the rows of a value for the arguments `key` (JSON), null for a
     value that brings none (the read's rows go) or KEEP_ROWS for one whose
-    rows stay as they were, as a fixed Overview batch that split keeps its
-    last rows until its halves answer. A read without `rows`, such as the
+    rows stay as they were, as a Team sync meeting that stops fitting keeps
+    its cards. A read without `rows`, such as the
     Overview's summary, holds no rows, and its deliveries hold no write.
     A milestone read's `milestones` answers the ask its arguments `key`
     make and the milestones a value brings (store/milestoneRows.ts), which
     hold the milestone writes the read's deliveries hold
     (milestoneNeeds). `keepsOnError` keeps the rows of a read that fails
     as KEEP_ROWS does, so its view can show its last answer under the
-    failure, as Team sync keeps a meeting's cards with their unsent text. */
+    failure, as Team sync keeps a meeting's cards with their unsent text.
+    `keepsHeldOnError` keeps, as KEEP_ROWS does, only the rows of an answer
+    held for other arguments (watchView `hold`) where the arguments asked
+    fail, as an Overview list's failed Load more keeps the rows on screen
+    while it reads them again (store/overviewLists.ts). Where that read
+    fails too, while the failure before it is held, the rows go with the
+    projects their answer named, as they would have gone had the read gone
+    back without `hold`. */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
   milestones?: (value: unknown, key: string) => { ask: MilestoneAsk; take: MilestoneTake }
   keepsOnError?: boolean
+  keepsHeldOnError?: true
   /** the rows of a value whose cards a view draws, by uuid, where it
       draws fewer than it brings: only their owners register with the
       owner-load cache for delays (reshapeViews), and the person's new
@@ -3811,26 +3818,6 @@ const BOARD_QUERY: ViewQuery = {
   },
 }
 
-/** An Overview list batch's read: an ok answer brings its rows, without
-    the At-risk marker, which the Overview keeps with the batch
-    (store/overviewLists.ts). A batch with a fixed end that gives way to two
-    halves, as it split or its reads stopped (splitAt), keeps its rows
-    until the batches that replace it answer. */
-const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
-  ref,
-  rows: (value, key) => {
-    const answer = value as ListAnswer
-    if (answer.state !== 'ok') return null
-    const { cursor = null, end = null } = JSON.parse(key) as { cursor?: string; end?: string }
-    if (splitAt(cursor, end, answer) !== null) return KEEP_ROWS
-    return answer.rows.map(({ at_risk: _risk, ...row }) => row)
-  },
-  projects: (value) => {
-    const answer = value as ListAnswer
-    return answer.state === 'ok' ? projectsOf(answer.rows) : null
-  },
-})
-
 /** The Roadmap's read (tasks.roadmap): an ok answer brings its rows, the
     shown parents above them and the shown subtasks of its group rows, so
     a group's bar, stale fade and due mark read its family from the answer
@@ -3877,14 +3864,11 @@ const PLAN_LOADS = 'roadmap:plan'
 export const ROADMAP_MILESTONE_SLOTS = ['milestones:roadmap:a', 'milestones:roadmap:b'] as const
 /** The slots of the Overview's milestone reads: two for each section, the
     answer shown and a Load more's or a new base's on its way, which the
-    section alternates (views/useMilestoneSection.ts), and the one-row read
-    of the next milestone while Upcoming moved on
-    (views/useScopeMilestones.ts). P.releaseOverview forgets
-    them. */
+    section alternates (views/useMilestoneSection.ts). P.releaseOverview
+    forgets them. */
 export const OVERVIEW_MILESTONE_SLOTS = {
   upcoming: ['milestones:overview:upcoming:a', 'milestones:overview:upcoming:b'],
   past: ['milestones:overview:past:a', 'milestones:overview:past:b'],
-  next: 'milestones:overview:next',
 } as const
 /** The slots of the phone Roadmap agenda's milestone reads, two for each
     section as the Overview's (views/useScopeMilestones.ts), which
@@ -3897,14 +3881,14 @@ export const AGENDA_MILESTONE_SLOTS = {
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
     write; it names its rows' projects with the project cache, which give
-    each row its organization (the leads it names) and its name. */
+    each row its organization (the leads it names) and its name, and lets
+    them go after a failed Load more as the task lists do
+    (keepsHeldOnError). */
 const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
-  risk: { ref: api.overview.risk },
-  attention: listQuery(api.overview.attention),
-  paused: listQuery(api.overview.paused),
   health: {
     ref: api.overview.health,
+    keepsHeldOnError: true,
     projects: (value) => {
       const answer = value as { state?: string; rows?: { project_id: string }[] }
       return answer.state === 'ok' && answer.rows ? answer.rows.map((r) => r.project_id) : null
@@ -3912,6 +3896,7 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   },
   needs: {
     ref: api.overview.needs,
+    keepsHeldOnError: true,
     rows: (value) => {
       const answer = value as NeedsAnswer
       return answer.state === 'ok' ? answer.rows.map(({ needs: _needs, ...row }) => row) : null
@@ -3919,6 +3904,24 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
     projects: (value) => {
       const answer = value as NeedsAnswer
       return answer.state === 'ok' ? projectsOf(answer.rows) : null
+    },
+  },
+  work: {
+    ref: api.overview.work,
+    keepsHeldOnError: true,
+    rows: (value) => {
+      const answer = value as WorkAnswer
+      return answer.state === 'ok'
+        ? WORK_GROUPS.flatMap((g) =>
+            answer.groups[g].rows.map(({ needs: _needs, parent_title: _parent, ...row }) => row),
+          )
+        : null
+    },
+    projects: (value) => {
+      const answer = value as WorkAnswer
+      return answer.state === 'ok'
+        ? projectsOf(WORK_GROUPS.flatMap((g) => answer.groups[g].rows))
+        : null
     },
   },
 }
@@ -3934,7 +3937,7 @@ const OVERVIEW_PEOPLE = 'overview:people'
 
 /** Team sync's read (convex/teamSync.ts agenda). An ok answer brings its
     rows, without the blockers and verdicts the page reads from the answer
-    itself, as an Overview batch's leave out At risk, its asks, its Done
+    itself, as the Overview's Needs attention rows leave out what they need, its asks, its Done
     tasks and their shown parents. A meeting that stops fitting
     (over_ceiling, over_budget) and a read that fails keep the rows it last
     held, so the page shows that meeting with its cards' unsent text as no
@@ -4122,15 +4125,26 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     next = { key, error }
   }
   together(() => {
+    // a failure while the read holds the failure of other arguments, as
+    // after an Overview list's failed Load more the read back to the rows
+    // on screen fails too (ViewQuery keepsHeldOnError)
+    const failedBack =
+      !!read.query.keepsHeldOnError &&
+      next.error !== undefined &&
+      read.held?.error !== undefined &&
+      read.held.key !== key
     read.held = next
     read.current = true
     read.connection = latestConnection
     if (next.value !== undefined) read.answered = true
     const take = read.query.rows
+    const keepsOnError =
+      read.query.keepsOnError ||
+      (read.query.keepsHeldOnError && read.fitted !== null && read.fitted.key !== key)
     const rows =
       take && next.value !== undefined
         ? take(next.value, key)
-        : next.error !== undefined && read.query.keepsOnError
+        : next.error !== undefined && keepsOnError
           ? KEEP_ROWS
           : null
     if (take && rows === KEEP_ROWS) {
@@ -4149,9 +4163,11 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       dropHeldViewParts()
     }
     // the projects an answer names, named with the next repaint; a failure
-    // keeps the last answer's
+    // keeps the last answer's, except where it lets the rows a hold back
+    // kept go, as the arguments it asked without that hold would have
     const named = read.query.projects
     if (named && next.value !== undefined) nameSlotProjects(slot, named(next.value) ?? [])
+    else if (named && failedBack && rows !== KEEP_ROWS) nameSlotProjects(slot, [])
     // a milestone read's answer is its anchor; a failure keeps the last
     // one, which the view shows under its note (P.milestoneRead)
     const milestones = read.query.milestones
@@ -4241,8 +4257,11 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
  * arguments the held answer may stand in for (`hold`) keep that answer and
  * its rows, never as current, until the answer for `key` replaces them: a
  * text filter that only narrows the Board's (views/board/useBoardView.ts
- * narrowsText), and the same Team sync meeting on a new day or week grid
- * (P.watchSync). The view decides when it holds; the store keeps one rule.
+ * narrowsText), the same Team sync meeting on a new day or week grid
+ * (P.watchSync), and an Overview list's Load more, its Retry and the read
+ * back to the rows shown after a failed Load more, whose failure kept them
+ * (ViewQuery keepsHeldOnError) (store/overviewLists.ts). The view decides
+ * when it holds; the store keeps one rule.
  * A new `attempt` on a read that keeps its rows past a failure
  * (ViewQuery keepsOnError) and still holds the last answer whose rows it
  * took (ViewRead fitted) asks afresh without dropping anything. The held
@@ -4375,11 +4394,20 @@ function releaseView(slot: ViewSlot) {
 
 /* The Overview's reads, over the view reads (store/overviewLists.ts). */
 const overview = createOverviewReads({
-  watch: (slot, query, key, attempt) =>
-    watchView(slot, OVERVIEW_QUERIES[query], key, attempt, 0, false),
+  watch: (slot, query, key, attempt, hold) =>
+    watchView(slot, OVERVIEW_QUERIES[query], key, attempt, 0, false, hold),
   read: viewRead,
   release: releaseView,
 })
+
+/* What runs before a page of the Overview goes (P.beforeOverviewRelease). */
+const beforeOverviewRelease = new Set<() => void>()
+
+function runBeforeOverviewRelease() {
+  const writes = [...beforeOverviewRelease]
+  beforeOverviewRelease.clear()
+  for (const write of writes) write()
+}
 
 /** Runs `step`, an action on the Overview's reads, and shows what it
     changed in one repaint of the views. */
@@ -9195,14 +9223,16 @@ const VIEW_WRITES = new Set([
     the views' rows of the task and the task window's own answer of it
     (`detail`), which shows once a window opens on the task while the write
     waits (store/layers.ts View). Its `expected` values are the view's row
-    on screen. A write of dates alone joins the Roadmap's history, in its
+    on screen with `opts.seen` over it, and a field the person saw with the
+    value sent stays unsent; `opts.keepDraft` and `opts.keepUnsaved` run as
+    for the window's own answer (updateAnswerTask). A write of dates alone joins the Roadmap's history, in its
     open batch (recordRoadmapChange), and goes out as an ordinary write
     where no visit records it. A group's dates come from its subtasks, so a
     date patch for one drops. Resolves false for any other field. A handle two view rows share names the person's new task on its
     way (store/viewRows.ts byHandle), never another person's task. A write
     on the task a window shows from a current answer goes through
     updateAnswerTask instead (P.updateIssue). */
-function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
+function updateViewTask(id: string, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
   const it = viewRows.byHandle(id)
   const row = it && viewRows.peek(it.uuid)
   if (!it || !row) return Promise.resolve(false)
@@ -9225,7 +9255,7 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   // nobody else to judge
   const wire = mapIssuePatch(patch)
   if (!wire) return Promise.resolve(false)
-  const shown: Record<string, unknown> = { ...row }
+  const shown: Record<string, unknown> = { ...row, ...opts.seen }
   for (const key of Object.keys(wire) as (keyof typeof wire)[])
     if ((wire[key] ?? null) === (shown[key] ?? null)) delete wire[key]
   if (!Object.keys(wire).length) return Promise.resolve(true)
@@ -9248,12 +9278,15 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
       },
     },
   }
-  const over = overOf('issues', row, Object.keys(wire))
+  const over = overOf('issues', row, Object.keys(wire), opts.seen)
   const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
   return (
-    (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||
+    (planningOnly &&
+      recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over, opts.keepDraft)) ||
     send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
       over,
+      keepDraft: opts.keepDraft,
+      keepUnsaved: opts.keepUnsaved,
       about: { task: uuid },
     })
   )
@@ -12141,17 +12174,16 @@ export const PLANNER = {
   },
   /** Registers the Overview's reads for `key` (store/overviewLists.ts
       overviewKey: its scope and its clock), or none with null while its
-      page or the tab is hidden, which stops them and keeps what they held:
-      the summary, the delays and the batches each list holds, read again
-      with the same arguments when the page asks for them again. `owner`
-      names the mounted page, as P.watchBoard's does, and a new `attempt`
-      (the page's Try again) asks the summary and the delays afresh. A key
+      page or the tab is hidden, which stops them and keeps what they held,
+      read again with the same arguments when the page asks for them again.
+      `owner` names the mounted page, as P.watchBoard's does, and a new
+      `attempt` (the page's Try again) asks the summary afresh. A key
       whose day is not the local day now asks for nothing: a kept page shown
       again after midnight renders once with the day it held, and where the
       store has not reached the new day yet, as before its day watch ran
       after sleep (lib/localDay.ts), it moves to it, so the page renders
       again on the new day. */
-  watchOverview: (key: string | null, owner = 0, attempt = 0, page: OverviewPage = 'classic') => {
+  watchOverview: (key: string | null, owner = 0, attempt = 0, page: OverviewPage = 'status') => {
     const base = key === null ? null : baseOfKey(key)
     const now = new Date()
     const today = isoFromDate(now)
@@ -12176,6 +12208,9 @@ export const PLANNER = {
       Overview's reads ask. */
   watchOverviewNeeds: (ask: NeedsAsk | null, owner = 0) =>
     overviewStep(() => overview.watchNeeds(ask, owner)),
+  /** Registers My view's Your work, or none with false, for the page
+      `owner` names, as P.watchOverviewNeeds registers Needs attention. */
+  watchOverviewWork: (on: boolean, owner = 0) => overviewStep(() => overview.watchWork(on, owner)),
   /** Registers with the owner-load cache, under the Overview's own view
       key, the people its Load this week shows, `owners`, each with how
       many of the listed tasks are theirs, which orders a guest's or
@@ -12193,46 +12228,55 @@ export const PLANNER = {
       keeping them and their last answers for the panel's return: the
       panel left. */
   stopOverviewPeople: () => ownerLoads.setLive(OVERVIEW_PEOPLE, false),
-  /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
-      the summary's and the delays' answers for the Overview asked now and
-      whether each is current, each list's batches and state, and the
-      health table's answer. */
+  /** What the Overview's reads hold (store/overviewLists.ts OverviewView)
+      for the Overview asked now. */
   overviewRead: (): OverviewView => overview.view(),
-  /** Load more on Overview list `list`, the health table or the Needs
-      attention list. */
-  overviewMore: (list: ListKind | 'health' | 'needs') =>
+  /** Load more on the health table, the Needs attention list or a group
+      of Your work. */
+  overviewMore: (read: 'health' | 'needs' | WorkGroup) =>
     overviewStep(() =>
-      list === 'health'
+      read === 'health'
         ? overview.moreHealth()
-        : list === 'needs'
+        : read === 'needs'
           ? overview.moreNeeds()
-          : overview.more(list),
+          : overview.moreWork(read),
     ),
-  /** Shows Overview list `list` from its first batch again. */
-  overviewFromStart: (list: ListKind) => overviewStep(() => overview.fromStart(list)),
-  /** Asks batch `batch` of Overview list `list` afresh (Try again, Retry),
-      or the health table, with no batch (its Try again, or a failed Load
-      more's Retry). */
-  overviewRetry: (list: ListKind | 'health' | 'needs', batch = 0) =>
+  /** Asks the health table, the Needs attention list or Your work afresh
+      (its Try again), or after a Load more that failed, that Load more
+      again (its Retry). */
+  overviewRetry: (read: 'health' | 'needs' | 'work') =>
     overviewStep(() =>
-      list === 'health'
+      read === 'health'
         ? overview.retryHealth()
-        : list === 'needs'
+        : read === 'needs'
           ? overview.retryNeeds()
-          : overview.retry(list, batch),
+          : overview.retryWork(),
     ),
+  /** Runs `write` once, as the Overview's page goes for good
+      (P.leaveOverviewPage, P.releaseOverview), while the Overview's rows
+      are still there: a write the page holds back until another answers,
+      which the store sends only for a task its rows hold. Answers a
+      function that drops it. */
+  beforeOverviewRelease: (write: () => void) => {
+    beforeOverviewRelease.add(write)
+    return () => {
+      beforeOverviewRelease.delete(write)
+    }
+  },
+  /** Runs what waits for the Overview's page to go
+      (P.beforeOverviewRelease): a page of the Overview left for good while
+      the Overview stays kept, as where a new scope mounts it anew. Its
+      reads and rows stay for the page that takes its place. */
+  leaveOverviewPage: runBeforeOverviewRelease,
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
       longer kept. */
   releaseOverview: () => {
+    runBeforeOverviewRelease()
     overviewStep(() => overview.release())
     ownerLoads.release(OVERVIEW_PEOPLE)
-    for (const slot of [
-      ...OVERVIEW_MILESTONE_SLOTS.upcoming,
-      ...OVERVIEW_MILESTONE_SLOTS.past,
-      OVERVIEW_MILESTONE_SLOTS.next,
-    ])
+    for (const slot of [...OVERVIEW_MILESTONE_SLOTS.upcoming, ...OVERVIEW_MILESTONE_SLOTS.past])
       PLANNER.releaseMilestones(slot)
   },
   /** Registers milestone read `slot` (the milestone reads' header above):
@@ -12885,7 +12929,7 @@ export const PLANNER = {
     // the task the window shows from its own current answer, else one only
     // an open view's answer brings (store/viewRows.ts)
     const shown = answerTaskOf(id)
-    return shown ? updateAnswerTask(shown, patch, opts) : updateViewTask(id, patch)
+    return shown ? updateAnswerTask(shown, patch, opts) : updateViewTask(id, patch, opts)
   },
 
   setStatus: (id: string, status: Row<'issues'>['status']) => {

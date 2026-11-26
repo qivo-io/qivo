@@ -1,5 +1,6 @@
-/* The Overview's reads (views/Overview.tsx): its summary, its projected
-   delays, its two lists in batches and its health table, over the store's
+/* The Overview's reads (views/overview/ProjectOverview.tsx and
+   views/overview/MyOverview.tsx): its summary, its health table, a
+   project's Needs attention list and My view's Your work, over the store's
    view reads (store/planner.ts watchView), which this module asks for
    through the transport it is given, as store/ownerLoadCache.ts takes one.
    It holds no React and reads nothing of the store's own.
@@ -9,126 +10,85 @@
      what it held and reads again with the same arguments when the page
      asks for them again. Arguments are built here in one fixed key order,
      so equal arguments share one subscription.
-   - The summary and the delays are one read each. A list is a run of
-     batches, each one read of overview.attention or overview.paused under
-     a view slot of its own (`overview:<list>:<id>`), whose rows the store
-     keeps for the page to show (store/viewRows.ts).
-   - Only the last batch is open (no `end`). Load more freezes it: the
-     batch is read again between its cursor and the end it answered, and
-     the next one opens at its `next`. The frozen read and the new open one
-     replace the open batch together, once both answered, and until then
-     the page shows the open batch's answer from the press
-     (convex/lib/overview.ts listBatch).
-   - A frozen batch that grew past OVERVIEW.split rows answers `split`, and
-     one whose reads stopped answers `complete: false` with the last
-     position it judged: each gives way to two batches that meet there, and
-     shows its earlier answer until both answered. A Load more's frozen
-     read that splits waits for its halves the same way. Reads that stopped
-     at the batch's own end judged every row in it, so it gives way to
-     nothing. Two frozen batches next to each other whose rows fit
-     OVERVIEW.split become one read.
-   - While a batch shows its earlier answer, for a Load more or for its
-     halves, the list's other batches keep what they show as well and take
-     their new answers with the batches that replace it, so the list shows
-     the answers of one moment. A row that moved out of that batch never
-     shows twice, and one that moved into it never goes missing. A batch
-     whose answer splits in the same change that answers a Load more's or
-     a split's last batch holds them as well.
-   - A list keeps at most LIST_ROWS rows and LIST_READS reads, split halves
-     and merges included. Past either, a merge still on its way gives way
-     first. Next, where a batch on screen waits for its halves, a Load more
-     on its way gives way, as the list would hold the reads of both until
-     they all answered: the rows on screen stay, and the list offers Load
-     more again. Then the list drops its first batches until both fit and
-     says that earlier tasks are not shown, with a way back to the start,
-     so every task stays reachable by going on. Where only the open batch
-     is left and a Load more's frozen read keeps splitting past the reads,
-     the Load more gives way: the open batch takes its current answer and
-     offers Load more again.
-   - A batch refused for its position, as after the server's secret
-     rotated, starts its list again from the first batch, once for one
-     list key; a second refusal is the list's error. A new day restarts
-     the At-risk list, whose positions follow the day, and keeps Paused.
-   - Any other failure, `unavailable` or `over_budget` shows in place of
-     that batch, with Try again, and the list shows no end while it stands.
-   - The health table is one read (overview.health) of its first rows in
-     the order and with the search the page asks (`watchTable`), apart
-     from the scope's reads, so a new sort, search or Load more asks the
-     health read alone. It asks only while the page asks and has a table,
-     OVERVIEW_BATCH rows at first and as many more for each Load more. A new
-     sort or search starts again at the first rows. A new scope forgets the
-     table and asks no health read until the page registers its own for
-     it, so the health read never asks the new scope with the old scope's
-     sort or search. While an answer for new table arguments is on its way,
-     the last answer shown for the same scope and clock stays as `kept`, as
-     the store's view read drops what it held for other arguments, and
-     offers no Load more; a new scope or clock shows nothing until its own
-     answer. A Load more that fails goes back to the rows it showed, asking
-     their arguments again so they keep updating, and offers Retry. Where
-     those rows fail too, the table shows its error, whose Try again asks
-     it afresh.
+   - The summary is one read. The health table, the Needs attention list
+     and Your work are each one read of their first rows, with Load more:
+     the health table OVERVIEW_BATCH rows at first and as many more each
+     time, Needs attention NEEDS_FIRST and NEEDS_STEP, and each group of
+     Your work WORK_FIRST and WORK_STEP, apart from the other groups. Each
+     asks only while the page asks for it (`watchTable`, `watchNeeds`,
+     `watchWork`), apart from the scope's reads, so a new sort, search,
+     kind or Load more asks that read alone. A new sort, search or kind
+     starts again at the first rows. A new scope forgets them and asks
+     none until the page registers its own, so no read asks the new scope
+     with the old scope's arguments.
+   - While an answer for new arguments is on its way, the last answer
+     shown for the same scope and clock stays as `kept`, as the store's
+     view read drops what it held for other arguments, and offers no Load
+     more beyond the one on its way; a new scope or clock shows nothing
+     until its own answer. For a Load more and its Retry the store's read
+     keeps that answer and its rows too (OverviewTransport `hold`), so the
+     tasks of the rows on screen stay editable until the longer answer
+     replaces them. A Load more that fails goes back to the rows it
+     showed, asking their arguments again so they keep updating, and offers
+     Retry; the store keeps those rows through the failure and that read
+     until its answer replaces them. Where those rows fail too, the read
+     shows its error, without them, whose Try again asks it afresh.
    - A project or sub-project's page (`page` 'status') asks the summary,
-     the health table and the Needs attention list (overview.needs), and
-     no delays or lists; My view's page ('classic') asks the summary, the
-     delays, the two lists and the health table. The Needs attention list
-     is one read of its first rows of the kind the page shows
-     (`watchNeeds`), with Load more, a kept answer and a failed Load more's
-     Retry by the health table's rules, NEEDS_FIRST rows at first and
-     NEEDS_STEP more each time. */
+     the health table and Needs attention; My view's page ('mine') the
+     summary, the health table and Your work. */
 
-import { ConvexError, type Value } from 'convex/values'
+import type { Value } from 'convex/values'
 import type {
   HealthAnswer,
   HealthSort,
-  ListAnswer,
-  OverviewRow,
   OverviewScope,
-  RiskAnswer,
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import type { NeedsAnswer, NeedsFilter } from '../../convex/lib/overviewNeeds'
+import type { WorkAnswer } from '../../convex/lib/overviewWork'
+import { WORK_GROUPS, type WorkGroup } from '../../convex/lib/workGroups'
 
-/** The rows one batch holds, the page's Load more step
-    (convex/lib/overview.ts OVERVIEW.batch, pinned by
-    store/overviewParity.test.ts). */
+/** The health table's first rows and its Load more step. */
 export const OVERVIEW_BATCH = 10
-/** The rows a batch read again with its fixed end may hold before it
-    answers a position to split at (OVERVIEW.split). */
-export const OVERVIEW_SPLIT = 20
 /** How many local weeks the clock sends: this one and the 52 before
     (convex/lib/viewLoads.ts WEEK_STARTS). */
 export const OVERVIEW_WEEKS = 53
-/** The rows one list keeps on screen at most. Past it, Load more drops the
-    list's first batches. */
-export const LIST_ROWS = 50
-/** The reads one list holds at most, split halves and merges included: with
-    the summary, the delays and the health table an Overview holds at most
-    3 + 2 * LIST_READS reads. */
-export const LIST_READS = 5
 
 /** The Needs attention list's first rows and its Load more step
     (convex/lib/overviewNeeds.ts NEEDS). */
 export const NEEDS_FIRST = 20
 export const NEEDS_STEP = 20
 
-/** The Overview's two lists. */
-export type ListKind = 'attention' | 'paused'
-/** The Overview's six queries (convex/overview.ts). */
-export type OverviewQuery = 'summary' | 'risk' | ListKind | 'health' | 'needs'
+/** A group of Your work's first rows and its Load more step
+    (convex/lib/overviewWork.ts WORK). */
+export const WORK_FIRST = 10
+export const WORK_STEP = 10
+
+/** The Overview's queries (convex/overview.ts) the app calls. */
+export type OverviewQuery = 'summary' | 'health' | 'needs' | 'work'
 
 /** Which Overview page asks: a project or sub-project's ('status') or My
-    view's ('classic'). */
-export type OverviewPage = 'status' | 'classic'
+    view's ('mine'). */
+export type OverviewPage = 'status' | 'mine'
 
 /** The Needs attention list the page asks for: the kind it shows. */
 export type NeedsAsk = { kind: NeedsFilter }
 
 /** The health table the page asks for: the column it sorts by, the
-    direction and the search, trimmed, '' for none. */
-export type HealthTable = { sort: HealthSort; dir: 'asc' | 'desc'; search: string }
+    direction, the search, trimmed, '' for none, and whether it leaves out
+    the rows with nothing left (`openOnly`). */
+export type HealthTable = {
+  sort: HealthSort
+  dir: 'asc' | 'desc'
+  search: string
+  openOnly?: boolean
+}
 
 /** One health read's table, with how many rows it asks for. */
 export type HealthAsk = HealthTable & { limit: number }
+
+/** How many rows of each group Your work asks for. */
+export type WorkLimits = Record<WorkGroup, number>
 
 /** The client's day and weeks the queries are judged by
     (convex/lib/viewLoads.ts clockOf). */
@@ -156,35 +116,26 @@ const clockArgs = (c: OverviewClock): Record<string, Value> => ({
   week_end: c.week_end,
 })
 
+const firstWork = (): WorkLimits => ({ progress: WORK_FIRST, review: WORK_FIRST, next: WORK_FIRST })
+
 /**
  * The arguments of `query` for `base`, in a fixed key order: the summary
- * takes the day, the delays and the At-risk list every clock field, the
- * Paused list none, and a list batch its `cursor` and `end` where set; the
- * health table every clock field and `table`'s column, direction, search
- * (left out when blank) and limit.
+ * takes the day; the health table every clock field and `table`'s column,
+ * direction, search (left out when blank), limit and open_only where set;
+ * Needs attention every clock field, `needs`' kind and limit; Your work
+ * every clock field and each group's limit.
  */
 export function overviewArgs(
   query: OverviewQuery,
   base: OverviewBase,
-  cursor: string | null = null,
-  end: string | null = null,
   table: HealthAsk | null = null,
   needs: (NeedsAsk & { limit: number }) | null = null,
+  work: WorkLimits | null = null,
 ): Record<string, Value> {
   const scope = scopeArgs(base.scope)
-  const at = {
-    ...(cursor === null ? {} : { cursor }),
-    ...(end === null ? {} : { end }),
-  }
   switch (query) {
     case 'summary':
       return { scope, day: base.clock.day }
-    case 'risk':
-      return { scope, ...clockArgs(base.clock) }
-    case 'attention':
-      return { scope, ...clockArgs(base.clock), ...at }
-    case 'paused':
-      return { scope, ...at }
     case 'needs': {
       const n = needs ?? { kind: 'all', limit: NEEDS_FIRST }
       const at = base.scope.kind === 'project' ? base.scope : { org_id: '', project_id: '' }
@@ -195,6 +146,10 @@ export function overviewArgs(
         limit: n.limit,
       }
     }
+    case 'work': {
+      const w = work ?? firstWork()
+      return { ...clockArgs(base.clock), progress: w.progress, review: w.review, next: w.next }
+    }
     case 'health': {
       const t = table ?? { sort: 'late', dir: 'desc', search: '', limit: OVERVIEW_BATCH }
       return {
@@ -204,6 +159,7 @@ export function overviewArgs(
         dir: t.dir,
         ...(t.search === '' ? {} : { search: t.search }),
         limit: t.limit,
+        ...(t.openOnly ? { open_only: true } : {}),
       }
     }
   }
@@ -220,11 +176,6 @@ export function baseOfKey(key: string): OverviewBase {
   return { scope, clock }
 }
 
-/** The key of a list's positions (convex/lib/overview.ts listKey): its
-    scope, and for At risk the clock, so a new day restarts it and keeps
-    Paused. */
-const listKeyOf = (kind: ListKind, base: OverviewBase) => JSON.stringify(overviewArgs(kind, base))
-
 /** What one read holds, as the store's view reads answer it
     (store/planner.ts viewRead). */
 export type HeldRead = {
@@ -240,8 +191,17 @@ export type HeldRead = {
 export type OverviewTransport = {
   /** Registers read `slot` of `query` for the arguments `key` (JSON), or
       stops it with null, keeping what it held; a new `attempt` asks
-      afresh. */
-  watch(slot: string, query: OverviewQuery, key: string | null, attempt: number): void
+      afresh. With `hold` the answer it holds for other arguments, and its
+      rows, stay until an answer for `key` replaces them. A failure for
+      `key` keeps those rows, which stay through a `hold` back to the
+      arguments they answer, until that read's result replaces them. */
+  watch(
+    slot: string,
+    query: OverviewQuery,
+    key: string | null,
+    attempt: number,
+    hold: boolean,
+  ): void
   /** What read `slot` holds. */
   read(slot: string): HeldRead
   /** Forgets read `slot`, its result and its rows. */
@@ -259,174 +219,70 @@ export type FigureView<T> = {
   current: boolean
 } | null
 
-/** What one batch shows in place: its rows, and its note where it has one. */
-export type BatchView = {
-  id: number
-  /** the view slot whose rows hold the models of its tasks */
-  slot: string
-  rows: readonly OverviewRow[]
-  /** what it says after its rows: its reads stopped before the batch ended
-      (`incomplete`), or it failed (`over_budget`, `unavailable` with the
-      answer's sentence, `error`), with Try again */
-  note:
-    | null
-    | { kind: 'incomplete' }
-    | { kind: 'over_budget' }
-    | { kind: 'unavailable'; message?: string }
-    | { kind: 'error' }
-  /** whether its answer is on its way (Try again pressed) */
-  waiting: boolean
-}
-
-/** What one list shows. */
-export type ListView = {
-  state: 'loading' | 'refreshing' | 'ok' | 'incomplete' | 'over_budget' | 'error'
-  /** the batches on screen, in order */
-  batches: readonly BatchView[]
-  /** whether earlier batches were dropped (LIST_ROWS, LIST_READS) */
-  dropped: boolean
-  /** whether the list reached its true end */
-  end: boolean
-  /** Load more: `ready` to press, `loading` while its batches load, none */
-  more: 'ready' | 'loading' | null
-  /** whether the list failed as a whole (a second position refusal) */
-  failed: boolean
-  /** the reads it holds now */
-  reads: number
-}
-
-/** What the health table shows: its answer, or nothing (null) before the
-    first one for the scope and clock asked now. */
-export type HealthView = {
-  /** the answer shown: the one for the table asked now, or while an answer
-      for new table arguments is on its way, the last one shown for this
+/** What a read of first rows with Load more shows: its answer, or nothing
+    (null) before the first one for the scope and clock asked now. */
+type LimitedView<Ask, Answer, More, Lim = number> = {
+  /** the answer shown: the one for the arguments asked now, or while an
+      answer for new arguments is on its way, the last one shown for this
       scope and clock (`kept`) */
-  value?: HealthAnswer
-  /** the error of the first answer for the table asked now */
+  value?: Answer
+  /** the error of the first answer for the arguments asked now */
   error?: unknown
-  /** the table arguments the answer or the error shown answers, so the
-      page tells an answer asked with no search from one with a search */
-  table: HealthAsk
-  /** whether the answer shown is the live subscription's for the table
-      asked now, arrived on this connection */
+  /** the arguments the answer or the error shown answers */
+  ask: Ask
+  /** whether the answer shown is the live subscription's for the
+      arguments asked now, arrived on this connection */
   current: boolean
-  /** whether the answer shown answers other table arguments than those
-      asked now: a sort, a search or a Load more on its way */
+  /** whether the answer shown answers other arguments than those asked
+      now: a sort, a search, a kind or a Load more on its way */
   kept: boolean
-  /** Load more: `ready` to press, `loading` while its rows load, none,
-      also while the answer shown is kept for another sort or search */
-  more: 'ready' | 'loading' | null
+  /** Load more: `ready` to press, `loading` while its rows load, none */
+  more: More
   /** whether a Load more failed, so the rows are the ones before it and
       Retry asks it again */
   moreFailed: boolean
+  /** the rows that failed Load more asked for, null for none */
+  failedAt: Lim | null
 } | null
 
-/** What the Needs attention list shows, by the health table's rules
-    (HealthView): its answer, or nothing (null) before the first one for
-    the scope and clock asked now. */
-export type NeedsView = {
-  value?: NeedsAnswer
-  error?: unknown
-  /** the kind and rows the answer or the error shown answers */
-  ask: NeedsAsk & { limit: number }
-  current: boolean
-  kept: boolean
-  more: 'ready' | 'loading' | null
-  moreFailed: boolean
-} | null
+type MoreState = 'ready' | 'loading' | null
+
+/** What the health table shows; `table` is the arguments its answer
+    answers. */
+export type HealthView =
+  | (Omit<NonNullable<LimitedView<HealthAsk, HealthAnswer, MoreState>>, 'ask'> & {
+      table: HealthAsk
+    })
+  | null
+
+/** What the Needs attention list shows. */
+export type NeedsView = LimitedView<NeedsAsk & { limit: number }, NeedsAnswer, MoreState>
+
+/** What Your work shows: Load more and a failed Load more by group. */
+export type WorkView = LimitedView<true, WorkAnswer, Record<WorkGroup, MoreState>, WorkLimits>
 
 /** What the Overview's reads hold for the page. */
 export type OverviewView = {
   /** the Overview the reads are for, null for none */
   key: string | null
   summary: FigureView<SummaryAnswer>
-  risk: FigureView<RiskAnswer>
-  attention: ListView
-  paused: ListView
   health: HealthView
   needs: NeedsView
+  work: WorkView
 }
-
-type OkList = Extract<ListAnswer, { state: 'ok' }>
-
-/* What a batch shows: its last answer that needs no successor, or its
-   failure. */
-type Shown =
-  | { kind: 'ok'; answer: OkList }
-  | { kind: 'refused'; value: Exclude<ListAnswer, { state: 'ok' }> }
-  | { kind: 'error'; error: unknown }
-
-type Batch = {
-  id: number
-  slot: string
-  cursor: string | null
-  /** its fixed end, null for the open batch */
-  end: string | null
-  attempt: number
-  shown: Shown | null
-  /** a merge with it failed, so it is not merged again */
-  alone?: boolean
-}
-
-/* Batches that replace `from`, contiguous on screen, once each of `to`
-   answered: Load more's frozen and open batch, a split's halves, a merge. */
-type Swap = { from: Batch[]; to: Batch[]; why: 'more' | 'split' | 'merge' }
-
-type List = {
-  kind: ListKind
-  /** the key the list's positions are bound to, null before any */
-  key: string | null
-  shown: Batch[]
-  swaps: Swap[]
-  dropped: boolean
-  /** the list key a position refusal restarted the list for */
-  restarted: string | null
-  failed: boolean
-}
-
-/**
- * Where fixed batch (`cursor`, `end`] gives way to two halves after its ok
- * answer `v`: the position it split at, or the last one it judged where its
- * reads stopped. Null where it gives way to nothing: an open batch (no
- * `end`), an answer that fits, or reads that stopped at the batch's own end
- * or cursor, where one half would ask again with the batch's own arguments
- * and get the same answer. The store keeps a batch's rows exactly while it
- * gives way (store/planner.ts listQuery).
- */
-export function splitAt(cursor: string | null, end: string | null, v: OkList): string | null {
-  if (end === null) return null
-  if (v.split !== undefined) return v.split
-  if (v.complete || v.next === null || v.next === end || v.next === cursor) return null
-  return v.next
-}
-
-/** The refusal code of a query's error (convex/lib/functions.ts Refusal). */
-const codeOf = (error: unknown): string | undefined =>
-  error instanceof ConvexError ? (error.data as { code?: string } | undefined)?.code : undefined
 
 const SUMMARY_SLOT = 'overview:summary'
-const RISK_SLOT = 'overview:risk'
 const HEALTH_SLOT = 'overview:health'
 const NEEDS_SLOT = 'overview:needs'
+const WORK_SLOT = 'overview:work'
 
-/** An answer of first rows with Load more: its rows, how many there are
-    and the most one answer holds. */
+/** An answer of first rows: its rows, how many there are and the most one
+    answer holds. */
 type Limited = { state: string; rows?: readonly unknown[]; total?: number; most?: number }
 
-/** What a limited read shows, before the page's own names for it. */
-type LimitedView<Ask, Answer> = {
-  value?: Answer
-  error?: unknown
-  ask: Ask & { limit: number }
-  current: boolean
-  kept: boolean
-  more: 'ready' | 'loading' | null
-  moreFailed: boolean
-} | null
-
 /* Whether two health tables ask the same. */
-const sameTable = (a: HealthTable | null, b: HealthTable | null) =>
-  a !== null && b !== null && a.sort === b.sort && a.dir === b.dir && a.search === b.search
+const sameTable = (a: HealthTable, b: HealthTable) =>
+  a.sort === b.sort && a.dir === b.dir && a.search === b.search && !a.openOnly === !b.openOnly
 
 /** Creates the Overview's reads over `transport`. */
 export function createOverviewReads(transport: OverviewTransport) {
@@ -436,256 +292,302 @@ export function createOverviewReads(transport: OverviewTransport) {
   let asking = false
   let owner = 0
   let attempt = 0
-  let nextId = 0
   let settling = false
   let again = false
-  const lists: Record<ListKind, List> = {
-    attention: emptyList('attention'),
-    paused: emptyList('paused'),
-  }
   // which page asks: its reads (OverviewPage)
-  let page: OverviewPage = 'classic'
+  let page: OverviewPage = 'status'
 
-  function emptyList(kind: ListKind): List {
-    return { kind, key: null, shown: [], swaps: [], dropped: false, restarted: null, failed: false }
-  }
+  /**
+   * One read of an answer's first rows with Load more (the module header):
+   * what the page asks (`ask`, null for none), how many rows (`limit`),
+   * `first` at first and `grow` for each Load more, its Try again count,
+   * the last answer it showed for the Overview and the limit it answered,
+   * and a Load more that failed, whose Retry asks it again. `Lim` is a
+   * number of rows, or one for each part of an answer, as Your work's
+   * groups; `pressed` says which parts a limit asks more of than one
+   * before, and `ready` which parts of an answer offer Load more. A Load
+   * more of one part that failed leaves the other parts' Load more, and
+   * `join` keeps the larger of two limits in each part, so a failed part's
+   * Retry keeps what another part loaded since.
+   */
+  function limitedRead<Ask, Answer extends { state: string }, Lim, More, Asked>(o: {
+    slot: string
+    query: OverviewQuery
+    first: () => Lim
+    same: (a: Ask, b: Ask) => boolean
+    sameLimit: (a: Lim, b: Lim) => boolean
+    args: (at: OverviewBase, ask: Ask, limit: Lim) => Record<string, Value>
+    /** what the view names as the arguments of `ask` with `limit` */
+    asked: (ask: Ask, limit: Lim) => Asked
+    /** whether `now` asks more rows than `before` of some part */
+    grew: (before: Lim, now: Lim) => boolean
+    join: (a: Lim, b: Lim) => Lim
+    /** what Load more says for `value`, the answer for limit `answered`,
+        `pressed` naming the limit on its way and `failed` the one a failed
+        Load more asked (null for none) */
+    more: (value: Answer, answered: Lim, pressed: Lim | null, failed: Lim | null) => More
+    none: More
+  }) {
+    let ask: Ask | null = null
+    let limit = o.first()
+    let tries = 0
+    let shown: { base: string; ask: Ask; limit: Lim; value: Answer } | null = null
+    let failedMore: Lim | null = null
+    const same = (a: Ask | null, b: Ask | null) => a !== null && b !== null && o.same(a, b)
 
-  const batchKey = (list: List, b: Batch) =>
-    base === null ? null : JSON.stringify(overviewArgs(list.kind, base, b.cursor, b.end))
+    /** The read's arguments now, null where it asks for none. */
+    const key = () =>
+      base === null || ask === null ? null : JSON.stringify(o.args(base, ask, limit))
 
-  /** Registers batch `b`'s read as the reads stand: live while asking. */
-  const watchBatch = (list: List, b: Batch) =>
-    transport.watch(b.slot, list.kind, asking ? batchKey(list, b) : null, b.attempt)
+    /** Registers the read as the reads stand: live while asking, holding
+        the answer shown and its rows where the arguments ask more rows of
+        it, and after a failed Load more, whose read goes back to them. */
+    const watch = () =>
+      transport.watch(
+        o.slot,
+        o.query,
+        asking ? key() : null,
+        tries,
+        shown !== null &&
+          shown.base === baseKey &&
+          same(shown.ask, ask) &&
+          (o.grew(shown.limit, limit) || failedMore !== null),
+      )
 
-  function newBatch(list: List, cursor: string | null, end: string | null): Batch {
-    const id = ++nextId
-    const b: Batch = {
-      id,
-      slot: `overview:${list.kind}:${id}`,
-      cursor,
-      end,
-      attempt: 0,
-      shown: null,
+    /** Takes the read's news in: an answer for the arguments asked now is
+        the one it shows, and a Load more that failed goes back to the rows
+        it showed, asking their arguments again. Where those rows fail too,
+        it forgets the Load more, so the read shows its error and Try again
+        asks it afresh. Only a failure the live read brought fails a Load
+        more: a Retry pressed while the rows it went back to load again
+        asks the arguments that failed, whose failure the store holds until
+        the new read answers. */
+    function settleRead() {
+      const now = key()
+      if (now === null || baseKey === null || ask === null) return
+      const held = transport.read(o.slot)
+      if (held.key !== now) return
+      if (held.error === undefined) {
+        if (held.value !== undefined)
+          shown = { base: baseKey, ask, limit, value: held.value as Answer }
+        return
+      }
+      if (
+        shown !== null &&
+        shown.base === baseKey &&
+        same(shown.ask, ask) &&
+        o.grew(shown.limit, limit)
+      ) {
+        if (!held.current) return
+        failedMore = failedMore === null ? limit : o.join(failedMore, limit)
+        limit = shown.limit
+        watch()
+        return
+      }
+      failedMore = null
     }
-    watchBatch(list, b)
-    return b
-  }
 
-  /** The reads list `list` holds. */
-  const readsOf = (list: List) =>
-    list.shown.length + list.swaps.reduce((n, s) => n + s.to.length, 0)
-
-  /** The rows list `list` shows. */
-  const rowsOf = (list: List) =>
-    list.shown.reduce((n, b) => n + (b.shown?.kind === 'ok' ? b.shown.answer.rows.length : 0), 0)
-
-  /** Starts list `list` again from its first batch, releasing every read. */
-  function restart(list: List) {
-    for (const b of list.shown) transport.release(b.slot)
-    for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
-    list.shown = []
-    list.swaps = []
-    list.dropped = false
-    list.failed = false
-    list.shown = [newBatch(list, null, null)]
-  }
-
-  /** Drops batch `b`, the first on screen, and the swaps it is part of.
-      Where that was a split the other batches waited for, they take their
-      answers in the next pass. */
-  function drop(list: List, b: Batch) {
-    for (const s of list.swaps.filter((s) => s.from.includes(b))) {
-      if (s.why === 'split') again = true
-      cancel(list, s)
-    }
-    transport.release(b.slot)
-    list.shown = list.shown.filter((x) => x !== b)
-    list.dropped = true
-  }
-
-  /** Gives up swap `s`, releasing the batches that were to replace. */
-  function cancel(list: List, s: Swap) {
-    for (const b of s.to) transport.release(b.slot)
-    list.swaps = list.swaps.filter((x) => x !== s)
-  }
-
-  /** Batch `b`'s answer for the arguments it asks with, or undefined. */
-  function answerOf(list: List, b: Batch): { value?: ListAnswer; error?: unknown } | undefined {
-    const held = transport.read(b.slot)
-    if (held.key === null || held.key !== batchKey(list, b)) return undefined
-    if (held.error !== undefined) return { error: held.error }
-    if (held.value === undefined) return undefined
-    return { value: held.value as ListAnswer }
-  }
-
-  /** Whether batch `b`'s answer `a` refuses its position. */
-  const refusedPosition = (b: Batch, a: { error?: unknown }) =>
-    a.error !== undefined &&
-    codeOf(a.error) === 'bad_request' &&
-    (b.cursor !== null || b.end !== null)
-
-  /** What `a` shows, or null where batch `b` gives way to two halves: a
-      fixed batch that split, or whose reads stopped before its end
-      (splitAt). A fixed batch whose reads stopped at its end shows its
-      rows as the whole batch; one whose reads stopped at its cursor judged
-      nothing, which the server answers over_budget. */
-  function settledOf(b: Batch, a: { value?: ListAnswer; error?: unknown }): Shown | null {
-    if (a.error !== undefined) return { kind: 'error', error: a.error }
-    const v = a.value as ListAnswer
-    if (v.state !== 'ok') return { kind: 'refused', value: v }
-    if (splitAt(b.cursor, b.end, v) !== null) return null
-    if (b.end !== null && !v.complete)
-      return v.next === b.end
-        ? { kind: 'ok', answer: { ...v, complete: true } }
-        : { kind: 'refused', value: { state: 'over_budget' } }
-    return { kind: 'ok', answer: v }
-  }
-
-  /** The two batches that replace fixed batch `b`, whose answer `v` split
-      or stopped, meeting where it split or the last position it judged. */
-  function halves(list: List, b: Batch, v: OkList): Batch[] {
-    const at = splitAt(b.cursor, b.end, v) as string
-    return [newBatch(list, b.cursor, at), newBatch(list, at, b.end)]
-  }
-
-  /** A position refusal: the list starts again once for its key, then
-      fails. Answers false to stop settling the list. */
-  function refused(list: List): false {
-    if (list.restarted === list.key) {
-      for (const b of list.shown) transport.release(b.slot)
-      for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
-      list.shown = []
-      list.swaps = []
-      list.failed = true
-      return false
-    }
-    list.restarted = list.key
-    restart(list)
-    return false
-  }
-
-  /** Takes list `list`'s answers in, as the module header describes.
-      Answers false where a refusal restarted it. */
-  function settleList(list: List): boolean {
-    if (list.failed) return true
-    // batches waiting to replace others take each answer as it comes, as
-    // nothing shows them yet, so they replace with their current one. One
-    // that split or stopped gives way to its halves at once; a merged read
-    // that would, as a guest's stops at its second owner, gives the merge
-    // up (cancel puts a new array in list.swaps, so this walks the one it
-    // was)
-    for (const s of list.swaps)
-      for (let i = 0; i < s.to.length; i++) {
-        const b = s.to[i] as Batch
-        const a = answerOf(list, b)
-        if (a === undefined) continue
-        if (refusedPosition(b, a)) return refused(list)
-        const settled = settledOf(b, a)
-        if (settled !== null) b.shown = settled
-        else if (s.why === 'merge') {
-          for (const x of s.from) x.alone = true
-          cancel(list, s)
-          break
-        } else {
-          transport.release(b.slot)
-          s.to.splice(i, 1, ...halves(list, b, a.value as OkList))
-          i--
+    /** What the read shows. */
+    function view(): LimitedView<Asked, Answer, More, Lim> {
+      const now = key()
+      if (now === null || ask === null) return null
+      const held = transport.read(o.slot)
+      const asked = o.asked(ask, limit)
+      const offered = (value: Answer, answered: Lim, pressed: Lim | null) =>
+        o.more(value, answered, pressed, failedMore)
+      if (held.key === now && held.value !== undefined) {
+        const value = held.value as Answer
+        return {
+          value,
+          ask: asked,
+          current: held.current,
+          kept: false,
+          more: offered(value, limit, null),
+          moreFailed: failedMore !== null,
+          failedAt: failedMore,
         }
       }
-    // the batches on screen read their current answers, and start or end
-    // their splits, before any swap replaces what it stood for, so a split
-    // that starts with this change also holds a Load more or a split whose
-    // last batch answered in it
-    const fresh: [Batch, Shown][] = []
-    for (const b of list.shown) {
-      const a = answerOf(list, b)
-      if (a === undefined) continue
-      if (refusedPosition(b, a)) return refused(list)
-      const swap = list.swaps.find((s) => s.from.includes(b))
-      // Load more shows the open batch's answer from the press
-      if (swap?.why === 'more') continue
-      const settled = settledOf(b, a)
-      if (settled === null) {
-        // it gives way to its halves, also where it waited to merge
-        if (swap?.why === 'merge') cancel(list, swap)
-        if (swap?.why !== 'split')
-          list.swaps.push({ from: [b], to: halves(list, b, a.value as OkList), why: 'split' })
-        continue
+      // the last answer shown for this scope and clock, and whether the
+      // arguments asked now are its own with more rows (a Load more)
+      const before = shown !== null && shown.base === baseKey ? shown : null
+      const sameAsk = before !== null && same(before.ask, ask)
+      const pressed = sameAsk && before !== null && o.grew(before.limit, limit)
+      const keptAsk = before === null ? asked : o.asked(before.ask, before.limit)
+      if (held.key === now && held.error !== undefined && (held.current || !pressed))
+        // a Load more that failed shows the rows before it from the first
+        // render, as settleRead takes the read back to them, and a failure
+        // from before its Retry shows that Retry on its way below; any
+        // other error is the read's own, also where the rows a failed Load
+        // more went back to failed, which settleRead then forgets
+        return pressed && before !== null
+          ? {
+              value: before.value,
+              ask: keptAsk,
+              current: false,
+              kept: false,
+              more: o.none,
+              moreFailed: true,
+              failedAt: failedMore === null ? limit : o.join(failedMore, limit),
+            }
+          : {
+              error: held.error,
+              ask: asked,
+              current: held.current,
+              kept: false,
+              more: o.none,
+              moreFailed: false,
+              failedAt: null,
+            }
+      // waiting: the last answer shown for this scope and clock, which
+      // offers Load more only where it answers what is asked now, so a press
+      // never raises the rows of another sort, search or kind on its way
+      if (before === null) return null
+      const exact = sameAsk && o.sameLimit(before.limit, limit)
+      return {
+        value: before.value,
+        ask: keptAsk,
+        current: false,
+        kept: !exact,
+        more: exact
+          ? offered(before.value, before.limit, null)
+          : pressed
+            ? offered(before.value, before.limit, limit)
+            : o.none,
+        moreFailed: failedMore !== null,
+        failedAt: failedMore,
       }
-      fresh.push([b, settled])
-      // an answer that fits again ends the split it started
-      if (swap?.why === 'split') cancel(list, swap)
     }
-    // swaps whose batches all answered replace what they stood for, all at
-    // once with every Load more's and split's batches, halves included:
-    // while a batch on screen still shows its older answer for them, a
-    // current answer beside it could show a row that left it a second time
-    // or miss one that moved into it
-    const waiting = list.swaps.some(
-      (s) => s.why !== 'merge' && !s.to.every((b) => b.shown !== null),
-    )
-    for (const s of list.swaps) {
-      if (!s.to.every((b) => b.shown !== null)) continue
-      if (s.why === 'merge' && s.to.some((b) => b.shown?.kind !== 'ok')) {
-        // a merge that failed keeps the two batches it would have joined
-        for (const b of s.from) b.alone = true
-        cancel(list, s)
-        continue
-      }
-      if (waiting) continue
-      const at = list.shown.indexOf(s.from[0] as Batch)
-      if (at < 0) {
-        cancel(list, s)
-        continue
-      }
-      list.shown.splice(at, s.from.length, ...s.to)
-      for (const b of s.from) transport.release(b.slot)
-      list.swaps = list.swaps.filter((x) => x !== s)
+
+    return {
+      watch,
+      settle: settleRead,
+      view,
+      /** Asks for `next` (null for none), the first rows again where it
+          changed. Answers whether it changed. */
+      set(next: Ask | null): boolean {
+        if (next === null ? ask === null : same(next, ask)) return false
+        limit = o.first()
+        failedMore = null
+        ask = next
+        watch()
+        return true
+      },
+      /** Load more: the limit `grow` gives, keeping the rows shown until
+          they answer. */
+      more(grow: (limit: Lim, value: Answer) => Lim | null) {
+        const v = view()
+        if (v?.value?.state !== 'ok' || v.kept) return
+        const next = grow(limit, v.value)
+        if (next === null) return
+        limit = next
+        watch()
+      },
+      /** Asks afresh (Try again), or after a Load more that failed, that
+          Load more again (Retry), whose new arguments ask afresh, so the
+          rows on screen stay until they answer. */
+      retry() {
+        if (failedMore !== null) {
+          limit = o.join(limit, failedMore)
+          failedMore = null
+        } else tries++
+        watch()
+      },
+      /** Forgets what the page asked, as for a new scope. */
+      forget() {
+        ask = null
+        limit = o.first()
+        failedMore = null
+      },
+      /** Forgets everything without asking the store. */
+      clear() {
+        ask = null
+        limit = o.first()
+        tries = 0
+        shown = null
+        failedMore = null
+      },
     }
-    // and the batches on screen take their current answers with them, so
-    // the list shows one moment's answers
-    if (!list.swaps.some((s) => s.why !== 'merge')) for (const [b, shown] of fresh) b.shown = shown
-    // two frozen batches whose rows fit one read become one
-    for (let i = 0; i + 1 < list.shown.length; i++) {
-      const x = list.shown[i] as Batch
-      const y = list.shown[i + 1] as Batch
-      if (x.end === null || y.end === null || x.alone || y.alone) continue
-      if (x.shown?.kind !== 'ok' || y.shown?.kind !== 'ok') continue
-      if (list.swaps.some((s) => s.from.includes(x) || s.from.includes(y))) continue
-      if (x.shown.answer.rows.length + y.shown.answer.rows.length > OVERVIEW_SPLIT) continue
-      // the merged read stands beside the two until it answers
-      if (readsOf(list) + 1 > LIST_READS) break
-      list.swaps.push({ from: [x, y], to: [newBatch(list, x.cursor, y.end)], why: 'merge' })
-      i++
-    }
-    cap(list, 0, 0)
-    return true
   }
 
-  /** Fits list `list` to LIST_ROWS with room for `rows` more rows and to
-      LIST_READS with room for `reads` more reads: a merge still on its way
-      gives way first, as it only saves reads, then a Load more on its way
-      beside a batch on screen that waits for its halves, which keeps every
-      row on screen, then the first batches on screen. The open batch
-      stays. Where it is the only one left and a Load more's frozen read
-      split past LIST_READS, the Load more gives way too. The open batch
-      takes its current answer once nothing holds the list (settleList). */
-  function cap(list: List, rows: number, reads: number) {
-    const over = () => readsOf(list) + reads > LIST_READS
-    /** Gives up the Load more on its way, if there is one. */
-    const unpress = () => {
-      const pressed = list.swaps.find((s) => s.why === 'more')
-      if (!pressed) return
-      cancel(list, pressed)
-      again = true
-    }
-    for (const s of list.swaps.filter((x) => x.why === 'merge')) if (over()) cancel(list, s)
-    if (over() && list.swaps.some((s) => s.why === 'split')) unpress()
-    while (list.shown.length > 1 && (list.shown[0] as Batch).end !== null) {
-      if (rowsOf(list) + rows <= LIST_ROWS && !over()) return
-      drop(list, list.shown[0] as Batch)
-    }
-    if (over()) unpress()
+  /** Load more of one list of first rows: `step` more, at most its
+      `most`, where it holds more rows than it shows. */
+  const oneMore = (value: Limited, pressed: boolean): MoreState => {
+    if (pressed) return 'loading'
+    const rows = value.rows?.length ?? 0
+    return value.state === 'ok' && rows < (value.total ?? 0) && rows < (value.most ?? 0)
+      ? 'ready'
+      : null
+  }
+
+  const health = limitedRead<HealthTable, HealthAnswer, number, MoreState, HealthAsk>({
+    slot: HEALTH_SLOT,
+    query: 'health',
+    first: () => OVERVIEW_BATCH,
+    same: sameTable,
+    sameLimit: (a, b) => a === b,
+    args: (at, table, limit) => overviewArgs('health', at, { ...table, limit }),
+    asked: (table, limit) => ({ ...table, limit }),
+    grew: (a, b) => a < b,
+    join: Math.max,
+    more: (value, _answered, pressed, failed) =>
+      failed === null ? oneMore(value, pressed !== null) : null,
+    none: null,
+  })
+
+  const needs = limitedRead<NeedsAsk, NeedsAnswer, number, MoreState, NeedsAsk & { limit: number }>(
+    {
+      slot: NEEDS_SLOT,
+      query: 'needs',
+      first: () => NEEDS_FIRST,
+      same: (a, b) => a.kind === b.kind,
+      sameLimit: (a, b) => a === b,
+      args: (at, ask, limit) => overviewArgs('needs', at, null, { ...ask, limit }),
+      asked: (ask, limit) => ({ ...ask, limit }),
+      grew: (a, b) => a < b,
+      join: Math.max,
+      more: (value, _answered, pressed, failed) =>
+        failed === null ? oneMore(value, pressed !== null) : null,
+      none: null,
+    },
+  )
+
+  const noWorkMore: Record<WorkGroup, MoreState> = { progress: null, review: null, next: null }
+  const work = limitedRead<true, WorkAnswer, WorkLimits, Record<WorkGroup, MoreState>, true>({
+    slot: WORK_SLOT,
+    query: 'work',
+    first: firstWork,
+    same: () => true,
+    sameLimit: (a, b) => WORK_GROUPS.every((g) => a[g] === b[g]),
+    args: (at, _ask, limit) => overviewArgs('work', at, null, null, limit),
+    asked: () => true,
+    grew: (a, b) => WORK_GROUPS.some((g) => a[g] < b[g]),
+    join: (a, b) => ({
+      progress: Math.max(a.progress, b.progress),
+      review: Math.max(a.review, b.review),
+      next: Math.max(a.next, b.next),
+    }),
+    // while one group's Load more is on its way, only that group says so,
+    // and a group whose Load more failed offers Retry instead
+    more: (value, answered, pressed, failed) => {
+      if (value.state !== 'ok') return noWorkMore
+      const out = { ...noWorkMore }
+      for (const g of WORK_GROUPS) {
+        const group = value.groups[g]
+        if (pressed !== null) out[g] = pressed[g] > answered[g] ? 'loading' : null
+        else if (failed !== null && failed[g] > answered[g]) out[g] = null
+        else out[g] = oneMore({ state: 'ok', ...group, most: value.most }, false)
+      }
+      return out
+    },
+    none: noWorkMore,
+  })
+
+  /** What the health table shows (HealthView). */
+  function healthView(): HealthView {
+    const v = health.view()
+    if (v === null) return null
+    const { ask, ...rest } = v
+    return { ...rest, table: ask }
   }
 
   /** Takes every read's news in, until nothing more changes. */
@@ -698,330 +600,38 @@ export function createOverviewReads(transport: OverviewTransport) {
     try {
       do {
         again = false
-        for (const list of Object.values(lists)) settleList(list)
         health.settle()
         needs.settle()
+        work.settle()
       } while (again)
     } finally {
       settling = false
     }
   }
 
-  /**
-   * One read of an answer's first rows with Load more, as the health table
-   * and the Needs attention list take theirs (the module header): what the
-   * page asks (`ask`, null for none), how many rows, `first` at first and
-   * `step` more for each Load more up to the answer's `most`, its Try again
-   * count, the last answer it showed for the Overview and the arguments it
-   * answered, and a Load more that failed, whose Retry asks it again.
-   */
-  function limitedRead<Ask, Answer extends Limited>(o: {
-    slot: string
-    query: OverviewQuery
-    first: number
-    step: number
-    same: (a: Ask, b: Ask) => boolean
-    args: (at: OverviewBase, ask: Ask, limit: number) => Record<string, Value>
-  }) {
-    let ask: Ask | null = null
-    let limit = o.first
-    let tries = 0
-    let shown: { base: string; ask: Ask; limit: number; value: Answer } | null = null
-    let failedMore: number | null = null
-    const same = (a: Ask | null, b: Ask | null) => a !== null && b !== null && o.same(a, b)
-
-    /** The read's arguments now, null where it asks for none. */
-    const key = () =>
-      base === null || ask === null ? null : JSON.stringify(o.args(base, ask, limit))
-
-    /** Registers the read as the reads stand: live while asking. */
-    const watch = () => transport.watch(o.slot, o.query, asking ? key() : null, tries)
-
-    /** Takes the read's news in: an answer for the arguments asked now is
-        the one it shows, and a Load more that failed goes back to the rows
-        it showed, asking their arguments again. Where those rows fail too,
-        it forgets the Load more, so the read shows its error and Try again
-        asks it afresh. */
-    function settleRead() {
-      const now = key()
-      if (now === null || baseKey === null || ask === null) return
-      const held = transport.read(o.slot)
-      if (held.key !== now) return
-      if (held.error === undefined) {
-        if (held.value !== undefined)
-          shown = { base: baseKey, ask, limit, value: held.value as Answer }
-        return
-      }
-      if (failedMore !== null) {
-        failedMore = null
-        return
-      }
-      if (shown !== null && shown.base === baseKey && same(shown.ask, ask) && shown.limit < limit) {
-        failedMore = limit
-        limit = shown.limit
-        watch()
-      }
-    }
-
-    /** What the read shows. */
-    function view(): LimitedView<Ask, Answer> {
-      const now = key()
-      if (now === null || ask === null) return null
-      const held = transport.read(o.slot)
-      const asked = { ...ask, limit }
-      const more = (value: Answer, pressed: boolean): 'ready' | 'loading' | null => {
-        if (failedMore !== null) return null
-        if (pressed) return 'loading'
-        const rows = value.rows?.length ?? 0
-        return value.state === 'ok' && rows < (value.total ?? 0) && rows < (value.most ?? 0)
-          ? 'ready'
-          : null
-      }
-      if (held.key === now && held.value !== undefined) {
-        const value = held.value as Answer
-        return {
-          value,
-          ask: asked,
-          current: held.current,
-          kept: false,
-          more: more(value, false),
-          moreFailed: failedMore !== null,
-        }
-      }
-      // the last answer shown for this scope and clock, and whether the
-      // arguments asked now are its own with more rows (a Load more)
-      const before = shown !== null && shown.base === baseKey ? shown : null
-      const sameAsk = before !== null && same(before.ask, ask)
-      const pressed = sameAsk && before !== null && before.limit < limit
-      const keptAsk = before === null ? asked : { ...before.ask, limit: before.limit }
-      if (held.key === now && held.error !== undefined)
-        // a Load more that failed shows the rows before it from the first
-        // render, as settleRead takes the read back to them; any other
-        // error is the read's own, also where the rows a failed Load more
-        // went back to failed, which settleRead then forgets
-        return pressed && before !== null
-          ? {
-              value: before.value,
-              ask: keptAsk,
-              current: false,
-              kept: false,
-              more: null,
-              moreFailed: true,
-            }
-          : {
-              error: held.error,
-              ask: asked,
-              current: held.current,
-              kept: false,
-              more: null,
-              moreFailed: false,
-            }
-      // waiting: the last answer shown for this scope and clock, which
-      // offers Load more only where it answers what is asked now, so a press
-      // never raises the rows of another sort, search or kind on its way
-      if (before === null) return null
-      const exact = sameAsk && before.limit === limit
-      return {
-        value: before.value,
-        ask: keptAsk,
-        current: false,
-        kept: !exact,
-        more: exact || pressed ? more(before.value, pressed) : null,
-        moreFailed: failedMore !== null,
-      }
-    }
-
-    return {
-      watch,
-      settle: settleRead,
-      view,
-      /** Asks for `next` (null for none), the first rows again where it
-          changed. Answers whether it changed. */
-      set(next: Ask | null): boolean {
-        if (next === null ? ask === null : same(next, ask)) return false
-        limit = o.first
-        failedMore = null
-        ask = next
-        watch()
-        return true
-      },
-      /** Load more: `step` more rows, at most the answer's `most`, keeping
-          the rows shown until they answer. */
-      more() {
-        const v = view()
-        if (v?.more !== 'ready' || v.value?.state !== 'ok') return
-        limit = Math.min(limit + o.step, v.value.most ?? limit)
-        watch()
-      },
-      /** Asks afresh (Try again), or after a Load more that failed, that
-          Load more again (Retry). */
-      retry() {
-        if (failedMore !== null) {
-          limit = failedMore
-          failedMore = null
-        }
-        tries++
-        watch()
-      },
-      /** Forgets what the page asked, as for a new scope. */
-      forget() {
-        ask = null
-        limit = o.first
-        failedMore = null
-      },
-      /** Forgets everything without asking the store. */
-      clear() {
-        ask = null
-        limit = o.first
-        tries = 0
-        shown = null
-        failedMore = null
-      },
-    }
-  }
-
-  const health = limitedRead<HealthTable, HealthAnswer>({
-    slot: HEALTH_SLOT,
-    query: 'health',
-    first: OVERVIEW_BATCH,
-    step: OVERVIEW_BATCH,
-    same: (a, b) => sameTable(a, b),
-    args: (at, table, limit) => overviewArgs('health', at, null, null, { ...table, limit }),
-  })
-
-  const needs = limitedRead<NeedsAsk, NeedsAnswer>({
-    slot: NEEDS_SLOT,
-    query: 'needs',
-    first: NEEDS_FIRST,
-    step: NEEDS_STEP,
-    same: (a, b) => a.kind === b.kind,
-    args: (at, ask, limit) => overviewArgs('needs', at, null, null, null, { ...ask, limit }),
-  })
-
-  /** What the health table shows (HealthView). */
-  function healthView(): HealthView {
-    const v = health.view()
-    if (v === null) return null
-    const { ask, ...rest } = v
-    return { ...rest, table: ask }
-  }
-
   /** Registers every read as the reads stand. */
   function watchAll() {
-    const figure = (slot: string, query: 'summary' | 'risk') =>
-      transport.watch(
-        slot,
-        query,
-        asking && base ? JSON.stringify(overviewArgs(query, base)) : null,
-        attempt,
-      )
-    figure(SUMMARY_SLOT, 'summary')
-    if (page === 'classic') figure(RISK_SLOT, 'risk')
-    else transport.watch(RISK_SLOT, 'risk', null, attempt)
+    transport.watch(
+      SUMMARY_SLOT,
+      'summary',
+      asking && base ? JSON.stringify(overviewArgs('summary', base)) : null,
+      attempt,
+      false,
+    )
     health.watch()
     needs.watch()
-    for (const list of Object.values(lists)) {
-      for (const b of list.shown) watchBatch(list, b)
-      for (const s of list.swaps) for (const b of s.to) watchBatch(list, b)
-    }
+    work.watch()
   }
 
-  /** The figure read `slot` holds for the arguments asked now. */
-  function figureOf<T>(slot: string, query: 'summary' | 'risk'): FigureView<T> {
+  /** The summary's answer for the arguments asked now. */
+  function summaryView(): FigureView<SummaryAnswer> {
     if (!base) return null
-    const held = transport.read(slot)
-    if (held.key === null || held.key !== JSON.stringify(overviewArgs(query, base))) return null
+    const held = transport.read(SUMMARY_SLOT)
+    if (held.key === null || held.key !== JSON.stringify(overviewArgs('summary', base))) return null
     if (held.error !== undefined) return { error: held.error, current: held.current }
     if (held.value === undefined) return null
-    return { value: held.value as T, current: held.current }
+    return { value: held.value as SummaryAnswer, current: held.current }
   }
-
-  /** What list `list` shows. */
-  function listView(list: List): ListView {
-    const batches: BatchView[] = []
-    let refreshing = false
-    // while a batch on screen waits for its halves the list shows older
-    // answers (settleList), so it cannot say it reached its end; nor while
-    // a batch waits for its answer, as after Try again; a merge's batches
-    // keep taking their answers, and a Load more on its way, which holds
-    // older answers too, says no end by itself (`pressed`)
-    let older = false
-    for (const b of list.shown) {
-      if (list.swaps.some((s) => s.why === 'split' && s.from.includes(b))) older = true
-      const held = transport.read(b.slot)
-      if (!held.current) refreshing = true
-      const shown = b.shown
-      const view: BatchView = {
-        id: b.id,
-        slot: b.slot,
-        rows: [],
-        note: null,
-        waiting: shown === null,
-      }
-      if (shown?.kind === 'ok') {
-        view.rows = shown.answer.rows
-        if (!shown.answer.complete) view.note = { kind: 'incomplete' }
-      } else if (shown?.kind === 'refused')
-        view.note =
-          shown.value.state === 'over_budget'
-            ? { kind: 'over_budget' }
-            : {
-                kind: 'unavailable',
-                ...(shown.value.message === undefined ? {} : { message: shown.value.message }),
-              }
-      else if (shown?.kind === 'error') view.note = { kind: 'error' }
-      batches.push(view)
-    }
-    const last = list.shown[list.shown.length - 1]
-    const lastShown = last?.shown
-    const open = last !== undefined && last.end === null
-    const pressed =
-      last !== undefined && list.swaps.some((s) => s.why === 'more' && s.from.includes(last))
-    const failedIn = batches.some((b) => b.note?.kind === 'error' || b.note?.kind === 'unavailable')
-    const overBudget = batches.some((b) => b.note?.kind === 'over_budget')
-    const stopped = batches.some((b) => b.note?.kind === 'incomplete')
-    const answered = batches.some((b) => !b.waiting)
-    const end =
-      open &&
-      !pressed &&
-      !older &&
-      !batches.some((b) => b.waiting) &&
-      lastShown?.kind === 'ok' &&
-      lastShown.answer.next === null &&
-      lastShown.answer.complete &&
-      !failedIn &&
-      !overBudget
-    const state: ListView['state'] = list.failed
-      ? 'error'
-      : failedIn
-        ? 'error'
-        : overBudget
-          ? 'over_budget'
-          : !answered
-            ? 'loading'
-            : refreshing
-              ? 'refreshing'
-              : stopped
-                ? 'incomplete'
-                : 'ok'
-    return {
-      state,
-      batches,
-      dropped: list.dropped,
-      end,
-      more: pressed
-        ? 'loading'
-        : open && lastShown?.kind === 'ok' && lastShown.answer.next !== null
-          ? 'ready'
-          : null,
-      failed: list.failed,
-      reads: readsOf(list),
-    }
-  }
-
-  /** Finds batch `id` of list `list`, on screen or waiting to replace. */
-  const findBatch = (list: List, id: number) =>
-    list.shown.find((b) => b.id === id) ?? list.swaps.flatMap((s) => s.to).find((b) => b.id === id)
 
   /** Forgets everything without asking the store. */
   function clear() {
@@ -1030,18 +640,10 @@ export function createOverviewReads(transport: OverviewTransport) {
     asking = false
     owner = 0
     attempt = 0
-    lists.attention = emptyList('attention')
-    lists.paused = emptyList('paused')
-    page = 'classic'
+    page = 'status'
     health.clear()
     needs.clear()
-  }
-
-  /** Releases list `list`'s reads, which `page` 'status' asks none of. */
-  function dropList(list: List) {
-    for (const b of list.shown) transport.release(b.slot)
-    for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
-    Object.assign(list, emptyList(list.kind))
+    work.clear()
   }
 
   return {
@@ -1049,11 +651,11 @@ export function createOverviewReads(transport: OverviewTransport) {
         or the tab is hidden, which stops every read and keeps what they
         held. `by` names the mounted page: one that leaves after the next
         one asked stops nothing. A new `tries` (the page's Try again) asks
-        the summary and the delays afresh. A new scope forgets the health
-        table and the Needs attention list, so their reads ask nothing until
-        the page registers the new scope's (watchTable, watchNeeds). `as`
-        says which page asks, and so which reads (OverviewPage). */
-    watch(next: OverviewBase | null, by: number, tries: number, as: OverviewPage = 'classic') {
+        the summary afresh. A new scope or page forgets the health table,
+        the Needs attention list and Your work, so their reads ask nothing
+        until the page registers the new scope's (watchTable, watchNeeds,
+        watchWork). `as` says which page asks (OverviewPage). */
+    watch(next: OverviewBase | null, by: number, tries: number, as: OverviewPage = 'status') {
       if (next === null && by !== owner) return
       owner = by
       if (next === null) {
@@ -1065,10 +667,9 @@ export function createOverviewReads(transport: OverviewTransport) {
       const key = overviewKey(next)
       const sameAsk = asking && key === baseKey && tries === attempt && as === page
       if (sameAsk) return
-      // a new scope asks no health read until the page registers its table
-      // in the same commit, as App mounts the page anew for each scope with
-      // its own sort and no search, so no read asks the new scope with the
-      // old one's; a new clock keeps the table and its rows
+      // App mounts the page anew for each scope, so no read asks the new
+      // scope with the old one's arguments; a new clock keeps them and
+      // their rows
       if (
         base === null ||
         as !== page ||
@@ -1076,58 +677,50 @@ export function createOverviewReads(transport: OverviewTransport) {
       ) {
         health.forget()
         needs.forget()
+        work.forget()
       }
       attempt = tries
       base = next
       baseKey = key
       asking = true
       page = as
-      for (const list of Object.values(lists)) {
-        if (page === 'status') {
-          dropList(list)
-          continue
-        }
-        const listKey = listKeyOf(list.kind, next)
-        if (list.key !== listKey) {
-          list.key = listKey
-          list.restarted = null
-          restart(list)
-        }
-      }
       watchAll()
       settle()
     },
     /** Asks for the health table `next` (null for none, as for one
-        sub-project), apart from the scope's reads, so only the health read
-        asks again. `by` names the mounted page, as `watch` takes it; a page
-        that is not the one asking changes nothing. A new sort or search
-        starts again at the first rows. */
+        sub-project), for the page `by` names: a page that is not the one
+        asking changes nothing. A new sort or search starts again at the
+        first rows. */
     watchTable(next: HealthTable | null, by: number) {
       if (by !== owner) return
       if (health.set(next)) settle()
     },
-    /** Load more on the health table: asks OVERVIEW_BATCH more rows, at most
-        the answer's `most`, keeping the rows shown until they answer. */
+    /** Load more on the health table: OVERVIEW_BATCH more rows, at most
+        the answer's `most`. */
     moreHealth() {
-      health.more()
+      if (health.view()?.more !== 'ready') return
+      health.more((limit, value) =>
+        value.state === 'ok' ? Math.min(limit + OVERVIEW_BATCH, value.most) : null,
+      )
       settle()
     },
-    /** Asks the health table afresh (its Try again), or after a Load more
-        that failed, that Load more again (its Retry). */
+    /** Asks the health table afresh, or a failed Load more again. */
     retryHealth() {
       health.retry()
       settle()
     },
     /** Asks for the Needs attention list's kind `next` (null for none), for
-        the page `by` names, as watchTable takes a table: a new kind starts
-        again at the first rows. */
+        the page `by` names, as watchTable takes a table. */
     watchNeeds(next: NeedsAsk | null, by: number) {
       if (by !== owner) return
       if (needs.set(next)) settle()
     },
     /** Load more on the Needs attention list: NEEDS_STEP more rows. */
     moreNeeds() {
-      needs.more()
+      if (needs.view()?.more !== 'ready') return
+      needs.more((limit, value) =>
+        value.state === 'ok' ? Math.min(limit + NEEDS_STEP, value.most) : null,
+      )
       settle()
     },
     /** Asks the Needs attention list afresh, or a failed Load more again. */
@@ -1135,56 +728,39 @@ export function createOverviewReads(transport: OverviewTransport) {
       needs.retry()
       settle()
     },
+    /** Asks for Your work, or none with false, for the page `by` names. */
+    watchWork(on: boolean, by: number) {
+      if (by !== owner) return
+      if (work.set(on ? true : null)) settle()
+    },
+    /** Load more on group `group` of Your work: WORK_STEP more of its
+        rows, the other groups' limits kept. */
+    moreWork(group: WorkGroup) {
+      const v = work.view()
+      if (v?.more[group] !== 'ready') return
+      work.more((limit, value) =>
+        value.state === 'ok'
+          ? { ...limit, [group]: Math.min(limit[group] + WORK_STEP, value.most) }
+          : null,
+      )
+      settle()
+    },
+    /** Asks Your work afresh, or a failed Load more again. */
+    retryWork() {
+      work.retry()
+      settle()
+    },
     /** Takes the reads' news in: the store calls it after each delivery of
         an Overview read. */
     settle,
-    /** Load more on list `kind`: freezes its open batch and opens the next
-        one at its `next`, after the cap gave up a merge on its way or
-        dropped the first batches it needs to (cap). */
-    more(kind: ListKind) {
-      const list = lists[kind]
-      const last = list.shown[list.shown.length - 1]
-      if (!last || last.end !== null || last.shown?.kind !== 'ok') return
-      const answer = last.shown.answer
-      if (answer.next === null || list.swaps.some((s) => s.from.includes(last))) return
-      // room for the next batch's rows and the reads both new batches take,
-      // beside the open batch's until then
-      cap(list, OVERVIEW_BATCH, 2)
-      list.swaps.push({
-        from: [last],
-        to: [newBatch(list, last.cursor, answer.end), newBatch(list, answer.next, null)],
-        why: 'more',
-      })
-      settle()
-    },
-    /** Shows list `kind` from its first batch again. */
-    fromStart(kind: ListKind) {
-      const list = lists[kind]
-      if (base === null) return
-      list.restarted = null
-      restart(list)
-      settle()
-    },
-    /** Asks batch `id` of list `kind` afresh (its Try again or Retry). */
-    retry(kind: ListKind, id: number) {
-      const list = lists[kind]
-      const b = findBatch(list, id)
-      if (!b) return
-      b.attempt++
-      b.shown = null
-      watchBatch(list, b)
-      settle()
-    },
     /** What the reads hold for the page. */
     view(): OverviewView {
       return {
         key: baseKey,
-        summary: figureOf<SummaryAnswer>(SUMMARY_SLOT, 'summary'),
-        risk: figureOf<RiskAnswer>(RISK_SLOT, 'risk'),
-        attention: listView(lists.attention),
-        paused: listView(lists.paused),
+        summary: summaryView(),
         health: healthView(),
         needs: needs.view(),
+        work: work.view(),
       }
     },
     /** Whether view slot `slot` is one of the Overview's. */
@@ -1192,13 +768,9 @@ export function createOverviewReads(transport: OverviewTransport) {
     /** Forgets every read and its rows: the Overview page left. */
     release() {
       transport.release(SUMMARY_SLOT)
-      transport.release(RISK_SLOT)
       transport.release(HEALTH_SLOT)
       transport.release(NEEDS_SLOT)
-      for (const list of Object.values(lists)) {
-        for (const b of list.shown) transport.release(b.slot)
-        for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
-      }
+      transport.release(WORK_SLOT)
       clear()
     },
     /** Forgets everything without asking the store, whose own reset

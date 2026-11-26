@@ -1,0 +1,276 @@
+/* My view's Overview (MyOverview.tsx), over the project Overview's parts
+   (ProjectOverview.css). Every row of Your work, in every group, lays its
+   values on the same fixed columns: the flag, the title and its line, the
+   hours field with one width and one right edge, and the actions in one
+   column as wide as the widest set, Send back and Approve, each set held
+   to its right edge. A narrow row puts the hours and the actions on a
+   second line, and a narrower one the actions on a third, on the same
+   columns in every row. */
+
+.mov {
+  --mov-flag: 22px;
+  --mov-hours: 96px;
+  --mov-actions: 196px;
+  --mov-gap: 12px;
+  /* the dark theme's primary is too light under white text for 4.5 to 1 */
+  --mov-approve-fill: color-mix(in oklab, var(--primary) 78%, black);
+}
+:root[data-appearance="light"] .mov {
+  --mov-approve-fill: var(--primary);
+}
+
+.mov .overview-section-heading h2 {
+  align-items: center;
+}
+
+.mov-board {
+  gap: 6px;
+  height: var(--control-sm, 32px);
+  padding: 0 8px;
+  font-size: var(--fs-sm);
+}
+
+/* --- the groups ------------------------------------------------------- */
+
+.mov-group + .mov-group {
+  margin-top: 14px;
+}
+.mov-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 2px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+.mov-group-title:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- a row ------------------------------------------------------------ */
+
+.mov-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--mov-flag) minmax(0, 1fr) var(--mov-hours) var(--mov-actions);
+  grid-template-areas: "flag main hours actions";
+  align-items: center;
+  column-gap: var(--mov-gap);
+  min-height: 52px;
+  margin: 0 -10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.mov-row:hover {
+  background: var(--hover);
+}
+.mov-row:has(.pov-need-open:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.mov-flag {
+  grid-area: flag;
+  display: grid;
+  place-items: center;
+}
+.mov-main {
+  grid-area: main;
+}
+/* a row names its project and sub-project, its fact and its other facts,
+   so its line wraps rather than cut them off */
+.pov .mov-main .pov-need-sub {
+  flex-wrap: wrap;
+  white-space: normal;
+  row-gap: 0;
+}
+.mov-fact {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.mov-fact:is([data-kind="overdue"], [data-kind="projected"]) {
+  color: var(--pov-late-ink);
+}
+.mov-fact[data-kind="behind"] {
+  color: var(--warn);
+}
+.mov-unknown {
+  flex-shrink: 0;
+  color: var(--text-1);
+}
+.mov-parent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mov-note {
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: var(--text-2);
+}
+.mov-note[data-tone="danger"] {
+  color: var(--pov-late-ink);
+}
+
+/* The hours and the actions sit above the title's button, whose box
+   covers the row. */
+.mov-hours {
+  grid-area: hours;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.mov-hours-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 64px;
+  height: 30px;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+.mov-hours-box input {
+  width: 100%;
+  height: 100%;
+  padding: 0 17px 0 6px;
+  background: var(--surface-2);
+  font: inherit;
+  text-align: right;
+}
+.mov-hours-box input::placeholder {
+  color: var(--text-2);
+}
+/* A save shows in place, in a field with hours and in an empty one alike,
+   and changes no size: a line would move the rows below. The field stays
+   editable while it saves, so its text keeps its full contrast. */
+.mov-hours-box[data-state="saving"] input {
+  border-style: dashed;
+  cursor: progress;
+}
+.mov-hours-box > span {
+  position: absolute;
+  right: 8px;
+  color: var(--text-2);
+  pointer-events: none;
+}
+.mov-hours-text {
+  justify-content: flex-end;
+  padding-right: 8px;
+}
+.mov-hours-left {
+  width: 22px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.mov-actions {
+  grid-area: actions;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.mov-actions[data-state="saving"] > * {
+  opacity: 0.6;
+  cursor: progress;
+}
+.mov-actions[data-state="saving"] :is(.pov-action, .mov-status) {
+  border-style: dashed;
+}
+.mov-approve {
+  border-color: var(--mov-approve-fill);
+  background: var(--mov-approve-fill);
+  color: #ffffff;
+}
+.mov-approve:hover {
+  border-color: var(--mov-approve-fill);
+  filter: brightness(1.08);
+}
+.mov-status {
+  width: 156px;
+  height: 30px;
+  font-size: var(--fs-sm);
+}
+/* On a touch screen the project Overview's row actions become icon
+   buttons (ProjectOverview.css); these carry their name as text, so they
+   keep it and take a touch height in the same column. */
+@media (hover: none) {
+  .mov-actions .mov-action {
+    width: auto;
+    height: 36px;
+    padding: 0 10px;
+  }
+}
+
+/* --- the status panel --------------------------------------------------- */
+
+.mov-status-panel .pov-sentence {
+  font-size: var(--fs-md);
+}
+.mov-status-panel .pov-facts {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 14px;
+}
+.mov-status-panel .pov-fact {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-left: 0;
+  border-top: 1px solid var(--pov-line);
+}
+.mov-status-panel .pov-fact-label {
+  font-size: var(--fs-sm);
+}
+
+/* --- narrow ------------------------------------------------------------ */
+
+@container (max-width: 640px) {
+  .mov-row {
+    grid-template-columns: var(--mov-flag) var(--mov-hours) minmax(0, 1fr);
+    grid-template-areas:
+      "flag main main"
+      ". hours actions";
+    row-gap: 6px;
+    align-items: start;
+  }
+  .mov-flag {
+    padding-top: 1px;
+  }
+  .mov-hours {
+    justify-content: flex-start;
+  }
+  .pov .mov-main .pov-need-open {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+/* The widest set, Send back and Approve, takes about 190 px, which the
+   column beside the hours holds only where the page is about 400 px wide
+   or more, so on a narrower page every row puts its actions on a line of
+   their own. */
+@container (max-width: 420px) {
+  .mov-row {
+    grid-template-columns: var(--mov-flag) minmax(0, 1fr);
+    grid-template-areas:
+      "flag main"
+      ". hours"
+      ". actions";
+  }
+}

@@ -27,52 +27,40 @@ import {
 } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
-import { HoverTooltip } from '@/components/ui/tooltip'
-import {
-  firstDayOfWeek,
-  fmtDate,
-  isoToDate,
-  isoToWeek,
-  relativeWeek,
-  TODAY_WEEK,
-  WEEKDAYS,
-  weekLabel,
-  weekNumLabel,
-  weekToISO,
-} from '@/lib/dates'
-import { DELAY_LABELS } from '@/lib/delay'
-import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
+import { afterPress, pressing } from '@/lib/afterPress'
+import { TODAY_WEEK, weekNumLabel } from '@/lib/dates'
+import { focusAround } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { usePagedList } from '@/lib/pagedList'
-import { headingTarget, shownEmptyState } from '@/lib/taskFocus'
-import { type SentencePart, syncSentence } from '@/lib/teamSync'
+import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours, hasPlannableWeek, loadTone } from '@/lib/workload'
-import type { HealthView, NeedsView } from '@/store/overviewLists'
+import type { NeedsView } from '@/store/overviewLists'
 import { api } from '../../../convex/_generated/api'
-import type { HealthRow } from '../../../convex/lib/overview'
 import type { NeedsKind, NeedsRow } from '../../../convex/lib/overviewNeeds'
 import { taskOwnerId } from '../../../convex/lib/review'
 import type { NavChildRow, NavChildren } from '../../../convex/model/projectNavReads'
-import { MilestoneSectionPart } from '../../components/MilestoneSectionPart'
 import { navCursors } from '../../components/projectNavRows'
 import { Avatar, DateInput, EmptyState, Icon, ProjectName } from '../../components/qivo'
 import { personLabel, useOrgPeople, usePeople } from '../../components/usePeople'
 import { ViewNote } from '../../components/ViewNote'
-import {
-  type IssueVM,
-  type MilestoneVM,
-  OVERVIEW_MILESTONE_SLOTS,
-  P,
-  type ScopeInfo,
-} from '../../store/planner'
+import { type IssueVM, OVERVIEW_MILESTONE_SLOTS, P, type ScopeInfo } from '../../store/planner'
 import { capacityOf } from '../capacity'
 import { figuresOf } from '../teamWeeks'
 import { useOverviewPanelClipping } from '../useOverviewPanelClipping'
 import { useScopeMilestones } from '../useScopeMilestones'
 import { OvSection } from './OvSection'
+import {
+  factOf,
+  KIND_LABEL,
+  LATE_UNKNOWN,
+  lateLine,
+  plural,
+  reasonsOf,
+  useRowFocus,
+} from './overviewFacts'
 import {
   given,
   narrower,
@@ -83,31 +71,20 @@ import {
   shownOf,
   useOverviewRead,
 } from './overviewParts'
+import {
+  Fact,
+  LoadMore,
+  MilestonesPanel,
+  NeedFlag,
+  ProjectsPanel,
+  Sentence,
+  type SentenceFacts,
+} from './overviewRows'
 import './ProjectOverview.css'
 import '../Overview.css'
 import '../../styles/mobile-views.css'
 
 const NEEDS_SLOT = 'overview:needs'
-
-const KIND_LABEL: Record<NeedsKind, string> = {
-  overdue: 'Overdue',
-  projected: 'Projected to miss',
-  behind: DELAY_LABELS.behind,
-  blocked: 'Blocked',
-  no_reviewer: 'No reviewer',
-  paused: 'Paused',
-}
-
-/** Each kind's flag: a glyph of its own, so no kind is told by colour
-    alone. */
-const KIND_ICON: Record<NeedsKind, string> = {
-  overdue: 'warning',
-  projected: 'alert',
-  behind: 'clockFading',
-  blocked: 'blocked',
-  no_reviewer: 'eye',
-  paused: 'pause',
-}
 
 const KIND_EMPTY: Record<NeedsKind, string> = {
   overdue: 'No task is overdue.',
@@ -127,150 +104,6 @@ const KIND_NONE_FOUND: Record<'all' | 'projected' | 'behind', string> = {
 }
 
 type Filter = 'all' | NeedsKind
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
-
-function daysSince(at: number, now: number): number {
-  const a = new Date(at)
-  const b = new Date(now)
-  a.setHours(0, 0, 0, 0)
-  b.setHours(0, 0, 0, 0)
-  return Math.round((b.getTime() - a.getTime()) / 86_400_000)
-}
-
-const dayOf = (iso: string) => {
-  const d = isoToDate(iso)
-  return `${WEEKDAYS[d.getDay()]?.slice(0, 3)} ${fmtDate(d)}`
-}
-
-const weekOf = (iso: string) => weekNumLabel(isoToWeek(iso))
-
-const plannedEnd = (row: NeedsRow): string | undefined =>
-  row.has_subtasks ? row.span?.end_week : (row.end_week ?? undefined)
-
-function factOf(row: NeedsRow, day: string): { fact: string; date: string | null } {
-  const due = row.due_date ?? null
-  const end = plannedEnd(row)
-  const fin = row.needs.finish_week
-  switch (row.needs.kind) {
-    case 'overdue': {
-      const days = Math.max(
-        1,
-        Math.round((isoToDate(day).getTime() - isoToDate(due ?? day).getTime()) / 86_400_000),
-      )
-      return { fact: `${days}d overdue`, date: due ? `due ${dayOf(due)}` : null }
-    }
-    case 'projected':
-      return {
-        fact: fin ? `finishes ${weekOf(fin)}` : 'projected to miss',
-        date: due ? `due ${weekOf(due)}, ${dayOf(due)}` : null,
-      }
-    case 'behind':
-      return {
-        fact: fin ? `finishes ${weekOf(fin)}` : DELAY_LABELS.behind.toLowerCase(),
-        date: end ? `planned ${weekOf(end)}` : null,
-      }
-    case 'no_reviewer': {
-      const at = row.review_at ? Date.parse(row.review_at) : null
-      return {
-        fact: 'no reviewer',
-        date:
-          at === null ? null : `waiting ${plural(Math.max(0, daysSince(at, Date.now())), 'day')}`,
-      }
-    }
-    default:
-      return {
-        fact:
-          row.needs.kind === 'blocked'
-            ? `blocked by ${plural(row.needs.blocked_by, 'task')}`
-            : 'paused',
-        date: due ? `due ${dayOf(due)}` : end ? `planned ${weekOf(end)}` : null,
-      }
-  }
-}
-
-function reasonsOf(row: NeedsRow): string[] {
-  const out: string[] = []
-  const { needs } = row
-  const kinds = needs.also
-  if (needs.blocks)
-    out.push(
-      `blocks ${needs.blocks.first.title}${needs.blocks.count > 1 ? ` and ${plural(needs.blocks.count - 1, 'more')}` : ''}`,
-    )
-  if (kinds.includes('blocked')) out.push(`blocked by ${plural(needs.blocked_by, 'task')}`)
-  if (kinds.includes('no_reviewer')) {
-    const days = row.review_at ? daysSince(Date.parse(row.review_at), Date.now()) : null
-    out.push(
-      days === null
-        ? 'no reviewer'
-        : days <= 0
-          ? 'no reviewer since today'
-          : `no reviewer for ${plural(days, 'day')}`,
-    )
-  }
-  if (kinds.includes('paused')) out.push('paused')
-  return out
-}
-
-function Sentence({ needs, tasksLeft }: { needs: NeedsView; tasksLeft: number | null }) {
-  const answer = needs?.value
-  let body: ReactNode
-  if (needs === null || (answer === undefined && needs.error === undefined)) body = '…'
-  else if (answer === undefined) body = 'Qivo could not check what needs attention here.'
-  else if (answer.state !== 'ok') body = 'Qivo could not check every task here in one request.'
-  else {
-    const c = answer.counts
-    const projected = c.projected.state === 'ok' ? c.projected.count : null
-    if (c.all.state === 'ok' && c.all.count === 0)
-      body =
-        tasksLeft === 0
-          ? 'Nothing is left to do.'
-          : tasksLeft === null
-            ? 'Nothing needs attention.'
-            : `Nothing needs attention. ${plural(tasksLeft, 'task')} ${tasksLeft === 1 ? 'is' : 'are'} left.`
-    // the parts alternate text and a count, and each count's clause is
-    // its own, so the clause that follows names it
-    else
-      body = syncSentence({ overdue: c.overdue, projected, blocked: c.blocked }).reduce<
-        ReactNode[]
-      >((out, part: SentencePart) => {
-        out.push(
-          typeof part === 'string' ? (
-            part
-          ) : (
-            <b key={`${part.tone}:${out.length}`} className="pov-num" data-tone={part.tone}>
-              {part.n}
-            </b>
-          ),
-        )
-        return out
-      }, [])
-  }
-  return (
-    <p data-ov-sentence className="pov-sentence" aria-busy={body === '…' || undefined}>
-      {body}
-    </p>
-  )
-}
-
-function Fact({
-  label,
-  name,
-  state,
-  children,
-}: {
-  label: string
-  name: string
-  state: string
-  children: ReactNode
-}) {
-  return (
-    <div className="pov-fact" data-ov-figure={name} data-ov-figure-state={state}>
-      <span className="pov-fact-label">{label}</span>
-      <b className="pov-fact-value">{children}</b>
-    </div>
-  )
-}
 
 function LeadFact({ info }: { info: ScopeInfo }) {
   const proj = info.proj
@@ -355,30 +188,6 @@ function Tabs({
   )
 }
 
-/** Focus props for a control that a change can take away, and `held()`,
-    whether focus was on it when it went, which answers once. */
-function useHeldFocus() {
-  // React hears no blur from an element it removes while it has focus, so
-  // the flag stays set through the removal
-  const on = useRef(false)
-  return {
-    props: {
-      onFocus: () => {
-        on.current = true
-      },
-      // a window that loses focus blurs the control and keeps it focused
-      onBlur: (e: FocusEvent) => {
-        if (document.activeElement !== e.target) on.current = false
-      },
-    },
-    held: () => {
-      const was = on.current
-      on.current = false
-      return was
-    },
-  }
-}
-
 const modelOf = (row: NeedsRow): IssueVM | undefined =>
   P.viewTask(NEEDS_SLOT, row.id) ?? P.anyTask(P.handleNow(row.id, row.org_id, row.num))
 
@@ -433,6 +242,7 @@ function NeedRow({
   const [ownerName] = useOrgPeople(row.org_id, [owner])
   const root = useRef<HTMLLIElement>(null)
   const controls = useLiveControls(root)
+  const [keepActions, setKeepActions] = useState(false)
   const place = inProject ? P.projectPlace(row.project_id, false) : null
   const placeName = place ? P.placeLabel(place) : null
   const name = [
@@ -451,15 +261,20 @@ function NeedRow({
       {...controls.rootProps}
       onFocusCapture={() => onFocusIn(handle, row.id)}
       onBlurCapture={onFocusOut}
+      onBlur={(e) => {
+        if (!pressing()) return
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+        setKeepActions(true)
+        afterPress(() => setKeepActions(false))
+      }}
       className="pov-need"
       data-need={handle}
       data-need-id={row.id}
       data-kind={kind}
+      data-keep-actions={keepActions || undefined}
     >
       <StaticControlsContext.Provider value={controls.value}>
-        <span className="pov-flag" data-kind={kind} aria-hidden="true">
-          <Icon name={KIND_ICON[kind]} size={13} strokeWidth={2.4} />
-        </span>
+        <NeedFlag kind={kind} />
         <span className="pov-need-main">
           <Button
             type="button"
@@ -542,47 +357,10 @@ function NeedsPanel({
   const unknown = c !== undefined && c.all.state !== 'ok' ? c.all : null
   const rows = answer?.rows ?? []
   const listRoot = useRef<HTMLDivElement>(null)
-  // the row focus is in, and where focus goes once a change takes that row
-  // out of the tab: the next row, else the one before, else the heading
-  const focused = useRef<{ uuid: string; target: () => HTMLElement | null } | null>(null)
-  const heading = () =>
-    headingTarget(listRoot.current?.closest('section')?.querySelector<HTMLElement>('h2')) ?? null
-  const focusIn = (handle: string, uuid: string) => {
-    focused.current = {
-      uuid,
-      target: focusAround(
-        'data-need',
-        handle,
-        (row) => row.querySelector<HTMLElement>('[data-focus-key="row"]'),
-        heading,
-      ),
-    }
-  }
-  // a window that loses focus blurs the row and keeps it focused
-  const focusOut = (e: FocusEvent) => {
-    if (document.activeElement !== e.target) focused.current = null
-  }
-  const was = focused.current
-  const [, marked] = useState(0)
-  useFocusWhenGone(was === null || rows.some((r) => r.id === was.uuid), () => {
-    const to = focused.current ? focused.current.target() : null
-    // a window in the background sends no focus event for the row focus
-    // moves to, so the mark follows it here, and a render lets the hook see
-    // that row on the page before it can leave too
-    const row = to?.closest<HTMLElement>('[data-need]')
-    if (row?.dataset.need && row.dataset.needId) {
-      focusIn(row.dataset.need, row.dataset.needId)
-      marked((n) => n + 1)
-    }
-    return to
-  })
-  // Load more leaves at the end of the list or where its rows failed:
-  // where it held focus, focus goes to Retry, else to the list
-  const more = useHeldFocus()
-  useFocusWhenGone((needs?.more ?? null) !== null, () =>
-    more.held()
-      ? (listRoot.current?.querySelector<HTMLElement>('[data-ov-needs-retry]') ?? listRoot.current)
-      : null,
+  const { focusIn, focusOut } = useRowFocus(
+    'need',
+    (uuid) => rows.some((r) => r.id === uuid),
+    () => listRoot.current?.closest('section')?.querySelector<HTMLElement>('h2'),
   )
   // the rows the answer shown answers, so a tab on its way keeps the last
   // answer's rows, dimmed, rather than none
@@ -654,38 +432,15 @@ function NeedsPanel({
                 : KIND_EMPTY[shownKind]}
           </p>
         )}
-        {needs.more !== null && (
-          <Button
-            type="button"
-            variant="ghost"
-            data-ov-more
-            {...more.props}
-            aria-disabled={needs.more === 'loading' || undefined}
-            className={cn('pov-more', needs.more === 'loading' && 'pointer-events-none italic')}
-            onClick={() => {
-              if (needs.more === 'ready') P.overviewMore('needs')
-            }}
-          >
-            {needs.more === 'loading' ? 'Loading…' : 'Load more'}
-          </Button>
-        )}
-        {needs.moreFailed && (
-          <div role="alert" className="pov-note">
-            Couldn't load more tasks.
-            <Button
-              type="button"
-              variant="ghost"
-              data-ov-needs-retry
-              className="h-control-sm text-sm"
-              onClick={() => {
-                P.overviewRetry('needs')
-                listRoot.current?.focus()
-              }}
-            >
-              Retry
-            </Button>
-          </div>
-        )}
+        <LoadMore
+          more={needs.more}
+          failed={needs.moreFailed}
+          what="tasks"
+          root={() => listRoot.current}
+          onMore={() => P.overviewMore('needs')}
+          onRetry={() => P.overviewRetry('needs')}
+          hook={{ more: 'data-ov-more', retry: 'data-ov-needs-retry' }}
+        />
         {answer && answer.rows.length >= answer.most && answer.total > answer.most && (
           <p className="pov-note">
             Qivo shows the first {answer.most.toLocaleString('en-US')} tasks of this list.
@@ -725,231 +480,6 @@ function NeedsPanel({
           (needs && (!needs.current || needs.kept)) || needs?.more === 'loading' || undefined
         }
         data-ov-needs
-      >
-        {body}
-      </div>
-    </OvSection>
-  )
-}
-
-function Chip({ kind, n, label }: { kind: string; n: number; label: string }) {
-  return (
-    <span className="pov-slot">
-      {n > 0 && (
-        <HoverTooltip content={label}>
-          <span className="pov-chip" data-kind={kind} tabIndex={-1}>
-            <Icon
-              name={kind === 'late' ? 'warning' : kind === 'behind' ? 'clockFading' : 'pause'}
-              size={11}
-              strokeWidth={2.6}
-            />
-            {n}
-          </span>
-        </HoverTooltip>
-      )}
-    </span>
-  )
-}
-
-function SubRow({
-  row,
-  org,
-  onOpen,
-}: {
-  row: HealthRow
-  /** the organization of the project the row is a sub-project of, '' while
-      the page knows none */
-  org: string
-  onOpen: (id: string) => void
-}) {
-  const c = row.counts.state === 'ok' ? row.counts : null
-  const left = c ? c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review : null
-  const d = row.delays.state === 'ok' ? row.delays : null
-  // the lead is named in the sub-project's organization only, since a read
-  // in another organization answers them gone. It is the parent's, which
-  // the page knows before the workspace holds the sub-project itself
-  const [lead] = useOrgPeople(org, [org ? row.lead_id : null])
-  const parts = [
-    row.name,
-    row.lead_id
-      ? `${lead ? personLabel(lead, 'Unknown person') : 'Loading…'}, Lead`
-      : 'No lead assigned',
-    c
-      ? `${plural(left ?? 0, 'task')} left, ${fmtHours(c.left_tenths / 10)} hours left`
-      : 'counts not known',
-    d
-      ? `${d.late} ${DELAY_LABELS.late.toLowerCase()}, ${d.behind} ${DELAY_LABELS.behind.toLowerCase()}`
-      : `${DELAY_LABELS.late} and ${DELAY_LABELS.behind} unknown`,
-    c ? `${c.paused} paused` : null,
-  ]
-  return (
-    <li>
-      <Button
-        type="button"
-        variant="unstyled"
-        className="pov-sub"
-        data-ov-sub={row.project_id}
-        aria-label={parts.filter(Boolean).join(', ')}
-        onClick={() => onOpen(row.project_id)}
-      >
-        <span className="pov-sub-lead">
-          <Avatar id={row.lead_id} size={28} />
-        </span>
-        <span className="pov-sub-main">
-          <span className="pov-sub-name">{row.name}</span>
-          <span className="pov-sub-num">
-            {c ? (
-              <>
-                <span className="pov-sub-tasks">
-                  <b className="pov-sub-fig">{left}</b> {left === 1 ? 'task' : 'tasks'}
-                </span>
-                <i aria-hidden="true" />
-                <span>
-                  <b className="pov-sub-fig">{fmtHours(c.left_tenths / 10)}h</b> left
-                </span>
-              </>
-            ) : row.counts.state === 'unavailable' && row.counts.reason === 'counting' ? (
-              'Counting…'
-            ) : (
-              'unknown'
-            )}
-          </span>
-        </span>
-        <span className="pov-slots">
-          {d ? (
-            <>
-              <Chip kind="late" n={d.late} label={DELAY_LABELS.late} />
-              <Chip kind="behind" n={d.behind} label={DELAY_LABELS.behind} />
-            </>
-          ) : (
-            <span className="pov-sub-unknown">unknown</span>
-          )}
-          <Chip kind="paused" n={c?.paused ?? 0} label="Paused" />
-        </span>
-      </Button>
-    </li>
-  )
-}
-
-function SubProjectsPanel({
-  health,
-  org,
-  onOpen,
-}: {
-  health: HealthView
-  /** the project's organization, '' while the page knows none */
-  org: string
-  onOpen: (id: string) => void
-}) {
-  const answer = health?.value?.state === 'ok' ? health.value : null
-  // where the list stands, as its root's data-ov-subs-state names it
-  const state =
-    health === null || (health.value === undefined && health.error === undefined)
-      ? 'loading'
-      : health.value === undefined
-        ? 'error'
-        : health.value.state !== 'ok'
-          ? health.value.state
-          : health.current && !health.kept
-            ? 'ok'
-            : 'refreshing'
-  const root = useRef<HTMLDivElement>(null)
-  // Load more leaves at the end of the list or where its rows failed:
-  // where it held focus, focus goes to Retry, else to the list
-  const more = useHeldFocus()
-  useFocusWhenGone((health?.more ?? null) !== null, () =>
-    more.held()
-      ? (root.current?.querySelector<HTMLElement>('[data-ov-subs-retry]') ?? root.current)
-      : null,
-  )
-  /** `step` for a button that goes with its press, with focus on the list. */
-  const inList = (step: () => void) => () => {
-    step()
-    root.current?.focus()
-  }
-  let body: ReactNode
-  if (health === null || (health.value === undefined && health.error === undefined))
-    body = (
-      <div role="status" className="pov-placeholder pov-placeholder-short">
-        Loading…
-      </div>
-    )
-  else if (health.value === undefined)
-    body = (
-      <div role="alert" className="pov-note">
-        The sub-projects could not be loaded.
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-control-sm text-sm"
-          onClick={inList(() => P.overviewRetry('health'))}
-        >
-          Try again
-        </Button>
-      </div>
-    )
-  else if (!answer)
-    body = <div className="pov-note">Qivo could not list the sub-projects in one request.</div>
-  else
-    body = (
-      <>
-        <ul className="pov-list" data-ov-subs>
-          {answer.rows.map((row) => (
-            <SubRow key={row.project_id} row={row} org={org} onOpen={onOpen} />
-          ))}
-        </ul>
-        {answer.sort.by_name && (
-          <p className="pov-note">
-            {answer.sort.missing === 'counting'
-              ? 'Qivo is counting the tasks here, so the sub-projects are in name order.'
-              : `Qivo could not work out every ${DELAY_LABELS.late} and ${DELAY_LABELS.behind} count, so the sub-projects are in name order.`}
-          </p>
-        )}
-        {health.moreFailed && (
-          <div role="alert" className="pov-note">
-            Couldn't load more sub-projects.
-            <Button
-              type="button"
-              variant="ghost"
-              data-ov-subs-retry
-              className="h-control-sm text-sm"
-              onClick={inList(() => P.overviewRetry('health'))}
-            >
-              Retry
-            </Button>
-          </div>
-        )}
-        {answer.rows.length >= answer.most && answer.total > answer.rows.length && (
-          <p className="pov-note" data-ov-subs-cap>
-            Qivo shows the first {answer.rows.length.toLocaleString('en-US')} of{' '}
-            {answer.total.toLocaleString('en-US')} sub-projects.
-          </p>
-        )}
-        {health.more !== null && (
-          <Button
-            type="button"
-            variant="ghost"
-            data-ov-subs-more
-            {...more.props}
-            className={cn('pov-more', health.more === 'loading' && 'pointer-events-none italic')}
-            aria-disabled={health.more === 'loading' || undefined}
-            onClick={() => {
-              if (health.more === 'ready') P.overviewMore('health')
-            }}
-          >
-            {health.more === 'loading' ? 'Loading…' : 'Load more'}
-          </Button>
-        )}
-      </>
-    )
-  return (
-    <OvSection title="Sub-projects">
-      <div
-        ref={root}
-        tabIndex={-1}
-        data-ov-subs-state={state}
-        aria-busy={state === 'loading' || state === 'refreshing' || undefined}
-        className="outline-none"
       >
         {body}
       </div>
@@ -1101,68 +631,18 @@ function LoadPanel({
   )
 }
 
-/** The line under an upcoming milestone: how many Late tasks are due on or
-    before the first day of its week, in the calendar of its organization,
-    whose weeks start on `weekStart`, so every reader cuts at the same day;
-    those due by the cut-off day of `before`, the milestone shown above it,
-    left out. Which milestone is shown above it follows the reader's own
-    weeks. */
-function lateLine(
-  days: readonly { due: string; count: number }[],
-  m: MilestoneVM,
-  before: MilestoneVM | null,
-  weekStart: number,
-): string {
-  const upTo = (row: MilestoneVM) => {
-    const day = firstDayOfWeek(row.day, weekStart)
-    return days.reduce((n, d) => (d.due <= day ? n + d.count : n), 0)
+/** The sentence's facts from the Needs attention list's answer. */
+function sentenceFacts(needs: NeedsView): SentenceFacts {
+  if (needs === null || (needs.value === undefined && needs.error === undefined)) return 'loading'
+  if (needs.value === undefined) return 'error'
+  if (needs.value.state !== 'ok') return 'partial'
+  const c = needs.value.counts
+  return {
+    overdue: c.overdue,
+    projected: c.projected.state === 'ok' ? c.projected.count : null,
+    blocked: c.blocked,
+    clear: c.all.state === 'ok' && c.all.count === 0,
   }
-  const n = upTo(m) - (before ? upTo(before) : 0)
-  const late = DELAY_LABELS.late.toLowerCase()
-  if (before === null)
-    return n === 0
-      ? `No ${late} task is due before it`
-      : `${plural(n, `${late} task`)} ${n === 1 ? 'is' : 'are'} due before it`
-  return n === 0
-    ? `No other ${late} task is due before it`
-    : `${n} more ${late} ${n === 1 ? 'task is' : 'tasks are'} due before it`
-}
-
-function MilestoneRow({
-  m,
-  next,
-  past = false,
-  line,
-  onEdit,
-}: {
-  m: MilestoneVM
-  next: boolean
-  past?: boolean
-  line: string | null
-  onEdit: (id: string, project: string) => void
-}) {
-  return (
-    <Button
-      type="button"
-      variant="unstyled"
-      onClick={() => onEdit(m.id, m.project)}
-      title={`Edit “${m.name}”`}
-      data-overview-milestone={m.id}
-      data-next={next ? '' : undefined}
-      data-past={past ? '' : undefined}
-      className="pov-mile"
-    >
-      <span className="pov-diamond" aria-hidden="true" data-past={past ? '' : undefined} />
-      <span className="pov-mile-main">
-        <span className="pov-mile-name">{m.name}</span>
-        {line && <span className="pov-mile-line">{line}</span>}
-      </span>
-      <span className="pov-mile-when">
-        <b className="pov-mile-rel">{relativeWeek(m.week)}</b>
-        <time dateTime={weekToISO(m.week)}>{weekLabel(m.week)}</time>
-      </span>
-    </Button>
-  )
 }
 
 export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
@@ -1179,7 +659,6 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
   const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
   const newMilestone = useRef<HTMLButtonElement>(null)
   const milestonesRoot = useRef<HTMLDivElement>(null)
-  const pastBodyId = useId()
   const editMilestone = (id: string, project?: string) =>
     actions.editMilestone(
       id,
@@ -1308,118 +787,30 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
   const factState = counts.state
   const canAdd = P.canAddMilestone(info.id)
 
-  const upcomingRows = ms.upcoming.view.rows
   const lateDays = needsAnswer?.late_due.state === 'ok' ? needsAnswer.late_due.days : null
   const milestones = (
-    <OvSection
-      title="Milestones"
-      action={
-        canAdd ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="w-control-xs h-control-xs"
-            aria-label="New milestone"
-            title="New milestone"
-            ref={newMilestone}
-            onClick={() => actions.newMilestone({})}
-          >
-            <Icon name="plus" size={16} />
-          </Button>
-        ) : null
+    <MilestonesPanel
+      ms={ms}
+      mine={false}
+      onNew={canAdd ? () => actions.newMilestone({}) : null}
+      newRef={newMilestone}
+      rootRef={milestonesRoot}
+      lineOf={(m, i, rows) =>
+        needsAnswer && !needsAnswer.tracks_delay
+          ? null
+          : lateDays === null
+            ? needsAnswer
+              ? LATE_UNKNOWN
+              : null
+            : lateLine(
+                lateDays,
+                m,
+                i > 0 ? (rows[i - 1] ?? null) : null,
+                P.orgWeekStart(info.proj?.org ?? ''),
+              )
       }
-    >
-      <div ref={milestonesRoot} data-overview-milestones className="flex flex-col gap-1">
-        <MilestoneSectionPart
-          side="upcoming"
-          section={ms.upcoming}
-          open
-          searchable={false}
-          pastKnown={ms.upcoming.view.past === false}
-          header={null}
-          scroller="[data-overview-root]"
-          rowMark="data-overview-milestone"
-          rowsClassName="pov-miles"
-          sentences={{
-            noneYet: canAdd
-              ? 'No milestones yet. Add one with the + button.'
-              : 'No milestones yet.',
-          }}
-        >
-          {upcomingRows.map((m, i) => (
-            <MilestoneRow
-              key={m.id}
-              m={m}
-              next={m.id === ms.nextId}
-              line={
-                needsAnswer && !needsAnswer.tracks_delay
-                  ? null
-                  : lateDays === null
-                    ? needsAnswer
-                      ? `Qivo could not count the ${DELAY_LABELS.late.toLowerCase()} tasks due before it`
-                      : null
-                    : lateLine(
-                        lateDays,
-                        m,
-                        i > 0 ? (upcomingRows[i - 1] ?? null) : null,
-                        P.orgWeekStart(info.proj?.org ?? ''),
-                      )
-              }
-              onEdit={editMilestone}
-            />
-          ))}
-        </MilestoneSectionPart>
-        {ms.showPast && (
-          <MilestoneSectionPart
-            side="past"
-            section={ms.past}
-            open={ms.pastOpen}
-            searchable={ms.pastSearchable}
-            bodyId={pastBodyId}
-            scroller="[data-overview-root]"
-            rowMark="data-overview-milestone"
-            rowsClassName="pov-miles"
-            header={
-              <Button
-                type="button"
-                variant="ghost"
-                data-milestone-past-toggle
-                aria-expanded={ms.pastOpen}
-                aria-controls={pastBodyId}
-                onClick={() => ms.setPastOpen(!ms.pastOpen)}
-                className="pov-past-toggle"
-              >
-                <Icon
-                  name={ms.pastOpen ? 'chevronDown' : 'chevronRight'}
-                  size={14}
-                  color="var(--text-2)"
-                />
-                Past
-                {ms.pastOpen && ms.past.view.count !== null && (
-                  <span data-milestone-count className="font-normal text-text-2">
-                    {ms.past.view.count}
-                  </span>
-                )}
-              </Button>
-            }
-          >
-            {ms.pastOpen
-              ? ms.past.view.rows.map((m) => (
-                  <MilestoneRow
-                    key={m.id}
-                    m={m}
-                    next={false}
-                    past
-                    line={null}
-                    onEdit={editMilestone}
-                  />
-                ))
-              : []}
-          </MilestoneSectionPart>
-        )}
-      </div>
-    </OvSection>
+      onEdit={editMilestone}
+    />
   )
 
   return (
@@ -1443,7 +834,7 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
           {replaced ?? (
             <>
               <section className="pov-head" data-ov-head aria-label="Summary">
-                <Sentence needs={read.needs} tasksLeft={tasksLeft} />
+                <Sentence facts={sentenceFacts(read.needs)} tasksLeft={tasksLeft} />
                 <div className="pov-facts" data-ov-facts>
                   <Fact label="Tasks left" name="tasks-left" state={factState}>
                     {tasksLeft ?? placeholder(counts)}
@@ -1476,9 +867,11 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
             )}
             <div className="pov-col">
               {replaced === null && info.isMeta && (
-                <SubProjectsPanel
+                <ProjectsPanel
+                  title="Sub-projects"
+                  noun="sub-projects"
                   health={read.health}
-                  org={info.proj?.org ?? ''}
+                  orgOf={() => info.proj?.org ?? ''}
                   onOpen={(id) => {
                     actions.setScope(id)
                     actions.setView('kanban')

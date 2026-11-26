@@ -791,6 +791,32 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(document.body.textContent).not.toContain('opens once every task has loaded')
   })
 
+  it('runs what the Overview page held back when a new scope takes its place, and not while it hides behind the Board', async () => {
+    const org = await boot()
+    const { P } = await import('./store/planner')
+    await go(`/app/${org}/overview/mine`)
+    const mine = await shownPage('overview')
+    const left = vi.fn()
+    P.beforeOverviewRelease(left)
+    await go(`/app/${org}/board/mine`)
+    await shownPage('kanban')
+    await go(`/app/${org}/overview/mine`)
+    expect(await shownPage('overview')).toBe(mine)
+    expect(left).not.toHaveBeenCalled()
+    // a project in the sidebar opens on the Overview too: the Overview
+    // stays kept, so P.releaseOverview does not run, and its page is new
+    const releases = vi.spyOn(P, 'releaseOverview')
+    const project = await waitFor(
+      () => document.querySelector<HTMLElement>('aside [data-project-row] > button'),
+      'a project in the sidebar',
+    )
+    await act(async () => project.click())
+    await waitFor(() => !mine.isConnected, "My view's Overview page gone")
+    expect(await shownPage('overview')).not.toBe(mine)
+    expect(releases).not.toHaveBeenCalled()
+    expect(left).toHaveBeenCalledTimes(1)
+  })
+
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {
     const org = await boot()
     await go(`/app/${org}/inbox`)

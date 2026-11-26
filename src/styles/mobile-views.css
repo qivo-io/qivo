@@ -1,9 +1,5 @@
 /* Phone views preserve the shared type, status colors and Canvas material.
    The timeline stays available as an explicit, scrollable planning layer. */
-.overview-milestone {
-  /* Rows grow with wrapped names and the timing line, beyond control height. */
-  height: auto;
-}
 
 @media (max-width: 760px) {
   .overview-view > div {
@@ -11,20 +7,7 @@
     gap: 16px;
   }
 
-  .overview-view [data-ov-strip-cells] {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px 16px;
-  }
-
-  .overview-view [data-ov-strip-cells] > div {
-    min-width: 0;
-  }
-
-  .overview-view [data-ov-lead] {
-    grid-column: 1 / -1;
-  }
-
-  html[data-appearance] .overview-view :is([data-ov-summary], [data-ov-strip], .overview-section) {
+  html[data-appearance] .overview-view .overview-section {
     padding: 16px;
   }
 
@@ -32,12 +15,6 @@
     flex-wrap: wrap;
   }
 
-  .overview-view :is([data-ovrow], [data-atrisk]) {
-    min-height: 64px;
-    padding: 12px 8px;
-  }
-
-  .mobile-health-sort,
   .mobile-roadmap-task-filter {
     display: flex;
     align-items: center;
@@ -45,7 +22,7 @@
     margin-bottom: 8px;
   }
 
-  :is(.mobile-health-sort, .mobile-roadmap-task-filter) label {
+  .mobile-roadmap-task-filter label {
     color: var(--text-2);
     font-size: var(--fs-sm);
     flex-shrink: 0;
@@ -54,7 +31,7 @@
   /* Padding and the chevron are the shared dropdown face (tokens.css). At
      phone widths every browser draws that chevron as a background image, so
      set only the fill colour, because the background shorthand would clear it. */
-  :is(.mobile-health-sort, .mobile-roadmap-task-filter) select {
+  .mobile-roadmap-task-filter select {
     flex: 1;
     width: 0;
     min-width: 0;
@@ -65,87 +42,6 @@
     color: var(--text-1);
     font: inherit;
     font-size: 16px;
-  }
-
-  .mobile-health-card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    width: 100%;
-    padding: 16px 0;
-    border-bottom: 1px solid var(--border);
-    border-radius: 0;
-    color: var(--text-1);
-    text-align: left;
-    white-space: normal;
-    font-size: var(--fs-base);
-  }
-
-  .mobile-health-card:last-child {
-    border-bottom: 0;
-    padding-bottom: 0;
-  }
-
-  .mobile-health-heading,
-  .mobile-health-progress,
-  .mobile-health-lead {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .mobile-health-heading strong {
-    flex: 1;
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-
-  .mobile-health-heading svg {
-    flex-shrink: 0;
-    color: var(--text-3);
-  }
-
-  .mobile-health-progress > span:first-child {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .mobile-health-facts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 16px;
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-  }
-
-  .mobile-health-lead {
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-  }
-
-  .overview-milestone {
-    display: grid;
-    grid-template-columns: 9px minmax(0, 1fr);
-    align-items: start;
-    gap: 8px 12px;
-  }
-
-  .overview-milestone > span:first-child {
-    margin-top: 6px;
-  }
-
-  .overview-milestone-text > span {
-    overflow-wrap: anywhere;
-  }
-
-  .overview-milestone-date {
-    grid-column: 2;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 8px;
   }
 }
 

@@ -198,10 +198,9 @@ project. It appears when you belong to an organization.
 
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in
-the landscape Roadmap. The exceptions are My view's **Overview** health
-cards, which show a search once there are more than 10, **Projects**, whose search
-asks the server, and **Archived tasks** and **Deleted items** in Settings,
-which keep their search boxes. Status and
+the landscape Roadmap. The exceptions are **Projects**, whose search asks
+the server, and **Archived tasks** and **Deleted items** in Settings, which
+keep their search boxes. Status and
 other filters remain available, as do searches inside people, label and
 relationship pickers. The relationship pickers search every task you could
 choose on the server.
@@ -222,8 +221,10 @@ user, team and email invitation controls. Its **…** menu holds **Archived
 tasks** and, where you may add one, **New sub-project…**.
 
 **Overview** shows a project's Needs attention list first, in one column,
-and My view's sortable health cards, 10 at a time with **Load more** and a
-search once there are more than 10. The view switch reads **Overview**,
+and My view's **Your work** first, with each task's remaining hours and
+actions below its title, then **Your status**, **Milestones**
+and **Your projects**, 10 at a time with **Load more**
+([My view's Overview](./the-overview-project-health-at-a-glance.md#my-views-overview)). The view switch reads **Overview**,
 **Tasks** and **Roadmap**. **Roadmap** starts on milestones,
 listed as the Overview lists them, 10 upcoming at a time with **Load more**
 and a collapsed **Past** ([Overview

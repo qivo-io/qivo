@@ -1,5 +1,5 @@
 /* The milestones a scope's page lists from the server in two sections, as
-   the Overview (views/overview/OverviewMilestones.tsx) and the phone
+   the Overview (views/overview/overviewRows.tsx MilestonesPanel) and the phone
    Roadmap's agenda (views/MobileRoadmap.tsx) show them: Upcoming, the
    milestones of the current week and later, nearest first, 10 at first and
    10 more for each Load more, and Past, collapsed until the person opens
@@ -8,24 +8,14 @@
    page's two fixed slots. A project or sub-project reads its top-level
    project's milestones, and My view reads `mine`, which the server
    resolves to the projects that hold the person's own work. The agenda
-   lists the Overview's sections.
-
-   The Overview also shows the next milestone, Upcoming's first row while
-   the section has not moved on, else a one-row read of the same base on a
-   slot of its own while it has, so the figure never comes from a row the
-   browser picked out of a longer list. That read's failure offers a Retry
-   of its own, as Upcoming's note says nothing of it. */
+   lists the Overview's sections. The Overview emphasises the next
+   milestone, Upcoming's first row while the section has not moved on. */
 
 import { useState } from 'react'
 import { weekToISO } from '@/lib/dates'
-import {
-  OVERVIEW_MILESTONES,
-  type SectionBase,
-  type SectionView,
-  sectionAsk,
-} from '../lib/milestoneSection'
+import { OVERVIEW_MILESTONES, type SectionBase, type SectionView } from '../lib/milestoneSection'
 import { type MilestoneVM, P, type ScopeInfo } from '../store/planner'
-import { type MilestoneSection, useMilestoneSection, useMilestoneSlot } from './useMilestoneSection'
+import { type MilestoneSection, useMilestoneSection } from './useMilestoneSection'
 
 /** What a scope's milestone sections read: its top-level project, or My
     view's projects (`mine`). */
@@ -44,28 +34,11 @@ export function scopeMilestoneBase(
   return { projects: [info.topId ?? info.id] }
 }
 
-/** The next milestone as the Overview's cell shows it: on its way, given
-    (kept from before and refreshing, or current), none scheduled where
-    Upcoming is whole and empty (`refreshing` where that answer is kept
-    from before), unavailable where Upcoming's read failed, a read was
-    refused, names too many projects or stopped before a row, which the
-    section below says why, or failed where the one-row read of a section
-    that moved on failed, which the section does not say, with `retry`,
-    which asks it again. */
-export type NextMilestone =
-  | { state: 'loading' }
-  | { state: 'ok' | 'refreshing'; row: MilestoneVM }
-  | { state: 'none'; refreshing: boolean }
-  | { state: 'unavailable' }
-  | { state: 'failed'; retry: () => void }
-
 /** The slots of a page's milestone sections (store/planner.ts
-    OVERVIEW_MILESTONE_SLOTS, AGENDA_MILESTONE_SLOTS), with the next
-    milestone's where the page shows one. */
+    OVERVIEW_MILESTONE_SLOTS, AGENDA_MILESTONE_SLOTS). */
 export type ScopeMilestoneSlots = {
   upcoming: readonly [string, string]
   past: readonly [string, string]
-  next?: string
 }
 
 /** A scope's milestone sections, as useScopeMilestones answers them. */
@@ -94,23 +67,19 @@ export type ScopeMilestones = {
       answer's or failure's decision holds, so the section stays and keeps
       the focus that Retry or Show from the start leaves in it. */
   stands: boolean
-  next: NextMilestone
   /** the row Upcoming shows the next milestone on, for its emphasis */
   nextId: string | null
 }
 
-/** The next milestone from Upcoming's view while it has not moved on. A
-    Load more that failed or was refused leaves the answer shown, whose
-    first row is still the next milestone, refreshing where that answer is
-    kept from before; a failure, refusal or too-many of the read shown
-    makes it unavailable. */
-function nextFromUpcoming(view: SectionView<MilestoneVM>): NextMilestone {
-  if (view.state === 'loading') return { state: 'loading' }
+/** The next milestone's row in Upcoming's view while it has not moved on.
+    A Load more that failed or was refused leaves the answer shown, whose
+    first row is still the next milestone; a failure, refusal or too-many
+    of the read shown leaves none. */
+function nextIdOf(view: SectionView<MilestoneVM>): string | null {
+  if (view.state === 'loading' || view.dropped) return null
   const { note } = view
-  if (note && (note.kind === 'too_many' || !note.more)) return { state: 'unavailable' }
-  const row = view.rows[0]
-  if (row) return { state: view.current ? 'ok' : 'refreshing', row }
-  return view.whole ? { state: 'none', refreshing: !view.current } : { state: 'unavailable' }
+  if (note && (note.kind === 'too_many' || !note.more)) return null
+  return view.rows[0]?.id ?? null
 }
 
 /**
@@ -170,33 +139,7 @@ export function useScopeMilestones(
   const showPast = base !== null && (pastOpen || holds?.past === true)
   const stands = holds?.stands === true
 
-  // the next milestone's one-row read, only while Upcoming moved on, and
-  // its attempt, which its Retry raises
-  const nextAsk =
-    slots.next && upcomingBase && view.dropped
-      ? sectionAsk(upcomingBase, '', { n: 0, limit: 1, attempt: 0 })
-      : null
-  const [nextAttempt, setNextAttempt] = useState(0)
-  useMilestoneSlot(slots.next ?? null, nextAsk, active, nextAttempt)
-  let next: NextMilestone
-  if (!view.dropped) next = nextFromUpcoming(view)
-  else {
-    const read = nextAsk && slots.next ? P.milestoneRead(slots.next, nextAsk) : null
-    const row = read?.state === 'ok' ? read.answer.rows[0] : undefined
-    next =
-      !read || read.state === 'loading'
-        ? { state: 'loading' }
-        : read.state === 'failed'
-          ? { state: 'failed', retry: () => setNextAttempt((n) => n + 1) }
-          : read.state !== 'ok'
-            ? { state: 'unavailable' }
-            : row
-              ? { state: read.current ? 'ok' : 'refreshing', row }
-              : read.answer.next === null && read.answer.stopped === null
-                ? { state: 'none', refreshing: !read.current }
-                : { state: 'unavailable' }
-  }
-  const nextId = !view.dropped && 'row' in next ? next.row.id : null
+  const nextId = nextIdOf(view)
   return {
     base,
     upcoming,
@@ -206,7 +149,6 @@ export function useScopeMilestones(
     showPast,
     pastSearchable,
     stands,
-    next,
     nextId,
   }
 }

@@ -1,5 +1,6 @@
-/* The parts both Overview pages share (views/Overview.tsx for My view,
-   views/overview/ProjectOverview.tsx for a project or sub-project): the
+/* The parts both Overview pages share (views/overview/MyOverview.tsx for
+   My view, views/overview/ProjectOverview.tsx for a project or
+   sub-project): the
    figures as a page shows them, where a figure that does not fit one
    request can still be read, the actions the page calls, its states, and
    the hook that registers its reads with the store. A section's frame is
@@ -10,7 +11,6 @@ import { useViewVisibility } from '@/lib/viewVisibility'
 import type {
   FigureView,
   HealthTable,
-  ListView,
   NeedsAsk,
   OverviewPage,
   OverviewView,
@@ -25,9 +25,6 @@ import { overviewRequest } from './overviewArgs'
    counting, unavailable for a reason, or failed. A figure that is not
    given never shows a number, so a count the server could not read whole
    never reads as a smaller one or as zero. */
-
-/** What a figure's element says of its state (data-ov-figure-state). */
-export type FigureState = 'loading' | 'refreshing' | 'ok' | 'counting' | 'unavailable' | 'error'
 
 /** A figure as the page shows it. `scope` is a refusal of the read's whole
     scope, which only the figure shows where the read is not the summary. */
@@ -55,15 +52,6 @@ export function shownOf<A extends { state: string }, F extends object>(
 /** The value of `figure` where it is given, else null. */
 export const given = <T>(figure: Shown<T>): T | null =>
   figure.state === 'ok' || figure.state === 'refreshing' ? figure.value : null
-
-/** The data attributes of figure `name` in `figure`'s state. */
-export const figureAttrs = (name: string, figure: Shown<unknown>) => ({
-  'data-ov-figure': name,
-  'data-ov-figure-state': figure.state satisfies FigureState,
-  ...(figure.state === 'unavailable' && figure.reason !== 'scope'
-    ? { 'data-ov-reason': figure.reason }
-    : {}),
-})
 
 /** What a figure cell shows where no number is given: "…" on its way,
     "Counting…" while the counts are not whole, and the dash the page uses
@@ -120,10 +108,9 @@ export type OverviewState =
 let overviewReaders = 0
 
 /** The Overview's reads for `info`, which the page registers with the store
-    while it and the tab show, with Try again: for `page` 'classic' (My
-    view) the summary, the delays and the two lists, for 'status' (a
-    project or sub-project) the summary; its health table `table` (null for
-    none) and, on 'status', the kind of the Needs attention list `needs`,
+    while it and the tab show, with Try again: the summary, the health table
+    `table` (null for none), and on 'status' (a project or sub-project) the
+    kind of the Needs attention list `needs`, on 'mine' (My view) Your work,
     each registered apart so a new sort, search, kind or Load more asks its
     read alone; the store's answers for the arguments on screen. Renders
     again on the store's `views` news. */
@@ -131,7 +118,7 @@ export function useOverviewRead(
   info: ScopeInfo,
   table: HealthTable | null,
   needs: NeedsAsk | null = null,
-  page: OverviewPage = 'classic',
+  page: OverviewPage = 'status',
 ) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useState(0)
@@ -154,18 +141,23 @@ export function useOverviewRead(
   const sort = table?.sort
   const dir = table?.dir
   const search = table?.search
+  const openOnly = table?.openOnly === true
   useEffect(() => {
     P.watchOverviewTable(
       sort === undefined || dir === undefined || search === undefined
         ? null
-        : { sort, dir, search },
+        : { sort, dir, search, ...(openOnly ? { openOnly } : {}) },
       owner,
     )
-  }, [sort, dir, search, owner, ask])
+  }, [sort, dir, search, openOnly, owner, ask])
   const kind = needs?.kind
   useEffect(() => {
     P.watchOverviewNeeds(kind === undefined ? null : { kind }, owner)
   }, [kind, owner, ask])
+  const work = page === 'mine'
+  useEffect(() => {
+    P.watchOverviewWork(work, owner)
+  }, [work, owner, ask])
   const view: OverviewView = P.overviewRead()
   // answers count only for the arguments on screen
   const mine = key !== null && view.key === key
@@ -174,21 +166,9 @@ export function useOverviewRead(
     view,
     visible,
     summary: mine ? view.summary : null,
-    risk: mine ? view.risk : null,
-    lists: mine ? { attention: view.attention, paused: view.paused } : null,
     health: mine ? view.health : null,
     needs: mine ? view.needs : null,
+    work: mine ? view.work : null,
     retry: () => setAttempt((n) => n + 1),
   }
-}
-
-/** A list before any answer for the arguments on screen. */
-export const WAITING: ListView = {
-  state: 'loading',
-  batches: [],
-  dropped: false,
-  end: false,
-  more: null,
-  failed: false,
-  reads: 0,
 }

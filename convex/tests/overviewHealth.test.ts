@@ -71,6 +71,7 @@ type Ask = {
   dir: 'asc' | 'desc'
   search?: string
   limit: number
+  open_only?: boolean
 }
 
 /** The table's defaults: the client's clock on DAY, most Late first, the
@@ -404,6 +405,66 @@ describe('rows', () => {
     expect(rowOf(await health(t, f.admin, scopeOf(f.admin, f.sub)), 'Firmware').lead_id).toBe(
       f.user.id,
     )
+  })
+})
+
+describe('open only', () => {
+  it("leaves out My view's projects where none of the person's tasks is left, and counts only the rest", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.admin.id })
+    const finished = await plantProject(t, {
+      org_id: f.org.id,
+      name: 'Finished',
+      lead_id: f.admin.id,
+    })
+    const finishedSub = await subOf(t, finished, 'Wrapped up')
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: finishedSub.id,
+      assignee_id: f.admin.id,
+      status: 'done',
+      done_at: PLANTED_AT,
+    })
+    await countOrg(t, f.org.id)
+    const all = okOf(await health(t, f.admin, MINE, { sort: 'name', dir: 'asc' }))
+    expect(all.rows.map((r) => r.name)).toEqual(['Finished', 'Testbed platform'])
+    const open = okOf(await health(t, f.admin, MINE, { sort: 'name', dir: 'asc', open_only: true }))
+    expect(open.rows.map((r) => r.name)).toEqual(['Testbed platform'])
+    expect(open.total).toBe(1)
+  })
+
+  it('lists no project as holding work left while the counts that say which do are not given', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const other = await withReadingAdmin(t)
+    const there = await plantSeat(t, {
+      org_id: other.org.id,
+      org_role: 'admin',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.meta.id,
+        profile_id: there.id,
+        level: 'user',
+      }),
+    )
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.user.id,
+      status: 'done',
+      done_at: PLANTED_AT,
+    })
+    await plantIssue(t, { org_id: other.org.id, project_id: other.sub.id, assignee_id: there.id })
+    await countOrg(t, f.org.id)
+    const ask = () => health(t, f.user, MINE, { sort: 'name', dir: 'asc', open_only: true })
+    expect(okOf(await ask())).toMatchObject({ rows: [], total: 0, uncounted: 'counting' })
+    await countOrg(t, other.org.id)
+    const counted = okOf(await ask())
+    expect(counted.rows.map((r) => r.project_id)).toEqual([other.meta.id])
+    expect(counted.uncounted).toBeUndefined()
   })
 })
 

@@ -64,8 +64,6 @@ html[data-appearance]
     .board-status-panel,
     .board-empty-note,
     .qivo-empty-state,
-    [data-ov-summary],
-    [data-ov-strip],
     [data-ov-head],
     .overview-section,
     .settings-navigation,
@@ -357,13 +355,9 @@ html[data-appearance="light"] .board-card:hover {
     0 1px 2px rgba(25, 39, 56, 0.1),
     0 2px 6px rgba(25, 39, 56, 0.06);
 }
-html[data-appearance] :is([data-ov-summary], [data-ov-strip], .overview-section) {
+html[data-appearance] .overview-section {
   padding: 20px;
   max-width: none;
-}
-html[data-appearance] .overview-section :is([data-ov-table], [data-ovrow], [data-atrisk]) {
-  background: transparent;
-  box-shadow: none;
 }
 @media (max-width: 760px) {
   .planner-shell [data-view-switch] > [data-slot="toggle-group"] {
@@ -568,11 +562,4 @@ html[data-appearance="light"]
   input[data-slot="input"]:is([data-user-name], [data-user-email])
 ) {
   box-shadow: none;
-}
-/* Light over the photo: Overview milestone rows are clear like the at-risk
-   rows; the next milestone keeps its primary-soft fill. */
-html[data-appearance="light"][data-background-state="ready"]
-  .overview-section
-  .overview-milestone:not([data-next], :hover) {
-  background-color: transparent;
 }

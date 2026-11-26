@@ -1166,6 +1166,15 @@ function App() {
   useEffect(() => {
     if (!overviewKept) P.releaseOverview()
   }, [overviewKept])
+  // a new scope mounts the Overview anew while it stays kept: the page of
+  // the old scope goes, and what it held back until then runs
+  const overviewScope = overviewKept ? keep.scope : null
+  useEffect(
+    () => () => {
+      if (overviewScope !== null) P.leaveOverviewPage()
+    },
+    [overviewScope],
+  )
   // and so does Team sync, its agenda's read and rows, an organization
   // Viewer's people's loads and the last comments' marks, also when Done
   // ends the sitting, and its opening's milestone reads, which stop while

@@ -7,12 +7,11 @@ import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* The Overview's milestones from the server (views/useScopeMilestones.ts,
-   views/overview/OverviewMilestones.tsx): Upcoming 10 at a time with Load
-   more and the move on at a lowered cap, a collapsed Past that reads
-   nothing until it opens, 25 at a time with its search on the server, the
-   Next milestone cell of My view's page in each state, a kept answer's
-   included, the Retry
-   of its one-row read, the empty lines and My view's own sentences, My
+   views/overview/overviewRows.tsx MilestonesPanel): Upcoming 10 at a time
+   with Load more and the move on at a lowered cap, a collapsed Past that
+   reads nothing until it opens, 25 at a time with its search on the
+   server, the next milestone's emphasis, the section states, the empty
+   lines and My view's own sentences, My
    view's `mine` read, the note pages, the section staying under a note while
    Retry and Show from the start read again, another person's rename, move
    and delete arriving while the page shows, a hidden tab, a kept page, a
@@ -180,7 +179,6 @@ const noteOf = (side: 'upcoming' | 'past') =>
   [...(sectionOf(side)?.querySelectorAll<HTMLElement>('[data-milestone-note]') ?? [])].map(
     (e) => `${e.dataset.milestoneNote}: ${e.textContent}`,
   )
-const cell = () => q('[data-ov-figure="next-milestone"]')
 const click = (element: Element | null | undefined) =>
   act(async () => (element as HTMLElement | null)?.click())
 /** The section reads asked, in order. */
@@ -231,9 +229,9 @@ describe("a project's Upcoming", { timeout: BOARD_TEST_TIMEOUT }, () => {
     // no task is asked for
   })
 
-  it('moves on at a lowered cap with Show from the start, and takes Next milestone from a one-row read', async () => {
+  it('moves on at a lowered cap with Show from the start, emphasising the next milestone only while it shows', async () => {
     const loaded = await overview(plan({ up: 7 }), { scope: 'mine' })
-    const { board, section, store } = loaded
+    const { section } = loaded
     Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
     try {
       // a new mount reads with the lowered sizes
@@ -249,16 +247,10 @@ describe("a project's Upcoming", { timeout: BOARD_TEST_TIMEOUT }, () => {
       expect(
         sectionOf('upcoming')?.querySelector('[data-milestone-dropped]')?.textContent,
       ).toContain('Earlier milestones are not shown.')
-      // Next milestone is still Step 1, from a read of one row on its own
-      // slot, and no row shows the emphasis
-      expect(cell()?.textContent).toContain('Step 1')
-      expect(sectionAsks(board).some((a) => a.limit === 1 && a.after === undefined)).toBe(true)
-      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('ok')
+      // the next milestone is not among the rows, so none shows the emphasis
       expect(q('[data-overview-milestones] [data-next]')).toBeNull()
       await click(sectionOf('upcoming')?.querySelector('[data-milestone-from-start]'))
       expect(rowsOf('upcoming')).toEqual(['u1', 'u2'])
-      // the one-row read goes once Upcoming shows the first row again
-      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('loading')
       expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
     } finally {
       Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
@@ -320,12 +312,11 @@ describe("a project's Past", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
-describe('the Next milestone cell and the section states', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('says loading, none scheduled and unavailable, never none for a failed, refused or stopped read', async () => {
+describe('the section states', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('says loading, failed, refused and stopped, never the empty line for them', async () => {
     const loaded = await overview(plan({ up: 0 }), { scope: 'mine' })
     const { board } = loaded
     // projects whose whole Upcoming is empty and hold no past milestone
-    expect(cell()?.textContent).toContain('None scheduled')
     expect(noteOf('upcoming')).toEqual(['empty: No milestones in any of your projects yet.'])
     // a new page each time, after App let the last one go, as it frees
     // a page it no longer keeps (P.releaseOverview)
@@ -337,8 +328,6 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
       await loaded.render()
     }
     await again({ upcoming: 'loading' })
-    expect(cell()?.dataset.ovFigureState).toBe('loading')
-    expect(cell()?.textContent).not.toContain('None scheduled')
     expect(stateOf('upcoming')).toBe('loading')
     for (const [force, state, note] of [
       ['error', 'failed', "failed: Couldn't load milestones.Retry"],
@@ -346,9 +335,6 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
       ['stopped', 'ok', 'stopped: Qivo checked part of the list. Load more continues.'],
     ] as const) {
       await again({ upcoming: force })
-      expect(cell()?.dataset.ovFigureState, force).toBe('unavailable')
-      expect(cell()?.textContent, force).toContain('Unavailable')
-      expect(cell()?.textContent, force).not.toContain('None scheduled')
       expect(stateOf('upcoming'), force).toBe(state)
       expect(
         noteOf('upcoming').some((n) => n.startsWith(note)),
@@ -362,109 +348,26 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
     board.server.milestones.force = {}
   })
 
-  it('keeps the next milestone and its emphasis while a failed Load more says so', async () => {
+  it("keeps the next milestone's emphasis while a failed Load more says so", async () => {
     const { board } = await overview(plan({ up: 12 }), { scope: 'mine' })
     board.server.milestones.force = { more: 'error' }
     await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
     expect(noteOf('upcoming').some((n) => n.startsWith('more-failed'))).toBe(true)
     expect(rowsOf('upcoming')).toHaveLength(10)
-    // must fail for a cell that reads any failure as unavailable
-    expect(cell()?.dataset.ovFigureState).toBe('ok')
-    expect(cell()?.textContent).toContain('Step 1')
+    // must fail for an emphasis that any failure takes away
     expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
     board.server.milestones.force = {}
-  })
-
-  it('marks a kept None scheduled refreshing until the fresh answer comes', async () => {
-    const { board } = await overview(plan({ up: 0 }), { scope: 'mine' })
-    expect(cell()?.textContent).toContain('None scheduled')
-    expect(cell()?.dataset.ovFigureState).toBe('ok')
-    await setVisibility('hidden')
-    board.server.milestones.hold = true
-    await setVisibility('visible')
-    expect(stateOf('upcoming')).toBe('refreshing')
-    // must fail for a cell that shows a kept None scheduled as settled
-    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
-    expect(cell()?.textContent).toContain('None scheduled')
-    board.server.milestones.hold = false
-    await board.answer()
-    expect(cell()?.dataset.ovFigureState).toBe('ok')
-  })
-
-  it('keeps the next milestone refreshing while a Load more over a kept answer fails', async () => {
-    const { board } = await overview(plan({ up: 12 }), { scope: 'mine' })
-    await setVisibility('hidden')
-    // the shown read gets no fresh answer, and the Load more's read fails
-    board.server.milestones.force = { upcoming: 'loading', more: 'error' }
-    await setVisibility('visible')
-    expect(stateOf('upcoming')).toBe('refreshing')
-    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
-    await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
-    expect(noteOf('upcoming').some((n) => n.startsWith('more-failed'))).toBe(true)
-    expect(stateOf('upcoming')).toBe('failed')
-    // must fail for a cell that takes the section's failed state for a
-    // current answer
-    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
-    expect(cell()?.textContent).toContain('Step 1')
-    board.server.milestones.force = {}
-  })
-
-  it('offers a Retry of the one-row read that fails while Upcoming answers, which reads it again', async () => {
-    const loaded = await overview(plan({ up: 7 }), { scope: 'mine' })
-    const { board, section, store } = loaded
-    Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
-    /** The one-row reads of the next milestone asked so far. */
-    const oneRow = () => sectionAsks(board).filter((a) => a.limit === 1 && a.after === undefined)
-    try {
-      await act(async () => root.unmount())
-      root = createRoot(container)
-      await loaded.render()
-      board.server.milestones.force = { next: 'error' }
-      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
-      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
-      // Upcoming moved on and answers, and the one-row read failed, which
-      // Upcoming's note does not say
-      expect(rowsOf('upcoming')).toEqual(['u3', 'u4', 'u5', 'u6'])
-      expect(stateOf('upcoming')).toBe('ok')
-      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('failed')
-      expect(cell()?.dataset.ovFigureState).toBe('error')
-      expect(cell()?.textContent).toContain("Couldn't load")
-      const retry = cell()?.querySelector<HTMLElement>('[data-ov-figure-retry]')
-      expect(retry?.textContent).toBe('Retry')
-      // Retry asks the one-row read again, and its row shows
-      board.server.milestones.force = {}
-      const asked = oneRow().length
-      retry?.focus()
-      await click(retry)
-      expect(oneRow()).toHaveLength(asked + 1)
-      expect(cell()?.dataset.ovFigureState).toBe('ok')
-      expect(cell()?.textContent).toContain('Step 1')
-      expect(cell()?.querySelector('[data-ov-figure-retry]')).toBeNull()
-      // the focus the Retry left as it went is on the cell
-      expect(document.activeElement).toBe(cell())
-      // a refusal stays unavailable, with no Retry
-      board.server.milestones.force = { next: 'refused' }
-      await board.answer()
-      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('refused')
-      expect(cell()?.dataset.ovFigureState).toBe('unavailable')
-      expect(cell()?.textContent).toContain('Unavailable')
-      expect(cell()?.querySelector('[data-ov-figure-retry]')).toBeNull()
-      board.server.milestones.force = {}
-    } finally {
-      Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
-    }
   })
 
   it('shows a past milestone project as having history, and Retry asks again', async () => {
     const { board, render, store } = await overview(plan({ past: 1 }), { scope: 'mine' })
     expect(noteOf('upcoming')).toEqual(['empty: No upcoming milestones.'])
-    expect(cell()?.textContent).toContain('None scheduled')
     board.server.milestones.force = { upcoming: 'error' }
     await act(async () => root.unmount())
     await act(async () => store.P.releaseOverview())
     root = createRoot(container)
     await render()
-    expect(cell()?.textContent).toContain('Unavailable')
+    expect(stateOf('upcoming')).toBe('failed')
     board.server.milestones.force = {}
     await click(
       [...(sectionOf('upcoming')?.querySelectorAll('button') ?? [])].find(
@@ -501,7 +404,6 @@ describe('My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
         `[data-milestone-note="${note}"]`,
       )?.textContent
       expect(text, force).toContain('Open a project to see its milestones.')
-      expect(cell()?.textContent).toContain('Unavailable')
       // Past would be refused the same way, so it does not show
       expect(q('[data-overview-milestones] [data-milestone-past-toggle]')).toBeNull()
     }
@@ -616,12 +518,11 @@ describe('the note pages through a new read', { timeout: BOARD_TEST_TIMEOUT }, (
 })
 
 describe("another person's changes", { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('arrive in Upcoming, Next milestone and an open Past while the page shows, and wait while the tab hides', async () => {
+  it('arrive in Upcoming and an open Past while the page shows, and wait while the tab hides', async () => {
     const { board } = await overview(plan({ up: 4, past: 2 }), { scope: 'mine' })
     await click(q('[data-overview-milestones] [data-milestone-past-toggle]'))
     expect(rowsOf('upcoming')).toEqual(['u1', 'u2', 'u3', 'u4'])
     expect(rowsOf('past')).toEqual(['p1', 'p2'])
-    expect(cell()?.textContent).toContain('Step 1')
     const named = (id: string) => q(`[data-overview-milestone="${id}"]`)?.textContent
     const stored = (id: string) => {
       const row = board.snapshot.milestones.find((m) => m.id === id)
@@ -638,7 +539,6 @@ describe("another person's changes", { timeout: BOARD_TEST_TIMEOUT }, () => {
     await board.answer()
     expect(rowsOf('upcoming')).toEqual(['u1', 'u4'])
     expect(named('u1')).toContain('Kickoff')
-    expect(cell()?.textContent).toContain('Kickoff')
     expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
     expect(rowsOf('past')).toEqual(['p1', 'p2', 'u2'])
     expect(q('[data-overview-milestone="u3"]')).toBeNull()
