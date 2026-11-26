@@ -6,10 +6,11 @@
    finished is counted or drawn.
 
    Every figure is the server's (convex/overview.ts): the summary's counts
-   for Tasks left and Hours left, the Needs attention list's kinds, counts,
-   people and Late tasks by due date (overview.needs), and a project's
-   health table, sorted by Late, for Sub-projects (overview.health), through
-   the store's reads (store/overviewLists.ts, page 'status'). The people's
+   for Tasks left and Hours left, and the Needs attention list's kinds,
+   counts, people and Late tasks by due date (overview.needs), whose answer
+   for a project also holds its health table, sorted by Late, for
+   Sub-projects, through the store's reads (store/overviewLists.ts, page
+   'status'). Sub-projects shows that answer's rows 10 at a time. The people's
    loads come from the owner-load cache, as the Roadmap's Team utilization
    reads them (planning.ownerLoads, views/teamWeeks.ts), so a load counts
    the projects the reader can see. A figure the server answers unavailable
@@ -37,7 +38,7 @@ import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours, hasPlannableWeek, loadTone } from '@/lib/workload'
-import type { NeedsView } from '@/store/overviewLists'
+import { type NeedsView, OVERVIEW_BATCH } from '@/store/overviewLists'
 import { api } from '../../../convex/_generated/api'
 import type { NeedsKind, NeedsRow } from '../../../convex/lib/overviewNeeds'
 import { taskOwnerId } from '../../../convex/lib/review'
@@ -77,6 +78,7 @@ import {
   MilestonesPanel,
   NeedFlag,
   ProjectsPanel,
+  type ProjectsView,
   Sentence,
   type SentenceFacts,
 } from './overviewRows'
@@ -631,6 +633,25 @@ function LoadPanel({
   )
 }
 
+/** The Sub-projects a top-level project's Needs attention answer holds
+    (convex/lib/overviewNeeds.ts NeedsAnswer health), as ProjectsPanel
+    shows them: the first `shown` rows, with Load more while the answer
+    holds more. */
+function subProjectsOf(needs: NeedsView, shown: number): ProjectsView {
+  if (needs === null) return null
+  const read = { current: needs.current, kept: needs.kept, more: null, moreFailed: false }
+  if (needs.value === undefined)
+    return needs.error === undefined ? null : { ...read, error: needs.error }
+  if (needs.value.state !== 'ok') return { ...read, value: needs.value }
+  const table = needs.value.health
+  if (table === undefined) return null
+  return {
+    ...read,
+    value: { ...table, rows: table.rows.slice(0, shown) },
+    more: shown < table.rows.length ? 'ready' : null,
+  }
+}
+
 /** The sentence's facts from the Needs attention list's answer. */
 function sentenceFacts(needs: NeedsView): SentenceFacts {
   if (needs === null || (needs.value === undefined && needs.error === undefined)) return 'loading'
@@ -650,12 +671,8 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
   const { paneRef } = useOverviewPanelClipping(!mobile)
   const openIssue = useLatest((open: string) => actions.openIssue(open))
   const [filter, setFilter] = useState<Filter>('all')
-  const read = useOverviewRead(
-    info,
-    info.isMeta ? { sort: 'late', dir: 'desc', search: '' } : null,
-    { kind: filter },
-    'status',
-  )
+  const read = useOverviewRead(info, null, { kind: filter }, 'status')
+  const [subsShown, setSubsShown] = useState(OVERVIEW_BATCH)
   const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
   const newMilestone = useRef<HTMLButtonElement>(null)
   const milestonesRoot = useRef<HTMLDivElement>(null)
@@ -870,12 +887,14 @@ export function ProjectOverview({ info, actions }: { info: ScopeInfo; actions: O
                 <ProjectsPanel
                   title="Sub-projects"
                   noun="sub-projects"
-                  health={read.health}
+                  health={subProjectsOf(read.needs, subsShown)}
                   orgOf={() => info.proj?.org ?? ''}
                   onOpen={(id) => {
                     actions.setScope(id)
                     actions.setView('kanban')
                   }}
+                  onMore={() => setSubsShown((n) => n + OVERVIEW_BATCH)}
+                  onRetry={() => P.overviewRetry('needs')}
                 />
               )}
               {replaced === null && (

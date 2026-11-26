@@ -957,6 +957,8 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
                     actions.setScope(id)
                     actions.setView('kanban')
                   }}
+                  onMore={() => P.overviewMore('health')}
+                  onRetry={() => P.overviewRetry('health')}
                 />
               )}
             </div>

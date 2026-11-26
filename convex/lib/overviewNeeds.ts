@@ -35,7 +35,21 @@
  * owner's load or the budget does not hold one, Projected to miss, Behind
  * plan and the whole list's count are unavailable, with its reason, and
  * the rows of the other kinds still show, as does every row whose verdict
- * was read. The list then says it may leave tasks out. */
+ * was read. The list then says it may leave tasks out.
+ *
+ * For a top-level project the answer also holds its Sub-projects, the
+ * health table sorted by Late (lib/overview.ts lateTableRows and
+ * lateTable): each sub-project's row and counts, read before the tasks as
+ * overview.health reads them, and its Late, the overdue tasks and those
+ * projected to miss, and Behind plan from the verdicts above, so the tasks
+ * are read and judged once. A row with a verdict that needs an owner's load
+ * that was not read is unavailable for `loads`, and every row is
+ * unavailable for `budget` where the verdicts did not fit. A passed due
+ * date is Late whatever the load, so no owner's load is read for an overdue
+ * task, where overview.health reads it: a guest's or Viewer's one owner,
+ * and the owner reader's room, then reach further here, and a row the
+ * health table answers unavailable can have its figures here. A figure
+ * both give is the same. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -43,8 +57,12 @@ import type { QueryCtx } from '../_generated/server'
 import { badRequest } from './functions'
 import {
   type Groups,
+  type HealthDelays,
+  type HealthTable,
   isDoneFor,
   isGroup,
+  lateTable,
+  lateTableRows,
   newGroups,
   overScope,
   readGroups,
@@ -146,6 +164,10 @@ export type NeedsAnswer =
        * the sub-projects that track delay, by due date, ascending;
        * unavailable as Projected to miss is */
       late_due: Figure<{ days: { due: string; count: number }[] }>
+      /** a top-level project's Sub-projects: its health table as
+       * overview.health answers it sorted by Late, most first, with no
+       * search and every row up to its `most`; none for one sub-project */
+      health?: HealthTable
     }
   | ScopeRefusal
 
@@ -263,6 +285,10 @@ export async function readNeeds(
   const scope = { kind: 'project' as const, ...args.scope }
   return await overScope(ctx, profiles, scope, async (guard, at) => {
     if (at.kind !== 'project') return { state: 'unavailable' }
+    // a top-level project's Sub-projects: their rows and counts before any
+    // task, as overview.health reads them
+    const table =
+      at.selection.project.parent_id === undefined ? await lateTableRows(ctx, guard, at) : null
     const g = newGroups()
     const { open, read } = await openTasks(ctx, guard, at, g)
     const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
@@ -280,6 +306,7 @@ export async function readNeeds(
     const overdue = (t: Doc<'issues'>) => t.due_date !== undefined && t.due_date < clock.day
     const judged = open.filter((t) => tracked(t) && !overdue(t))
     const verdictOf = new Map<string, { status: string; fin: number | null }>()
+    const unknownIn = new Set<string>()
     const delays = await bounded(async (): Promise<Figure<{ missing: Missing | null }>> => {
       const v = verdicts(ctx, guard, at.seats, clock)
       const owners: string[] = []
@@ -291,16 +318,22 @@ export async function readNeeds(
       let missing: Missing | null = null
       for (const t of judged) {
         const verdict = await v.of(t, facts(t))
-        if (verdict === UNKNOWN) missing = 'loads'
-        else if (verdict !== null) verdictOf.set(t.id, verdict)
+        if (verdict === UNKNOWN) {
+          missing = 'loads'
+          unknownIn.add(t.project_id)
+        } else if (verdict !== null) verdictOf.set(t.id, verdict)
       }
       return { state: 'ok', missing }
     })
     const missing: Missing | null = delays.state === 'ok' ? delays.missing : delays.reason
 
-    // each task's kinds, in order
+    // each task's kinds, in order, and each sub-project's Late and Behind
+    // plan: a passed due date is Late whatever the load
     const list: Judged[] = []
     const lateDue = new Map<string, number>()
+    const lateIn = new Map<string, number>()
+    const behindIn = new Map<string, number>()
+    const add = (to: Map<string, number>, key: string) => to.set(key, (to.get(key) ?? 0) + 1)
     for (const t of open) {
       const f = facts(t)
       const leaf = f === null
@@ -310,8 +343,10 @@ export async function readNeeds(
       const verdict = verdictOf.get(t.id)
       if (overdue(t)) {
         kinds.push('overdue')
-        if (tracked(t))
-          lateDue.set(t.due_date as string, (lateDue.get(t.due_date as string) ?? 0) + 1)
+        if (tracked(t)) {
+          add(lateDue, t.due_date as string)
+          add(lateIn, t.project_id)
+        }
       } else if (verdict?.status === 'late') {
         kinds.push('projected')
         fin = verdict.fin
@@ -319,12 +354,14 @@ export async function readNeeds(
           verdict.fin === null || t.due_date === undefined
             ? 0
             : verdict.fin - clock.ofDay(t.due_date)
-        if (t.due_date !== undefined) lateDue.set(t.due_date, (lateDue.get(t.due_date) ?? 0) + 1)
+        if (t.due_date !== undefined) add(lateDue, t.due_date)
+        add(lateIn, t.project_id)
       } else if (verdict?.status === 'behind') {
         kinds.push('behind')
         fin = verdict.fin
         const end = plannedEnd(clock, t, f)
         weeks = verdict.fin === null || end === null ? 0 : verdict.fin - end
+        add(behindIn, t.project_id)
       }
       const open_blockers = leaf && focus.has(t.status) ? blockers.open(t) : []
       if (open_blockers.length > 0) kinds.push('blocked')
@@ -356,6 +393,29 @@ export async function readNeeds(
     const kept =
       args.kind === 'all' ? list : list.filter((j) => j.kinds.includes(args.kind as NeedsKind))
     const shown = new Map(read)
+    const health =
+      table === null
+        ? null
+        : await lateTable(
+            table,
+            delays.state === 'ok'
+              ? {
+                  state: 'ok',
+                  of: new Map(
+                    at.selection.subProjects.map((p): [string, HealthDelays] => [
+                      p.id,
+                      unknownIn.has(p.id)
+                        ? { state: 'unavailable', reason: 'loads' }
+                        : {
+                            state: 'ok',
+                            late: lateIn.get(p.id) ?? 0,
+                            behind: behindIn.get(p.id) ?? 0,
+                          },
+                    ]),
+                  ),
+                }
+              : delays,
+          )
     return {
       state: 'ok',
       rows: kept.slice(0, limit).map((j): NeedsRow => {
@@ -400,6 +460,7 @@ export async function readNeeds(
                 .map(([due, n]) => ({ due, count: n })),
             }
           : { state: 'unavailable', reason: missing },
+      ...(health === null ? {} : { health }),
     }
   })
 }

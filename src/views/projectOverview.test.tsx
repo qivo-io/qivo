@@ -199,7 +199,7 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     for (const call of before) expect(board.server.loads.has(call)).toBe(true)
   })
 
-  it('asks a failed Load more of the sub-projects again with Retry, and says how many it shows past the cap', async () => {
+  it("shows the sub-projects of Needs attention's answer 10 at a time, asking the server nothing more, and says how many it shows past the cap", async () => {
     /** Plan's sub-projects: One and eleven more. */
     const twelve = (snap: Snapshot) => {
       plan(snap)
@@ -209,63 +209,23 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
     const subs = () => document.querySelectorAll('[data-ov-sub]').length
     const section = () => q('[data-ov-subs]')?.closest('section') ?? null
-    const button = (label: string) =>
-      [...(section()?.querySelectorAll<HTMLElement>('button') ?? [])].find(
-        (b) => b.textContent === label,
-      )
     const { board } = await overview(twelve)
+    const queries = () => board.server.overview.asked.map((a) => a.query)
     expect(subs()).toBe(10)
-    board.server.overview.fail = new Error('down')
-    board.server.overview.failing = (query, args) =>
-      query === 'health' && (args.limit as number) > 10
+    expect(queries()).toContain('needs')
+    const asked = queries().length
     await act(async () => q('[data-ov-subs-more]')?.click())
-    await board.answer()
-    expect(subs()).toBe(10)
-    expect(section()?.textContent).toContain("Couldn't load more sub-projects.")
-    board.server.overview.fail = undefined
-    await act(async () => button('Retry')?.click())
-    await board.answer()
     expect(subs()).toBe(12)
+    expect(q('[data-ov-subs-more]')).toBeNull()
+    // no health table, and no read for Load more
+    expect(queries().length).toBe(asked)
+    expect(queries()).not.toContain('health')
     await act(async () => root.unmount())
     root = createRoot(container)
     await overview(twelve, { force: { health: { most: 10 } } })
     expect(subs()).toBe(10)
     expect(q('[data-ov-subs-more]')).toBeNull()
     expect(section()?.textContent).toContain('Qivo shows the first 10 of 12 sub-projects.')
-  })
-
-  it('lets the sub-projects it showed go where the rows a failed Load more went back to fail too', async () => {
-    // Plan's sub-projects: One and eleven more
-    const { board } = await overview((snap) => {
-      plan(snap)
-      const base = snap.projects[0]
-      for (let n = 2; n <= 12; n++)
-        snap.projects.push({ ...base, id: `sub${n}`, key: `S${n}`, num: 10 + n, name: `Sub ${n}` })
-    })
-    const shown = () =>
-      [...document.querySelectorAll<HTMLElement>('[data-ov-sub]')].map((row) => row.dataset.ovSub)
-    const read = () => board.P.cacheStats().reads.flat()
-    const first = shown()
-    expect(first).toHaveLength(10)
-    // One also holds Needs attention's rows, and the page reads Plan
-    const one = board.snapshot.projects[0].id
-    const listed = first.filter((id) => id !== one)
-    expect(listed).toHaveLength(9)
-    // the next 10 fail while the first 10 asked again are held back
-    board.server.overview.hold = (query) => query === 'health'
-    await act(async () => q('[data-ov-subs-more]')?.click())
-    board.server.overview.fail = new Error('down')
-    board.server.overview.failing = (query, args) =>
-      query === 'health' && (args.limit as number) > 10
-    await board.answer()
-    expect(shown()).toEqual(first)
-    expect(read()).toEqual(expect.arrayContaining(first))
-    // they fail too
-    board.server.overview.failing = (query) => query === 'health'
-    await board.answer()
-    expect(q('[data-ov-subs-state]')?.dataset.ovSubsState).toBe('error')
-    expect(read().filter((id) => listed.includes(id))).toEqual([])
-    expect(read()).toEqual(expect.arrayContaining([one, 'plan']))
   })
 
   it("names a sub-project's lead before the workspace holds the sub-project, loading and then by name, never as no lead", async () => {
@@ -284,11 +244,18 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     // the row of a sub-project whose own details have not reached the
     // workspace, led by Pat
     board.server.overview.edit = (query, answer) => {
-      const ok = answer as { state: string; rows?: { project_id: string; lead_id: string }[] }
-      if (query !== 'health' || ok.state !== 'ok' || !ok.rows?.[0]) return answer
+      const ok = answer as {
+        state: string
+        health?: { rows: { project_id: string; lead_id: string }[] }
+      }
+      const first = ok.health?.rows[0]
+      if (query !== 'needs' || ok.state !== 'ok' || !ok.health || !first) return answer
       return {
         ...ok,
-        rows: [...ok.rows, { ...ok.rows[0], project_id: 'unplaced', lead_id: 'pat' }],
+        health: {
+          ...ok.health,
+          rows: [...ok.health.rows, { ...first, project_id: 'unplaced', lead_id: 'pat' }],
+        },
       }
     }
     await board.deliver()

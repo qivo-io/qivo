@@ -17,7 +17,9 @@
    convex/lib/nameKey.ts) with its name fallback and cut at `limit`, at
    most HEALTH_ROWS; and a project's Needs attention list and My view's
    Your work from their stored facts alone (Overdue, No reviewer and
-   Paused, no verdict or blocker). It reads no access rule or read budget
+   Paused, no verdict or blocker), the list's answer for a top-level
+   project holding that project's health table sorted by Late, every row
+   up to HEALTH_ROWS. It reads no access rule or read budget
    of its own, so a state the workspace cannot reach, such as `counting`,
    `budget` or `over_budget`, answers only when `force` asks for it.
    src/store/overviewParity.test.ts compares the summary and the health
@@ -60,7 +62,8 @@ import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
     them too, or Overdue's `budget`), the owners in `unknown` whose loads
     the health table cannot read; and for the health table alone its scope
     refusal, its counts or its judged rows' delays not given, or a lower cap
-    (`most`). */
+    (`most`), which but the scope refusal the health table in a top-level
+    project's Needs attention answer takes too. */
 export type ForcedOverview = {
   scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
   counts?: 'counting' | 'budget'
@@ -637,7 +640,19 @@ export function overviewStandIn(
     for (const t of listed)
       if (tracks(t) && t.due_date !== undefined && t.due_date < day)
         late.set(t.due_date, (late.get(t.due_date) ?? 0) + 1)
+    // a top-level project's health table sorted by Late, with every forced
+    // state of the health table but its scope refusal
+    const health =
+      projectById.get(scope.project_id)?.parent_id === undefined
+        ? (overviewStandIn(
+            workspace,
+            'health',
+            { ...args, scope, sort: 'late', dir: 'desc', limit: HEALTH_ROWS },
+            { sees, force: { ...force, health: { ...force.health, scope: undefined } } },
+          ) as HealthAnswer)
+        : null
     return {
+      ...(health?.state === 'ok' ? { health } : {}),
       state: 'ok',
       rows: kept.slice(0, args.limit as number).map((t) => {
         const { description: _text, parent_id: parent, has_subtasks: _flag, ...rest } = t

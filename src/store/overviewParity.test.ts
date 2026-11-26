@@ -7,7 +7,9 @@
  * (src/views/overview/overviewArgs.ts overviewClock), and checks that the
  * stand-in answers the same summary and the same health table, for Nora in
  * every column's order both ways, a cut and a search, as the queries
- * answer for the same caller. Over every row of My view's Your work, as
+ * answer for the same caller, and that a top-level project's Needs
+ * attention answer holds the health table the server answers sorted by
+ * Late. Over every row of My view's Your work, as
  * the server answers it, it also checks what the page does on screen
  * (views/overview/MyOverview.tsx modelOf and its rows): the store shapes a
  * model of each row (store/viewRows.ts), so no row waits on a model it
@@ -150,6 +152,9 @@ const sorted = (ids: Iterable<string>) => [...ids].sort()
    owned by their reviewer, so a case can tell the comparison ran. */
 const shown = { rows: 0, reviewed: 0 }
 
+/* How many top-level projects' Sub-projects expectParity compared. */
+let subProjectTables = 0
+
 /** Checks that the store shapes a model of every row of `rows`, the rows
  * of Your work's groups, as the page's modelOf takes one (store/viewRows.ts),
  * and that the model shows the row's task: its uuid, title, due date and
@@ -243,6 +248,20 @@ async function expectParity(
     return got
   }
   const table = await health()
+  // a top-level project's Needs attention answer holds that same table, one
+  // sub-project's none
+  if (scope.kind === 'project') {
+    const needs = await caller.query(api.overview.needs, {
+      scope: { org_id: scope.org_id, project_id: scope.project_id },
+      ...days,
+      kind: 'all',
+      limit: 20,
+    })
+    if (needs.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(needs)}`)
+    const top = P.snapshot.projects.find((p) => p.id === scope.project_id)?.parent_id === undefined
+    expect(needs.health, `${label}: Sub-projects`).toEqual(top ? table : undefined)
+    if (top) subProjectTables++
+  }
   if (orders && table.state === 'ok') {
     for (const sort of HEALTH_SORTS)
       for (const dir of ['asc', 'desc'] as const) {
@@ -298,6 +317,7 @@ describe('Northstar', () => {
     // two days into the dataset's anchor week, in the afternoon
     const now = Date.parse('2026-09-09T18:00:00.000Z')
     let held = 0
+    const tables = subProjectTables
     const nora = await person('nora')
     for (const profile of [nora, ...(await Promise.all(['leo', 'ben'].map(person)))]) {
       const P = await storeOf(t, profile, now)
@@ -313,6 +333,7 @@ describe('Northstar', () => {
     }
     expect(held).toBeGreaterThan(0)
     expect(shown.rows).toBeGreaterThan(0)
+    expect(subProjectTables).toBeGreaterThan(tables)
   })
 })
 
@@ -473,9 +494,11 @@ describe('access shapes', () => {
   for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
     it(`answers as the stand-in does for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
+      const tables = subProjectTables
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
+      expect(subProjectTables).toBeGreaterThan(tables)
     })
 })
 

@@ -86,7 +86,7 @@
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary and needs), whose figures,
  * sentence and Needs attention list must count exactly those two, then
- * opens its project's Overview, whose Sub-projects (overview.health) must
+ * opens its project's Overview, whose Sub-projects (overview.needs) must
  * hold that sub-project's row with those two tasks' figures, and opens the
  * sub-project's Board from the row (ui/overview). It records the frames the
  * page sends on its sync socket and opens its project's Board, a fixture

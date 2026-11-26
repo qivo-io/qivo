@@ -97,12 +97,15 @@
 //                        access_unchecked; for My view's Your work alone
 //                        work-over-budget and work-unknown (its delays
 //                        unknown); for
-//                        the health table alone health-counting (its counts
-//                        counting), health-budget (its rows' delays past the
-//                        budget, so it sorts by name), health-loads (its
-//                        rows' delays needing a second owner's load),
-//                        health-over-budget, health-cap (at most 20 rows,
-//                        so the cap note shows) and health-error (its read
+//                        the health table alone, My view's Your projects
+//                        and a project's Sub-projects, which its Needs
+//                        attention answer holds, health-counting (its
+//                        counts counting), health-budget (its rows' delays
+//                        past the budget, so it sorts by name),
+//                        health-loads (its rows' delays needing a second
+//                        owner's load) and health-cap (at most 20 rows, so
+//                        the cap note shows), and for My view's alone
+//                        health-over-budget and health-error (its read
 //                        fails); several joined by commas
 //   projectnav           a state the navigation reads of the project
 //                        picker, the All projects directory, the

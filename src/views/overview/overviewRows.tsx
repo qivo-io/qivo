@@ -278,24 +278,36 @@ function ProjectRow({
   )
 }
 
+/** A health table as a read holds it for ProjectsPanel: the answer shown,
+    or the error of the read, and its Load more. */
+export type ProjectsView = Pick<
+  NonNullable<HealthView>,
+  'value' | 'error' | 'current' | 'kept' | 'more' | 'moreFailed'
+> | null
+
 /** A health table's rows as a panel, a project's sub-projects or My
     view's projects (`noun`), each with its lead, tasks and hours left and
     its Late, Behind plan and Paused counts, in the server's order, with
-    Load more. */
+    Load more (`onMore`). `onRetry` asks the read again, after its error or
+    a failed Load more. */
 export function ProjectsPanel({
   title,
   noun,
   health,
   orgOf,
   onOpen,
+  onMore,
+  onRetry,
 }: {
   title: string
   noun: 'sub-projects' | 'projects'
-  health: HealthView
+  health: ProjectsView
   /** the organization a row's lead is named in, '' while the page knows
       none */
   orgOf: (row: HealthRow) => string
   onOpen: (id: string) => void
+  onMore: () => void
+  onRetry: () => void
 }) {
   const answer = health?.value?.state === 'ok' ? health.value : null
   // where the list stands, as its root's data-ov-subs-state names it
@@ -330,7 +342,7 @@ export function ProjectsPanel({
           type="button"
           variant="ghost"
           className="h-control-sm text-sm"
-          onClick={inList(() => P.overviewRetry('health'))}
+          onClick={inList(onRetry)}
         >
           Try again
         </Button>
@@ -376,8 +388,8 @@ export function ProjectsPanel({
           failed={health.moreFailed}
           what={noun}
           root={() => root.current}
-          onMore={() => P.overviewMore('health')}
-          onRetry={() => P.overviewRetry('health')}
+          onMore={onMore}
+          onRetry={onRetry}
           hook={{ more: 'data-ov-subs-more', retry: 'data-ov-subs-retry' }}
         />
       </>

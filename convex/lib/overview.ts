@@ -75,7 +75,11 @@
  * count rows; its Late and Behind plan from its tasks' verdicts, read only
  * for the rows the order needs (every row for those two columns, else the
  * rows it answers). No position is needed, as each answer is one moment's
- * order of the whole table. */
+ * order of the whole table. overview.needs answers a top-level project's
+ * table sorted by Late with its Needs attention list (lib/overviewNeeds.ts):
+ * the same rows and counts (lateTableRows), each row's Late and Behind plan
+ * from the list's own verdicts, and the same order and fallback (lateTable,
+ * through readHealth's healthTable). */
 
 import { compareValues, type Value } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -1511,6 +1515,11 @@ export type HealthSort =
   | 'behind'
   | 'paused'
 
+/** Late (late) and Behind plan (behind) of a health row: the tasks, groups
+ * included, whose verdict is late or behind in a project that tracks
+ * delay; zero in one that does not. */
+export type HealthDelays = Figure<{ late: number; behind: number }>
+
 /** One health row: a sub-project of a project scope or, in My view, a
  * top-level project with the person's figures of its sub-projects. */
 export type HealthRow = {
@@ -1524,40 +1533,39 @@ export type HealthRow = {
    * unrounded: My view's row adds up the person's counts of its
    * sub-projects, and the page divides Left by 10 once */
   counts: Figure<LeafCounts>
-  /** Late (late) and Behind plan (behind): the tasks, groups included,
-   * whose verdict is late or behind in a project that tracks delay; zero
-   * in one that does not */
-  delays: Figure<{ late: number; behind: number }>
+  delays: HealthDelays
+}
+
+/** The health table, as overview.health answers it for a scope it holds
+ * and overview.needs for a top-level project (lib/overviewNeeds.ts). */
+export type HealthTable = {
+  state: 'ok'
+  /** the first `limit` rows of the table in `sort`'s order */
+  rows: HealthRow[]
+  /** how many rows the table holds with the search applied */
+  total: number
+  /** the order of `rows`: the one asked, or name ascending where the
+   * asked column needs a figure some row lacks, `by_name` naming it
+   * and `missing` why it is not given, also where the rows that lack
+   * it are past `rows`. For the delays `missing` is `budget` where
+   * their reads did not fit, else `loads`; for the counts it is their
+   * reason. */
+  sort: {
+    key: HealthSort
+    dir: 'asc' | 'desc'
+    by_name?: 'delays' | 'counts'
+    missing?: Missing
+  }
+  /** the most rows one answer holds (OVERVIEW.healthRows): past it, a
+   * search finds the others */
+  most: number
+  /** with `open_only`, why no row is listed: only the counts say which
+   * rows hold a task that is not Done, and they are not given */
+  uncounted?: Missing
 }
 
 /** What overview.health answers. */
-export type HealthAnswer =
-  | {
-      state: 'ok'
-      /** the first `limit` rows of the table in `sort`'s order */
-      rows: HealthRow[]
-      /** how many rows the table holds with the search applied */
-      total: number
-      /** the order of `rows`: the one asked, or name ascending where the
-       * asked column needs a figure some row lacks, `by_name` naming it
-       * and `missing` why it is not given, also where the rows that lack
-       * it are past `rows`. For the delays `missing` is `budget` where
-       * their reads did not fit, else `loads`; for the counts it is their
-       * reason. */
-      sort: {
-        key: HealthSort
-        dir: 'asc' | 'desc'
-        by_name?: 'delays' | 'counts'
-        missing?: Missing
-      }
-      /** the most rows one answer holds (OVERVIEW.healthRows): past it, a
-       * search finds the others */
-      most: number
-      /** with `open_only`, why no row is listed: only the counts say which
-       * rows hold a task that is not Done, and they are not given */
-      uncounted?: Missing
-    }
-  | ScopeRefusal
+export type HealthAnswer = HealthTable | ScopeRefusal
 
 /* A health row as the reader builds it: its project, its name key, its
  * effective lead and, in My view, the person's own tasks under it. */
@@ -1567,6 +1575,10 @@ type HealthItem = {
   lead: string | null
   own: Doc<'issues'>[]
 }
+
+/** The counts of a health table's rows by project id, or why they are not
+ * given. */
+type HealthCounts = Figure<{ of: Map<string, LeafCounts> }>
 
 /* The health table's rows of the scope `at`, before the search: for a
  * project scope each selected sub-project, an empty one included, with its
@@ -1757,7 +1769,7 @@ async function healthDelays(
   clock: Clock,
   judged: readonly HealthItem[],
   g: Groups,
-): Promise<Map<string, Figure<{ late: number; behind: number }>>> {
+): Promise<Map<string, HealthDelays>> {
   const tasksOf = new Map<string, Doc<'issues'>[]>(judged.map((r) => [r.project.id, []]))
   if (at.kind === 'project') {
     const tracked = judged.map((r) => r.project).filter(tracks)
@@ -1783,7 +1795,7 @@ async function healthDelays(
     }
     await v.readAll(org, owners)
   }
-  const out = new Map<string, Figure<{ late: number; behind: number }>>()
+  const out = new Map<string, HealthDelays>()
   for (const r of judged) {
     let late = 0
     let behind = 0
@@ -1878,12 +1890,7 @@ export async function readHealth(
   return await overScope(ctx, profiles, args.scope, async (guard, at) => {
     const g = newGroups()
     let items = (await healthItems(ctx, guard, at, g)).filter((r) => matches(r.key))
-    const counts = await bounded(async (): Promise<Figure<{ of: Map<string, LeafCounts> }>> => {
-      const read = await healthCounts(ctx, guard, at, items)
-      return read === null
-        ? { state: 'unavailable', reason: 'counting' }
-        : { state: 'ok', of: read }
-    })
+    const counts = await countsOfItems(ctx, guard, at, items)
     if (args.open_only === true) {
       if (counts.state !== 'ok')
         return {
@@ -1900,97 +1907,155 @@ export async function readHealth(
       })
     }
     const leads = sort === 'lead' ? await leadKeys(ctx, guard, items) : new Map<string, string>()
-    let delays = new Map<string, Figure<{ late: number; behind: number }>>()
-    const countsOf = (r: HealthItem): LeafCounts | null =>
-      counts.state === 'ok' ? (counts.of.get(r.project.id) ?? noCounts()) : null
-    /* row `r`'s value in column `key`, as Convex orders values */
-    const columnOf = (r: HealthItem, key: HealthSort): Value => {
-      const c = countsOf(r)
-      const all = c === null ? 0 : leafTotal(c)
-      const d = delays.get(r.project.id)
-      switch (key) {
-        case 'name':
-          return r.key
-        case 'lead': {
-          const name = r.lead === null ? undefined : leads.get(r.lead)
-          return name === undefined ? [1] : [0, name]
-        }
-        case 'progress':
-          return c !== null && all > 0 ? Math.round((c.leaves.done / all) * 100) : 0
-        case 'done':
-          return c !== null && all > 0 ? c.leaves.done / all : 0
-        case 'left':
-          return c?.left_tenths ?? 0
-        case 'paused':
-          return c?.paused ?? 0
-        case 'late':
-          return d?.state === 'ok' ? d.late : 0
-        case 'behind':
-          return d?.state === 'ok' ? d.behind : 0
-      }
-    }
-    let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
-      COUNT_SORTS.includes(sort) && counts.state !== 'ok'
-        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: counts.reason }
-        : { key: sort, dir }
-    /* the kept rows in `order`, one total order */
-    const ordered = () =>
-      [...items].sort((a, b) => {
-        const d = compareValues(columnOf(a, order.key), columnOf(b, order.key))
-        const asked = order.dir === 'asc' ? d : -d
-        if (asked !== 0) return asked
-        const byName = order.key === 'name' ? 0 : compareValues(a.key, b.key)
-        return byName !== 0 ? byName : compareValues(a.project.id, b.project.id)
-      })
-    const byDelays = DELAY_SORTS.includes(sort)
-    let rows = byDelays ? items : ordered()
-    const judged = byDelays ? items : rows.slice(0, limit)
-    const read = await bounded(
-      async (): Promise<Figure<{ of: typeof delays }>> => ({
+    return await healthTable(items, counts, leads, { sort, dir, limit }, (judged) =>
+      bounded(async () => ({
         state: 'ok',
         of: await healthDelays(ctx, guard, at, clock, judged, g),
-      }),
+      })),
     )
-    delays =
-      read.state === 'ok'
-        ? read.of
-        : new Map(
-            judged.map((r): [string, Figure<{ late: number; behind: number }>] => [
-              r.project.id,
-              { state: 'unavailable', reason: read.reason },
-            ]),
-          )
-    if (byDelays) {
-      if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
-        order = {
-          key: 'name',
-          dir: 'asc',
-          by_name: 'delays',
-          missing: read.state === 'ok' ? 'loads' : read.reason,
-        }
-      rows = ordered()
-    }
-    return {
-      state: 'ok',
-      rows: rows.slice(0, limit).map((r): HealthRow => {
-        const c = countsOf(r)
-        return {
-          project_id: r.project.id,
-          name: r.project.name,
-          lead_id: r.lead,
-          counts:
-            c !== null
-              ? { state: 'ok', ...c }
-              : {
-                  state: 'unavailable',
-                  reason: counts.state === 'ok' ? 'counting' : counts.reason,
-                },
-          delays: delays.get(r.project.id) ?? { state: 'unavailable', reason: 'budget' },
-        }
-      }),
-      total: items.length,
-      sort: order,
-      most: OVERVIEW.healthRows,
-    }
   })
 }
+
+/* The counts of `items`, rows of the scope `at` (healthCounts), as one
+ * figure: `counting` while they are not whole, `budget` past the budget. */
+const countsOfItems = (
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  at: ScopeRead,
+  items: readonly HealthItem[],
+): Promise<HealthCounts> =>
+  bounded(async (): Promise<HealthCounts> => {
+    const read = await healthCounts(ctx, guard, at, items)
+    return read === null ? { state: 'unavailable', reason: 'counting' } : { state: 'ok', of: read }
+  })
+
+/* Steps 5 to 7 of readHealth over `items`, the kept rows, with their
+ * `counts` and, for the Lead sort, their `leads` (leadKeys): the order and
+ * the cut, the delays of the rows the order judges, which `delaysOf` reads
+ * as one figure, and the name fallback. */
+async function healthTable(
+  items: readonly HealthItem[],
+  counts: HealthCounts,
+  leads: ReadonlyMap<string, string>,
+  ask: { sort: HealthSort; dir: 'asc' | 'desc'; limit: number },
+  delaysOf: (judged: readonly HealthItem[]) => Promise<Figure<{ of: Map<string, HealthDelays> }>>,
+): Promise<HealthTable> {
+  const { sort, dir, limit } = ask
+  let delays = new Map<string, HealthDelays>()
+  const countsOf = (r: HealthItem): LeafCounts | null =>
+    counts.state === 'ok' ? (counts.of.get(r.project.id) ?? noCounts()) : null
+  /* row `r`'s value in column `key`, as Convex orders values */
+  const columnOf = (r: HealthItem, key: HealthSort): Value => {
+    const c = countsOf(r)
+    const all = c === null ? 0 : leafTotal(c)
+    const d = delays.get(r.project.id)
+    switch (key) {
+      case 'name':
+        return r.key
+      case 'lead': {
+        const name = r.lead === null ? undefined : leads.get(r.lead)
+        return name === undefined ? [1] : [0, name]
+      }
+      case 'progress':
+        return c !== null && all > 0 ? Math.round((c.leaves.done / all) * 100) : 0
+      case 'done':
+        return c !== null && all > 0 ? c.leaves.done / all : 0
+      case 'left':
+        return c?.left_tenths ?? 0
+      case 'paused':
+        return c?.paused ?? 0
+      case 'late':
+        return d?.state === 'ok' ? d.late : 0
+      case 'behind':
+        return d?.state === 'ok' ? d.behind : 0
+    }
+  }
+  let order: HealthTable['sort'] =
+    COUNT_SORTS.includes(sort) && counts.state !== 'ok'
+      ? { key: 'name', dir: 'asc', by_name: 'counts', missing: counts.reason }
+      : { key: sort, dir }
+  /* the kept rows in `order`, one total order */
+  const ordered = () =>
+    [...items].sort((a, b) => {
+      const d = compareValues(columnOf(a, order.key), columnOf(b, order.key))
+      const asked = order.dir === 'asc' ? d : -d
+      if (asked !== 0) return asked
+      const byName = order.key === 'name' ? 0 : compareValues(a.key, b.key)
+      return byName !== 0 ? byName : compareValues(a.project.id, b.project.id)
+    })
+  const byDelays = DELAY_SORTS.includes(sort)
+  let rows = byDelays ? items : ordered()
+  const judged = byDelays ? items : rows.slice(0, limit)
+  const read = await delaysOf(judged)
+  delays =
+    read.state === 'ok'
+      ? read.of
+      : new Map(
+          judged.map((r): [string, HealthDelays] => [
+            r.project.id,
+            { state: 'unavailable', reason: read.reason },
+          ]),
+        )
+  if (byDelays) {
+    if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
+      order = {
+        key: 'name',
+        dir: 'asc',
+        by_name: 'delays',
+        missing: read.state === 'ok' ? 'loads' : read.reason,
+      }
+    rows = ordered()
+  }
+  return {
+    state: 'ok',
+    rows: rows.slice(0, limit).map((r): HealthRow => {
+      const c = countsOf(r)
+      return {
+        project_id: r.project.id,
+        name: r.project.name,
+        lead_id: r.lead,
+        counts:
+          c !== null
+            ? { state: 'ok', ...c }
+            : {
+                state: 'unavailable',
+                reason: counts.state === 'ok' ? 'counting' : counts.reason,
+              },
+        delays: delays.get(r.project.id) ?? { state: 'unavailable', reason: 'budget' },
+      }
+    }),
+    total: items.length,
+    sort: order,
+    most: OVERVIEW.healthRows,
+  }
+}
+
+/** The first reads of a top-level project's health table sorted by Late,
+ * which overview.needs answers (lib/overviewNeeds.ts): its rows, each
+ * selected sub-project with its own lead or else its top-level project's
+ * (healthItems), and their counts as one figure, read as readHealth reads
+ * them before any task. Past the guard the rows throw OverBudget. */
+export async function lateTableRows(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  at: Extract<ScopeRead, { kind: 'project' }>,
+): Promise<{ items: HealthItem[]; counts: HealthCounts }> {
+  const items = await healthItems(ctx, guard, at, newGroups())
+  return { items, counts: await countsOfItems(ctx, guard, at, items) }
+}
+
+/** The health table of `start`'s rows (lateTableRows) as readHealth answers
+ * it sorted by Late, most first, with no search and every row up to
+ * OVERVIEW.healthRows, from `delays`, each row's Late and Behind plan by
+ * project id, or why none is given, which `budget` says of every row. */
+export const lateTable = (
+  start: { items: readonly HealthItem[]; counts: HealthCounts },
+  delays: Figure<{ of: Map<string, HealthDelays> }>,
+): Promise<HealthTable> =>
+  healthTable(
+    start.items,
+    start.counts,
+    new Map(),
+    { sort: 'late', dir: 'desc', limit: OVERVIEW.healthRows },
+    async () => delays,
+  )

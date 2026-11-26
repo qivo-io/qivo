@@ -2,11 +2,12 @@
  * projected delays, its two task lists, its health table and a project's
  * Needs attention list and My view's Your work on the server. The app's
  * Overview page reads them through the store (src/store/overviewLists.ts):
- * a project or sub-project's page the summary, the health table and the
- * Needs attention list, My view's page the summary, the health table with
- * `open_only` and Your work, each as one read of its first rows. The app no
- * longer calls risk, attention and paused, which stay for tabs loaded
- * before. Readers and budgets are in lib/overview.ts, lib/overviewNeeds.ts
+ * a project or sub-project's page the summary and the Needs attention list,
+ * whose answer holds a top-level project's health table sorted by Late, My
+ * view's page the summary, the health table with `open_only` and Your work,
+ * each as one read of its first rows. The app no longer calls risk,
+ * attention and paused, nor the health table for a project, which stay for
+ * tabs loaded before. Readers and budgets are in lib/overview.ts, lib/overviewNeeds.ts
  * and lib/overviewWork.ts, on the shared view reader lib/viewReads.ts and
  * the counts every task writer keeps (model/overviewCounts.ts). A scope is a
  * top-level project with its visible live sub-projects, one sub-project,
@@ -35,8 +36,10 @@
  *   Paused list, at most lib/overview.ts OVERVIEW.batch rows, in due-date
  *   order, through the same indexes, and the parents of the rows by id.
  * - needs: the Needs attention list's first `limit` rows of one kind,
- *   ranked over the whole scope, with each kind's count
- *   (lib/overviewNeeds.ts).
+ *   ranked over the whole scope, with each kind's count, and for a
+ *   top-level project its health table sorted by Late, whose counts it
+ *   reads as health does and whose Late and Behind plan come from the
+ *   list's verdicts (lib/overviewNeeds.ts).
  * - work: My view's Your work, each group's first rows, with each kind's
  *   count and the Late tasks by due date (lib/overviewWork.ts). It reads
  *   the person's To Do, In Progress and In Review tasks through their
@@ -114,10 +117,11 @@ export const paused = authedQuery({
 
 /* The Needs attention list of a project or sub-project's Overview: the
  * first `limit` rows of `kind`, with every kind's count, the people of the
- * scope's open work and the Late tasks by due date (lib/overviewNeeds.ts).
- * It reads every task of the scope that is not done, their subtasks and
- * blockers, and the owners' loads its verdicts need, so a change to any of
- * them reruns it. */
+ * scope's open work and the Late tasks by due date, and a top-level
+ * project's Sub-projects (lib/overviewNeeds.ts). It reads every task of the
+ * scope that is not done, their subtasks and blockers, the owners' loads its
+ * verdicts need, and for a top-level project the organization's readiness
+ * and each sub-project's count rows, so a change to any of them reruns it. */
 export const needs = authedQuery({
   args: {
     scope: v.object({ org_id: v.string(), project_id: v.string() }),

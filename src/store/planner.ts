@@ -3883,7 +3883,8 @@ export const AGENDA_MILESTONE_SLOTS = {
     write; it names its rows' projects with the project cache, which give
     each row its organization (the leads it names) and its name, and lets
     them go after a failed Load more as the task lists do
-    (keepsHeldOnError). */
+    (keepsHeldOnError). Needs attention names the projects of its rows and
+    of the health table its answer holds for a top-level project. */
 const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
   health: {
@@ -3903,7 +3904,12 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
     },
     projects: (value) => {
       const answer = value as NeedsAnswer
-      return answer.state === 'ok' ? projectsOf(answer.rows) : null
+      return answer.state === 'ok'
+        ? projectsOf(
+            answer.rows,
+            answer.health?.rows.map((r) => r.project_id),
+          )
+        : null
     },
   },
   work: {

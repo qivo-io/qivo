@@ -33,9 +33,10 @@
      Retry; the store keeps those rows through the failure and that read
      until its answer replaces them. Where those rows fail too, the read
      shows its error, without them, whose Try again asks it afresh.
-   - A project or sub-project's page (`page` 'status') asks the summary,
-     the health table and Needs attention; My view's page ('mine') the
-     summary, the health table and Your work. */
+   - A project or sub-project's page (`page` 'status') asks the summary
+     and Needs attention, whose answer holds a top-level project's health
+     table; My view's page ('mine') the summary, the health table and Your
+     work. */
 
 import type { Value } from 'convex/values'
 import type {
@@ -687,8 +688,8 @@ export function createOverviewReads(transport: OverviewTransport) {
       watchAll()
       settle()
     },
-    /** Asks for the health table `next` (null for none, as for one
-        sub-project), for the page `by` names: a page that is not the one
+    /** Asks for the health table `next` (null for none, as for a project's
+        page), for the page `by` names: a page that is not the one
         asking changes nothing. A new sort or search starts again at the
         first rows. */
     watchTable(next: HealthTable | null, by: number) {
