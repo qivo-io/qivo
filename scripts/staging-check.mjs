@@ -9017,13 +9017,21 @@ async function loadUntil(section, row, what) {
 /** My view's Your work, which My view's Overview subscribes. */
 export const WORK_QUERY = 'overview:work'
 
+/** A day in the week the Overview step plans its task in, before any week
+ *  real work is planned in. */
+const FIRST_IN_NEXT = '2000-01-03'
+
 /** The Overview's milestones on the deployment's section read. The run
  *  makes `<tag> Overview milestone` over REST on M in the first week from
  *  three weeks on that M leaves free (freeMilestoneWeek), `<tag> Overview
  *  past milestone` in the first past week M leaves free
  *  (freePastMilestoneWeek), and a To Do task of Nora's in Alpha, which she
  *  owns by the Reviewer rule as its assignee, so M is one of her My view's
- *  projects. A fresh load of M's Overview must subscribe
+ *  projects. The task is planned in the first week of 2000
+ *  (FIRST_IN_NEXT), as Next lists the earliest planned start first and
+ *  stops at 1,000 rows, while Nora can hold any number of other To Do
+ *  tasks on a deployment that keeps its data, those of this run's earlier
+ *  steps and of a killed run among them. A fresh load of M's Overview must subscribe
  *  MILESTONES_SECTION_QUERY and reach Upcoming's ok state with the
  *  milestone's row (loadUntil), ask nothing for Past and show no past row
  *  until Past's disclosure is pressed, and then show the past milestone. A
@@ -9033,8 +9041,8 @@ export const WORK_QUERY = 'overview:work'
  *  name on it, which the project cache reads after the row shows, and drop
  *  it once the run deleted it over REST. That load must also subscribe
  *  WORK_QUERY and show the task in Your work's Next from its answer
- *  (pressing Next's Load more, as Nora's other To Do tasks can come
- *  first). It deletes
+ *  (pressing Next's Load more, as a killed run's task planned in the same
+ *  week comes first). It deletes
  *  the past milestone and the task at the end, and the cleanup that
  *  deletes M removes whatever a failure left. It runs while M is active,
  *  after ui/roadmap-milestones, and leaves the saved view on M's Board. */
@@ -9054,11 +9062,14 @@ async function overviewMilestonesCheck() {
       name: `${run.tag} Overview past milestone`,
       date: freePastMilestoneWeek(held, todayUtc(), weekStart),
     })
+    const first = weekOf(FIRST_IN_NEXT, weekStart)
     const task = await restOk(w, 'POST', '/tasks', {
       project: A.id,
       title: `${run.tag} overview milestone`,
       status: 'todo',
       assignee_id: run.nora.id,
+      start_week: first,
+      end_week: first,
     })
     run.created.push(task)
     eq(task.assignee_id, run.nora.id, "the task's assignee")

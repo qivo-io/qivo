@@ -546,10 +546,9 @@ async function openPage(origin, tasks, metrics, query = '') {
 /* The shown view counts as complete when nothing on it waits to mount and,
    in a build whose views ask the server, their answers arrived: the
    Board's (data-board-state ok), and the Overview's summary
-   (data-overview-state ok) with the first batch of each of its lists
-   (data-ov-list-state no longer loading or refreshing) and its health
-   table's first answer for the table on screen (data-ov-health-state
-   neither loading nor refreshing, and no data-ov-health-kept), a project's
+   (data-overview-state ok) with its health table's first answer for the
+   table on screen (data-ov-health-state neither loading nor refreshing,
+   and no data-ov-health-kept), a project's
    Needs attention list (data-ov-needs-state neither loading nor
    refreshing), its Sub-projects (data-ov-subs-state neither loading nor
    refreshing) and its Load this week, every person's load and name
@@ -577,7 +576,6 @@ async function openPage(origin, tasks, metrics, query = '') {
 const boardComplete = () => {
   const state = document.querySelector('[data-workspace-view] [data-board-root]')
   const overview = document.querySelector('[data-workspace-view] [data-overview-root]')
-  const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
   const health = document.querySelector('[data-workspace-view] [data-ov-health]')
   const needs = document.querySelector('[data-workspace-view] [data-ov-needs-state]')
   const work = document.querySelector('[data-workspace-view] [data-ov-work-state]')
@@ -603,9 +601,6 @@ const boardComplete = () => {
     (overview === null || overview.getAttribute('data-overview-state') === 'ok') &&
     (upcoming === null ||
       !['loading', 'refreshing'].includes(upcoming.getAttribute('data-milestone-section-state'))) &&
-    lists.every(
-      (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
-    ) &&
     (needs === null ||
       !['loading', 'refreshing'].includes(needs.getAttribute('data-ov-needs-state'))) &&
     (work === null ||
