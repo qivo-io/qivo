@@ -273,8 +273,10 @@ function SaveNote({
           {line}
         </span>
       ))}
+      {/* said, not shown: a line here would move the rows below between a
+          press and its release, so the press would miss its button */}
       {(hours?.saving || change === 'saving') && (
-        <span className="mov-note" role="status">
+        <span className="sr-only" role="status">
           Saving…
         </span>
       )}

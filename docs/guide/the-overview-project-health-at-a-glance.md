@@ -169,8 +169,8 @@ actions in the same place, whatever its title, its group or its actions.
 - The task's remaining hours are a field, followed by "left". Type and
   press Enter, or leave the field, to save them by the rules of the task
   window's **Remaining**. An empty field clears them, 0 is a value, and a
-  comma works as the decimal point, as in 1,5. The row says **Saving…**
-  while they save. Hours you save meanwhile save once that save answers,
+  comma works as the decimal point, as in 1,5. The field dims while they
+  save, and a screen reader hears "Saving…". Hours you save meanwhile save once that save answers,
   and what you type after them stays in the field until you save it too.
   Text that is not a number saves nothing, and the row asks for a
   number. **Esc** puts the saved hours back, except while they save. Where
