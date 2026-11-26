@@ -344,6 +344,43 @@ describe('milestone lines', () => {
     })
   })
 
+  it('counts a Done task that got a subtask not done, as the project Overview counts it', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
+    const late = shift(DAY, -4)
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Bring-up',
+      assignee_id: f.user.id,
+      status: 'done',
+      done_at: PLANTED_AT,
+      due_date: late,
+    })
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Solder headers',
+      parent_id: parent.id,
+      assignee_id: f.admin.id,
+      status: 'todo',
+    })
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    const answer = okOf(await workOf(t, f.user))
+    expect(answer.late_due).toEqual([
+      { project_id: f.meta.id, late: { state: 'ok', days: [{ due: late, count: 1 }] } },
+    ])
+    const needs = await as(t, f.user).query(api.overview.needs, {
+      scope: { org_id: f.org.id, project_id: f.meta.id },
+      ...WEEKS,
+      kind: 'all',
+      limit: 20,
+    })
+    expect(needs).toMatchObject({ late_due: { state: 'ok', days: [{ due: late, count: 1 }] } })
+  })
+
   it('answers each project its own Late tasks, unknown only where a verdict of a task due there could not be read, and none for a project without delay tracking', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -543,5 +580,36 @@ describe('real limits', () => {
     const { answer } = await readMeasured(c.t, c.me, '3 sub-projects, 800 open tasks')
     const ok = okOf(answer)
     expect(ok.groups.next.total + ok.groups.progress.total + ok.groups.review.total).toBe(800)
+  })
+
+  it("reads a project of 3 sub-projects with 200 Done tasks not yet archived, all the person's and due, whole", async () => {
+    const c = await sharedCase(1, 3)
+    for (const [k, sub] of c.subs.entries()) {
+      await plantTasks(c.t, sub, 30, (i) => ownTask(30 * k + i, c.me, c.f.user))
+      const done = await plantTasks(c.t, sub, k === 2 ? 66 : 67, (i) => ({
+        status: 'done',
+        title: `Replace the fan controller on the bench rig and log the readings, done ${i}`,
+        assignee_id: c.me.id,
+        done_at: PLANTED_AT,
+        due_date: shift(DAY, -(i % 30) - 1),
+      }))
+      await plantTasks(c.t, sub, 7, (i) => ({
+        status: 'todo',
+        title: `Recheck the readings, part ${i}`,
+        assignee_id: c.f.user.id,
+        parent_id: done[10 * i]?.id,
+      }))
+    }
+    await withReach(c.t)
+    await countOrg(c.t, c.f.org.id)
+    const { answer } = await readMeasured(c.t, c.me, '3 sub-projects, 90 open and 200 Done tasks')
+    const ok = okOf(answer)
+    expect(ok.groups.next.total + ok.groups.progress.total + ok.groups.review.total).toBe(90)
+    const late = ok.late_due[0]?.late
+    if (late?.state !== 'ok') throw new Error(JSON.stringify(ok.late_due))
+    // the overdue ones: 18 open tasks (ownTask's due before the day) and
+    // the 21 Done tasks a subtask keeps open
+    const overdue = late.days.filter((d) => d.due < DAY).reduce((n, d) => n + d.count, 0)
+    expect(overdue).toBe(18 + 21)
   })
 })

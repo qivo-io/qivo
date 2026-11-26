@@ -6,15 +6,17 @@
  * assignee under In progress, as Team sync's On it holds it. Each row's
  * blockers are read through the seat of its own organization. The
  * milestone lines' Late tasks are read from every task of the person's
- * in a status other than Done that is not done for them, Backlog and
- * groups included, as Needs attention reads a project's. The tasks, their parents and blockers are
- * read whole or the answer is over_budget; the verdicts come last, and a
+ * that is not done for them, Backlog tasks and groups included, a group
+ * whose stored status is Done too, as Needs attention reads a project's.
+ * The tasks, Done ones included, their parents and blockers are read
+ * whole or the answer is over_budget; the verdicts come last, and a
  * verdict that could not be read makes the delay figures unavailable, its
  * row's delay unknown, never on track, and its top-level project's Late
  * tasks unavailable where it could be Late. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { ISSUE_STATUSES } from './enums'
 import { badRequest } from './functions'
 import {
   isDoneFor,
@@ -37,10 +39,8 @@ import {
   UNKNOWN,
   verdicts,
 } from './viewLoads'
-import { FOCUS_STATUSES, groupBy, ownTasks, shownParents, type ViewRow, viewRow } from './viewReads'
+import { groupBy, ownTasks, shownParents, type ViewRow, viewRow } from './viewReads'
 import type { WorkGroup } from './workGroups'
-
-const OPEN_STATUSES = ['backlog', ...FOCUS_STATUSES] as const
 
 export { WORK_GROUPS, type WorkGroup } from './workGroups'
 
@@ -188,9 +188,16 @@ export async function readWork(
     const tracking: Doc<'issues'>[] = []
     for (const seat of at.seats.values()) {
       const own: Doc<'issues'>[] = []
-      for await (const step of ownTasks(ctx, guard, seat, OPEN_STATUSES)) own.push(...step)
+      for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES)) own.push(...step)
       for (const t of own) read.set(t.id, t)
-      await readGroups(ctx, guard, g, own, false)
+      // a Done task is its assignee's, a group or not
+      await readGroups(
+        ctx,
+        guard,
+        g,
+        own.filter((t) => t.status !== 'done'),
+        false,
+      )
       for (const t of own) {
         if (taskOwnerId(t, isGroup(g, t)) !== seat.me.id) continue
         const sub = await seat.project(t.project_id)
@@ -201,11 +208,13 @@ export async function readWork(
         if (group !== null) mine.push({ task: t, group })
       }
     }
+    // the groups' facts, and which Done tasks a subtask made groups, where
+    // a due date can make them Late: their stored status is dormant
     await readGroups(
       ctx,
       guard,
       g,
-      tracking.filter((t) => isGroup(g, t)),
+      tracking.filter((t) => isGroup(g, t) || (t.status === 'done' && t.due_date !== undefined)),
       true,
     )
     const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
