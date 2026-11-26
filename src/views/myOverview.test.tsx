@@ -419,6 +419,37 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(said).not.toContain('still in the')
   })
 
+  it('says the hours were discarded where their save is refused after the page went to a project that keeps the Overview’s rows', async () => {
+    await overview(work)
+    const settle = heldUpdates()
+    await type(hours('wire'), '7')
+    await press('Enter')
+    // as a project in the sidebar does, which takes the page and keeps the rows
+    root.unmount()
+    await settle(
+      new ConvexError({
+        code: 'conflict',
+        reason: 'field_changed',
+        message: 'changed',
+        changes: [
+          {
+            record: 'task',
+            id: 'wire',
+            field: 'remaining_hours',
+            by: null,
+            at: '2026-11-25T10:00:00.000Z',
+          },
+        ],
+      }),
+    )
+    const said = vi
+      .mocked(window.showToast)
+      .mock.calls.map(([text]) => String(text))
+      .join(' ')
+    expect(said).toContain('discarded')
+    expect(said).not.toContain('still in the')
+  })
+
   it('adds no line to a row and takes none away while it saves, nor while a press is held when the save answers', async () => {
     await overview(work)
     const settle = heldUpdates()

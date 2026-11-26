@@ -181,7 +181,8 @@ actions in the same place, whatever its title, its group or its actions.
   Qivo does not save yours and says so
   ([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)).
   What you typed stays in the field, and saving it again replaces their
-  value.
+  value. If you have left the Overview by then, your hours are discarded,
+  and the notice says so.
 - In progress rows have the **Status** control, with every status and
   **Pause** or **Resume**.
 - Waiting on your review rows have **Send back**, which moves the task to
