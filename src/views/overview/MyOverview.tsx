@@ -380,7 +380,11 @@ function WorkRowView({
   onFocusIn: (handle: string, uuid: string, key?: string) => void
   onFocusOut: (e: FocusEvent) => void
 }) {
-  const it = modelOf(row)
+  const live = modelOf(row)
+  // a row held through a press whose task left the newest answer keeps
+  // its field and actions, as the store lets go of that task's model
+  const held = useAfterPress(live)
+  const it = live ?? held
   const handle = it?.id ?? P.handleNow(row.id, row.org_id, row.num)
   const kind = row.needs.kind
   const fact = kind === null ? null : factOf({ ...row, needs: { ...row.needs, kind } }, day)
@@ -724,6 +728,9 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
     null,
     'mine',
   )
+  // an answer that arrives during a press, such as a save's, can reorder
+  // Your work and change the figures beside it, under the pointer
+  const answers = useAfterPress({ summary: read.summary, health: read.health, work: read.work })
   const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
   const edits = useWorkEdits()
   const milestonesRoot = useRef<HTMLDivElement>(null)
@@ -744,15 +751,15 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
       project,
     )
 
-  const summaryAnswer = read.summary?.value
+  const summaryAnswer = answers.summary?.value
   let state: OverviewState
-  if (read.summary === null) state = 'loading'
-  else if (read.summary.error !== undefined) state = 'error'
+  if (answers.summary === null) state = 'loading'
+  else if (answers.summary.error !== undefined) state = 'error'
   else if (summaryAnswer?.state === 'unavailable') state = 'unavailable'
   else if (summaryAnswer?.state === 'over_budget') state = 'over_budget'
-  else state = read.summary.current ? 'ok' : 'refreshing'
-  const counts = shownOf(read.summary, (s) => s.counts)
-  const anyTask = shownOf(read.summary, (s) => s.any_task)
+  else state = answers.summary.current ? 'ok' : 'refreshing'
+  const counts = shownOf(answers.summary, (s) => s.counts)
+  const anyTask = shownOf(answers.summary, (s) => s.any_task)
   const c = given(counts)
   const tasksLeft = c
     ? c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review
@@ -837,12 +844,14 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
       : null,
   )
 
-  const workAnswer = read.work?.value?.state === 'ok' ? read.work.value : null
+  const workAnswer = answers.work?.value?.state === 'ok' ? answers.work.value : null
   // a failed or refused read of Your work leaves no project's Late tasks
   // known, delay tracking or not
   const workFailed =
-    read.work !== null &&
-    (read.work.value === undefined ? read.work.error !== undefined : read.work.value.state !== 'ok')
+    answers.work !== null &&
+    (answers.work.value === undefined
+      ? answers.work.error !== undefined
+      : answers.work.value.state !== 'ok')
   const lateOf = new Map(workAnswer?.late_due.map((p) => [p.project_id, p.late]) ?? [])
   const lineOf = (m: MilestoneVM, i: number, rows: readonly MilestoneVM[]) => {
     if (workFailed) return LATE_UNKNOWN
@@ -859,7 +868,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
   const status = (
     <OvSection title="Your status">
       <div className="mov-status-panel" data-ov-status>
-        <Sentence facts={sentenceFacts(read.work)} tasksLeft={tasksLeft} />
+        <Sentence facts={sentenceFacts(answers.work)} tasksLeft={tasksLeft} />
         <div className="pov-facts" data-ov-facts>
           <Fact label="Tasks left" name="tasks-left" state={counts.state}>
             {tasksLeft ?? placeholder(counts)}
@@ -900,7 +909,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
               {replaced ?? (
                 <WorkPanel
                   info={info}
-                  work={read.work}
+                  work={answers.work}
                   day={day}
                   edits={edits}
                   onOpen={openIssue}
@@ -922,7 +931,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
                 <ProjectsPanel
                   title="Your projects"
                   noun="projects"
-                  health={read.health}
+                  health={answers.health}
                   orgOf={(row) => P.project(row.project_id)?.org ?? ''}
                   onOpen={(id) => {
                     actions.setScope(id)

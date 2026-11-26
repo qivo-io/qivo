@@ -417,6 +417,33 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(row('late')?.textContent).not.toContain('The remaining hours were not saved')
   })
 
+  it('keeps Your work, its rows’ fields and actions and the figures beside it as they were through a press that an answer reordering the rows arrives in, and shows that answer once the press is over', async () => {
+    const { board } = await overview(work)
+    heldUpdates()
+    await type(hours('wire'), '5')
+    const work_ = () => room(q('[data-ov-work]'))
+    const before = work_()
+    const held = await hold(q('[data-work-id="second"] [data-ov-start]'), hours('wire'))
+    // the answer moves Task wire up, as new hours can, and Task first leaves Your work
+    for (const t of board.snapshot.issues) {
+      if (t.id === 'wire') t.due_date = day(-1)
+      if (t.id === 'first') t.status = 'done'
+    }
+    await board.deliver()
+    await repaint()
+    expect(titles('progress')).toEqual(['Task late', 'Task spec', 'Task wire'])
+    expect(titles('next')).toEqual(['Task first', 'Task second'])
+    expect(work_()).toBe(before)
+    expect(text('[data-ov-figure="work-next"]')).toBe('2')
+    expect(text('[data-ov-figure="tasks-left"]')).toBe('Tasks left7')
+    await held.release()
+    await repaint()
+    expect(patches()).toEqual([{ remaining_hours: 5 }, { status: 'progress' }])
+    expect(titles('progress')).toEqual(['Task late', 'Task wire', 'Task spec'])
+    expect(row('first')).toBeNull()
+    expect(text('[data-ov-figure="tasks-left"]')).toBe('Tasks left6')
+  })
+
   it('keeps hours being typed in a row that moves to another group, with focus in the field', async () => {
     const { board } = await overview(work)
     await type(hours('first'), '7')

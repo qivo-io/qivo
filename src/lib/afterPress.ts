@@ -1,9 +1,10 @@
 /* A change to the page between a pointer's press and its click moves what
    was under the pointer, so the click can land elsewhere than the press and
    miss the control the person pressed. What the page shows in answer to a
-   press, such as a line under a field the press took focus from, waits
-   here until the press is over. Only what is shown waits: a write that the
-   press sets off goes at once.
+   press, such as a line under a field the press took focus from, and an
+   answer from the server that arrives during it wait here until the press
+   is over. Only what is shown waits: a write that the press sets off goes
+   at once.
 
    A press lasts from the primary pointer's pointerdown until its click has
    been delivered. A tap's compatibility mouse events, among them the
@@ -116,16 +117,17 @@ export function afterPress(work: () => void): () => void {
 }
 
 /**
- * `value` as the page shows it: a change during a press shows once the
- * press is over, and any other change at once.
+ * `value` as the page shows it: during a press, the value the page showed
+ * when the press began, and the newest once the press is over. It compares
+ * no values, so one made anew in each render holds too.
  */
 export function useAfterPress<T>(value: T): T {
-  const [shown, setShown] = useState(value)
-  const latest = useRef(value)
-  latest.current = value
-  const changed = !Object.is(value, shown)
+  const shownBefore = useRef(value)
+  const [, render] = useState(0)
+  const held = pressing()
   useLayoutEffect(() => {
-    if (changed) return afterPress(() => setShown(() => latest.current))
-  }, [changed])
-  return changed && pressing() ? shown : value
+    if (!held) shownBefore.current = value
+    else return afterPress(() => render((n) => n + 1))
+  })
+  return held ? shownBefore.current : value
 }
