@@ -36,6 +36,19 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
   return rest
 }
 
+/* Task rows written before the hours got their one name say 'remaining
+ * time' (model/issues.ts now writes 'remaining hours'). Every reader gets
+ * such a row under the current name. */
+const LEGACY_REMAINING_VERBS = new Map([
+  ['set the remaining time on', 'set the remaining hours on'],
+  ['changed the remaining time on', 'changed the remaining hours on'],
+  ['cleared the remaining time on', 'cleared the remaining hours on'],
+])
+function withRemainingHours(ev: Doc<'activity_events'>): Doc<'activity_events'> {
+  const verb = ev.target_type === 'issue' ? LEGACY_REMAINING_VERBS.get(ev.verb) : undefined
+  return verb === undefined ? ev : { ...ev, verb }
+}
+
 /* A member, an organization admin as anyone, receives a task row only if
  * the task is in their working set, which keeps out the history of a task that
  * was deleted, archived or moved to a project the member cannot access, and
@@ -316,7 +329,7 @@ export async function taskHistoryPage(
       const sight = await sees(ev, passed === undefined)
       if (sight === 'unchecked') return page(true)
       passed = ev
-      if (sight === 'yes') newest.push(withoutLegacySubtaskCount(ev))
+      if (sight === 'yes') newest.push(withRemainingHours(withoutLegacySubtaskCount(ev)))
     }
     if (rows.length < n) return page(false)
     if (await usedMoreThan(ctx, HISTORY_ROOM.room)) return page(true)
