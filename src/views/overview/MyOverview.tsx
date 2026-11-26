@@ -16,7 +16,7 @@ import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { isoToWeek, TODAY_WEEK } from '@/lib/dates'
-import { focusAround } from '@/lib/focusWhenGone'
+import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { remainingNumber, remainingPatchFromInput, remainingValue } from '@/lib/remaining'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
@@ -48,6 +48,7 @@ import {
   LATE_UNKNOWN,
   lateLine,
   reasonsOf,
+  useHeldFocus,
   useRowFocus,
   weekOf,
 } from './overviewFacts'
@@ -304,7 +305,8 @@ function Actions({
       <StatusSelect
         it={it}
         labelled
-        disabled={busy}
+        disabled={false}
+        busy={busy}
         className="mov-status h-control-sm"
         onStatus={() => edits.begin(it)}
         onSaved={(saved) => edits.end(it, saved)}
@@ -316,7 +318,7 @@ function Actions({
         <Button
           type="button"
           variant="unstyled"
-          className="pov-action"
+          className="pov-action mov-action"
           aria-label={`Send back ${it.title}`}
           aria-disabled={busy || undefined}
           data-ov-send-back
@@ -327,7 +329,7 @@ function Actions({
         <Button
           type="button"
           variant="unstyled"
-          className="pov-action mov-approve"
+          className="pov-action mov-action mov-approve"
           aria-label={`Approve ${it.title}`}
           aria-disabled={busy || undefined}
           data-ov-approve
@@ -342,7 +344,7 @@ function Actions({
     <Button
       type="button"
       variant="unstyled"
-      className="pov-action"
+      className="pov-action mov-action"
       aria-label={`Start ${it.title}`}
       aria-disabled={busy || undefined}
       data-ov-start
@@ -581,6 +583,10 @@ function WorkPanel({
             : 'refreshing'
   const root = useRef<HTMLDivElement>(null)
   const empty = answer !== null && WORK_GROUPS.every((g) => answer.groups[g].total === 0)
+  // the last row going takes its group's heading with it, so focus it held
+  // goes to the panel
+  const held = useHeldFocus()
+  useFocusWhenGone(!empty, () => (held.held() ? root.current : null))
   let body: ReactNode
   if (work === null || (work.value === undefined && work.error === undefined))
     body = (
@@ -661,6 +667,7 @@ function WorkPanel({
       <div
         ref={root}
         tabIndex={-1}
+        {...held.props}
         className={cn('outline-none', state === 'refreshing' && 'opacity-60')}
         data-ov-work
         data-ov-work-state={state}

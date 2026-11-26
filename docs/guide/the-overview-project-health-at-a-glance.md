@@ -192,7 +192,8 @@ may only view shows its hours and no action. After a change the row moves
 to its new group, or leaves Your work once the task is no longer yours or
 no longer open. Keyboard focus stays on a row that moves, in its hours
 field where it was there, and when a row with focus leaves, focus goes to
-the next row, then to the one before it, then to the group's heading. Select a row to open its task. **Open on the
+the next row, then to the one before it, then to the group's heading, and
+to Your work itself when no task is left in it. Select a row to open its task. **Open on the
 Board** opens the same work on My view's Board.
 
 Each group says when it holds nothing, such as "Nothing waits for your

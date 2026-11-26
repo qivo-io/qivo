@@ -194,6 +194,16 @@
   height: 30px;
   font-size: var(--fs-sm);
 }
+/* On a touch screen the project Overview's row actions become icon
+   buttons (ProjectOverview.css); these carry their name as text, so they
+   keep it and take a touch height in the same column. */
+@media (hover: none) {
+  .mov-actions .mov-action {
+    width: auto;
+    height: 36px;
+    padding: 0 10px;
+  }
+}
 
 /* --- the status panel --------------------------------------------------- */
 
