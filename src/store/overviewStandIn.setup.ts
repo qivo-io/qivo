@@ -17,14 +17,17 @@
    convex/lib/nameKey.ts) with its name fallback and cut at `limit`, at
    most HEALTH_ROWS; and a project's Needs attention list and My view's
    Your work from their stored facts alone (Overdue, No reviewer and
-   Paused, no verdict or blocker), the list's answer for a top-level
-   project holding that project's health table sorted by Late, every row
-   up to HEALTH_ROWS. It reads no access rule or read budget
+   Paused, no verdict kind or blocker). The list's answer judges the
+   verdicts as convex/lib/overviewNeeds.ts readNeeds does, reading no
+   load for an overdue task, which is Late whatever the load. The verdicts
+   say whether its verdict counts are given and, for a top-level project,
+   give its Sub-projects, the health table sorted by Late, every row up to
+   HEALTH_ROWS. It reads no access rule or read budget
    of its own, so a state the workspace cannot reach, such as `counting`,
    `budget` or `over_budget`, answers only when `force` asks for it.
-   src/store/overviewParity.test.ts compares the summary and the health
-   table with the real queries. It imports nothing the benchmark's worker
-   cannot load. */
+   src/store/overviewParity.test.ts compares the summary, the health table
+   and a project's Sub-projects with the real queries. It imports nothing
+   the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues, type Value } from 'convex/values'
 import { type DelayIssue, delayOf } from '../../convex/lib/delay'
@@ -33,6 +36,7 @@ import { nameKey } from '../../convex/lib/nameKey'
 import type {
   Figure,
   HealthAnswer,
+  HealthDelays,
   HealthRow,
   HealthSort,
   OverviewScope,
@@ -60,10 +64,12 @@ import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
     (`unavailable`, `access_unchecked`, `over_budget`), a figure that is not
     given (`counting`, the counts' `budget`, which takes the figures after
     them too, or Overdue's `budget`), the owners in `unknown` whose loads
-    the health table cannot read; and for the health table alone its scope
-    refusal, its counts or its judged rows' delays not given, or a lower cap
-    (`most`), which but the scope refusal the health table in a top-level
-    project's Needs attention answer takes too. */
+    the health table and the Needs attention list cannot read; and for the
+    health table alone its scope refusal, its counts or its judged rows'
+    delays not given, or a lower cap (`most`). A top-level project's
+    Sub-projects in its Needs attention answer take the counts and the cap,
+    and of the delays `budget` alone, which the server answers where the
+    list's verdicts did not fit, so the list's verdict counts read it too. */
 export type ForcedOverview = {
   scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
   counts?: 'counting' | 'budget'
@@ -71,8 +77,9 @@ export type ForcedOverview = {
   unknown?: readonly string[]
   /** Your work: past its budget, or with verdicts it could not read */
   work?: 'over_budget' | 'unknown'
-  /** the Needs attention list: past its budget, or with verdicts it could
-      not read, whose counts read unavailable for `loads` */
+  /** the Needs attention list: past its budget, or with no verdict read, so
+      that where it judges one its verdict counts and the Sub-projects rows
+      of the sub-projects it judged in read unavailable for `loads` */
   needs?: 'over_budget' | 'unknown'
   health?: {
     scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
@@ -397,91 +404,87 @@ export function overviewStandIn(
     return delayOf(it, load, 0)
   }
   const unknownOwners = new Set(force.unknown ?? [])
-
-  if (query === 'health') {
-    const h = force.health ?? {}
-    if (h.scope === 'unavailable') return { state: 'unavailable' }
-    if (h.scope === 'access_unchecked')
-      return { state: 'unavailable', reason: 'access_unchecked', message: ACCESS_UNCHECKED_MESSAGE }
-    if (h.scope === 'over_budget') return { state: 'over_budget' }
-    // a lowered cap cuts the rows there, as the page's first ask of 10 rows
-    // stays one the server takes
-    const most = Math.min(h.most ?? HEALTH_ROWS, HEALTH_ROWS)
-    const { sort = 'late', dir = 'desc', limit: asked = OVERVIEW_BATCH } = args
-    if (!Number.isInteger(asked) || asked < 1 || asked > HEALTH_ROWS)
-      throw new ConvexError({
-        code: 'bad_request',
-        message: `limit must be a whole number from 1 to ${HEALTH_ROWS}`,
-      })
-    const limit = Math.min(asked, most)
-    const text = (args.search ?? '').trim()
-    if (text.length > LIMITS.search.max)
-      throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
-    const matches = allWordsMatcher(nameKey(text))
-    // the rows: a project's sub-projects, or My view's top-level projects
-    // above the person's tasks, each with its tasks in the scope
-    type Item = { project: Project; key: string; lead: string | null; tasks: Task[] }
-    const item = (project: Project, lead: string | null, tasks: Task[]): Item => ({
-      project,
-      key: nameKey(project.name),
-      lead,
-      tasks,
-    })
-    let items: Item[]
-    if (subProjects !== null)
-      items = subProjects.map((p) =>
-        item(
-          p,
-          p.lead_id ??
-            (p.parent_id === undefined ? undefined : projectById.get(p.parent_id)?.lead_id) ??
-            null,
-          scoped.filter((t) => t.project_id === p.id),
-        ),
-      )
-    else
-      items = [...myViewProjects(workspace, sees)].flatMap(([id, tasks]) => {
-        const top = projectById.get(id)
-        return top ? [item(top, top.lead_id ?? null, tasks)] : []
-      })
-    items = items.filter((r) => matches(r.key))
-    // the counts: the leaves by status, the paused leaves and Left in tenths
-    const countsOf = (r: Item): LeafCounts => {
-      const c: LeafCounts = {
-        leaves: { backlog: 0, todo: 0, progress: 0, review: 0, done: 0 },
-        paused: 0,
-        left_tenths: 0,
+  // the owners whose loads the verdicts of `tasks` read, in owner id order
+  // by organization, none past the first that could not be read, and one a
+  // query for a guest or Viewer (convex/lib/viewLoads.ts verdicts readAll)
+  const readableOwners = (tasks: readonly Task[]) => {
+    const readable = new Set<string>()
+    for (const org of [...new Set(tasks.map((t) => t.org_id))].sort()) {
+      const owners = [
+        ...new Set(tasks.filter((t) => t.org_id === org).flatMap((t) => needs(t) ?? [])),
+      ].sort()
+      for (const [i, id] of owners.entries()) {
+        if (unknownOwners.has(id) || (onePerQuery(org) && i > 0)) break
+        readable.add(id)
       }
-      for (const t of r.tasks)
-        if (!isGroup(t)) {
-          c.leaves[t.status]++
-          if (t.paused) c.paused++
-          if (t.status !== 'done') c.left_tenths += Math.round((t.remaining_hours ?? 0) * 10)
-        }
-      return c
     }
-    const counted = h.counts === undefined
-    if (args.open_only === true && h.counts !== undefined)
-      return {
-        state: 'ok',
-        rows: [],
-        total: 0,
-        sort: { key: sort, dir },
-        most,
-        uncounted: h.counts,
+    return readable
+  }
+  const judge = (t: Task, readable: ReadonlySet<string>) => {
+    const id = needs(t)
+    if (id !== null && !readable.has(id)) return 'unknown' as const
+    return verdictOf(t, id === null ? [] : loadOf(t.org_id, id))
+  }
+
+  // the health table's rows: a project's sub-projects, or My view's
+  // top-level projects above the person's tasks, each with its tasks in the
+  // scope
+  type Item = { project: Project; key: string; lead: string | null; tasks: Task[] }
+  const item = (project: Project, lead: string | null, tasks: Task[]): Item => ({
+    project,
+    key: nameKey(project.name),
+    lead,
+    tasks,
+  })
+  const subProjectItems = (subs: readonly Project[]) =>
+    subs.map((p) =>
+      item(
+        p,
+        p.lead_id ??
+          (p.parent_id === undefined ? undefined : projectById.get(p.parent_id)?.lead_id) ??
+          null,
+        scoped.filter((t) => t.project_id === p.id),
+      ),
+    )
+  // the counts: the leaves by status, the paused leaves and Left in tenths
+  const countsOf = (r: Item): LeafCounts => {
+    const c: LeafCounts = {
+      leaves: { backlog: 0, todo: 0, progress: 0, review: 0, done: 0 },
+      paused: 0,
+      left_tenths: 0,
+    }
+    for (const t of r.tasks)
+      if (!isGroup(t)) {
+        c.leaves[t.status]++
+        if (t.paused) c.paused++
+        if (t.status !== 'done') c.left_tenths += Math.round((t.remaining_hours ?? 0) * 10)
       }
-    if (args.open_only === true)
-      items = items.filter((r) => {
-        const c = countsOf(r)
-        return c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review > 0
-      })
+    return c
+  }
+  type Table = Extract<HealthAnswer, { state: 'ok' }>
+  /* The health table of `items` as convex/lib/overview.ts healthTable
+     answers it, `uncounted` saying why their counts are not given and
+     `delaysOf` giving the delays of the rows the order judges. */
+  const healthTable = (
+    items: readonly Item[],
+    ask: {
+      sort: HealthSort
+      dir: 'asc' | 'desc'
+      limit: number
+      most: number
+      uncounted?: 'counting' | 'budget'
+    },
+    delaysOf: (judged: readonly Item[]) => Figure<{ of: Map<string, HealthDelays> }>,
+  ): Table => {
+    const { sort, dir, limit, most, uncounted } = ask
     // each lead's name, a lead of another organization or none being none
     const leadName = (r: Item) => {
       const p = r.lead === null ? undefined : profileById.get(r.lead)
       return p !== undefined && p.org_id === r.project.org_id ? nameKey(p.name) : undefined
     }
-    const delays = new Map<string, Figure<{ late: number; behind: number }>>()
+    let delays = new Map<string, HealthDelays>()
     const columnOf = (r: Item, key: HealthSort): Value => {
-      const c = counted ? countsOf(r) : null
+      const c = uncounted === undefined ? countsOf(r) : null
       const all = c === null ? 0 : Object.values(c.leaves).reduce((n, x) => n + x, 0)
       const d = delays.get(r.project.id)
       switch (key) {
@@ -505,9 +508,9 @@ export function overviewStandIn(
           return d?.state === 'ok' ? d.behind : 0
       }
     }
-    let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
-      COUNT_SORTS.includes(sort) && h.counts !== undefined
-        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: h.counts }
+    let order: Table['sort'] =
+      COUNT_SORTS.includes(sort) && uncounted !== undefined
+        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: uncounted }
         : { key: sort, dir }
     const ordered = () =>
       [...items].sort((a, b) => {
@@ -520,51 +523,23 @@ export function overviewStandIn(
     const byDelays = sort === 'late' || sort === 'behind'
     let rows = byDelays ? items : ordered()
     const judged = byDelays ? items : rows.slice(0, limit)
-    // the judged rows' delays: owners read in owner id order across them,
-    // by organization, none past the first that could not be read, and one
-    // a query for a guest or Viewer
-    const tracked = (r: Item) => r.tasks.filter(tracks)
-    const readable = new Set<string>()
-    const all = judged.flatMap(tracked)
-    for (const org of [...new Set(all.map((t) => t.org_id))].sort()) {
-      const owners = [
-        ...new Set(all.filter((t) => t.org_id === org).flatMap((t) => needs(t) ?? [])),
-      ].sort()
-      for (const [i, id] of owners.entries()) {
-        if (unknownOwners.has(id) || (onePerQuery(org) && i > 0)) break
-        readable.add(id)
-      }
-    }
-    for (const r of judged) {
-      if (h.delays !== undefined) {
-        delays.set(r.project.id, { state: 'unavailable', reason: h.delays })
-        continue
-      }
-      let late = 0
-      let behind = 0
-      let known = true
-      for (const t of tracked(r)) {
-        const id = needs(t)
-        if (id !== null && !readable.has(id)) {
-          known = false
-          break
-        }
-        const verdict = verdictOf(t, id === null ? [] : loadOf(t.org_id, id))
-        if (verdict?.status === 'late') late++
-        else if (verdict?.status === 'behind') behind++
-      }
-      delays.set(
-        r.project.id,
-        known ? { state: 'ok', late, behind } : { state: 'unavailable', reason: 'loads' },
-      )
-    }
+    const read = delaysOf(judged)
+    delays =
+      read.state === 'ok'
+        ? read.of
+        : new Map(
+            judged.map((r): [string, HealthDelays] => [
+              r.project.id,
+              { state: 'unavailable', reason: read.reason },
+            ]),
+          )
     if (byDelays) {
       if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
         order = {
           key: 'name',
           dir: 'asc',
           by_name: 'delays',
-          missing: h.delays === 'budget' ? 'budget' : 'loads',
+          missing: read.state === 'ok' ? 'loads' : read.reason,
         }
       rows = ordered()
     }
@@ -576,9 +551,9 @@ export function overviewStandIn(
           name: r.project.name,
           lead_id: r.lead,
           counts:
-            h.counts === undefined
+            uncounted === undefined
               ? { state: 'ok', ...countsOf(r) }
-              : { state: 'unavailable', reason: h.counts },
+              : { state: 'unavailable', reason: uncounted },
           delays: delays.get(r.project.id) ?? { state: 'unavailable', reason: 'budget' },
         }),
       ),
@@ -588,11 +563,71 @@ export function overviewStandIn(
     }
   }
 
+  if (query === 'health') {
+    const h = force.health ?? {}
+    if (h.scope === 'unavailable') return { state: 'unavailable' }
+    if (h.scope === 'access_unchecked')
+      return { state: 'unavailable', reason: 'access_unchecked', message: ACCESS_UNCHECKED_MESSAGE }
+    if (h.scope === 'over_budget') return { state: 'over_budget' }
+    // a lowered cap cuts the rows there, as the page's first ask of 10 rows
+    // stays one the server takes
+    const most = Math.min(h.most ?? HEALTH_ROWS, HEALTH_ROWS)
+    const { sort = 'late', dir = 'desc', limit: asked = OVERVIEW_BATCH } = args
+    if (!Number.isInteger(asked) || asked < 1 || asked > HEALTH_ROWS)
+      throw new ConvexError({
+        code: 'bad_request',
+        message: `limit must be a whole number from 1 to ${HEALTH_ROWS}`,
+      })
+    const limit = Math.min(asked, most)
+    const text = (args.search ?? '').trim()
+    if (text.length > LIMITS.search.max)
+      throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
+    const matches = allWordsMatcher(nameKey(text))
+    let items =
+      subProjects !== null
+        ? subProjectItems(subProjects)
+        : [...myViewProjects(workspace, sees)].flatMap(([id, tasks]) => {
+            const top = projectById.get(id)
+            return top ? [item(top, top.lead_id ?? null, tasks)] : []
+          })
+    items = items.filter((r) => matches(r.key))
+    if (args.open_only === true && h.counts !== undefined)
+      return {
+        state: 'ok',
+        rows: [],
+        total: 0,
+        sort: { key: sort, dir },
+        most,
+        uncounted: h.counts,
+      }
+    if (args.open_only === true)
+      items = items.filter((r) => {
+        const c = countsOf(r)
+        return c.leaves.backlog + c.leaves.todo + c.leaves.progress + c.leaves.review > 0
+      })
+    return healthTable(items, { sort, dir, limit, most, uncounted: h.counts }, (judged) => {
+      if (h.delays !== undefined) return { state: 'unavailable', reason: h.delays }
+      const readable = readableOwners(judged.flatMap((r) => r.tasks.filter(tracks)))
+      const rowDelays = (r: Item): HealthDelays => {
+        let late = 0
+        let behind = 0
+        for (const t of r.tasks.filter(tracks)) {
+          const verdict = judge(t, readable)
+          if (verdict === 'unknown') return { state: 'unavailable', reason: 'loads' }
+          if (verdict?.status === 'late') late++
+          else if (verdict?.status === 'behind') behind++
+        }
+        return { state: 'ok', late, behind }
+      }
+      return { state: 'ok', of: new Map(judged.map((r) => [r.project.id, rowDelays(r)])) }
+    })
+  }
+
   // ---- the Needs attention list (convex/lib/overviewNeeds.ts), from the
   // stored facts alone: Overdue, No reviewer and Paused, which rank in that
-  // order, then by due date, undated last, and task number. It judges no
-  // verdict and reads no blocker; the server's own suite tests the whole
-  // rule
+  // order, then by due date, undated last, and task number. It lists no
+  // verdict kind and reads no blocker; the server's own suite tests the
+  // whole rule
   if (query === 'needs') {
     if (scope.kind !== 'project') return { state: 'unavailable' }
     if (force.needs === 'over_budget') return { state: 'over_budget' }
@@ -621,11 +656,33 @@ export function overviewStandIn(
     const filter = args.kind as string
     const kept =
       filter === 'all' ? listed : listed.filter((t) => (kindsOf(t) as string[]).includes(filter))
-    const unknown = force.needs === 'unknown'
-    const verdict = (count: number) =>
-      unknown
-        ? { state: 'unavailable' as const, reason: 'loads' as const }
-        : { state: 'ok' as const, count }
+    // the verdicts of the open tasks in sub-projects that track delay and
+    // are not overdue, and each sub-project's Late and Behind plan. A passed
+    // due date is Late whatever the load, so no load is read for it
+    const overdue = (t: Task) => t.due_date !== undefined && t.due_date < day
+    const open = scoped.filter((t) => !done(t))
+    const judged = open.filter((t) => tracks(t) && !overdue(t))
+    const lateIn = new Map<string, number>()
+    const behindIn = new Map<string, number>()
+    const unknownIn = new Set<string>()
+    const add = (to: Map<string, number>, key: string) => to.set(key, (to.get(key) ?? 0) + 1)
+    let missing: 'budget' | 'loads' | null = force.health?.delays === 'budget' ? 'budget' : null
+    if (missing === null) {
+      const readable = readableOwners(judged)
+      for (const t of judged) {
+        const verdict = force.needs === 'unknown' ? 'unknown' : judge(t, readable)
+        if (verdict === 'unknown') {
+          missing = 'loads'
+          unknownIn.add(t.project_id)
+        } else if (verdict?.status === 'late') add(lateIn, t.project_id)
+        else if (verdict?.status === 'behind') add(behindIn, t.project_id)
+      }
+    }
+    for (const t of open) if (tracks(t) && overdue(t)) add(lateIn, t.project_id)
+    const verdictCount = (count: number) =>
+      missing === null
+        ? { state: 'ok' as const, count }
+        : { state: 'unavailable' as const, reason: missing }
     const people = new Map<string, number>()
     for (const t of scoped)
       if (!isGroup(t) && ['todo', 'progress', 'review'].includes(t.status)) {
@@ -640,19 +697,35 @@ export function overviewStandIn(
     for (const t of listed)
       if (tracks(t) && t.due_date !== undefined && t.due_date < day)
         late.set(t.due_date, (late.get(t.due_date) ?? 0) + 1)
-    // a top-level project's health table sorted by Late, with every forced
-    // state of the health table but its scope refusal
+    const most = Math.min(force.health?.most ?? HEALTH_ROWS, HEALTH_ROWS)
+    const subs = subProjects ?? []
     const health =
       projectById.get(scope.project_id)?.parent_id === undefined
-        ? (overviewStandIn(
-            workspace,
-            'health',
-            { ...args, scope, sort: 'late', dir: 'desc', limit: HEALTH_ROWS },
-            { sees, force: { ...force, health: { ...force.health, scope: undefined } } },
-          ) as HealthAnswer)
+        ? healthTable(
+            subProjectItems(subs),
+            { sort: 'late', dir: 'desc', limit: most, most, uncounted: force.health?.counts },
+            () =>
+              missing === 'budget'
+                ? { state: 'unavailable', reason: 'budget' }
+                : {
+                    state: 'ok',
+                    of: new Map(
+                      subs.map((p): [string, HealthDelays] => [
+                        p.id,
+                        unknownIn.has(p.id)
+                          ? { state: 'unavailable', reason: 'loads' }
+                          : {
+                              state: 'ok',
+                              late: lateIn.get(p.id) ?? 0,
+                              behind: behindIn.get(p.id) ?? 0,
+                            },
+                      ]),
+                    ),
+                  },
+          )
         : null
     return {
-      ...(health?.state === 'ok' ? { health } : {}),
+      ...(health === null ? {} : { health }),
       state: 'ok',
       rows: kept.slice(0, args.limit as number).map((t) => {
         const { description: _text, parent_id: parent, has_subtasks: _flag, ...rest } = t
@@ -671,22 +744,23 @@ export function overviewStandIn(
         blocked: 0,
         no_reviewer: listed.filter((t) => kindsOf(t).includes('no_reviewer')).length,
         paused: listed.filter((t) => kindsOf(t).includes('paused')).length,
-        projected: verdict(0),
-        behind: verdict(0),
-        all: verdict(listed.length),
+        projected: verdictCount(0),
+        behind: verdictCount(0),
+        all: verdictCount(listed.length),
       },
       tracks_delay: (subProjects ?? []).some((p) => p.track_delay === true),
       people: [...people.entries()]
         .sort(([a], [b]) => (a < b ? -1 : 1))
         .map(([id, n]) => ({ id, listed: n })),
-      late_due: unknown
-        ? { state: 'unavailable', reason: 'loads' }
-        : {
-            state: 'ok',
-            days: [...late.entries()]
-              .sort(([a], [b]) => (a < b ? -1 : 1))
-              .map(([due, count]) => ({ due, count })),
-          },
+      late_due:
+        missing !== null
+          ? { state: 'unavailable', reason: missing }
+          : {
+              state: 'ok',
+              days: [...late.entries()]
+                .sort(([a], [b]) => (a < b ? -1 : 1))
+                .map(([due, count]) => ({ due, count })),
+            },
     }
   }
 
