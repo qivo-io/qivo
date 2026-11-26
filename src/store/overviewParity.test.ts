@@ -7,9 +7,10 @@
  * (src/views/overview/overviewArgs.ts overviewClock), and checks that the
  * stand-in answers the same summary and the same health table, for Nora in
  * every column's order both ways, a cut and a search, as the queries
- * answer for the same caller, and a project's Needs attention answer with
- * every row in the same order with what it needs, the same total, counts,
- * people, Late tasks by due date and Sub-projects. Of the server's own two
+ * answer for the same caller, and a project's whole Needs attention
+ * answer, every row in the same order with each of its fields, a group's
+ * calculated dates among them, and the same total, counts, people, Late
+ * tasks by due date and Sub-projects. Of the server's own two
  * reads of a top-level project's Sub-projects it checks the rule
  * convex/lib/overviewNeeds.ts states, that a figure both give is the same,
  * as either may give one the other answers unavailable. Over every row of
@@ -228,21 +229,14 @@ function expectFiguresOf(needs: HealthTable | undefined, health: HealthAnswer, l
   if (same) expect(needs, `${label}: Sub-projects`).toEqual(health)
 }
 
-/** A Needs attention answer with each row as its task's id and what it
- * needs, the part of a row that the list works out. */
-const needsOf = (answer: NeedsAnswer) =>
-  answer.state === 'ok'
-    ? { ...answer, rows: answer.rows.map((r) => ({ id: r.id, needs: r.needs })) }
-    : answer
-
 /** Checks that the Overview's stand-in answers the summary and the health
  * table of `scope` as the server does for `profile`, with `orders` every
  * column's order both ways, a cut and a search too, and in My view that
  * every row of Your work shows. Of a project it checks that the stand-in
- * answers the server's Needs attention list, every row of it, and of a
- * top-level project the rule between the server's two reads of its
- * Sub-projects (expectFiguresOf). Answers how many leaf tasks the summary
- * counts. */
+ * answers the server's whole Needs attention answer, every field of every
+ * row, and of a top-level project the rule between the server's two reads
+ * of its Sub-projects (expectFiguresOf). Answers how many leaf tasks the
+ * summary counts. */
 async function expectParity(
   t: T,
   P: Store,
@@ -311,9 +305,9 @@ async function expectParity(
       subProjectTables++
     } else expect(needs.health, `${label}: Sub-projects`).toBeUndefined()
     expect(
-      needsOf(stand('needs', { scope, ...args }) as NeedsAnswer),
+      stand('needs', { scope, ...args }) as NeedsAnswer,
       `${label}: stand-in Needs attention`,
-    ).toEqual(needsOf(needs))
+    ).toEqual(needs)
   }
   if (orders && table.state === 'ok') {
     for (const sort of HEALTH_SORTS)
@@ -405,9 +399,10 @@ const NOW_CASE = Date.parse('2026-11-04T19:00:00.000Z')
  * sub-project, a task stored on the TBED meta, an In Review hand-off, a task the
  * subject reviews and two nobody reviews, tasks projected late, on track
  * and behind, two groups projected late by their span, a task further
- * behind, and a task whose remaining hours were
- * measured near midnight before a week began in New York, so its local and
- * UTC weeks differ. Then the organization is counted. */
+ * behind, a group further behind still by its span, and a task whose
+ * remaining hours were measured near midnight before a week began in New
+ * York, so its local and UTC weeks differ. Then the organization is
+ * counted. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
@@ -520,6 +515,13 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     parent_id: farSpan.id,
     start_week: '2026-12-14',
     end_week: '2026-12-21',
+  })
+  const behindSpan = await task(f.sub, { title: 'Group behind its span' })
+  await task(f.sub, {
+    title: 'Its leaf behind its plan',
+    parent_id: behindSpan.id,
+    start_week: '2026-09-21',
+    end_week: '2026-09-28',
   })
   // two hand-offs nobody reviews, the one waiting longer due later
   await task(f.sub2, {

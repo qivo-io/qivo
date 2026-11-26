@@ -18,8 +18,10 @@
    most HEALTH_ROWS; My view's Your work from its stored facts alone
    (Overdue, No reviewer and Paused, no verdict kind or blocker); and a
    project's Needs attention list by the rule of convex/lib/overviewNeeds.ts
-   readNeeds: every kind, Blocked by the workspace's blocks links, ranked
-   as the server ranks them, its verdicts judged as readNeeds judges them,
+   readNeeds: every kind, Blocked by the workspace's blocks links from
+   tasks in live projects the person sees, ranked as the server ranks
+   them, each group's row with its calculated dates and whether it is
+   done, its verdicts judged as readNeeds judges them,
    with no load read for an overdue task, which is Late whatever the load,
    and for a top-level project its Sub-projects, the health table sorted
    by Late from those verdicts, every row up to HEALTH_ROWS. It reads no
@@ -282,6 +284,10 @@ export function overviewStandIn(
     ]),
   )
   const done = (t: Task) => isIssueDone(groupView[t.id], groupView)
+  const spanOfGroup = (t: Task) => ({
+    ...spanOf(t, children, byId),
+    partial: groupProgress(groupView[t.id], groupView).unknown,
+  })
   const owner = (t: Task) => taskOwnerId(t, isGroup(t))
   const inSubProject = (t: Task) => {
     const p = projectById.get(t.project_id)
@@ -388,10 +394,10 @@ export function overviewStandIn(
     let end: number | null
     let partial = false
     if (group) {
-      const span = spanOf(t, children, byId)
+      const span = spanOfGroup(t)
       start = week(span.start_week)
       end = week(span.end_week)
-      partial = groupProgress(groupView[t.id], groupView).unknown
+      partial = span.partial
     } else {
       start = week(t.start_week)
       const planned = week(t.end_week)
@@ -669,12 +675,12 @@ export function overviewStandIn(
       .filter((l) => l.type === 'blocks' && rowIds.has(l.target_id))
       .sort((a, b) => order(a.created_at, b.created_at) || order(a.id, b.id))) {
       const b = byId.get(link.source_id)
-      if (b === undefined || b.org_id !== scope.org_id || done(b)) continue
+      if (b === undefined || b.org_id !== scope.org_id || !seen(b.project_id) || done(b)) continue
       blockersOf.set(link.target_id, [...(blockersOf.get(link.target_id) ?? []), b])
     }
     const plannedEnd = (t: Task) => {
       if (isGroup(t)) {
-        const end = spanOf(t, children, byId).end_week
+        const end = spanOfGroup(t).end_week
         return end ? clock.ofDay(end) : null
       }
       if (t.end_week === undefined) return null
@@ -800,7 +806,9 @@ export function overviewStandIn(
         return {
           ...rest,
           ...(parent !== undefined && shownIds.has(parent) ? { parent_id: parent } : {}),
-          has_subtasks: isGroup(t),
+          ...(isGroup(t)
+            ? { has_subtasks: true, group_done: done(t), span: spanOfGroup(t) }
+            : { has_subtasks: false }),
           needs: {
             kind: kinds[0] as NeedsKind,
             also: kinds.slice(1),

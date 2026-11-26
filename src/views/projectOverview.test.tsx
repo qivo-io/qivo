@@ -13,9 +13,12 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    server's rule: the sentence and Tasks left, a count Qivo could not
    work out, a tab's read, a row opened while the next answer loads, the
    people's load reads of a kept page, the sub-projects' Load more and cap,
-   a milestone's late count, and the row actions a reader may not use. The
-   list's own rule is the server's, which convex/tests/overviewNeeds.test.ts
-   tests. */
+   a milestone's late count, a blocker in a sub-project the reader no
+   longer sees, and the row actions a reader may not use. The list's own
+   rule is the server's, which convex/tests/overviewNeeds.test.ts tests.
+   The parity test (store/overviewParity.test.ts) cannot plant such a
+   blocker, as the server's workspace holds no task the reader cannot
+   see. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -321,6 +324,39 @@ describe("a project's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
     await board.answer()
     expect(text('[data-overview-milestone="launch"]')).toContain('1 late task is due before it')
+  })
+
+  it('counts a blocker only while the reader may see its sub-project', async () => {
+    const { board } = await overview((snap) => {
+      plan(snap)
+      // the reader sees Two only through its grant, as a lead of Plan sees
+      // every sub-project of it
+      const top = snap.projects.find((p) => p.id === 'plan')
+      if (top) delete top.lead_id
+      const { lead_id: _lead, ...one } = snap.projects[0]
+      snap.projects.push({ ...one, id: 'two', key: 'TWO', num: 3, name: 'Two' })
+      snap.access.push({ project_id: 'two', profile_id: snap.profiles[0].id, level: 'user' })
+      snap.issues = [
+        taskRow(snap, 'waits', 'todo', 1),
+        taskRow(snap, 'near', 'todo', 2),
+        { ...taskRow(snap, 'far', 'todo', 3), project_id: 'two' },
+      ]
+      for (const source of ['near', 'far'])
+        snap.links.push({
+          id: `${source}-blocks`,
+          source_id: source,
+          target_id: 'waits',
+          type: 'blocks',
+          pair_key: `${source}:waits`,
+          created_at: '2026-09-01T08:00:00.000Z',
+        })
+    })
+    const blocked = () =>
+      rows().map((r) => r.querySelector('[data-focus-key="row"]')?.getAttribute('aria-label'))
+    expect(blocked()).toEqual(['Blocked: Task waits, One, blocked by 2 tasks, Planner'])
+    board.snapshot.access = []
+    await board.deliver()
+    expect(blocked()).toEqual(['Blocked: Task waits, One, blocked by 1 task, Planner'])
   })
 
   it("asks the server for a tab's kind and shows its rows", async () => {
