@@ -1,14 +1,15 @@
 /* The Overview's Needs attention list (overview.ts needs,
  * lib/overviewNeeds.ts): its kinds and ranking, its counts beside the
- * Overview's other reads, what a reader who may not read every owner's
- * work sees, what hidden projects may move, its fail-safe answers past a
- * lowered budget, and its reads at the design size under Convex's
- * transaction limits. */
+ * Overview's other reads, a top-level project's Sub-projects as the health
+ * table answers them, what a reader who may not read every owner's work
+ * sees, what hidden projects may move, its fail-safe answers past a lowered
+ * budget, and its reads at the design size under Convex's transaction
+ * limits. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { OVERVIEW, readHealth } from '../lib/overview'
+import { OVERVIEW } from '../lib/overview'
 import { NEEDS, type NeedsAnswer, type NeedsFilter, readNeeds } from '../lib/overviewNeeds'
 import { OWNER_LOADS } from '../lib/ownerLoads'
 import { plantTasks } from './board.setup'
@@ -255,6 +256,200 @@ describe('beside the other reads', () => {
   })
 })
 
+// ------------------------------------------------------------- sub-projects
+
+/** overview.health of `project` for `me` sorted by Late, most first, every
+ * row: the Sub-projects a project's Overview read before overview.needs
+ * answered them. */
+const healthOf = (t: T, me: Doc<'profiles'>, project: Doc<'projects'>) =>
+  as(t, me).query(api.overview.health, {
+    scope: { kind: 'project', org_id: me.org_id, project_id: project.id },
+    ...WEEKS,
+    sort: 'late',
+    dir: 'desc',
+    limit: OVERVIEW.healthRows,
+  })
+
+/** The Sub-projects of `project`'s Needs attention answer for `me`. */
+const subsOf = async (t: T, me: Doc<'profiles'>, project: Doc<'projects'>) =>
+  okOf(await needsOf(t, me, project)).health
+
+/** A task of `owner` in `project` that its load projects late: 200 hours
+ * at 40 a week from DAY's week, due in ten days, with `fields` over it. */
+const projectedLate = (
+  t: T,
+  project: Doc<'projects'>,
+  owner: Doc<'profiles'>,
+  title: string,
+  fields: Partial<Doc<'issues'>> = {},
+) =>
+  plantIssue(t, {
+    org_id: project.org_id,
+    project_id: project.id,
+    title,
+    assignee_id: owner.id,
+    start_week: DAY,
+    end_week: shift(DAY, 7),
+    due_date: shift(DAY, 10),
+    remaining_hours: 200,
+    remaining_set_at: `${DAY}T12:00:00.000Z`,
+    ...fields,
+  })
+
+describe('sub-projects', () => {
+  it('answers a top-level project’s Sub-projects as the health table sorted by Late does, row for row, and a guest’s figures as staff’s or unknown', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
+    const sensors = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      name: 'Sensors',
+      name_key: 'sensors',
+      track_delay: true,
+    })
+    await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      name: 'Spare',
+      name_key: 'spare',
+    })
+    const [p1, p2, p3, p4, p5] = await plantPeople(t, f.org.id, 5)
+    const task = (title: string, fields: Partial<Doc<'issues'>> = {}, project = f.sub) =>
+      plantIssue(t, { org_id: f.org.id, project_id: project.id, title, ...fields })
+    // in FW, which tracks delay, Late: overdue without an owner, with an
+    // owner but no hours left, and with a plan whose owner's load staff
+    // read; a group past its due date, a parent stored Done with an open
+    // subtask past its due date, a group late by its span, a paused task
+    // and a task projected late
+    await task('No owner, overdue', { due_date: shift(DAY, -3) })
+    await task('No hours, overdue', { due_date: shift(DAY, -4), assignee_id: p1?.id })
+    await projectedLate(t, f.sub, p2 as Doc<'profiles'>, 'Planned, overdue', {
+      due_date: shift(DAY, -2),
+      remaining_hours: 30,
+    })
+    const late = await task('Late group', { due_date: shift(DAY, -2) })
+    await task('Its open subtask', { parent_id: late.id })
+    const stored = await task('Stored Done', {
+      status: 'done',
+      done_at: PLANTED_AT,
+      due_date: shift(DAY, -1),
+    })
+    await task('Its open subtask too', { parent_id: stored.id })
+    const span = await task('Group late by its span', { due_date: shift(DAY, 11) })
+    await task('Its late leaf', {
+      parent_id: span.id,
+      start_week: shift(DAY, 21),
+      end_week: shift(DAY, 28),
+    })
+    await projectedLate(t, f.sub, p3 as Doc<'profiles'>, 'Paused, projected late', {
+      paused: true,
+    })
+    await projectedLate(t, f.sub, f.user, 'Projected late')
+    // Behind plan, and none of these: on track, Done past its due date
+    // waiting for the nightly archive, a group whose leaves are all Done
+    await task('Behind its plan', {
+      assignee_id: p4?.id,
+      start_week: shift(DAY, -14),
+      end_week: shift(DAY, -7),
+      remaining_hours: 30,
+      remaining_set_at: `${shift(DAY, -10)}T12:00:00.000Z`,
+    })
+    await projectedLate(t, f.sub, p4 as Doc<'profiles'>, 'On track', {
+      end_week: shift(DAY, 28),
+      due_date: shift(DAY, 35),
+      remaining_hours: 4,
+    })
+    await task('Done past due', { status: 'done', done_at: PLANTED_AT, due_date: shift(DAY, -5) })
+    const finished = await task('Finished group', { due_date: shift(DAY, -6) })
+    await task('Its Done leaf', { parent_id: finished.id, status: 'done', done_at: PLANTED_AT })
+    // in PCB, which does not track delay, none; in Sensors one late
+    await task('Overdue, no tracking', { due_date: shift(DAY, -3) }, f.sub2)
+    await projectedLate(t, f.sub2, p5 as Doc<'profiles'>, 'Late, no tracking')
+    await projectedLate(t, sensors, p5 as Doc<'profiles'>, 'Late in Sensors')
+    await withReach(t)
+    await countOrg(t, f.org.id)
+
+    const table = await subsOf(t, f.user, f.meta)
+    expect(table).toEqual(await healthOf(t, f.user, f.meta))
+    expect(table?.rows.map((r) => [r.name, r.delays])).toEqual([
+      ['Firmware', { state: 'ok', late: 8, behind: 1 }],
+      ['Sensors', { state: 'ok', late: 1, behind: 0 }],
+      ['Board rev', { state: 'ok', late: 0, behind: 0 }],
+      ['Spare', { state: 'ok', late: 0, behind: 0 }],
+    ])
+    expect(table?.sort).toEqual({ key: 'late', dir: 'desc' })
+    // a sub-project's own answer holds none
+    expect(okOf(await needsOf(t, f.user, f.sub)).health).toBeUndefined()
+    // a guest reads one owner's load, so a row is the staff's figures or
+    // unknown, and the list is then in name order
+    const guest = await subsOf(t, f.guest, f.meta)
+    const staff = new Map(table?.rows.map((r) => [r.project_id, r]))
+    for (const row of guest?.rows ?? [])
+      if (row.delays.state === 'ok') expect(row).toEqual(staff.get(row.project_id))
+      else expect(row.delays).toEqual({ state: 'unavailable', reason: 'loads' })
+    expect(guest?.rows.map((r) => [r.name, r.delays.state])).toContainEqual([
+      'Firmware',
+      'unavailable',
+    ])
+    expect(guest?.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' })
+  })
+
+  it('keeps the health table’s states: unknown for a second owner, counting before the counts, and every row past a lowered budget', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    for (const p of [f.sub, f.sub2])
+      await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
+    await projectedLate(t, f.sub, f.user, 'Late of one owner')
+    await projectedLate(t, f.sub2, f.admin, 'Late of another')
+    await withReach(t)
+    // not counted yet
+    const counting = await subsOf(t, f.admin, f.meta)
+    expect(counting?.rows.map((r) => r.counts)).toEqual([
+      { state: 'unavailable', reason: 'counting' },
+      { state: 'unavailable', reason: 'counting' },
+    ])
+    expect(counting).toEqual(await healthOf(t, f.admin, f.meta))
+    await countOrg(t, f.org.id)
+    // a guest reads the lower owner's load only
+    const guest = await subsOf(t, f.guest, f.meta)
+    expect(guest?.rows.map((r) => r.delays.state).sort()).toEqual(['ok', 'unavailable'])
+    expect(guest).toEqual(await healthOf(t, f.guest, f.meta))
+    // a budget that holds the tasks but not the verdicts' reads: the reads
+    // of the same answer where no sub-project tracks delay
+    const profiles = new Map([[f.admin.org_id, f.admin]])
+    const read = () =>
+      measured(t, (ctx) =>
+        readNeeds(ctx, profiles, {
+          scope: { org_id: f.org.id, project_id: f.meta.id },
+          ...WEEKS,
+          kind: 'all',
+          limit: NEEDS.first,
+        }),
+      )
+    for (const p of [f.sub, f.sub2])
+      await t.run((ctx) => ctx.db.patch(p._id, { track_delay: false }))
+    const untracked = await read()
+    for (const p of [f.sub, f.sub2])
+      await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
+    Object.assign(OVERVIEW.reads, { ranges: untracked.took.ranges })
+    const thin = okOf((await read()).answer)
+    expect(thin.counts.projected).toEqual({ state: 'unavailable', reason: 'budget' })
+    expect(thin.health?.rows.map((r) => [r.counts.state, r.delays])).toEqual([
+      ['ok', { state: 'unavailable', reason: 'budget' }],
+      ['ok', { state: 'unavailable', reason: 'budget' }],
+    ])
+    expect(thin.health?.sort).toEqual({
+      key: 'name',
+      dir: 'asc',
+      by_name: 'delays',
+      missing: 'budget',
+    })
+  })
+})
+
 describe('access', () => {
   it("reads unknown, never zero, where a verdict needs an owner's load the reader may not read", async () => {
     const t = newT()
@@ -447,6 +642,9 @@ describe('real limits', () => {
     expect(ok.counts.all.state).toBe('ok')
     expect(ok.counts.blocked).toBeGreaterThan(100)
     expect(ok.late_due.state).toBe('ok')
+    expect(ok.health?.rows.map((r) => [r.counts.state, r.delays.state])).toEqual(
+      Array(3).fill(['ok', 'ok']),
+    )
   })
 
   it('reads a project of 30 sub-projects with 20 open tasks each whole', async () => {
@@ -455,7 +653,11 @@ describe('real limits', () => {
     await withReach(c.t)
     await countOrg(c.t, c.f.org.id)
     const { answer } = await readMeasured(c.t, c.me, c.top, '30 sub-projects, 600 open tasks')
-    expect(okOf(answer).counts.all.state).toBe('ok')
+    const ok = okOf(answer)
+    expect(ok.counts.all.state).toBe('ok')
+    expect(ok.health?.rows.map((r) => [r.counts.state, r.delays.state])).toEqual(
+      Array(30).fill(['ok', 'ok']),
+    )
   })
 
   it('reads a project with 200 Done tasks not yet archived beside everyday open ones', async () => {
@@ -473,27 +675,5 @@ describe('real limits', () => {
     await countOrg(c.t, c.f.org.id)
     const { answer } = await readMeasured(c.t, c.me, c.top, '200 Done tasks beside 90 open')
     expect(okOf(answer).counts.all.state).toBe('ok')
-  })
-
-  it('reads the health table beside it at 800 open tasks, as the page asks both', async () => {
-    const c = await sharedCase(3)
-    for (const [i, sub] of c.subs.entries())
-      await plantOpen(c.t, sub, i === 2 ? 266 : 267, c.owners)
-    await withReach(c.t)
-    await countOrg(c.t, c.f.org.id)
-    const started = Date.now()
-    const got = await measured(c.t, (ctx) =>
-      readHealth(ctx, new Map([[c.me.org_id, c.me]]), {
-        scope: { kind: 'project', org_id: c.me.org_id, project_id: c.top.id },
-        ...WEEKS,
-        sort: 'late',
-        dir: 'desc',
-        limit: 10,
-      }),
-    )
-    console.log(
-      `health reads beside the list, 800 open tasks: ${JSON.stringify(got.took)} in ${Date.now() - started} ms`,
-    )
-    expect(got.answer.state).toBe('ok')
   })
 })

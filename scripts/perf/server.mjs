@@ -92,18 +92,26 @@
 //                        tasks say, for screenshots of states a seeded
 //                        backend cannot reach: counting, counts-budget,
 //                        overdue-budget, unknown (every owner's load
-//                        unreadable, so the health table's delays read
-//                        unknown), over_budget, unavailable or
+//                        unreadable, so My view's Your projects read a
+//                        row's delays unknown where one of its tasks needs
+//                        a load, and a project's Sub-projects where one
+//                        that is not overdue does, with Needs attention's
+//                        verdict counts), over_budget, unavailable or
 //                        access_unchecked; for My view's Your work alone
 //                        work-over-budget and work-unknown (its delays
-//                        unknown); for
-//                        the health table alone health-counting (its counts
-//                        counting), health-budget (its rows' delays past the
-//                        budget, so it sorts by name), health-loads (its
-//                        rows' delays needing a second owner's load),
-//                        health-over-budget, health-cap (at most 20 rows,
-//                        so the cap note shows) and health-error (its read
-//                        fails); several joined by commas
+//                        unknown); for My view's Your projects and a
+//                        project's Sub-projects, which its Needs attention
+//                        answer holds, health-counting (its counts
+//                        counting), health-budget (its rows' delays past
+//                        the budget, so it sorts by name, and on a
+//                        project's page Needs attention's verdict counts
+//                        too, which the same read answers) and health-cap
+//                        (at most 20 rows, so the cap note shows); and for
+//                        My view's alone health-loads (its rows' delays
+//                        needing a second owner's load, which role=viewer
+//                        shows on a project's Sub-projects from the
+//                        tasks), health-over-budget and health-error (its
+//                        read fails); several joined by commas
 //   projectnav           a state the navigation reads of the project
 //                        picker, the All projects directory, the
 //                        sidebar's project tree, the New task dialog's and

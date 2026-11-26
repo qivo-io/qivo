@@ -96,9 +96,8 @@ counts, each in a place of its own, Late first and then by name. **Late**
 counts its overdue and projected-to-miss tasks where delay tracking is on.
 Where Qivo could not work out Late and Behind plan, the row says
 **unknown** and the list is in name order with a line that says why. It
-shows 10 sub-projects, and **Load more** adds 10; where that fails,
-**Retry** asks again and the rows already shown stay. Past 200 the list
-says how many of how many it shows. Select a row to open that
+shows 10 sub-projects, and **Load more** adds 10. Past 200 the list says
+how many of how many it shows. Select a row to open that
 sub-project's Board. A sub-project's own Overview has no such list.
 
 **Load this week** lists the owners of the open tasks here, with each

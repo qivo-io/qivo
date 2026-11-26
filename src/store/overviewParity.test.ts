@@ -7,7 +7,14 @@
  * (src/views/overview/overviewArgs.ts overviewClock), and checks that the
  * stand-in answers the same summary and the same health table, for Nora in
  * every column's order both ways, a cut and a search, as the queries
- * answer for the same caller. Over every row of My view's Your work, as
+ * answer for the same caller, and a project's whole Needs attention
+ * answer, every row in the same order with each of its fields, a group's
+ * calculated dates among them, and the same total, counts, people, Late
+ * tasks by due date and Sub-projects. Of the server's own two
+ * reads of a top-level project's Sub-projects it checks the rule
+ * convex/lib/overviewNeeds.ts states, that a figure both give is the same,
+ * as either may give one the other answers unavailable. Over every row of
+ * My view's Your work, as
  * the server answers it, it also checks what the page does on screen
  * (views/overview/MyOverview.tsx modelOf and its rows): the store shapes a
  * model of each row (store/viewRows.ts), so no row waits on a model it
@@ -22,6 +29,7 @@
  * if a rule drifts compare a drifted rule over the stored tasks with the
  * server's answer. */
 
+import { isDeepStrictEqual } from 'node:util'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
@@ -30,10 +38,12 @@ import { nameKey } from '../../convex/lib/nameKey'
 import type {
   HealthAnswer,
   HealthSort,
+  HealthTable,
   OverviewScope,
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
+import { NEEDS, type NeedsAnswer } from '../../convex/lib/overviewNeeds'
 import { taskOwnerId } from '../../convex/lib/review'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import { WORK_GROUPS } from '../../convex/lib/workGroups'
@@ -55,6 +65,7 @@ import {
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
+import { plantBlocks } from '../../convex/tests/teamSyncAgenda.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
 import { OVERVIEW_WEEKS, type OverviewQuery } from './overviewLists'
@@ -150,6 +161,9 @@ const sorted = (ids: Iterable<string>) => [...ids].sort()
    owned by their reviewer, so a case can tell the comparison ran. */
 const shown = { rows: 0, reviewed: 0 }
 
+/* How many top-level projects' Sub-projects expectParity compared. */
+let subProjectTables = 0
+
 /** Checks that the store shapes a model of every row of `rows`, the rows
  * of Your work's groups, as the page's modelOf takes one (store/viewRows.ts),
  * and that the model shows the row's task: its uuid, title, due date and
@@ -185,11 +199,44 @@ const HEALTH_SORTS: HealthSort[] = [
   'paused',
 ]
 
+/** Checks that `needs`, a top-level project's Sub-projects as
+ * overview.needs answers them, holds the same rows as `health`, from
+ * overview.health sorted by Late, with the same names, leads, total and
+ * cap, that a row's counts or delays that both give are the same, and that
+ * where every row is the same, so is the table. */
+function expectFiguresOf(needs: HealthTable | undefined, health: HealthAnswer, label: string) {
+  if (needs === undefined || health.state !== 'ok')
+    throw new Error(`${label}: ${JSON.stringify([needs, health])}`)
+  expect(sorted(needs.rows.map((r) => r.project_id)), `${label}: Sub-projects rows`).toEqual(
+    sorted(health.rows.map((r) => r.project_id)),
+  )
+  expect([needs.total, needs.most], `${label}: Sub-projects total and cap`).toEqual([
+    health.total,
+    health.most,
+  ])
+  const byId = new Map(needs.rows.map((r) => [r.project_id, r]))
+  let same = true
+  for (const row of health.rows) {
+    const other = byId.get(row.project_id)
+    const at = `${label}: Sub-projects row ${row.name}`
+    expect([other?.name, other?.lead_id], at).toEqual([row.name, row.lead_id])
+    if (row.counts.state === 'ok' && other?.counts.state === 'ok')
+      expect(other.counts, at).toEqual(row.counts)
+    if (row.delays.state === 'ok' && other?.delays.state === 'ok')
+      expect(other.delays, at).toEqual(row.delays)
+    same &&= isDeepStrictEqual(other, row)
+  }
+  if (same) expect(needs, `${label}: Sub-projects`).toEqual(health)
+}
+
 /** Checks that the Overview's stand-in answers the summary and the health
  * table of `scope` as the server does for `profile`, with `orders` every
  * column's order both ways, a cut and a search too, and in My view that
- * every row of Your work shows. Answers how many leaf tasks the summary
- * counts. */
+ * every row of Your work shows. Of a project it checks that the stand-in
+ * answers the server's whole Needs attention answer, every field of every
+ * row, and of a top-level project the rule between the server's two reads
+ * of its Sub-projects (expectFiguresOf). Answers how many leaf tasks the
+ * summary counts. */
 async function expectParity(
   t: T,
   P: Store,
@@ -243,6 +290,25 @@ async function expectParity(
     return got
   }
   const table = await health()
+  // a top-level project's Needs attention answer holds its Sub-projects, a
+  // sub-project's none
+  if (scope.kind === 'project') {
+    const args = { ...days, kind: 'all' as const, limit: NEEDS.most }
+    const needs = await caller.query(api.overview.needs, {
+      scope: { org_id: scope.org_id, project_id: scope.project_id },
+      ...args,
+    })
+    if (needs.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(needs)}`)
+    const top = P.snapshot.projects.find((p) => p.id === scope.project_id)?.parent_id === undefined
+    if (top) {
+      expectFiguresOf(needs.health, table, label)
+      subProjectTables++
+    } else expect(needs.health, `${label}: Sub-projects`).toBeUndefined()
+    expect(
+      stand('needs', { scope, ...args }) as NeedsAnswer,
+      `${label}: stand-in Needs attention`,
+    ).toEqual(needs)
+  }
   if (orders && table.state === 'ok') {
     for (const sort of HEALTH_SORTS)
       for (const dir of ['asc', 'desc'] as const) {
@@ -298,6 +364,7 @@ describe('Northstar', () => {
     // two days into the dataset's anchor week, in the afternoon
     const now = Date.parse('2026-09-09T18:00:00.000Z')
     let held = 0
+    const tables = subProjectTables
     const nora = await person('nora')
     for (const profile of [nora, ...(await Promise.all(['leo', 'ben'].map(person)))]) {
       const P = await storeOf(t, profile, now)
@@ -313,6 +380,7 @@ describe('Northstar', () => {
     }
     expect(held).toBeGreaterThan(0)
     expect(shown.rows).toBeGreaterThan(0)
+    expect(subProjectTables).toBeGreaterThan(tables)
   })
 })
 
@@ -325,13 +393,16 @@ const NOW_CASE = Date.parse('2026-11-04T19:00:00.000Z')
 /** The tasks every access case plants over the withOrg fixture for
  * `subject`, FW tracking delay: an overdue task, a Done task past its due
  * date, a group past its due date whose leaves are all Done, a task in a
- * sibling sub-project the subject may not see, a paused group, paused
+ * sibling sub-project the subject may not see, a task blocked by that one,
+ * the Done one and one in PCB, a paused group, paused
  * tasks dated, undated and Done, a group with its subtask in an archived
- * sub-project, a task stored on the TBED meta, an In Review hand-off and a task the
- * subject reviews, tasks projected late, on track and behind, a group
- * projected late by its span, and a task whose remaining hours were
- * measured near midnight before a week began in New York, so its local and
- * UTC weeks differ. Then the organization is counted. */
+ * sub-project, a task stored on the TBED meta, an In Review hand-off, a task the
+ * subject reviews and two nobody reviews, tasks projected late, on track
+ * and behind, two groups projected late by their span, a task further
+ * behind, a group further behind still by its span, and a task whose
+ * remaining hours were measured near midnight before a week began in New
+ * York, so its local and UTC weeks differ. Then the organization is
+ * counted. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
@@ -348,8 +419,12 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     plantIssue(t, { org_id, project_id: project.id, ...fields })
   const mine = { assignee_id: subject.id }
   await task(f.sub, { title: 'Overdue', due_date: '2026-10-28', ...mine })
-  await task(f.sub2, { title: 'Overdue in PCB', due_date: '2026-11-03', status: 'progress' })
-  await task(f.sub, {
+  const pcb = await task(f.sub2, {
+    title: 'Overdue in PCB',
+    due_date: '2026-11-03',
+    status: 'progress',
+  })
+  const donePastDue = await task(f.sub, {
     title: 'Done past due',
     due_date: '2026-10-20',
     status: 'done',
@@ -357,7 +432,17 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   })
   const late = await task(f.sub, { title: 'Late group', due_date: '2026-10-30', ...mine })
   await task(f.sub, { title: 'Its Done leaf', parent_id: late.id, status: 'done', done_at: NOW })
-  await task(sibling, { title: 'Overdue in the sibling', due_date: '2026-10-27', ...mine })
+  const inSibling = await task(sibling, {
+    title: 'Overdue in the sibling',
+    due_date: '2026-10-27',
+    ...mine,
+  })
+  const waits = await task(f.sub, { title: 'Waits on three', ...mine })
+  await plantBlocks(t, [
+    [inSibling, waits],
+    [donePastDue, waits],
+    [pcb, waits],
+  ])
   const pausedGroup = await task(f.sub, { title: 'Paused group', paused: true, ...mine })
   await task(f.sub, { title: 'Its subtask', parent_id: pausedGroup.id, ...mine })
   await task(f.sub, { title: 'Paused, dated', paused: true, due_date: '2026-11-20', ...mine })
@@ -413,6 +498,45 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     parent_id: span.id,
     start_week: '2026-11-23',
     end_week: '2026-11-30',
+  })
+  // further behind its plan, and further past its due week, than the ones
+  // planted before them
+  await task(f.sub, {
+    title: 'Further behind its plan',
+    start_week: '2026-10-05',
+    end_week: '2026-10-12',
+    remaining_set_at: '2026-10-06T15:00:00.000Z',
+    remaining_hours: 10,
+    ...mine,
+  })
+  const farSpan = await task(f.sub, { title: 'Group far late by its span', due_date: '2026-11-13' })
+  await task(f.sub, {
+    title: 'Its far late leaf',
+    parent_id: farSpan.id,
+    start_week: '2026-12-14',
+    end_week: '2026-12-21',
+  })
+  const behindSpan = await task(f.sub, { title: 'Group behind its span' })
+  await task(f.sub, {
+    title: 'Its leaf behind its plan',
+    parent_id: behindSpan.id,
+    start_week: '2026-09-21',
+    end_week: '2026-09-28',
+  })
+  // two hand-offs nobody reviews, the one waiting longer due later
+  await task(f.sub2, {
+    title: 'Waiting since October',
+    status: 'review',
+    due_date: '2026-12-01',
+    review_at: '2026-10-20T15:00:00.000Z',
+    ...mine,
+  })
+  await task(f.sub2, {
+    title: 'Waiting since Monday',
+    status: 'review',
+    due_date: '2026-11-20',
+    review_at: '2026-11-02T15:00:00.000Z',
+    ...mine,
   })
   // measured at 22:00 on Sunday 18 October in New York, Monday 19 October in
   // UTC: 400 hours at 40 a week from that week end in the week of 14
@@ -473,9 +597,85 @@ describe('access shapes', () => {
   for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
     it(`answers as the stand-in does for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
+      const tables = subProjectTables
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
+      expect(subProjectTables).toBeGreaterThan(tables)
+    })
+})
+
+// ------------------------------------------------ a project's Sub-projects
+
+describe("a project's Sub-projects", () => {
+  for (const role of ['guest', 'viewer'] as const)
+    it(`give a ${role} the Late of a sub-project whose only owned tasks are overdue, where the health table answers it unknown, as the stand-in does`, async () => {
+      const t = newT()
+      const f = await withReadingAdmin(t)
+      for (const p of [f.sub, f.sub2])
+        await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
+      // the reader reads one load, which the health table, taking owners in
+      // id order, spends on the first, whose task is overdue, so the other
+      // two read unknown, and Needs attention on the second, whose task is
+      // the only one it judges
+      const [first, second, third] = (
+        await Promise.all(
+          [0, 1, 2].map(() => plantSeat(t, { org_id: f.org.id, auth_user_id: `auth_${uuid()}` })),
+        )
+      ).sort((a, b) => (a.id < b.id ? -1 : 1))
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        title: 'Planned',
+        assignee_id: second.id,
+        start_week: '2026-11-02',
+        end_week: '2026-11-30',
+        due_date: '2026-12-30',
+        remaining_hours: 4,
+        remaining_set_at: '2026-11-03T15:00:00.000Z',
+      })
+      for (const [title, owner] of [
+        ['Overdue', first],
+        ['Overdue too', third],
+      ] as const)
+        await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub2.id,
+          title,
+          assignee_id: owner.id,
+          due_date: '2026-10-28',
+          remaining_hours: 10,
+        })
+      await countOrg(t, f.org.id)
+      const reader = f[role]
+      const P = await storeOf(t, reader, NOW_CASE)
+      const scope = projectScope(reader, f.meta.id)
+      await expectParity(t, P, reader, scope, role)
+      const days = clientDays(P)
+      const health = await as(t, reader).query(api.overview.health, {
+        scope,
+        ...days,
+        sort: 'late',
+        dir: 'desc',
+        limit: OVERVIEW.healthRows,
+      })
+      const needs = await as(t, reader).query(api.overview.needs, {
+        scope: { org_id: f.org.id, project_id: f.meta.id },
+        ...days,
+        kind: 'all',
+        limit: 20,
+      })
+      if (health.state !== 'ok' || needs.state !== 'ok')
+        throw new Error(JSON.stringify([health, needs]))
+      const delays = (table: HealthTable | undefined) => table?.rows.map((r) => [r.name, r.delays])
+      expect(delays(health)).toEqual([
+        ['Board rev', { state: 'unavailable', reason: 'loads' }],
+        ['Firmware', { state: 'unavailable', reason: 'loads' }],
+      ])
+      expect(delays(needs.health)).toEqual([
+        ['Board rev', { state: 'ok', late: 2, behind: 0 }],
+        ['Firmware', { state: 'ok', late: 0, behind: 0 }],
+      ])
     })
 })
 
