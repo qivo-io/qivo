@@ -11,14 +11,14 @@
    and only for a task the person may edit. Every row of every group lays
    its values on the same columns (MyOverview.css). */
 
-import { type FocusEvent, type ReactNode, useRef, useState } from 'react'
+import { type FocusEvent, type ReactNode, useCallback, useRef, useState } from 'react'
 import { StatusSelect } from '@/components/StatusSelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { isoToWeek, TODAY_WEEK } from '@/lib/dates'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { remainingNumber, remainingPatchFromInput, remainingValue } from '@/lib/remaining'
-import { shownEmptyState } from '@/lib/taskFocus'
+import { headingTarget, shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
@@ -699,6 +699,14 @@ function sentenceFacts(work: WorkView): SentenceFacts {
 export function MyOverview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
+  const page = useRef<HTMLDivElement | null>(null)
+  const pageRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      page.current = element
+      paneRef(element)
+    },
+    [paneRef],
+  )
   const openIssue = useLatest((open: string) => actions.openIssue(open))
   const read = useOverviewRead(
     info,
@@ -808,6 +816,16 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
   const replaced = note ?? emptyNote
   const alone = replaced !== null && !ms.stands
   const busy = state === 'loading' || state === 'refreshing'
+  // a note that takes Your work's place, as Nothing assigned to you once
+  // the person's last task leaves, takes the column or the whole page, so
+  // focus Your work held goes to its heading from here
+  const workHeld = useHeldFocus()
+  useFocusWhenGone(replaced === null, () =>
+    workHeld.held()
+      ? (headingTarget(page.current?.querySelector<HTMLElement>('[data-empty-state-title]')) ??
+        null)
+      : null,
+  )
 
   const workAnswer = read.work?.value?.state === 'ok' ? read.work.value : null
   // a failed or refused read of Your work leaves no project's Late tasks
@@ -851,7 +869,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
 
   return (
     <div
-      ref={paneRef}
+      ref={pageRef}
       data-scroll
       data-screen-label="Overview"
       data-overview-root
@@ -868,7 +886,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
       ) : (
         <div className="pov-page">
           <div className="pov-cols">
-            <div className="pov-col">
+            <div className="pov-col" {...workHeld.props}>
               {replaced ?? (
                 <WorkPanel
                   info={info}

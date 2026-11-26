@@ -370,6 +370,27 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.activeElement).toBe(open('wire'))
   })
 
+  it('moves keyboard focus to the empty state once approving the only review leaves nothing assigned', async () => {
+    const { board } = await overview((snap) => {
+      work(snap)
+      snap.issues = snap.issues.filter((t) => t.id === 'check')
+    })
+    const approve = q('[data-work-id="check"] [data-ov-approve]')
+    await act(async () => {
+      approve?.focus()
+      approve?.click()
+    })
+    expect(patches()).toEqual([{ status: 'done' }])
+    const task = board.snapshot.issues.find((t) => t.id === 'check')
+    if (task) task.status = 'done'
+    await board.deliver()
+    // the store repaints the views on a timer
+    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    const title = q('[data-empty-state-title]')
+    expect(title?.textContent).toBe('Nothing assigned to you')
+    expect(document.activeElement).toBe(title)
+  })
+
   it('says plainly when a group, all of Your work or the whole view holds nothing', async () => {
     await overview((snap) => {
       work(snap)
