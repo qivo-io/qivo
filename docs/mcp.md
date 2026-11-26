@@ -2324,7 +2324,7 @@ task lists its active ones, and an archived task lists all of them. `links`
 are the
 task's links whose other task you can read, `kind` as seen from this task.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
-is the remaining time the app shows, which is the sum over its unfinished
+holds the remaining hours the app shows, the sum over its unfinished
 subtasks, or `null` when none has hours. Like the group's
 dates, it counts only active subtasks of an active group.
 
@@ -3105,7 +3105,7 @@ subtasks has no reviewer of its own; set reviewers on its subtasks`, while
 clearing one always passes.
 
 While a task is in `review` with a reviewer set, it is the reviewer's task:
-the app counts its remaining time against the reviewer's week and shows the
+the app counts its remaining hours against the reviewer's week and shows the
 reviewer as its owner. In every other status the assignee owns it.
 
 The hours field on tasks is `remaining_hours` — named `estimate_hours` until
@@ -3113,10 +3113,10 @@ The hours field on tasks is `remaining_hours` — named `estimate_hours` until
 longer in the `create_task`/`update_task` schemas. A client still sending
 `estimate_hours` is refused with `Unrecognized key`, and the call changes
 nothing. Update the client. A task **with
-active subtasks** has no remaining time of its own (0066; archived
+active subtasks** has no remaining hours of its own (0066; archived
 subtasks stopped counting in 0070). `update_task` with a non-null
 `remaining_hours` for one is refused with `remaining_hours cannot be set on a
-task with subtasks, because it is the sum of their remaining time`. `null`
+task with subtasks, because it is the sum of their remaining hours`. `null`
 passes as a no-op. The hours live on the
 subtasks, and the app shows the parent's value as the sum over its unfinished
 subtasks; such tasks read back `remaining_hours: null` and
@@ -3124,11 +3124,11 @@ subtasks; such tasks read back `remaining_hours: null` and
 from before their subtasks counted.
 
 Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
-`remaining_hours` was last saved. A remaining time is a measurement, and the
-app's planning math anchors on when it was taken. The stamp moves when the
+`remaining_hours` was last saved. Remaining hours are a measurement, and the
+app's planning math anchors on when they were taken. The stamp moves when the
 value genuinely *changes* (re-sending the same number is a no-op there) and
-when the task enters `review` (below), not when the task moves to another
-sub-project. It clears together with the hours and cannot be written over
+when the task enters `review` and takes the review time (below), not when
+the task moves to another sub-project. It clears together with the hours and cannot be written over
 MCP. It is not in any tool schema, so a call
 that sends it is refused like any unknown argument.
 
@@ -3138,8 +3138,8 @@ review time as `remaining_hours`. That is `effective_review_hours` in
 `update_project` (see [Projects, access and
 milestones](#projects-access-and-milestones)). The task gets a fresh
 `remaining_set_at` even when the hours are unchanged. A non-null
-`remaining_hours` in the same call wins; `null` or no value takes the review
-time. Leaving `review` keeps whatever is left, and a call that stays in
+`remaining_hours` in the same call wins, and moves the stamp only if it
+changes the value; `null` or no value takes the review time. Leaving `review` keeps whatever is left, and a call that stays in
 `review` changes nothing. `update_task` does not add `remaining_hours` to
 `updated` for this; read the task back to see it.
 

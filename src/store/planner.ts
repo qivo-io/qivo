@@ -7446,7 +7446,7 @@ const TASK_FIELD: Record<string, string> = {
   start_week: 'schedule',
   end_week: 'schedule',
   due_date: 'due date',
-  remaining_hours: 'remaining time',
+  remaining_hours: 'remaining hours',
   paused: 'pause',
 }
 /* …and what any other write changed, by its module. */

@@ -203,7 +203,7 @@ export function PlanCard({
                     : cap === null
                       ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
                       : remaining <= 0
-                        ? 'Add remaining time to auto-fit'
+                        ? 'Add remaining hours to auto-fit'
                         : !session.autoFit
                           ? 'Drag the end freely'
                           : loading

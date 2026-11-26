@@ -285,7 +285,7 @@ reviewer** and visible unfinished blockers.
 
 Time marks use the person's last sync. **untouched since** means nobody has
 edited an In Progress task or commented on it since then. Adding or removing a
-label, link or attachment is not an edit. Review rows show **handed to you**
+label, link or attachment is not an edit. In Review rows show **handed to you**
 for a new hand-off, or **waiting since** for an older one that nobody has
 edited or commented on since the hand-off. Entering In Review or changing the
 reviewer starts a hand-off; changing Remaining does not. Other rows can show

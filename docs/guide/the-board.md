@@ -46,8 +46,8 @@ In Swimlanes by assignee, dropping within the same person's lane changes
 only status, so entering In Review can move the task to its reviewer's lane.
 If changing status alone transfers ownership to the target
 person, Qivo also keeps the assignee and reviewer unchanged. For example,
-moving a Review task to In Progress in its assignee's lane returns the work
-to that assignee.
+moving a task from In Review to In Progress in its assignee's lane returns
+the work to that assignee.
 
 Other drops into a person's lane change the assignee, except in **In
 Review**, where they change the reviewer. Dropping into the assignee's own

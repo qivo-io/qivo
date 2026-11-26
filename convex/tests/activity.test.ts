@@ -697,7 +697,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
         patch: { remaining_hours: 5 },
       }),
       'rule',
-      /^a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks$/,
+      /^a task with subtasks has no remaining hours of its own, because it shows the sum of its subtasks$/,
     )
     const after = await t.run(async (ctx) => (await ctx.db.get(parent._id)) as Doc<'issues'>)
     expect(after.remaining_hours).toBeUndefined()
@@ -753,9 +753,9 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     await step({ paused: true }, 'paused', undefined)
     await step({ paused: false }, 'resumed', undefined)
     await step({ priority: 'urgent' }, 'reprioritized', 'from Medium to Urgent')
-    await step({ remaining_hours: 8 }, 'set the remaining time on', 'to 8 h')
-    await step({ remaining_hours: 2.5 }, 'changed the remaining time on', 'from 8 h to 2.5 h')
-    await step({ remaining_hours: null }, 'cleared the remaining time on', '(was 2.5 h)')
+    await step({ remaining_hours: 8 }, 'set the remaining hours on', 'to 8 h')
+    await step({ remaining_hours: 2.5 }, 'changed the remaining hours on', 'from 8 h to 2.5 h')
+    await step({ remaining_hours: null }, 'cleared the remaining hours on', '(was 2.5 h)')
     await step({ description: 'Hello world' }, 'added a description to', '“Hello world”')
     await step(
       { description: 'Second' },

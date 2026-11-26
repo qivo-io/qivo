@@ -330,7 +330,7 @@ describe('one level of subtasks', () => {
         told.map(({ verb, detail, field_prints }) => ({ verb, detail, field_prints })),
       ).toEqual([
         {
-          verb: 'set the remaining time on',
+          verb: 'set the remaining hours on',
           detail: 'to 3 h',
           field_prints: { remaining_hours: expect.any(String) },
         },

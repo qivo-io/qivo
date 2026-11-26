@@ -733,7 +733,7 @@ function evIcon(verb: string) {
   if (verb === 'paused') return 'pause'
   if (verb === 'resumed') return 'play'
   if (verb === 'linked') return 'link'
-  if (verb.includes('remaining time')) return 'history' // the clock-shaped glyph in this icon set
+  if (verb.includes('remaining hours')) return 'history' // the clock-shaped glyph in this icon set
   if (
     verb.includes('due date') ||
     verb === 'rescheduled' ||

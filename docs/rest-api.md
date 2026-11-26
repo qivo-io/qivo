@@ -1718,7 +1718,7 @@ must be a row with `assignable: true`, `null` clears it, and an ineligible
 user gets the sentences above, ending `… to review work`. Malformed values
 return `reviewer_id must be a profile uuid or null`. A reviewer may be the
 same user as the assignee. While a task is in `review` with a reviewer set, it
-is the reviewer's task: the app counts its remaining time against the
+is the reviewer's task: the app counts its remaining hours against the
 reviewer's week and shows the reviewer as its owner. In every other status the
 assignee owns it. A task with active subtasks has no reviewer of its own: a
 PATCH setting a new non-null `reviewer_id` on one is a `400` (`a task with
@@ -1883,11 +1883,11 @@ current value, returns `400` with `start_week and end_week cannot be set on a
 task with subtasks; its dates come from its subtasks`, and the other fields
 in that request remain unchanged. Change the subtasks' dates instead.
 
-A task **with active subtasks** has no remaining time of its own (0066;
+A task **with active subtasks** has no remaining hours of its own (0066;
 archived subtasks stopped counting in 0070): a PATCH
 sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks, because it is the sum
-of their remaining time`; `null` passes as a no-op) — the hours live on the
+of their remaining hours`; `null` passes as a no-op). The hours live on the
 subtasks, and clients show the parent's value as the sum over its unfinished
 subtasks. Such tasks return `remaining_hours: null` and
 `remaining_set_at: null` in the shape below, also while they still store
@@ -1895,8 +1895,8 @@ hours of their own from before their subtasks counted, and
 the single-task read adds that sum as `group_remaining_hours`. Attaching a
 subtask clears its new parent's own hours.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
-(0072): a remaining time is a measurement, and the planning math anchors on
-when it was taken — the server stamps the moment the value *changes* (an
+(0072): remaining hours are a measurement, and the planning math anchors on
+when they were taken. The server stamps the moment the value *changes* (an
 unchanged value writes nothing) and clears the stamp with the hours. A move
 to another sub-project keeps it. A request that sends `remaining_set_at` is
 refused as an unknown field.
@@ -1907,8 +1907,8 @@ with a fresh `remaining_set_at` even when the hours are unchanged. The review
 time is the project's `effective_review_hours` in the
 [single-project read](#projects), 2 h unless a lead sets another in the app
 or with [`PATCH /v1/projects/{ref}`](#changing-a-project). A non-null
-`remaining_hours` in the same request wins; `null` or no value takes the
-review time. Leaving `review` keeps whatever remaining time is there, and a
+`remaining_hours` in the same request wins, and moves the stamp only if it
+changes the value; `null` or no value takes the review time. Leaving `review` keeps whatever remaining hours are there, and a
 PATCH that stays in `review` changes nothing. A group cannot change status,
 so it never gets one.
 
@@ -2108,7 +2108,7 @@ task's links
 whose other task it can read, with `kind` as seen from this task (`blocks`,
 `blocked_by` or `relates`). `labels` are ordered by name.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
-is the remaining time the app shows, which is the sum over the unfinished
+holds the remaining hours the app shows, the sum over the unfinished
 subtasks, or `null` when none has hours. Like the group's
 dates, it counts only active subtasks of an active group.
 
@@ -3137,7 +3137,7 @@ Send each field as the read showed it:
   while it stays the parent. `expected` no longer takes `has_hidden_parent`,
   so a request that still sends it, alone or beside `parent_id`, is a `400`
   with `unknown field "expected.has_hidden_parent"; expected takes …`.
-- **A group's remaining time.** An active task with subtasks reads
+- **A group's remaining hours.** An active task with subtasks reads
   `remaining_hours: null`, also while it stores hours from before its
   subtasks, so send `null`.
 - **A project's lead.** `lead_id` is the lead the single-project read shows,

@@ -1169,6 +1169,26 @@ describe('threadHistory events', () => {
       ])
   })
 
+  it("names a task's hours remaining hours in rows written as remaining time", async () => {
+    await plantRows([
+      ev({ verb: 'set the remaining time on', detail: 'to 8 h' }),
+      ev({ verb: 'changed the remaining time on', detail: 'from 8 h to 2 h' }),
+      ev({ verb: 'cleared the remaining time on', detail: '(was 2 h)' }),
+      // the same words in a detail are a person's text
+      ev({ verb: 'renamed', detail: 'to “the remaining time on”' }),
+    ])
+    for (const p of [f.admin, f.guest])
+      expect(
+        (await thread(p, issueVis.id)).events.map((e) => [e.verb, e.detail]),
+        p.name,
+      ).toEqual([
+        ['set the remaining hours on', 'to 8 h'],
+        ['changed the remaining hours on', 'from 8 h to 2 h'],
+        ['cleared the remaining hours on', '(was 2 h)'],
+        ['renamed', 'to “the remaining time on”'],
+      ])
+  })
+
   it('gives every member, an admin included, the rows the rule allows, without legacy counts', async () => {
     const ids = await plantRows([
       ev({ verb: 'created' }),

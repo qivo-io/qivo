@@ -77,7 +77,8 @@ search, every word of it in any order.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
-project's review time unless the request supplies hours ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)). Assignee filters
+project's review time unless the request supplies hours, which count as a new
+measurement only if they change the value ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)). Assignee filters
 still match the assigned person while a reviewer owns the work.
 
 ## Guides for agents
