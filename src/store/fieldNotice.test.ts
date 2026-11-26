@@ -91,6 +91,17 @@ describe('refusalLine', () => {
     )
   })
 
+  it("calls the person's own change elsewhere the other version", () => {
+    expect(line({ kept: true, changes: [change({ field: 'title', by: ME })] })).toBe(
+      'Not saved. You changed the title of QN-12 elsewhere. Your text is still in the field. Save again to replace the other version.',
+    )
+    expect(
+      line({ kept: true, keepMine: true, changes: [change({ field: 'title', by: ME })] }),
+    ).toBe(
+      'Not saved. You changed the title of QN-12 elsewhere. Your text is still in the field. Choose Keep mine under it to replace the other version.',
+    )
+  })
+
   it('says remaining hours and dates were changed, as plurals', () => {
     expect(line({ changes: [change({ field: 'remaining_hours', by: null })] })).toBe(
       'Not saved. The remaining hours of QN-12 were changed elsewhere. Your change was discarded.',

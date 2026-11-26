@@ -3127,8 +3127,8 @@ Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
 `remaining_hours` was last saved. Remaining hours are a measurement, and the
 app's planning math anchors on when they were taken. The stamp moves when the
 value genuinely *changes* (re-sending the same number is a no-op there) and
-when the task enters `review` (below), not when the task moves to another
-sub-project. It clears together with the hours and cannot be written over
+when the task enters `review` and takes the review time (below), not when
+the task moves to another sub-project. It clears together with the hours and cannot be written over
 MCP. It is not in any tool schema, so a call
 that sends it is refused like any unknown argument.
 
@@ -3138,8 +3138,8 @@ review time as `remaining_hours`. That is `effective_review_hours` in
 `update_project` (see [Projects, access and
 milestones](#projects-access-and-milestones)). The task gets a fresh
 `remaining_set_at` even when the hours are unchanged. A non-null
-`remaining_hours` in the same call wins; `null` or no value takes the review
-time. Leaving `review` keeps whatever is left, and a call that stays in
+`remaining_hours` in the same call wins, and moves the stamp only if it
+changes the value; `null` or no value takes the review time. Leaving `review` keeps whatever is left, and a call that stays in
 `review` changes nothing. `update_task` does not add `remaining_hours` to
 `updated` for this; read the task back to see it.
 

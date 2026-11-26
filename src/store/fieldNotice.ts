@@ -107,8 +107,8 @@ const WHOLE = new Set<FieldChange['record']>(['comment', 'grant', 'link'])
 
 /* Each editor that keeps a draft sends `expected` only for the fields it
    edits, so the refusal's first change tells where the draft waits. */
-function keptTail(first: FieldChange): string {
-  const save = 'Save again to replace their version.'
+function keptTail(first: FieldChange, version: string): string {
+  const save = `Save again to replace ${version}.`
   if (first.record === 'comment' || (first.record === 'task' && first.field === 'description'))
     return `Your text is still in the editor. ${save}`
   if (first.record === 'milestone') return `Your change is still in the Milestones window. ${save}`
@@ -169,12 +169,13 @@ export function refusalLine(r: Refusal, look: Lookup): string {
       : writer
         ? `${writer.name} changed ${what}${offline}.`
         : `${capital(what)} ${plural ? 'were' : 'was'} changed elsewhere${offline}.`
+  const version = writer === 'you' ? 'the other version' : 'their version'
   const tail = r.deletes
     ? `Check it before you ${verb} it again.`
     : r.kept
       ? r.keepMine
-        ? 'Your text is still in the field. Choose Keep mine under it to replace their version.'
-        : keptTail(first)
+        ? `Your text is still in the field. Choose Keep mine under it to replace ${version}.`
+        : keptTail(first, version)
       : r.batch !== undefined && r.batch > 1
         ? `None of the ${r.batch} roadmap changes were saved.`
         : writer === 'you'

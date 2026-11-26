@@ -449,8 +449,8 @@ function ProjectSettingsFields({
           readOnly={blocked}
           hint={
             isMeta
-              ? 'Remaining hours a task gets when it moves into Review. Sub-projects use them unless they set their own.'
-              : "Remaining hours a task gets when it moves into Review. Empty uses the project's review time."
+              ? 'Remaining hours a task gets when it moves into In Review. Sub-projects use them unless they set their own.'
+              : "Remaining hours a task gets when it moves into In Review. Empty uses the project's review time."
           }
         />
         <SettingsField label="Lead" hint="Controls this project's settings and access.">

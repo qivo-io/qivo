@@ -1907,8 +1907,8 @@ with a fresh `remaining_set_at` even when the hours are unchanged. The review
 time is the project's `effective_review_hours` in the
 [single-project read](#projects), 2 h unless a lead sets another in the app
 or with [`PATCH /v1/projects/{ref}`](#changing-a-project). A non-null
-`remaining_hours` in the same request wins; `null` or no value takes the
-review time. Leaving `review` keeps whatever remaining hours are there, and a
+`remaining_hours` in the same request wins, and moves the stamp only if it
+changes the value; `null` or no value takes the review time. Leaving `review` keeps whatever remaining hours are there, and a
 PATCH that stays in `review` changes nothing. A group cannot change status,
 so it never gets one.
 
