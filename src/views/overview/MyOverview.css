@@ -150,10 +150,8 @@
   color: var(--text-2);
 }
 /* A save shows in place, in a field with hours and in an empty one alike,
-   and changes no size: a line would move the rows below. */
-.mov-hours-box[data-state="saving"] {
-  opacity: 0.6;
-}
+   and changes no size: a line would move the rows below. The field stays
+   editable while it saves, so its text keeps its full contrast. */
 .mov-hours-box[data-state="saving"] input {
   border-style: dashed;
   cursor: progress;
