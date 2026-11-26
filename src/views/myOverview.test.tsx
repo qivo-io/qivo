@@ -338,6 +338,43 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(titles('next')).toHaveLength(12)
   })
 
+  /** Types 7 in Task wire's hours, asks Next for 20 rows with Load more and
+      fails that read, while the read back to the first 10 is held. */
+  async function failedLoadMore() {
+    const { board } = await overview((snap) => {
+      work(snap)
+      for (let i = 0; i < 10; i++) snap.issues.push(taskRow(snap, `more-${i}`, 'todo', 20 + i))
+    })
+    await type(hours('wire'), '7')
+    board.server.overview.hold = (query) => query === 'work'
+    await act(async () => q('[data-ov-group="next"] [data-ov-more]')?.click())
+    board.server.overview.fail = new Error('offline')
+    board.server.overview.failing = (query, args) => query === 'work' && (args.next ?? 0) > 10
+    await board.answer()
+    await repaint()
+    return board
+  }
+
+  it('keeps every row’s hours field and actions through a failed Load more, with focus in the field being typed in', async () => {
+    await failedLoadMore()
+    expect(q('[data-ov-work-retry]')).not.toBeNull()
+    expect(titles('next')).toHaveLength(10)
+    expect(hours('wire')?.value).toBe('7')
+    expect(document.activeElement).toBe(hours('wire'))
+    expect(hours('first')).not.toBeNull()
+    expect(q('[data-work-id="first"] [data-ov-start]')).not.toBeNull()
+  })
+
+  it('lets the rows go and shows the error where the rows a failed Load more went back to fail too', async () => {
+    const board = await failedLoadMore()
+    expect(board.P.viewTask('overview:work', 'wire')?.uuid).toBe('wire')
+    board.server.overview.failing = (query) => query === 'work'
+    await board.answer()
+    await repaint()
+    expect(q('[data-ov-work]')?.dataset.ovWorkState).toBe('error')
+    expect(board.P.viewTask('overview:work', 'wire')).toBeUndefined()
+  })
+
   it('keeps an action on its way when Escape puts the hours back', async () => {
     await overview(work)
     await act(async () => q('[data-work-id="first"] [data-ov-start]')?.click())

@@ -30,8 +30,9 @@
      tasks of the rows on screen stay editable until the longer answer
      replaces them. A Load more that fails goes back to the rows it
      showed, asking their arguments again so they keep updating, and offers
-     Retry. Where those rows fail too, the read shows its error, whose Try
-     again asks it afresh.
+     Retry; the store keeps those rows through the failure and that read
+     until its answer replaces them. Where those rows fail too, the read
+     shows its error, without them, whose Try again asks it afresh.
    - A project or sub-project's page (`page` 'status') asks the summary,
      the health table and Needs attention; My view's page ('mine') the
      summary, the health table and Your work. */
@@ -191,7 +192,9 @@ export type OverviewTransport = {
   /** Registers read `slot` of `query` for the arguments `key` (JSON), or
       stops it with null, keeping what it held; a new `attempt` asks
       afresh. With `hold` the answer it holds for other arguments, and its
-      rows, stay until an answer for `key` replaces them. */
+      rows, stay until an answer for `key` replaces them. A failure for
+      `key` keeps those rows, which stay through a `hold` back to the
+      arguments they answer, until that read's result replaces them. */
   watch(
     slot: string,
     query: OverviewQuery,
@@ -337,7 +340,8 @@ export function createOverviewReads(transport: OverviewTransport) {
       base === null || ask === null ? null : JSON.stringify(o.args(base, ask, limit))
 
     /** Registers the read as the reads stand: live while asking, holding
-        the answer shown where the arguments ask more rows of it. */
+        the answer shown and its rows where the arguments ask more rows of
+        it, and after a failed Load more, whose read goes back to them. */
     const watch = () =>
       transport.watch(
         o.slot,
@@ -347,7 +351,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         shown !== null &&
           shown.base === baseKey &&
           same(shown.ask, ask) &&
-          o.grew(shown.limit, limit),
+          (o.grew(shown.limit, limit) || failedMore !== null),
       )
 
     /** Takes the read's news in: an answer for the arguments asked now is

@@ -3756,12 +3756,17 @@ const KEEP_ROWS = Symbol('keep the rows')
     hold the milestone writes the read's deliveries hold
     (milestoneNeeds). `keepsOnError` keeps the rows of a read that fails
     as KEEP_ROWS does, so its view can show its last answer under the
-    failure, as Team sync keeps a meeting's cards with their unsent text. */
+    failure, as Team sync keeps a meeting's cards with their unsent text.
+    `keepsHeldOnError` keeps, as KEEP_ROWS does, only the rows of an answer
+    held for other arguments (watchView `hold`) where the arguments asked
+    fail, as an Overview list's failed Load more keeps the rows on screen
+    while it reads them again (store/overviewLists.ts). */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
   milestones?: (value: unknown, key: string) => { ask: MilestoneAsk; take: MilestoneTake }
   keepsOnError?: boolean
+  keepsHeldOnError?: true
   /** the rows of a value whose cards a view draws, by uuid, where it
       draws fewer than it brings: only their owners register with the
       owner-load cache for delays (reshapeViews), and the person's new
@@ -3885,6 +3890,7 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   },
   needs: {
     ref: api.overview.needs,
+    keepsHeldOnError: true,
     rows: (value) => {
       const answer = value as NeedsAnswer
       return answer.state === 'ok' ? answer.rows.map(({ needs: _needs, ...row }) => row) : null
@@ -3896,6 +3902,7 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   },
   work: {
     ref: api.overview.work,
+    keepsHeldOnError: true,
     rows: (value) => {
       const answer = value as WorkAnswer
       return answer.state === 'ok'
@@ -4117,10 +4124,13 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     read.connection = latestConnection
     if (next.value !== undefined) read.answered = true
     const take = read.query.rows
+    const keepsOnError =
+      read.query.keepsOnError ||
+      (read.query.keepsHeldOnError && read.fitted !== null && read.fitted.key !== key)
     const rows =
       take && next.value !== undefined
         ? take(next.value, key)
-        : next.error !== undefined && read.query.keepsOnError
+        : next.error !== undefined && keepsOnError
           ? KEEP_ROWS
           : null
     if (take && rows === KEEP_ROWS) {
@@ -4232,9 +4242,10 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
  * its rows, never as current, until the answer for `key` replaces them: a
  * text filter that only narrows the Board's (views/board/useBoardView.ts
  * narrowsText), the same Team sync meeting on a new day or week grid
- * (P.watchSync), and an Overview list's Load more and its Retry
- * (store/overviewLists.ts). The view decides when it holds; the store
- * keeps one rule.
+ * (P.watchSync), and an Overview list's Load more, its Retry and the read
+ * back to the rows shown after a failed Load more, whose failure kept them
+ * (ViewQuery keepsHeldOnError) (store/overviewLists.ts). The view decides
+ * when it holds; the store keeps one rule.
  * A new `attempt` on a read that keeps its rows past a failure
  * (ViewQuery keepsOnError) and still holds the last answer whose rows it
  * took (ViewRead fitted) asks afresh without dropping anything. The held
