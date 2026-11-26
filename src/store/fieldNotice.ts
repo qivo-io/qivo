@@ -93,7 +93,13 @@ const WORDS: Partial<Record<FieldChange['record'], Record<string, string>>> = {
   },
 }
 
-const PLURAL = new Set(['dates', 'remaining hours', 'plannable hours', 'default plannable hours'])
+const PLURAL = new Set([
+  'dates',
+  'remaining hours',
+  'plannable hours',
+  'default plannable hours',
+  'project creators',
+])
 
 /* Records whose one checked field is the whole record, so the notice names
    the record alone: "Emil Berg changed this comment on QN-12". */

@@ -753,9 +753,9 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     await step({ paused: true }, 'paused', undefined)
     await step({ paused: false }, 'resumed', undefined)
     await step({ priority: 'urgent' }, 'reprioritized', 'from Medium to Urgent')
-    await step({ remaining_hours: 8 }, 'set the remaining time on', 'to 8 h')
-    await step({ remaining_hours: 2.5 }, 'changed the remaining time on', 'from 8 h to 2.5 h')
-    await step({ remaining_hours: null }, 'cleared the remaining time on', '(was 2.5 h)')
+    await step({ remaining_hours: 8 }, 'set the remaining hours on', 'to 8 h')
+    await step({ remaining_hours: 2.5 }, 'changed the remaining hours on', 'from 8 h to 2.5 h')
+    await step({ remaining_hours: null }, 'cleared the remaining hours on', '(was 2.5 h)')
     await step({ description: 'Hello world' }, 'added a description to', '“Hello world”')
     await step(
       { description: 'Second' },

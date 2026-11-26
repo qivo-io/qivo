@@ -81,9 +81,9 @@ says so.
   remaining hours.
 - A refused description or comment edit stays in its editor. A refused
   title stays in its field, as do remaining hours typed in My view's
-  Overview, and a refused milestone change stays in the Milestones window.
-  You can copy your text or save it again on purpose to replace the other
-  version.
+  Overview, and a milestone's name or date refused when you save it in the
+  Milestones window stays there. You can copy your text or save it again on
+  purpose to replace the other version.
 - A Roadmap change that saves several tasks at once, such as **Auto-move**,
   saves all or nothing. If one of its tasks changed since, none of its
   changes are saved.

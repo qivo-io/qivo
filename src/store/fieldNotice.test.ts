@@ -103,6 +103,11 @@ describe('refusalLine', () => {
         ],
       }),
     ).toBe('Not saved. The dates of QN-12 were changed elsewhere. Your change was discarded.')
+    expect(
+      line({ changes: [change({ record: 'organization', field: 'project_creators', by: null })] }),
+    ).toBe(
+      'Not saved. The project creators of QN-12 were changed elsewhere. Your change was discarded.',
+    )
   })
 
   it('asks for Keep mine for a settings field that keeps the text', () => {
