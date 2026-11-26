@@ -813,9 +813,7 @@ export function MyOverview({ info, actions }: { info: ScopeInfo; actions: Overvi
   // known, delay tracking or not
   const workFailed =
     read.work !== null &&
-    (read.work.value === undefined
-      ? read.work.error !== undefined
-      : read.work.value.state === 'over_budget')
+    (read.work.value === undefined ? read.work.error !== undefined : read.work.value.state !== 'ok')
   const lateOf = new Map(workAnswer?.late_due.map((p) => [p.project_id, p.late]) ?? [])
   const lineOf = (m: MilestoneVM, i: number, rows: readonly MilestoneVM[]) => {
     if (workFailed) return LATE_UNKNOWN

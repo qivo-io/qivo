@@ -376,6 +376,28 @@ describe("My view's Overview", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(text('[data-empty-state-title]')).toBe('Nothing assigned to you')
   })
 
+  it('says a milestone’s Late tasks could not be counted where Your work answers unavailable', async () => {
+    const { board } = await overview((snap) => {
+      work(snap)
+      snap.projects[0].track_delay = true
+      snap.milestones.push({
+        id: 'launch',
+        project_id: 'plan',
+        name: 'Launch',
+        week: day(21),
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
+    })
+    const line = () => text('[data-overview-milestone="launch"] .pov-mile-line')
+    expect(line()).toContain('1 late task is due before it')
+    board.server.overview.edit = (query, answer) =>
+      query === 'work'
+        ? { state: 'unavailable', reason: 'access_unchecked', message: 'Try again in a moment.' }
+        : answer
+    await board.answer()
+    expect(line()).toContain('Qivo could not count the late tasks due before it')
+  })
+
   it('says a delay it could not work out is unknown, never on track', async () => {
     await overview(
       (snap) => {
